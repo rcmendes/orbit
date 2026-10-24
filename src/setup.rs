@@ -1855,7 +1855,8 @@ mod tests {
 
     #[test]
     fn checked_in_agents_md_matches_the_generated_section() {
-        let agents = include_str!("../AGENTS.md");
+        // Windows checkouts may use CRLF; compare normalized text.
+        let agents = include_str!("../AGENTS.md").replace("\r\n", "\n");
         assert!(
             agents.contains(workflow_section().as_str()),
             "AGENTS.md is stale; run `orbit setup opencode --no-mcp` to refresh the managed block"

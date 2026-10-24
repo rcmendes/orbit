@@ -1763,6 +1763,15 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_agents_md_matches_the_generated_section() {
+        let agents = include_str!("../AGENTS.md");
+        assert!(
+            agents.contains(workflow_section().as_str()),
+            "AGENTS.md is stale; run `orbit setup opencode --no-mcp` to refresh the managed block"
+        );
+    }
+
+    #[test]
     fn upsert_is_idempotent() {
         let section = workflow_section();
         let first = upsert_section("", &section, "AGENTS.md").unwrap();

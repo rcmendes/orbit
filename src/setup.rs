@@ -89,19 +89,74 @@ enum McpJsonKind {
     Opencode,
 }
 
+struct McpJsonLayout {
+    container_path: &'static [&'static str],
+    legacy_container_path: Option<&'static [&'static str]>,
+    schema: Option<&'static str>,
+}
+
 impl McpJsonKind {
-    fn container(self) -> &'static str {
+    fn layout(self) -> McpJsonLayout {
         match self {
-            McpJsonKind::Servers => "mcpServers",
-            McpJsonKind::Opencode => "mcp",
+            McpJsonKind::Servers => McpJsonLayout {
+                container_path: &["mcpServers"],
+                legacy_container_path: None,
+                schema: None,
+            },
+            McpJsonKind::Opencode => McpJsonLayout {
+                container_path: &["mcp", "servers"],
+                legacy_container_path: Some(&["mcp"]),
+                schema: Some("https://opencode.ai/config.json"),
+            },
         }
     }
+}
 
-    fn schema(self) -> Option<&'static str> {
-        match self {
-            McpJsonKind::Servers => None,
-            McpJsonKind::Opencode => Some("https://opencode.ai/config.json"),
-        }
+fn nested_object_mut<'a>(
+    object: &'a mut serde_json::Map<String, Value>,
+    path: &[&str],
+) -> Option<&'a mut serde_json::Map<String, Value>> {
+    let (head, rest) = path.split_first()?;
+    let child = object.get_mut(*head)?.as_object_mut()?;
+    if rest.is_empty() {
+        Some(child)
+    } else {
+        nested_object_mut(child, rest)
+    }
+}
+
+fn ensure_nested_object_mut<'a>(
+    object: &'a mut serde_json::Map<String, Value>,
+    path: &[&str],
+    relative: &str,
+) -> Result<&'a mut serde_json::Map<String, Value>> {
+    let (head, rest) = path.split_first().expect("container path is not empty");
+    let child = object
+        .entry((*head).to_string())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| {
+            OrbitError::config(format!("{relative} `{}` must be an object", path.join(".")))
+        })?;
+    if rest.is_empty() {
+        Ok(child)
+    } else {
+        ensure_nested_object_mut(child, rest, relative)
+    }
+}
+
+fn prune_empty_object_path(object: &mut serde_json::Map<String, Value>, path: &[&str]) {
+    let Some((head, rest)) = path.split_first() else {
+        return;
+    };
+    let Some(child) = object.get_mut(*head).and_then(Value::as_object_mut) else {
+        return;
+    };
+    if !rest.is_empty() {
+        prune_empty_object_path(child, rest);
+    }
+    if child.is_empty() {
+        object.remove(*head);
     }
 }
 
@@ -978,8 +1033,7 @@ fn opencode_entry(bin: &Path, dir: Option<&Path>) -> Value {
     command.extend(mcp_args(dir));
     json!({
         "type": "local",
-        "command": command,
-        "enabled": true
+        "command": command
     })
 }
 
@@ -992,7 +1046,8 @@ fn plan_mcp_json(
     plan: &mut BTreeMap<PathBuf, FilePlan>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
-    let container = kind.container();
+    let layout = kind.layout();
+    let container_path = layout.container_path;
     let absolute = root.join(relative);
     let existing = read_optional(&absolute)?;
     let mut value: Value = match &existing {
@@ -1010,8 +1065,10 @@ fn plan_mcp_json(
         entry_command(&entry).is_some_and(|command| Path::new(command).is_absolute());
 
     if remove {
-        if let Some(container_value) = object.get_mut(container).and_then(Value::as_object_mut) {
-            if let Some(existing_entry) = container_value.get("orbit") {
+        for path in std::iter::once(container_path).chain(layout.legacy_container_path) {
+            if let Some(container_value) = nested_object_mut(object, path)
+                && let Some(existing_entry) = container_value.get("orbit")
+            {
                 if is_orbit_mcp_entry(existing_entry) {
                     container_value.remove("orbit");
                     changed = true;
@@ -1021,23 +1078,31 @@ fn plan_mcp_json(
                     ));
                 }
             }
-            if container_value.is_empty() {
-                object.remove(container);
-            }
         }
+        prune_empty_object_path(object, container_path);
     } else {
         if existing.is_none()
-            && let Some(schema) = kind.schema()
+            && let Some(schema) = layout.schema
         {
             object.insert("$schema".to_string(), json!(schema));
         }
-        let container_value = object
-            .entry(container)
-            .or_insert_with(|| json!({}))
-            .as_object_mut()
-            .ok_or_else(|| {
-                OrbitError::config(format!("{relative} `{container}` must be an object"))
-            })?;
+        if let Some(legacy_path) = layout.legacy_container_path
+            && let Some(legacy) = nested_object_mut(object, legacy_path)
+        {
+            match legacy.get("orbit").cloned() {
+                Some(legacy_entry) if is_orbit_mcp_entry(&legacy_entry) => {
+                    legacy.remove("orbit");
+                    changed = true;
+                }
+                Some(_) => {
+                    return Err(OrbitError::config(format!(
+                        "{relative} already has an `orbit` server that Orbit does not manage; move it first"
+                    )));
+                }
+                None => {}
+            }
+        }
+        let container_value = ensure_nested_object_mut(object, container_path, relative)?;
 
         let existing_entry = container_value.get("orbit").cloned();
         match existing_entry {

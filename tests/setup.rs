@@ -317,10 +317,11 @@ fn setup_all_writes_mcp_configs_for_every_client() {
     );
 
     let opencode = repo.read_json("opencode.json");
-    assert_eq!(opencode["mcp"]["orbit"]["type"], "local");
-    assert_orbit_command(&opencode["mcp"]["orbit"]["command"][0]);
-    assert_eq!(opencode["mcp"]["orbit"]["command"][1], "mcp");
-    assert_eq!(opencode["mcp"]["orbit"]["enabled"], true);
+    let orbit = &opencode["mcp"]["servers"]["orbit"];
+    assert_eq!(orbit["type"], "local");
+    assert_orbit_command(&orbit["command"][0]);
+    assert_eq!(orbit["command"][1], "mcp");
+    assert!(orbit.get("enabled").is_none());
 
     repo.ok_json(&["setup", "all", "--remove", "--json"]);
     assert!(!repo.exists(".mcp.json"));
@@ -337,8 +338,12 @@ fn setup_opencode_installs_mcp_by_default() {
 
     assert!(repo.exists("AGENTS.md"));
     let opencode = repo.read_json("opencode.json");
-    assert_orbit_command(&opencode["mcp"]["orbit"]["command"][0]);
-    assert_eq!(opencode["mcp"]["orbit"]["command"][1], "mcp");
+    let orbit = &opencode["mcp"]["servers"]["orbit"];
+    assert_eq!(orbit["type"], "local");
+    assert_orbit_command(&orbit["command"][0]);
+    assert_eq!(orbit["command"][1], "mcp");
+    assert!(orbit.get("enabled").is_none());
+    assert!(opencode["mcp"].get("orbit").is_none());
 }
 
 #[test]
@@ -365,12 +370,106 @@ fn setup_migrates_a_bare_orbit_mcp_entry() {
 }
 
 #[test]
+fn setup_opencode_merges_an_existing_v2_config() {
+    let repo = TestRepo::new();
+    std::fs::write(
+        repo.path().join("opencode.json"),
+        "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"theme\": \"dark\",\n  \"mcp\": {\n    \"servers\": {\n      \"other\": {\n        \"type\": \"local\",\n        \"command\": [\"other\", \"mcp\"]\n      }\n    }\n  }\n}\n",
+    )
+    .unwrap();
+
+    let value = repo.ok_json(&["setup", "opencode", "--json"]);
+    let files = value["data"]["files"].as_array().unwrap();
+    assert!(
+        files
+            .iter()
+            .any(|file| { file["path"] == "opencode.json" && file["action"] == "updated" })
+    );
+
+    let config = repo.read_json("opencode.json");
+    let orbit = &config["mcp"]["servers"]["orbit"];
+    assert_eq!(orbit["type"], "local");
+    assert_orbit_command(&orbit["command"][0]);
+    assert!(orbit.get("enabled").is_none());
+    assert_eq!(config["mcp"]["servers"]["other"]["command"][0], "other");
+    assert_eq!(config["theme"], "dark");
+    let before = repo.read("opencode.json");
+
+    repo.ok_json(&["setup", "opencode", "--json"]);
+    assert_eq!(repo.read("opencode.json"), before);
+}
+
+#[test]
+fn setup_migrates_a_legacy_opencode_mcp_entry() {
+    let repo = TestRepo::new();
+    std::fs::write(
+        repo.path().join("opencode.json"),
+        "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"mcp\": {\n    \"orbit\": {\n      \"type\": \"local\",\n      \"command\": [\"orbit\", \"mcp\"],\n      \"enabled\": true\n    },\n    \"other\": {\n      \"type\": \"local\",\n      \"command\": [\"other\", \"mcp\"]\n    }\n  }\n}\n",
+    )
+    .unwrap();
+
+    repo.ok_json(&["setup", "opencode", "--json"]);
+    let config = repo.read_json("opencode.json");
+    let orbit = &config["mcp"]["servers"]["orbit"];
+    assert_eq!(orbit["type"], "local");
+    assert_orbit_command(&orbit["command"][0]);
+    assert_eq!(orbit["command"][1], "mcp");
+    assert!(orbit.get("enabled").is_none());
+    assert!(config["mcp"].get("orbit").is_none());
+    assert_eq!(config["mcp"]["other"]["command"][0], "other");
+    assert_eq!(config["$schema"], "https://opencode.ai/config.json");
+}
+
+#[test]
+fn setup_opencode_remove_preserves_unrelated_servers() {
+    let repo = TestRepo::new();
+    std::fs::write(
+        repo.path().join("opencode.json"),
+        "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"theme\": \"dark\",\n  \"mcp\": {\n    \"orbit\": {\n      \"type\": \"local\",\n      \"command\": [\"orbit\", \"mcp\"],\n      \"enabled\": true\n    },\n    \"legacy-other\": {\n      \"type\": \"local\",\n      \"command\": [\"legacy-other\", \"mcp\"]\n    },\n    \"servers\": {\n      \"orbit\": {\n        \"type\": \"local\",\n        \"command\": [\"orbit\", \"mcp\"]\n      },\n      \"other\": {\n        \"type\": \"local\",\n        \"command\": [\"other\", \"mcp\"]\n      }\n    }\n  }\n}\n",
+    )
+    .unwrap();
+
+    repo.ok_json(&["setup", "opencode", "--remove", "--json"]);
+    let config = repo.read_json("opencode.json");
+    assert!(config["mcp"].get("orbit").is_none());
+    assert!(config["mcp"]["servers"].get("orbit").is_none());
+    assert_eq!(config["mcp"]["servers"]["other"]["command"][0], "other");
+    assert_eq!(config["mcp"]["legacy-other"]["command"][0], "legacy-other");
+    assert_eq!(config["theme"], "dark");
+    assert_eq!(config["$schema"], "https://opencode.ai/config.json");
+}
+
+#[test]
+fn setup_opencode_remove_deletes_a_legacy_only_config() {
+    let repo = TestRepo::new();
+    std::fs::write(
+        repo.path().join("opencode.json"),
+        "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"mcp\": {\n    \"orbit\": {\n      \"type\": \"local\",\n      \"command\": [\"orbit\", \"mcp\"],\n      \"enabled\": true\n    }\n  }\n}\n",
+    )
+    .unwrap();
+
+    repo.ok_json(&["setup", "opencode", "--remove", "--json"]);
+    assert!(!repo.exists("opencode.json"));
+}
+
+#[test]
+fn setup_opencode_refuses_a_foreign_legacy_orbit_entry() {
+    let repo = TestRepo::new();
+    let content = "{\n  \"mcp\": {\n    \"orbit\": {\n      \"type\": \"local\",\n      \"command\": [\"some-other-orbit\", \"mcp\"]\n    }\n  }\n}\n";
+    std::fs::write(repo.path().join("opencode.json"), content).unwrap();
+
+    let (_, error) = repo.err_json(&["setup", "opencode", "--json"]);
+    assert_eq!(error["error"]["code"], "CONFIG_ERROR");
+    assert_eq!(repo.read("opencode.json"), content);
+}
+
+#[test]
 fn setup_mcp_bin_can_write_a_portable_command() {
     let repo = TestRepo::new();
     let value = repo.ok_json(&["setup", "opencode", "--mcp-bin", "orbit", "--json"]);
 
     let opencode = repo.read_json("opencode.json");
-    assert_eq!(opencode["mcp"]["orbit"]["command"][0], "orbit");
+    assert_eq!(opencode["mcp"]["servers"]["orbit"]["command"][0], "orbit");
     assert!(
         value["meta"]["warnings"]
             .as_array()

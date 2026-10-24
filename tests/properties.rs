@@ -15,9 +15,7 @@ fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
             labels: Vec::new(),
             depends_on: dependencies,
             waiting_on: None,
-            claimed_by: None,
-            claimed_at: None,
-            lease_until: None,
+            claim: None,
             created_at: now,
             updated_at: now,
             extra: BTreeMap::new(),
@@ -93,7 +91,7 @@ proptest! {
             prop_assert_eq!(
                 graph.is_ready(task),
                 task.front.status == Status::Todo
-                    && task.front.claimed_by.is_none()
+                    && task.front.claim.is_none()
                     && task.front.waiting_on.is_none()
                     && graph.blocking_ids(task).is_empty()
             );
@@ -101,7 +99,7 @@ proptest! {
 
         for task in graph.ready_tasks() {
             prop_assert_eq!(task.front.status, Status::Todo);
-            prop_assert!(task.front.claimed_by.is_none());
+            prop_assert!(task.front.claim.is_none());
             let all_dependencies_terminal = task.front.depends_on.iter().all(|dependency| {
                 graph
                     .tasks

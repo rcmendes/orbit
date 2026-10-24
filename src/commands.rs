@@ -18,6 +18,7 @@ use crate::git::CommitOutcome;
 use crate::graph::{self, Graph, Issue, LoadMode};
 use crate::setup::COMPLETION_LINE;
 use crate::task::{self, Status, Task, TaskFrontmatter};
+use crate::transition::{ClaimGate, Outcome};
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     let Cli { json, dir, command } = cli;
@@ -387,9 +388,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
             labels,
             depends_on,
             waiting_on,
-            claimed_by: None,
-            claimed_at: None,
-            lease_until: None,
+            claim: None,
             created_at: now,
             updated_at: now,
             extra: Default::default(),
@@ -439,7 +438,7 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
                 return false;
             }
             if let Some(claimed_by) = &args.claimed_by
-                && task.front.claimed_by.as_deref() != Some(claimed_by.as_str())
+                && task.holder() != Some(claimed_by.as_str())
             {
                 return false;
             }
@@ -516,8 +515,9 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
 
         let lease = task
             .front
-            .lease_until
+            .claim
             .as_ref()
+            .and_then(|claim| claim.lease_until)
             .map(|until| until.to_rfc3339())
             .unwrap_or_default();
         let mut output = task_output(
@@ -583,8 +583,9 @@ fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output::CommandOut
 
     let lease = task
         .front
-        .lease_until
+        .claim
         .as_ref()
+        .and_then(|claim| claim.lease_until)
         .map(|until| until.to_rfc3339())
         .unwrap_or_default();
     task_output(
@@ -600,49 +601,17 @@ fn cmd_release(board: &Board, args: ReleaseArgs) -> Result<crate::output::Comman
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
     let caller = optional_agent(args.by);
 
-    {
-        let task = graph.get(&args.id)?;
-        if task.front.status.is_terminal() {
-            return Err(invalid_transition(format!(
-                "{} is {}; release only applies to active tasks",
-                args.id,
-                task.front.status.as_str()
-            )));
-        }
-        if let Some(holder) = &task.front.claimed_by
-            && !args.force
-        {
-            let caller = caller
-                .as_deref()
-                .ok_or_else(|| not_claim_holder(&args.id, holder))?;
-            if caller != holder {
-                return Err(not_claim_holder(&args.id, holder));
-            }
-        }
-    }
-
-    let changed = {
-        let task = graph.get(&args.id)?;
-        task.front.claimed_by.is_some() || task.front.status == Status::InProgress
-    };
-
-    if !changed {
+    let outcome = graph
+        .get_mut(&args.id)?
+        .release(caller.as_deref(), args.force, Utc::now())?;
+    if outcome == Outcome::Unchanged {
         return Ok(crate::output::CommandOutput::new(
             json!({ "id": args.id, "changed": false }),
             format!("{} was not claimed", args.id),
         ));
     }
 
-    let task = {
-        let now = Utc::now();
-        let task = graph.get_mut(&args.id)?;
-        task.front.status = Status::Todo;
-        task.front.claimed_by = None;
-        task.front.claimed_at = None;
-        task.front.lease_until = None;
-        task.front.updated_at = now;
-        task.clone()
-    };
+    let task = graph.get(&args.id)?.clone();
     write_task(board, &task)?;
 
     task_output(
@@ -657,34 +626,12 @@ fn cmd_release(board: &Board, args: ReleaseArgs) -> Result<crate::output::Comman
 fn cmd_heartbeat(board: &Board, args: HeartbeatArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
     let agent = resolve_agent(args.by)?;
-    let now = Utc::now();
 
-    {
-        let task = graph.get(&args.id)?;
-        if task.front.status != Status::InProgress {
-            return Err(invalid_transition(format!(
-                "{} is {}; only in_progress tasks can be heartbeated",
-                args.id,
-                task.front.status.as_str()
-            )));
-        }
-        let holder = task
-            .front
-            .claimed_by
-            .as_deref()
-            .ok_or_else(|| invalid_transition(format!("{} has no claim", args.id)))?;
-        if holder != agent {
-            return Err(not_claim_holder(&args.id, holder));
-        }
-    }
-
-    let lease_until = {
-        let task = graph.get_mut(&args.id)?;
-        let lease_until = now + ChronoDuration::minutes(board.config.board.lease_minutes);
-        task.front.lease_until = Some(lease_until);
-        task.front.updated_at = now;
-        lease_until
-    };
+    let lease_until = graph.get_mut(&args.id)?.heartbeat(
+        &agent,
+        ChronoDuration::minutes(board.config.board.lease_minutes),
+        Utc::now(),
+    )?;
     let task = graph.get(&args.id)?.clone();
     write_task(board, &task)?;
 
@@ -709,114 +656,15 @@ fn cmd_done(board: &Board, args: DoneArgs) -> Result<crate::output::CommandOutpu
     };
     let now = Utc::now();
 
-    {
-        let task = graph.get(&args.id)?;
-        if task.front.status == Status::Done {
-            if comment.is_none() {
-                return Ok(crate::output::CommandOutput::new(
-                    graph::task_detail(&graph, task),
-                    format!("{} is already done", args.id),
-                )
-                .with_meta(json!({ "changed": false })));
-            }
+    let blocking = graph.blocking_ids(graph.get(&args.id)?);
+    let outcome =
+        graph
+            .get_mut(&args.id)?
+            .complete(caller.as_deref(), args.force, &blocking, now)?;
 
-            let author = author.expect("a completion comment has an author");
-            let comments = add_comment(
-                board,
-                &args.id,
-                &author,
-                comment.expect("a completion comment has a body"),
-                now,
-            )?;
-            let task = {
-                let task = graph.get_mut(&args.id)?;
-                task.front.updated_at = now;
-                task.clone()
-            };
-            write_task(board, &task)?;
-
-            return task_output_with_comments(
-                board,
-                &graph,
-                &task,
-                &comments,
-                format!("done {} (comment added)", args.id),
-                &format!("orbit: done {}", args.id),
-            );
-        }
-        if task.front.status == Status::Cancelled {
-            return Err(invalid_transition(format!(
-                "{} is cancelled; reopen it before completing it",
-                args.id
-            )));
-        }
-
-        let blocking = graph.blocking_ids(task);
-        if !blocking.is_empty() {
-            return Err(dependency_blocked(&args.id, &blocking));
-        }
-
-        if let Some(holder) = &task.front.claimed_by {
-            let live = task
-                .front
-                .lease_until
-                .as_ref()
-                .is_some_and(|until| *until > now);
-            if live && !args.force {
-                let caller = caller
-                    .as_deref()
-                    .ok_or_else(|| not_claim_holder(&args.id, holder))?;
-                if caller != holder {
-                    return Err(not_claim_holder(&args.id, holder));
-                }
-            }
-        }
-    }
-
-    let task = {
-        let task = graph.get_mut(&args.id)?;
-        task.front.status = Status::Done;
-        task.front.claimed_by = None;
-        task.front.claimed_at = None;
-        task.front.lease_until = None;
-        task.front.waiting_on = None;
-        task.front.updated_at = now;
-        task.clone()
-    };
-    write_task(board, &task)?;
-
-    if let (Some(author), Some(body)) = (author.as_deref(), comment) {
-        match add_comment(board, &args.id, author, body, now) {
-            Ok(comments) => {
-                return task_output_with_comments(
-                    board,
-                    &graph,
-                    &task,
-                    &comments,
-                    format!("done {} (comment added)", args.id),
-                    &format!("orbit: done {}", args.id),
-                );
-            }
-            Err(error) => {
-                let mut output = task_output(
-                    board,
-                    &graph,
-                    &task,
-                    format!("done {}", args.id),
-                    &format!("orbit: done {}", args.id),
-                )?;
-                output = output.with_warning(format!("COMMENT_FAILED: {}", error.message));
-                return Ok(output.with_exit_code(1));
-            }
-        }
-    }
-
-    task_output(
-        board,
-        &graph,
-        &task,
-        format!("done {}", args.id),
-        &format!("orbit: done {}", args.id),
+    let comment = author.zip(comment);
+    settle_terminal(
+        board, &mut graph, &args.id, outcome, comment, now, "done", "done",
     )
 }
 
@@ -830,151 +678,100 @@ fn cmd_cancel(board: &Board, args: CancelArgs) -> Result<crate::output::CommandO
     };
     let now = Utc::now();
 
-    {
-        let task = graph.get(&args.id)?;
-        if task.front.status == Status::Cancelled {
-            if comment.is_none() {
-                return Ok(crate::output::CommandOutput::new(
-                    graph::task_detail(&graph, task),
-                    format!("{} is already cancelled", args.id),
-                )
-                .with_meta(json!({ "changed": false })));
-            }
+    let outcome = graph
+        .get_mut(&args.id)?
+        .cancel(caller.as_deref(), args.force, now)?;
 
-            let author = author.expect("a cancellation comment has an author");
-            let comments = add_comment(
-                board,
-                &args.id,
-                &author,
-                comment.expect("a cancellation comment has a body"),
-                now,
-            )?;
+    let comment = author.zip(comment);
+    settle_terminal(
+        board,
+        &mut graph,
+        &args.id,
+        outcome,
+        comment,
+        now,
+        "cancelled",
+        "cancel",
+    )
+}
+
+/// Persists a done/cancel transition and its optional comment. `past` is the human
+/// verb ("cancelled"), `verb` the commit verb ("cancel").
+#[allow(clippy::too_many_arguments)]
+fn settle_terminal(
+    board: &Board,
+    graph: &mut Graph,
+    id: &str,
+    outcome: Outcome,
+    comment: Option<(String, String)>,
+    now: chrono::DateTime<Utc>,
+    past: &str,
+    verb: &str,
+) -> Result<crate::output::CommandOutput> {
+    let message = format!("orbit: {verb} {id}");
+    match (outcome, comment) {
+        (Outcome::Unchanged, None) => Ok(crate::output::CommandOutput::new(
+            graph::task_detail(graph, graph.get(id)?),
+            format!("{id} is already {past}"),
+        )
+        .with_meta(json!({ "changed": false }))),
+        (Outcome::Unchanged, Some((author, body))) => {
+            let comments = add_comment(board, id, &author, body, now)?;
             let task = {
-                let task = graph.get_mut(&args.id)?;
-                task.front.updated_at = now;
+                let task = graph.get_mut(id)?;
+                task.touch(now);
                 task.clone()
             };
             write_task(board, &task)?;
-
-            return task_output_with_comments(
+            task_output_with_comments(
                 board,
-                &graph,
+                graph,
                 &task,
                 &comments,
-                format!("cancelled {} (comment added)", args.id),
-                &format!("orbit: cancel {}", args.id),
-            );
+                format!("{past} {id} (comment added)"),
+                &message,
+            )
         }
-        if task.front.status == Status::Done {
-            return Err(invalid_transition(format!(
-                "{} is done; reopen it before cancelling it",
-                args.id
-            )));
-        }
-
-        if let Some(holder) = &task.front.claimed_by {
-            let live = task
-                .front
-                .lease_until
-                .as_ref()
-                .is_some_and(|until| *until > now);
-            if live && !args.force {
-                let caller = caller
-                    .as_deref()
-                    .ok_or_else(|| not_claim_holder(&args.id, holder))?;
-                if caller != holder {
-                    return Err(not_claim_holder(&args.id, holder));
+        (Outcome::Changed, comment) => {
+            let task = graph.get(id)?.clone();
+            write_task(board, &task)?;
+            let Some((author, body)) = comment else {
+                return task_output(board, graph, &task, format!("{past} {id}"), &message);
+            };
+            match add_comment(board, id, &author, body, now) {
+                Ok(comments) => task_output_with_comments(
+                    board,
+                    graph,
+                    &task,
+                    &comments,
+                    format!("{past} {id} (comment added)"),
+                    &message,
+                ),
+                Err(error) => {
+                    let output =
+                        task_output(board, graph, &task, format!("{past} {id}"), &message)?;
+                    Ok(output
+                        .with_warning(format!("COMMENT_FAILED: {}", error.message))
+                        .with_exit_code(1))
                 }
             }
         }
     }
-
-    let task = {
-        let task = graph.get_mut(&args.id)?;
-        task.front.status = Status::Cancelled;
-        task.front.claimed_by = None;
-        task.front.claimed_at = None;
-        task.front.lease_until = None;
-        task.front.waiting_on = None;
-        task.front.updated_at = now;
-        task.clone()
-    };
-    write_task(board, &task)?;
-
-    if let (Some(author), Some(body)) = (author.as_deref(), comment) {
-        match add_comment(board, &args.id, author, body, now) {
-            Ok(comments) => {
-                return task_output_with_comments(
-                    board,
-                    &graph,
-                    &task,
-                    &comments,
-                    format!("cancelled {} (comment added)", args.id),
-                    &format!("orbit: cancel {}", args.id),
-                );
-            }
-            Err(error) => {
-                let mut output = task_output(
-                    board,
-                    &graph,
-                    &task,
-                    format!("cancelled {}", args.id),
-                    &format!("orbit: cancel {}", args.id),
-                )?;
-                output = output.with_warning(format!("COMMENT_FAILED: {}", error.message));
-                return Ok(output.with_exit_code(1));
-            }
-        }
-    }
-
-    task_output(
-        board,
-        &graph,
-        &task,
-        format!("cancelled {}", args.id),
-        &format!("orbit: cancel {}", args.id),
-    )
 }
 
 fn cmd_reopen(board: &Board, args: ReopenArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
 
-    {
-        let task = graph.get(&args.id)?;
-        if !task.front.status.is_terminal() {
-            return Err(invalid_transition(format!(
-                "{} is {}; only terminal tasks can be reopened",
-                args.id,
-                task.front.status.as_str()
-            )));
-        }
-
-        let done_dependents: Vec<String> = graph
-            .dependents(&args.id)
-            .iter()
-            .filter(|dependent| dependent.front.status == Status::Done)
-            .map(|dependent| dependent.id.clone())
-            .collect();
-        if !done_dependents.is_empty() && !args.force {
-            return Err(invalid_transition(format!(
-                "{} has done dependents: {}",
-                args.id,
-                done_dependents.join(", ")
-            ))
-            .with_details(json!({ "done_dependents": done_dependents })));
-        }
-    }
-
-    let task = {
-        let task = graph.get_mut(&args.id)?;
-        task.front.status = Status::Todo;
-        task.front.claimed_by = None;
-        task.front.claimed_at = None;
-        task.front.lease_until = None;
-        task.front.waiting_on = None;
-        task.front.updated_at = Utc::now();
-        task.clone()
-    };
+    let done_dependents: Vec<String> = graph
+        .dependents(&args.id)
+        .iter()
+        .filter(|dependent| dependent.front.status == Status::Done)
+        .map(|dependent| dependent.id.clone())
+        .collect();
+    graph
+        .get_mut(&args.id)?
+        .reopen(args.force, &done_dependents, Utc::now())?;
+    let task = graph.get(&args.id)?.clone();
     write_task(board, &task)?;
 
     task_output(
@@ -1309,24 +1106,9 @@ fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::output::CommandO
     let caller = optional_agent(args.by);
     let now = Utc::now();
 
-    {
-        let task = graph.get(&args.id)?;
-        if let Some(holder) = &task.front.claimed_by {
-            let live = task
-                .front
-                .lease_until
-                .as_ref()
-                .is_some_and(|until| *until > now);
-            if live && !args.force {
-                let caller = caller
-                    .as_deref()
-                    .ok_or_else(|| not_claim_holder(&args.id, holder))?;
-                if caller != holder {
-                    return Err(not_claim_holder(&args.id, holder));
-                }
-            }
-        }
-    }
+    graph
+        .get(&args.id)?
+        .authorize_live(caller.as_deref(), args.force, now)?;
 
     let dependent_ids: Vec<String> = graph
         .dependents(&args.id)
@@ -1498,14 +1280,17 @@ fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandO
         warnings.push(format!(
             "{}: stale claim by {}",
             task.id,
-            task.front.claimed_by.as_deref().unwrap_or("unknown")
+            task.holder().unwrap_or("unknown")
         ));
     }
 
     for task in graph.tasks.values() {
-        let has_holder = task.front.claimed_by.is_some();
-        let has_times = task.front.claimed_at.is_some() || task.front.lease_until.is_some();
-        if has_holder != has_times {
+        if task
+            .front
+            .claim
+            .as_ref()
+            .is_some_and(|claim| !claim.is_complete())
+        {
             warnings.push(format!("{}: claim metadata is incomplete", task.id));
         }
         if task.front.status == Status::Done {
@@ -1656,75 +1441,18 @@ fn claim_task(
     steal: bool,
     lease_minutes: i64,
 ) -> Result<()> {
-    let now = Utc::now();
-
-    {
-        let task = graph.get(id)?;
-        if task.front.status.is_terminal() {
-            return Err(invalid_transition(format!(
-                "{id} is {}; it cannot be claimed",
-                task.front.status.as_str()
-            )));
-        }
-        if task.front.waiting_on.is_some() {
-            return Err(OrbitError::new(
-                code::WAITING_EXTERNAL,
-                format!("{id} is waiting on an external blocker"),
-            )
-            .with_details(json!({ "task": id, "waiting_on": task.front.waiting_on })));
-        }
-
-        let holds = graph.hold_labels(task);
-        if !holds.is_empty() {
-            return Err(OrbitError::new(
-                code::LABEL_BLOCKED,
-                format!("{id} has hold labels: {}", holds.join(", ")),
-            )
-            .with_details(json!({ "task": id, "labels": holds })));
-        }
-
-        let blocking = graph.blocking_ids(task);
-        if !blocking.is_empty() {
-            return Err(dependency_blocked(id, &blocking));
-        }
-
-        if let Some(holder) = &task.front.claimed_by {
-            let live = task
-                .front
-                .lease_until
-                .as_ref()
-                .is_some_and(|until| *until > now);
-            if !steal {
-                if live {
-                    return Err(OrbitError::new(
-                        code::ALREADY_CLAIMED,
-                        format!("{id} is claimed by {holder}"),
-                    )
-                    .with_details(json!({
-                        "task": id,
-                        "holder": holder,
-                        "lease_until": task.front.lease_until,
-                    })));
-                }
-                return Err(OrbitError::new(
-                    code::CLAIM_STALE,
-                    format!("{id} has a stale claim by {holder}; use `orbit claim {id} --steal`"),
-                )
-                .with_details(json!({
-                    "task": id,
-                    "holder": holder,
-                    "lease_until": task.front.lease_until,
-                })));
-            }
-        }
-    }
-
-    let task = graph.get_mut(id)?;
-    task.front.status = Status::InProgress;
-    task.front.claimed_by = Some(agent.to_string());
-    task.front.claimed_at = Some(now);
-    task.front.lease_until = Some(now + ChronoDuration::minutes(lease_minutes));
-    task.front.updated_at = now;
+    let task = graph.get(id)?;
+    let gate = ClaimGate {
+        hold_labels: graph.hold_labels(task),
+        blocking: graph.blocking_ids(task),
+    };
+    graph.get_mut(id)?.claim(
+        agent,
+        steal,
+        ChronoDuration::minutes(lease_minutes),
+        &gate,
+        Utc::now(),
+    )?;
     Ok(())
 }
 
@@ -1908,9 +1636,7 @@ fn optional_agent(by: Option<String>) -> Option<String> {
 
 fn format_summary(task: &Task) -> String {
     let claim = task
-        .front
-        .claimed_by
-        .as_ref()
+        .holder()
         .map(|holder| format!("  claimed by {holder}"))
         .unwrap_or_default();
     let labels = if task.front.labels.is_empty() {
@@ -1967,14 +1693,12 @@ fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
     if let Some(waiting) = &task.front.waiting_on {
         lines.push(format!("waiting_on: {waiting}"));
     }
-    if let Some(holder) = &task.front.claimed_by {
-        let until = task
-            .front
+    if let Some(claim) = &task.front.claim {
+        let until = claim
             .lease_until
-            .as_ref()
             .map(|until| until.to_rfc3339())
             .unwrap_or_else(|| "unknown".to_string());
-        lines.push(format!("claimed_by: {holder} (until {until})"));
+        lines.push(format!("claimed_by: {} (until {until})", claim.holder));
     }
     lines.push(format!("ready: {}", graph.is_ready(task)));
     let blocking = graph.blocked_by(task);
@@ -2019,26 +1743,10 @@ fn invalid_transition(message: impl Into<String>) -> OrbitError {
     OrbitError::new(code::INVALID_TRANSITION, message)
 }
 
-fn dependency_blocked(id: &str, blocking: &[String]) -> OrbitError {
-    OrbitError::new(
-        code::DEPENDENCY_BLOCKED,
-        format!("{id} has unfinished dependencies"),
-    )
-    .with_details(json!({ "task": id, "blocking": blocking }))
-}
-
 fn cycle_error(path: &[String]) -> OrbitError {
     OrbitError::new(
         code::CYCLE_DETECTED,
         format!("dependency cycle: {}", path.join(" -> ")),
     )
     .with_details(json!({ "cycle": path }))
-}
-
-fn not_claim_holder(id: &str, holder: &str) -> OrbitError {
-    OrbitError::new(
-        code::NOT_CLAIM_HOLDER,
-        format!("{id} is claimed by {holder}"),
-    )
-    .with_details(json!({ "task": id, "holder": holder }))
 }

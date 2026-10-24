@@ -40,27 +40,111 @@ pub fn default_priority() -> u8 {
     2
 }
 
+/// Who holds a Task and until when. Times are optional so hand-edited files with a
+/// partial claim still load; `orbit doctor` reports them as incomplete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Claim {
+    pub holder: String,
+    pub claimed_at: Option<DateTime<Utc>>,
+    pub lease_until: Option<DateTime<Utc>>,
+}
+
+impl Claim {
+    pub fn is_live(&self, now: DateTime<Utc>) -> bool {
+        self.lease_until.is_some_and(|until| until > now)
+    }
+
+    pub fn is_stale(&self, now: DateTime<Utc>) -> bool {
+        self.lease_until.is_some_and(|until| until <= now)
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.claimed_at.is_some() && self.lease_until.is_some()
+    }
+}
+
+/// On-disk shape: the Claim is stored as three flat keys (see docs/SPEC.md).
+#[derive(Serialize, Deserialize)]
+struct RawFrontmatter {
+    title: String,
+    status: Status,
+    #[serde(default = "default_priority")]
+    priority: u8,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    waiting_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claimed_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claimed_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lease_until: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_yaml_ng::Value>,
+}
+
+impl From<RawFrontmatter> for TaskFrontmatter {
+    fn from(raw: RawFrontmatter) -> Self {
+        let claim = raw.claimed_by.map(|holder| Claim {
+            holder,
+            claimed_at: raw.claimed_at,
+            lease_until: raw.lease_until,
+        });
+        Self {
+            title: raw.title,
+            status: raw.status,
+            priority: raw.priority,
+            labels: raw.labels,
+            depends_on: raw.depends_on,
+            waiting_on: raw.waiting_on,
+            claim,
+            created_at: raw.created_at,
+            updated_at: raw.updated_at,
+            extra: raw.extra,
+        }
+    }
+}
+
+impl From<TaskFrontmatter> for RawFrontmatter {
+    fn from(front: TaskFrontmatter) -> Self {
+        let (claimed_by, claimed_at, lease_until) = match front.claim {
+            Some(claim) => (Some(claim.holder), claim.claimed_at, claim.lease_until),
+            None => (None, None, None),
+        };
+        Self {
+            title: front.title,
+            status: front.status,
+            priority: front.priority,
+            labels: front.labels,
+            depends_on: front.depends_on,
+            waiting_on: front.waiting_on,
+            claimed_by,
+            claimed_at,
+            lease_until,
+            created_at: front.created_at,
+            updated_at: front.updated_at,
+            extra: front.extra,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "RawFrontmatter", into = "RawFrontmatter")]
 pub struct TaskFrontmatter {
     pub title: String,
     pub status: Status,
-    #[serde(default = "default_priority")]
     pub priority: u8,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_on: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claimed_by: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claimed_at: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lease_until: Option<DateTime<Utc>>,
+    pub claim: Option<Claim>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    #[serde(flatten)]
     pub extra: BTreeMap<String, serde_yaml_ng::Value>,
 }
 
@@ -232,9 +316,7 @@ mod tests {
                 labels: Vec::new(),
                 depends_on: vec!["orb-f14c02".to_string()],
                 waiting_on: None,
-                claimed_by: None,
-                claimed_at: None,
-                lease_until: None,
+                claim: None,
                 created_at: now(),
                 updated_at: now(),
                 extra: BTreeMap::new(),
@@ -350,5 +432,21 @@ Body.
         assert!(is_valid_label("ready-for-agent"));
         assert!(is_valid_label("bug"));
         assert_eq!(normalize_label("Needs-Info").unwrap(), "needs-info");
+    }
+
+    #[test]
+    fn claim_round_trips_byte_identical_and_keeps_unknown_fields() {
+        let content = "---\ntitle: t\nstatus: in_progress\npriority: 2\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        assert_eq!(task.holder(), Some("alice"));
+        assert_eq!(render_task(&task).unwrap(), content);
+    }
+
+    #[test]
+    fn partial_claim_still_loads() {
+        let content = "---\ntitle: t\nstatus: in_progress\nclaimed_by: alice\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        let claim = task.front.claim.unwrap();
+        assert!(!claim.is_complete() && !claim.is_live(now()) && !claim.is_stale(now()));
     }
 }

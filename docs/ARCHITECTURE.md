@@ -268,6 +268,8 @@ stateDiagram-v2
 
 ### Transition rules
 
+These rules live in `src/transition.rs`: a Task owns its transitions and returns a typed `TransitionError`. Command handlers only load, call one transition, persist and print.
+
 | From | Command | To | Rules |
 | --- | --- | --- | --- |
 | none | `add` | `todo` | Creates `tasks/ID.md`. Priority defaults to `2`; dependencies must exist. |

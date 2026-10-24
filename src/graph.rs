@@ -178,7 +178,7 @@ impl Graph {
 
     pub fn is_ready(&self, task: &Task) -> bool {
         task.front.status == Status::Todo
-            && task.front.claimed_by.is_none()
+            && task.front.claim.is_none()
             && task.front.waiting_on.is_none()
             && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
@@ -248,8 +248,11 @@ impl Graph {
             .values()
             .filter(|task| {
                 task.front.status == Status::InProgress
-                    && task.front.claimed_by.is_some()
-                    && task.front.lease_until.is_some_and(|lease| lease <= now)
+                    && task
+                        .front
+                        .claim
+                        .as_ref()
+                        .is_some_and(|claim| claim.is_stale(now))
             })
             .collect();
         stale.sort_by(|left, right| left.id.cmp(&right.id));
@@ -305,8 +308,11 @@ impl Graph {
                 counts.ready += 1;
             }
             if task.front.status == Status::InProgress
-                && task.front.claimed_by.is_some()
-                && task.front.lease_until.is_some_and(|lease| lease <= now)
+                && task
+                    .front
+                    .claim
+                    .as_ref()
+                    .is_some_and(|claim| claim.is_stale(now))
             {
                 counts.stale += 1;
             }
@@ -395,9 +401,9 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "labels": task.front.labels,
         "depends_on": task.front.depends_on,
         "waiting_on": task.front.waiting_on,
-        "claimed_by": task.front.claimed_by,
-        "claimed_at": task.front.claimed_at,
-        "lease_until": task.front.lease_until,
+        "claimed_by": task.holder(),
+        "claimed_at": task.front.claim.as_ref().and_then(|claim| claim.claimed_at),
+        "lease_until": task.front.claim.as_ref().and_then(|claim| claim.lease_until),
         "created_at": task.front.created_at,
         "updated_at": task.front.updated_at,
         "ready": graph.is_ready(task),
@@ -447,9 +453,7 @@ mod tests {
                 labels: Vec::new(),
                 depends_on: deps.iter().map(|dep| dep.to_string()).collect(),
                 waiting_on: None,
-                claimed_by: None,
-                claimed_at: None,
-                lease_until: None,
+                claim: None,
                 created_at: now,
                 updated_at: now,
                 extra: BTreeMap::new(),

@@ -367,8 +367,24 @@ pub fn refresh(root: &Path, mcp_dir: Option<&Path>) -> Result<CommandOutput> {
 }
 
 pub(crate) fn has_orbit_hook(root: &Path) -> bool {
-    std::fs::read_to_string(root.join(".claude/settings.json"))
-        .is_ok_and(|content| content.contains("orbit prime"))
+    let Ok(content) = std::fs::read_to_string(root.join(".claude/settings.json")) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&content) else {
+        return false;
+    };
+    value
+        .get("hooks")
+        .and_then(|hooks| hooks.get("SessionStart"))
+        .and_then(Value::as_array)
+        .is_some_and(|groups| {
+            groups.iter().any(|group| {
+                group
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .is_some_and(|handlers| handlers.iter().any(is_orbit_hook))
+            })
+        })
 }
 
 fn configured_clients(root: &Path) -> Vec<SetupClient> {
@@ -1734,10 +1750,19 @@ fn remove_orbit_hook(value: &mut Value) -> Result<bool> {
 }
 
 fn is_orbit_hook(handler: &Value) -> bool {
-    handler
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|command| command.contains("orbit prime"))
+    let Some(command) = handler.get("command").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some((binary, args)) = command.split_once(" prime --hook-json") else {
+        return false;
+    };
+    if !args.starts_with(" --by") {
+        return false;
+    }
+    Path::new(binary.trim_matches('"'))
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "orbit" || name == "orbit.exe")
 }
 
 fn workflow_section() -> String {

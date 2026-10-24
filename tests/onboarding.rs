@@ -403,7 +403,11 @@ fn link_refreshes_existing_agent_configuration() {
     assert!(args.iter().any(|arg| arg == "--dir"));
     let resolved = std::fs::canonicalize(&board).unwrap();
     assert!(
-        args.iter().any(|arg| arg == resolved.to_str().unwrap()),
+        args.iter().any(|arg| {
+            arg.as_str()
+                .and_then(|arg| std::fs::canonicalize(arg).ok())
+                .is_some_and(|path| path == resolved)
+        }),
         "{args:?}"
     );
 }

@@ -11,6 +11,8 @@ ci = "github"
 installers = ["shell", "powershell", "npm"]
 # Publish the npm package when a release is tagged
 publish-jobs = ["npm"]
+# Gate publishing on the archived binaries from this workflow
+host-jobs = ["./smoke-artifacts"]
 # npm package settings
 npm-scope = "@rcmendes"
 npm-package = "orbit"

@@ -123,15 +123,21 @@ pub struct InstallOptions {
 
 pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOutput> {
     let root = project_root()?;
+    let linked = crate::board::Board::read_link().ok().flatten();
+    if let Some(path) = &linked
+        && !crate::board::Board::is_board(path)
+    {
+        return Err(OrbitError::new(
+            code::LINK_NOT_FOUND,
+            format!(
+                "the linked Board at {} is missing; run `orbit link <board>` to re-link or restore it",
+                path.display()
+            ),
+        ));
+    }
     let mcp_dir = dir
         .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
-        .or_else(|| {
-            crate::board::Board::read_link()
-                .ok()
-                .flatten()
-                .filter(|path| crate::board::Board::is_board(path))
-                .map(|path| dunce::canonicalize(&path).unwrap_or(path))
-        });
+        .or_else(|| linked.map(|path| dunce::canonicalize(&path).unwrap_or(path)));
     let mut warnings = Vec::new();
 
     if matches!(args.client, SetupClient::Mattpocock) && (args.mcp || args.mcp_bin.is_some()) {
@@ -887,9 +893,7 @@ fn plan_claude_hooks(
     let changed = if remove {
         remove_orbit_hook(&mut value)?
     } else {
-        let Some(bin) = bin else {
-            return Ok(());
-        };
+        let bin = bin.ok_or_else(|| OrbitError::config("hooks require a resolved Orbit binary"))?;
         add_orbit_hook(&mut value, bin)?
     };
     if !changed {
@@ -1338,7 +1342,14 @@ fn reject_ephemeral(path: &Path) -> Result<()> {
     let in_npx_cache = path
         .components()
         .any(|component| component.as_os_str() == "_npx");
-    let in_temp = path.starts_with(std::env::temp_dir());
+    let mut temp_roots = vec![std::env::temp_dir()];
+    #[cfg(unix)]
+    {
+        for root in ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"] {
+            temp_roots.push(PathBuf::from(root));
+        }
+    }
+    let in_temp = temp_roots.iter().any(|root| path.starts_with(root));
     if in_npx_cache || in_temp {
         return Err(OrbitError::new(
             code::EPHEMERAL_BIN,

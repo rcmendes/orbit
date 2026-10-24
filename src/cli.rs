@@ -103,7 +103,7 @@ pub enum Command {
 #[derive(Debug, Args)]
 pub struct InitArgs {
     /// Create or link a shared Board at PATH.
-    #[arg(long, value_name = "PATH", conflicts_with = "local")]
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["local", "dir"])]
     pub board: Option<PathBuf>,
 
     /// Which harnesses to wire: auto, all, none, ask, or a comma-separated list.

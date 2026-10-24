@@ -8,7 +8,7 @@
 - The Claude SessionStart hook records the absolute Orbit binary, so it works when `orbit` is not on `PATH`.
 - `orbit init` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory, with guidance to install globally or pass `--mcp-bin orbit`.
 - `orbit doctor` reports whether `orbit` is on `PATH` and warns when a configured Claude hook cannot find it.
-- `.github/workflows/smoke.yml` installs the published artifacts on Linux, macOS, and Windows and exercises the onboarding sequence.
+- `.github/workflows/smoke.yml` installs the published artifacts on Linux, macOS, and Windows and exercises the onboarding sequence. The release workflow also runs an artifact smoke job before npm publication, so a broken binary blocks the npm release.
 
 ## 0.2.0 - 2026-10-23
 

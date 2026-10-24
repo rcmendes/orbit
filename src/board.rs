@@ -250,7 +250,7 @@ impl Board {
         root.join("config.toml").exists()
     }
 
-    pub fn expected_root(dir_override: Option<&Path>) -> Result<PathBuf> {
+    pub fn resolve_root(dir_override: Option<&Path>) -> Result<PathBuf> {
         match dir_override {
             Some(dir) => resolve_external(dir),
             None => Self::local_root(),
@@ -541,12 +541,13 @@ fn read_link_file(path: &Path) -> Result<Option<PathBuf>> {
         )));
     }
     let candidate = PathBuf::from(value);
-    if candidate.is_absolute() {
-        Ok(Some(candidate))
-    } else {
-        let root = git::repo_root()?;
-        Ok(Some(root.join(candidate)))
+    if !candidate.is_absolute() {
+        return Err(OrbitError::config(format!(
+            "{} must contain an absolute path; run `orbit link` again",
+            path.display()
+        )));
     }
+    Ok(Some(candidate))
 }
 
 fn already_initialized(path: &Path) -> OrbitError {

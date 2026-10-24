@@ -68,7 +68,7 @@ They must stay in sync with the documented quick start; do not add a second smok
 ## Known issues
 
 - The `v0.1.0` tag's CI check is red on Windows because it predates the Unix-only lock-test import fix. Its Release workflow succeeded and its artifacts are valid; `v0.2.0` has the fix.
-- npm publication is not gated on the install smoke job: cargo-dist owns the generated release workflow, and its `publish-jobs` run in parallel. The smoke workflow runs on `release: published` and reports breakage immediately, but a broken package can be published before the red run appears.
+- The generated release workflow creates the GitHub Release in the `host` phase and then runs the artifact smoke before publishing npm. A broken binary therefore blocks npm publication, but the GitHub Release can already exist; the post-publication `Install smoke` workflow is what verifies the public installer URLs.
 
 ## Local checks
 

@@ -1,0 +1,76 @@
+name: Artifact smoke
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  unix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Extract the archive
+        run: |
+          case "$(uname -m)" in
+            arm64|aarch64) triple="aarch64" ;;
+            *) triple="x86_64" ;;
+          esac
+          case "$(uname -s)" in
+            Darwin) target="$triple-apple-darwin" ;;
+            *) target="$triple-unknown-linux-gnu" ;;
+          esac
+          archive="artifacts/orbit-tracker-$target.tar.xz"
+          test -f "$archive"
+          mkdir -p "$RUNNER_TEMP/orbit"
+          tar -xJf "$archive" -C "$RUNNER_TEMP/orbit" --strip-components=1
+          echo "$RUNNER_TEMP/orbit" >> "$GITHUB_PATH"
+
+      - name: Run onboarding smoke
+        env:
+          ORBIT_BIN: orbit
+        run: bash scripts/onboarding-smoke.sh
+
+  windows:
+    name: windows-latest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Extract the archive
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem artifacts -Filter "orbit-tracker-*-pc-windows-msvc.zip" |
+            Select-Object -First 1
+          if (-not $archive) { throw "no Windows archive found" }
+          Expand-Archive -Path $archive.FullName -DestinationPath "$env:RUNNER_TEMP\orbit" -Force
+          $binary = Get-ChildItem "$env:RUNNER_TEMP\orbit" -Recurse -Filter orbit.exe |
+            Select-Object -First 1
+          if (-not $binary) { throw "orbit.exe not found in the archive" }
+          $binary.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Run onboarding smoke
+        shell: pwsh
+        env:
+          ORBIT_BIN: orbit
+        run: ./scripts/onboarding-smoke.ps1

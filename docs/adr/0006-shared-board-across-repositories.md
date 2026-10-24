@@ -1,6 +1,6 @@
 # One Board may span repositories
 
-A Workspace is one Board plus every Repository linked to it, so a product backlog can span several repositories without copying Tasks between Boards. A Repository selects a non-local Board through an explicit, gitignored pointer written by `orbit link`; `--dir` and `ORBIT_DIR` still override it, and a Repository with no pointer uses the Board inside its Git common directory. Cross-repository Dependencies work because every linked Repository shares one graph.
+A Workspace is one Board plus every Repository linked to it, so a product backlog can span several repositories without copying Tasks between Boards. A Repository selects a non-local Board through an explicit pointer in its Git common directory, written by `orbit link`; `--dir` and `ORBIT_DIR` still override it, and a Repository with no pointer uses the Board inside its Git common directory. Cross-repository Dependencies work because every linked Repository shares one graph.
 
 ## Considered Options
 

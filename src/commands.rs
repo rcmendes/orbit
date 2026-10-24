@@ -88,15 +88,15 @@ where
 }
 
 fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::CommandOutput> {
-    if args.board.is_some() && dir.is_some() {
-        return Err(OrbitError::invalid_argument(
-            "--board and --dir cannot be combined; --board is the init form of --dir",
-        ));
-    }
-
     let cwd = std::env::current_dir()
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
     let in_repo = crate::git::is_git_repo(&cwd);
+    if !in_repo && args.board.is_none() && dir.is_none() {
+        return Err(OrbitError::new(
+            code::NOT_A_REPOSITORY,
+            "`orbit init` must run inside a Git repository; use `orbit init --board <dir>` to create a shared Board elsewhere",
+        ));
+    }
     let root = if in_repo {
         crate::git::repo_root()?
     } else {
@@ -126,31 +126,29 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     } else if let Some(dir) = dir {
         init_board_at(Some(dir), args.print)?
     } else {
-        if !in_repo {
-            return Err(OrbitError::new(
-                code::NOT_A_REPOSITORY,
-                "`orbit init` must run inside a Git repository; use `orbit init --board <dir>` to create a shared Board elsewhere",
-            ));
-        }
         let local = Board::local_root()?;
-        if existing_link.is_some() && !args.print {
-            Board::clear_link()?;
-        }
         let created = !Board::is_board(&local);
         if !args.print {
             if created {
                 Board::init(None)?;
             } else {
-                Board::discover(None)?;
+                Board::discover(Some(&local))?;
+            }
+            if existing_link.is_some() {
+                Board::clear_link()?;
             }
         }
         (local, created, false)
     };
 
-    if args.board.is_some() && !args.print && in_repo {
+    let target_given = args.board.is_some() || dir.is_some();
+    if target_given && !args.print && in_repo {
         Board::write_link(&board_root)?;
     }
-    let linked = args.board.is_some() && in_repo;
+    let linked = target_given && in_repo;
+    let branch = crate::board::Config::load(&board_root)
+        .map(|config| config.board.branch)
+        .unwrap_or_else(|_| "orbit".to_string());
 
     let mut files = json!([]);
     let mut warnings = Vec::new();
@@ -180,13 +178,13 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
 
     let mut human = if args.print {
         format!(
-            "would initialize Board at {} (branch orbit{})\n",
+            "would initialize Board at {} (branch {branch}{})\n",
             board_root.display(),
             if external { ", external" } else { "" }
         )
     } else if created {
         format!(
-            "initialized Board at {} (branch orbit{})\n",
+            "initialized Board at {} (branch {branch}{})\n",
             board_root.display(),
             if external { ", external" } else { "" }
         )
@@ -201,7 +199,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     let mut output = crate::output::CommandOutput::new(
         json!({
             "board": board_root,
-            "branch": "orbit",
+            "branch": branch,
             "external": external,
             "created": created,
             "preview": args.print,
@@ -216,7 +214,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
 }
 
 fn init_board_at(dir: Option<&Path>, print: bool) -> Result<(std::path::PathBuf, bool, bool)> {
-    let board_root = Board::expected_root(dir)?;
+    let board_root = Board::resolve_root(dir)?;
     let created = !Board::is_board(&board_root);
     if !print {
         if created {
@@ -238,7 +236,7 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
         ));
     }
 
-    let target = Board::expected_root(Some(&args.path))?;
+    let target = Board::resolve_root(Some(&args.path))?;
     let board = Board::discover(Some(&target))?;
     let local = Board::local_root()?;
     let shadowed = Board::is_board(&local) && local != board.root;
@@ -263,6 +261,12 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
                     .map(|files| {
                         files
                             .iter()
+                            .filter(|file| {
+                                matches!(
+                                    file["action"].as_str(),
+                                    Some("created" | "updated" | "removed")
+                                )
+                            })
                             .filter_map(|file| file["path"].as_str().map(str::to_string))
                             .collect::<Vec<_>>()
                     })
@@ -270,7 +274,7 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
                 warnings.extend(output.warnings);
             }
             Err(error) => warnings.push(format!(
-                "could not refresh agent configuration: {}",
+                "could not refresh agent configuration: {}; run `orbit setup <client>` to update MCP entries",
                 error.message
             )),
         }
@@ -308,16 +312,17 @@ fn cmd_unlink() -> Result<crate::output::CommandOutput> {
     }
 
     let local = Board::local_root()?;
+    let local_exists = Board::is_board(&local);
     let unlinked = Board::clear_link()?;
     let root = crate::git::repo_root()?;
     let mut warnings = Vec::new();
 
     if unlinked {
-        if Board::is_board(&local) {
+        if local_exists {
             match crate::setup::refresh(&root, None) {
                 Ok(output) => warnings.extend(output.warnings),
                 Err(error) => warnings.push(format!(
-                    "could not refresh agent configuration: {}",
+                    "could not refresh agent configuration: {}; run `orbit setup <client>` to update MCP entries",
                     error.message
                 )),
             }
@@ -331,12 +336,14 @@ fn cmd_unlink() -> Result<crate::output::CommandOutput> {
     let mut output = crate::output::CommandOutput::new(
         json!({
             "unlinked": unlinked,
-            "board": local,
+            "board": if local_exists { json!(local) } else { Value::Null },
         }),
-        if unlinked {
+        if !unlinked {
+            "this repository is not linked".to_string()
+        } else if local_exists {
             format!("unlinked this repository; it now uses {}", local.display())
         } else {
-            "this repository is not linked".to_string()
+            "unlinked this repository; no local Board exists, run `orbit init`".to_string()
         },
     );
     output.warnings = warnings;
@@ -1452,13 +1459,23 @@ fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandO
     };
 
     let orbit_name = if cfg!(windows) { "orbit.exe" } else { "orbit" };
-    let on_path = crate::setup::find_on_path(orbit_name).is_some();
+    let running = std::env::current_exe()
+        .ok()
+        .and_then(|path| dunce::canonicalize(path).ok());
+    let found =
+        crate::setup::find_on_path(orbit_name).and_then(|path| dunce::canonicalize(path).ok());
+    let on_path = match (&found, &running) {
+        (Some(found), Some(running)) => found == running,
+        (Some(_), None) => true,
+        _ => false,
+    };
     if !on_path {
         let repo_root =
             crate::git::repo_root().unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
         if crate::setup::has_orbit_hook(&repo_root) {
             warnings.push(
-                "`orbit` is not on PATH; the Claude SessionStart hook will not find it".to_string(),
+                "`orbit` is not the binary on PATH; the Claude SessionStart hook will not find it"
+                    .to_string(),
             );
         }
     }
@@ -1483,9 +1500,6 @@ fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandO
         }
     }
     human.push_str(&format!("tasks: {}\n", graph.tasks.len()));
-    if !on_path {
-        human.push_str("note: `orbit` is not on PATH\n");
-    }
     for warning in &warnings {
         human.push_str(&format!("warning: {warning}\n"));
     }

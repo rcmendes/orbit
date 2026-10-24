@@ -26,7 +26,9 @@ impl TestRepo {
 
         let home = dir.path().join("home");
         let bin = home.join("bin");
+        let tmp = home.join("tmp");
         std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&tmp).unwrap();
         let path = isolated_path(&bin);
 
         let repo = Self {
@@ -123,7 +125,7 @@ impl TestRepo {
     }
 
     pub fn json_with_stdin(&self, args: &[&str], input: &str) -> (i32, serde_json::Value) {
-        let input_path = self.dir.path().join("stdin.txt");
+        let input_path = self.home.join("stdin.txt");
         std::fs::write(&input_path, input).unwrap();
         let mut command = self.orbit_command(args);
         command.stdin(Stdio::from(
@@ -228,6 +230,9 @@ impl TestRepo {
         command.env("HOME", &self.home);
         command.env("USERPROFILE", &self.home);
         command.env("XDG_CONFIG_HOME", self.home.join(".config"));
+        command.env("TMPDIR", self.home.join("tmp"));
+        command.env("TMP", self.home.join("tmp"));
+        command.env("TEMP", self.home.join("tmp"));
         command.env("PATH", &self.path);
         command.env_remove("ORBIT_DIR");
         command.env_remove("ORBIT_AGENT");

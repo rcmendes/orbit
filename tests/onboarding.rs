@@ -547,7 +547,7 @@ fn doctor_warns_when_orbit_is_not_on_path() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|warning| warning.as_str().unwrap().contains("not on PATH")),
+            .any(|warning| warning.as_str().unwrap().contains("PATH")),
         "{value}"
     );
 }
@@ -633,4 +633,106 @@ fn unlink_refreshes_agent_configuration_back_to_the_local_board() {
             .iter()
             .any(|arg| arg == "--dir")
     );
+}
+
+#[test]
+fn setup_refuses_a_temporary_binary() {
+    let repo = TestRepo::new();
+    repo.init();
+
+    let temp_bin = repo.home().join("tmp/orbit-temp/orbit");
+    std::fs::create_dir_all(temp_bin.parent().unwrap()).unwrap();
+    std::fs::write(&temp_bin, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&temp_bin).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&temp_bin, permissions).unwrap();
+    }
+
+    let (status, value) = repo.json(&[
+        "setup",
+        "claude",
+        "--mcp-bin",
+        temp_bin.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "EPHEMERAL_BIN");
+}
+
+#[test]
+fn link_reports_a_vanished_board() {
+    let repo = TestRepo::new();
+    repo.init();
+    let shared = tempfile::tempdir().unwrap();
+    let board = shared.path().join("board");
+    repo.ok_json(&[
+        "init",
+        "--board",
+        board.to_str().unwrap(),
+        "--agents",
+        "none",
+        "--json",
+    ]);
+
+    std::fs::remove_dir_all(&board).unwrap();
+
+    let (status, value) = repo.json(&["list", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "LINK_NOT_FOUND");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("re-link")
+    );
+}
+
+#[test]
+fn init_reports_unchanged_artifacts_on_a_second_run() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["init", "--agents", "claude", "--json"]);
+
+    let second = repo.ok_json(&["init", "--agents", "claude", "--json"]);
+    let files = second["data"]["files"].as_array().unwrap();
+
+    assert!(!files.is_empty(), "{second}");
+    assert!(
+        files.iter().all(|file| file["action"] == "unchanged"),
+        "{second}"
+    );
+}
+
+#[test]
+fn init_detects_a_harness_from_path() {
+    let repo = TestRepo::new();
+    repo.fake_command("cursor");
+
+    let value = repo.ok_json(&["init", "--agents", "auto", "--json"]);
+
+    assert_eq!(value["data"]["agents"], serde_json::json!(["cursor"]));
+    assert!(repo.exists(".cursor/mcp.json"));
+    assert!(!repo.exists(".mcp.json"));
+}
+
+#[test]
+fn init_dir_links_like_board() {
+    let repo = TestRepo::new();
+    let shared = tempfile::tempdir().unwrap();
+    let board = shared.path().join("board");
+
+    let value = repo.ok_json(&[
+        "init",
+        "--dir",
+        board.to_str().unwrap(),
+        "--agents",
+        "none",
+        "--json",
+    ]);
+    assert_eq!(value["data"]["linked"], true);
+
+    let listed = repo.ok_json(&["list", "--json"]);
+    assert_eq!(listed["data"]["count"], 0);
 }

@@ -134,9 +134,45 @@ after a short backoff.
 
 ## Wayfinding operations
 
-- **Map**: use `orbit list --all --json` and the task bodies.
-- **Child ticket**: one Orbit task per child, linked with `orbit depend`.
-- **Blocking**: `depends_on` / `--depends-on`.
-- **Frontier**: `orbit ready --json`.
-- **Claim**: `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
-- **Resolve**: `orbit done <ID> --by <agent>`.
+A Wayfinder map is an ordinary Task; Orbit has no parent/child hierarchy. Labels
+and task bodies carry the map-to-child relationship.
+
+- **Map**: one Task labelled `wayfinder:map`. Put the destination, scope, and
+  decisions in its body, then capture the returned `data.id`:
+
+  ```bash
+  orbit add "Wayfinder: <destination>" --label wayfinder:map --body-file - --json
+  ```
+
+  Find maps with `orbit list --label wayfinder:map --json`.
+
+- **Child Task**: one Task per child, labelled with the map's per-map label
+  `wayfinder:<map-id>`, and with `Map: <map-id>` at the top of its body:
+
+  ```bash
+  orbit add "<child title>" --label "wayfinder:<map-id>" --body-file - --json
+  ```
+
+- **Dependency**: `--depends-on <dependency-id>` at creation or
+  `orbit depend <task-id> <dependency-id>` later creates a real Dependency: the
+  first Task cannot become Ready until the second is `done` or `cancelled`. Use it
+  only when one Task genuinely must wait for another, such as one child waiting
+  for another child. Never make the map a Dependency of a child; that would block
+  the child on the map instead of recording parentage.
+
+- **Frontier**: the Ready children of one map, not the whole Board. Filter by the
+  per-map label and keep Tasks whose `ready` field is true:
+
+  ```bash
+  orbit list --label "wayfinder:<map-id>" --json \
+    | jq '[.data.tasks[] | select(.ready)]'
+  ```
+
+  `orbit list` hides done and cancelled Tasks, and `ready` is true only for
+  `todo` Tasks with no Claim, not Waiting, no Hold Label, and no Dependency that
+  is neither Done nor Cancelled. Claim an ID from this list with
+  `orbit claim <ID> --by <agent>`. Do not use `orbit ready --claim` to pick map
+  work: it claims the highest-priority Ready Task anywhere on the Board.
+
+- **Resolve**: `orbit done` each child as its work lands, and the map once the
+  destination is reached.

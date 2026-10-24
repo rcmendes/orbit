@@ -199,6 +199,56 @@ fn create_claim_heartbeat_and_finish_round_trip() {
 }
 
 #[test]
+fn subtasks_are_available_over_mcp() {
+    let repo = TestRepo::new();
+    repo.init();
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let parent = client.call(70, "create", json!({ "title": "Feature" }));
+    let parent = tool_envelope(&parent);
+    let parent_id = parent["data"]["id"].as_str().unwrap().to_string();
+
+    let child = client.call(
+        71,
+        "create",
+        json!({
+            "title": "Part",
+            "parent": parent_id.clone(),
+            "labels": ["repo:api", "ready-for-agent"]
+        }),
+    );
+    let child = tool_envelope(&child);
+    let child_id = child["data"]["id"].as_str().unwrap().to_string();
+    assert!(child_id.starts_with(&format!("{parent_id}.")));
+    assert_eq!(child["data"]["parent"], parent_id.as_str());
+
+    let ready = client.call(72, "ready", json!({ "parent": parent_id.clone() }));
+    let ready = tool_envelope(&ready);
+    assert_eq!(ready["data"]["count"], 1);
+    assert_eq!(ready["data"]["tasks"][0]["id"], child_id.as_str());
+
+    let list = client.call(
+        73,
+        "list",
+        json!({ "parent": parent_id.clone(), "all": true }),
+    );
+    let list = tool_envelope(&list);
+    assert_eq!(list["data"]["count"], 1);
+    assert_eq!(list["data"]["tasks"][0]["id"], child_id.as_str());
+
+    let scoped = client.call(74, "list", json!({ "repo": "api", "all": true }));
+    let scoped = tool_envelope(&scoped);
+    assert_eq!(scoped["data"]["count"], 1);
+    assert_eq!(scoped["data"]["tasks"][0]["id"], child_id.as_str());
+
+    let ready_scoped = client.call(75, "ready", json!({ "labels": ["repo:api"] }));
+    let ready_scoped = tool_envelope(&ready_scoped);
+    assert_eq!(ready_scoped["data"]["count"], 1);
+    assert_eq!(ready_scoped["data"]["tasks"][0]["id"], child_id.as_str());
+}
+
+#[test]
 fn link_and_delete_are_available_over_mcp() {
     let repo = TestRepo::new();
     repo.init();

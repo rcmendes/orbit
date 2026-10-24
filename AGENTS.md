@@ -7,6 +7,8 @@ Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit t
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 - `orbit done <id> --by <agent> --comment "..."` completes it and records the note with the status change; `orbit cancel <id> --by <agent>` abandons it.
 - `orbit add "title" -p N --depends-on <id>` creates work.
+- `orbit add "title" --parent <id>` creates a SubTask; SubTasks are one level deep and the parent waits for them.
+- In a multi-repository workspace, add `--repo <name>` to `orbit ready` or `orbit list`.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.

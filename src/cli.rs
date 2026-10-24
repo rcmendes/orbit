@@ -33,6 +33,10 @@ pub enum Command {
     #[command(long_about = help::INIT_LONG, after_long_help = help::INIT_EXAMPLES)]
     Init(InitArgs),
 
+    /// Create a workspace with a shared Board at <folder>/board.
+    #[command(long_about = help::WORKSPACE_LONG, after_long_help = help::WORKSPACE_EXAMPLES)]
+    Workspace(WorkspaceArgs),
+
     /// Point this repository at a shared Board.
     #[command(long_about = help::LINK_LONG, after_long_help = help::LINK_EXAMPLES)]
     Link(LinkArgs),
@@ -109,6 +113,10 @@ pub enum Command {
     #[command(long_about = help::PRIME_LONG, after_long_help = help::PRIME_EXAMPLES)]
     Prime(PrimeArgs),
 
+    /// Export a deterministic JSON snapshot of the Board.
+    #[command(long_about = help::EXPORT_LONG, after_long_help = help::EXPORT_EXAMPLES)]
+    Export,
+
     /// Install, check, or remove one agent integration.
     #[command(long_about = help::SETUP_LONG, after_long_help = help::SETUP_EXAMPLES)]
     Setup(SetupArgs),
@@ -158,8 +166,15 @@ pub struct InitArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct WorkspaceArgs {
+    /// Workspace directory to create or reuse. Its Board lives at <folder>/board.
+    #[arg(value_name = "FOLDER")]
+    pub folder: PathBuf,
+}
+
+#[derive(Debug, Args)]
 pub struct LinkArgs {
-    /// Board directory to link this repository to.
+    /// Board or workspace directory to link this repository to.
     #[arg(value_name = "PATH")]
     pub path: PathBuf,
 
@@ -180,6 +195,10 @@ pub struct AddArgs {
     /// Make the new task wait for an existing task. Repeatable.
     #[arg(long = "depends-on", value_name = "ID", action = clap::ArgAction::Append)]
     pub depends_on: Vec<String>,
+
+    /// Create a SubTask under this Parent Task. SubTasks are one level deep.
+    #[arg(long, value_name = "ID")]
+    pub parent: Option<String>,
 
     /// Record a blocker that lives outside the Board.
     #[arg(long, value_name = "TEXT")]
@@ -216,13 +235,25 @@ pub struct ListArgs {
     #[arg(long)]
     pub waiting: bool,
 
-    /// Filter by label.
-    #[arg(long, value_name = "LABEL")]
-    pub label: Option<String>,
+    /// Filter by label. Repeatable; every label must match.
+    #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
+    pub label: Vec<String>,
+
+    /// Filter by repository label. Shorthand for --label repo:NAME.
+    #[arg(long, value_name = "NAME")]
+    pub repo: Option<String>,
 
     /// Only tasks with no labels.
-    #[arg(long, conflicts_with = "label")]
+    #[arg(long, conflicts_with_all = ["label", "repo"])]
     pub unlabeled: bool,
+
+    /// Filter to SubTasks of this Parent Task.
+    #[arg(long, value_name = "ID")]
+    pub parent: Option<String>,
+
+    /// Group each Parent Task with its SubTasks.
+    #[arg(long)]
+    pub tree: bool,
 
     /// Include done and cancelled tasks.
     #[arg(long)]
@@ -234,6 +265,18 @@ pub struct ReadyArgs {
     /// Maximum number of tasks to list.
     #[arg(long, value_name = "N")]
     pub limit: Option<usize>,
+
+    /// Only Ready SubTasks of this Parent Task.
+    #[arg(long, value_name = "ID")]
+    pub parent: Option<String>,
+
+    /// Only Ready tasks with this repository label. Shorthand for --label repo:NAME.
+    #[arg(long, value_name = "NAME")]
+    pub repo: Option<String>,
+
+    /// Only Ready tasks carrying every label. Repeatable.
+    #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
+    pub label: Vec<String>,
 
     /// Claim the first ready task in the same transaction.
     #[arg(long)]
@@ -513,6 +556,14 @@ pub struct PrimeArgs {
     /// Agent identity used in the context. Defaults to ORBIT_AGENT, then USER.
     #[arg(long, value_name = "NAME")]
     pub by: Option<String>,
+
+    /// Only Ready tasks with this repository label. Shorthand for --label repo:NAME.
+    #[arg(long, value_name = "NAME")]
+    pub repo: Option<String>,
+
+    /// Only Ready tasks carrying every label. Repeatable.
+    #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
+    pub label: Vec<String>,
 }
 
 #[derive(Debug, Args)]

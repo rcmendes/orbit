@@ -14,6 +14,7 @@ fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
             priority: 2,
             labels: Vec::new(),
             depends_on: dependencies,
+            parent: None,
             waiting_on: None,
             claim: None,
             stray_claim_times: None,

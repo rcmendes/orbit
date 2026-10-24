@@ -110,8 +110,9 @@ The detailed module map, board-resolution flow, domain relationships, state mach
 The canonical vocabulary lives in `docs/GLOSSARY.md`. In short:
 
 - A Task has one stored **Status**: `todo`, `in_progress`, `done`, or `cancelled`.
-- **Ready** is derived: `todo`, no Claim (including no Stale Claim), not Waiting, no Hold Label, and every Dependency is `done` or `cancelled`.
-- **Blocked** is derived: at least one Dependency is not `done` or `cancelled`.
+- A **Parent Task** groups **SubTasks**, and its completion depends on them. A **SubTask** is a Task with a `parent`; it is claimable and completable in its own right. Parentage is one level deep and is not a Dependency.
+- **Ready** is derived: `todo`, no Claim (including no Stale Claim), not Waiting, no Hold Label, every Dependency is `done` or `cancelled`, and every SubTask is `done` or `cancelled`.
+- **Blocked** is derived: at least one Dependency is not `done` or `cancelled`, or a Parent Task has at least one open SubTask.
 - **Waiting** is an external blocker recorded by `waiting_on`; it is not a Status.
 - A **Claim** is exclusive, time-bounded responsibility for a Task. The time window is a **Lease**. An expired, unreleased Claim is **Stale**: the Task is not Ready, but it can be released or stolen.
 - **Done** and **Cancelled** both resolve dependents. Cancelled exists so abandoned work does not have to lie with `done` or destroy history with `delete`.
@@ -153,8 +154,9 @@ stateDiagram-v2
     note left of todo
         Ready is derived:
         todo, no claim, no waiting_on,
-        no hold label, and every dependency
-        done or cancelled.
+        no hold label, every dependency
+        done or cancelled, and every
+        SubTask done or cancelled.
     end note
 ```
 
@@ -164,9 +166,9 @@ stateDiagram-v2
 
 ### ID
 
-`orb-` followed by 6 random Crockford base32 characters: `0123456789abcdefghjkmnpqrstvwxyz`.
+A Task ID is the configured `id.prefix` (default `orb-`) followed by 6–8 random Crockford base32 characters: `0123456789abcdefghjkmnpqrstvwxyz`. A SubTask ID is `<parent-id>.<random>`: the parent ID, a dot, and a fresh 6–8 character suffix.
 
-Examples: `orb-a7b2c9`, `orb-f14c02`. IDs of 6–8 characters are accepted so the length can grow without breaking existing boards. The filename stem is the single source of truth; there is no `id` field in frontmatter.
+Examples: `orb-a7b2c9` (Task), `orb-a7b2c9.d4b3df` (SubTask), and `orb-f14c02` (a legacy Task, still valid). Legacy IDs are ordinary Task IDs; a legacy Task can parent `orb-f14c02.d4b3df` without migration. One level only: a second dot is invalid. `id.prefix` accepts lowercase letters, digits, and dashes, and must not contain a dot, so the dot always marks the parent boundary. The filename stem is the single source of truth; there is no `id` field in frontmatter.
 
 ### Layout
 
@@ -177,10 +179,12 @@ Examples: `orb-a7b2c9`, `orb-f14c02`. IDs of 6–8 characters are accepted so th
 ├── tasks/
 │   ├── .gitkeep
 │   ├── orb-a7b2c9.md
-│   └── orb-f14c02.md
+│   ├── orb-f14c02.md
+│   └── orb-f14c02.d4b3df.md
 └── comments/
     ├── .gitkeep
-    └── orb-a7b2c9.md
+    ├── orb-a7b2c9.md
+    └── orb-f14c02.d4b3df.md
 ```
 
 Comments are optional; the file is created on the first comment. The task file remains the description and acceptance criteria; `orbit show` merges the task and its comments.
@@ -188,6 +192,8 @@ Comments are optional; the file is created on the first comment. The task file r
 The lock is runtime state outside the board for the default layout: `<git-common-dir>/orbit/lock`. For an external board (`ORBIT_DIR`), it is `<board_root>/.lock` and is gitignored.
 
 ### Frontmatter
+
+The example below is a SubTask file, `tasks/orb-f14c02.d4b3df.md`.
 
 ```yaml
 ---
@@ -198,7 +204,8 @@ labels:
 - ready-for-agent
 - bug
 depends_on:
-- orb-f14c02
+- orb-a7b2c9
+parent: orb-f14c02
 waiting_on: Waiting for API credentials
 claimed_by: claude-1
 claimed_at: 2026-10-23T12:00:00Z
@@ -210,7 +217,7 @@ updated_at: 2026-10-23T12:00:00Z
 Body text, acceptance criteria, notes.
 ```
 
-Required: `title`, `status`, `created_at`, `updated_at`. Optional: `priority` (default `2`), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `waiting_on`, `claimed_by`, `claimed_at`, `lease_until`. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC.
+Required: `title`, `status`, `created_at`, `updated_at`. Optional: `priority` (default `2`), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `waiting_on`, `claimed_by`, `claimed_at`, `lease_until`. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task that is not itself a SubTask; SubTasks are one level deep, and the SubTask ID must encode the same parent. `doctor` reports a mismatch as `PARENT_MISMATCH`.
 
 The body is free-form Markdown. Orbit does not duplicate the title as an H1. Frontmatter is parsed as the first `---` block, not by splitting the whole file on `---`.
 
@@ -244,6 +251,8 @@ length = 6
 prefix = "orb-"
 ```
 
+`id.prefix` must contain only lowercase letters, digits, and dashes; a dot is reserved for the SubTask boundary.
+
 ## 5. Board lifecycle
 
 `orbit init`:
@@ -257,7 +266,9 @@ prefix = "orb-"
 
 `orbit init` is idempotent: an existing Board is reused, and the agent integration is reconciled rather than rejected. In a repository linked to a shared Board, `init` refuses unless `--local` is passed. Outside a Git repository it refuses with `NOT_A_REPOSITORY` and names `--board` as the alternative.
 
-`--board PATH` creates an external Board at `PATH` when it does not exist, links the repository to it, and wires agents. The link is a pointer at `<git-common-dir>/orbit/link` containing the resolved Board path. `orbit link PATH` writes the same pointer for a repository joining an existing Board; `orbit unlink` removes it. Because the pointer lives in the common directory, every linked worktree resolves the same Board.
+`orbit workspace <FOLDER>` creates the workspace directory if needed and an external Board at `<FOLDER>/board`. It does not clone repositories, link them, or write agent configuration; each repository joins with `orbit link <FOLDER>`. A workspace root inside a Git working tree is rejected with `WORKSPACE_INSIDE_REPO`. The command is idempotent: an existing Board is reported, not overwritten.
+
+`--board PATH` creates an external Board at `PATH` when it does not exist, links the repository to it, and wires agents. The link is a pointer at `<git-common-dir>/orbit/link` containing the resolved Board path. `orbit link PATH` writes the same pointer for a repository joining an existing Board; `PATH` may be a Board root or a workspace root containing `board/`, and a workspace root resolves to that Board. `orbit unlink` removes it. Because the pointer lives in the common directory, every linked worktree resolves the same Board.
 
 Every command resolves the Board in this order: `--dir`, then `ORBIT_DIR`, then the repository link, then the Board in the Git common directory. A pointer whose target no longer contains a Board returns `LINK_NOT_FOUND`. A linked repository keeps its local Board on disk; linking shadows it and does not delete it.
 
@@ -275,11 +286,12 @@ The command map and the `init` and task-lifecycle sequences are in
 
 ```text
 orbit init [--board PATH] [--agents SELECTOR] [--no-agents] [--hooks] [--local] [--mcp-bin PATH] [--print]
+orbit workspace <FOLDER>
 orbit link <PATH> [--no-refresh]
 orbit unlink
-orbit add <title> [-p N] [--label LABEL]... [--depends-on ID]... [--waiting-on TEXT] [--body TEXT|--body-file PATH|-]
-orbit list [--status S] [--priority N] [--claimed-by NAME] [--label LABEL|--unlabeled] [--waiting] [--all]
-orbit ready [--limit N] [--claim] [--by NAME]
+orbit add <title> [-p N] [--label LABEL]... [--depends-on ID]... [--parent ID] [--waiting-on TEXT] [--body TEXT|--body-file PATH|-]
+orbit list [--status S] [--priority N] [--claimed-by NAME] [--label LABEL]... [--repo NAME|--unlabeled] [--parent ID] [--tree] [--waiting] [--all]
+orbit ready [--limit N] [--parent ID] [--repo NAME] [--label LABEL]... [--claim] [--by NAME]
 orbit show <id>
 orbit claim <id> [--by NAME] [--steal]
 orbit release <id> [--by NAME] [--force]
@@ -291,7 +303,8 @@ orbit update <id> [--title TEXT] [--body TEXT|--body-file PATH] [--priority N] [
 orbit depend <id> <dep-id>
 orbit undepend <id> <dep-id>
 orbit delete <id> [--by NAME] [--force]
-orbit prime [--hook-json] [--by NAME]
+orbit prime [--hook-json] [--repo NAME] [--label LABEL]... [--by NAME]
+orbit export
 orbit doctor [--fix]
 orbit sync
 ```
@@ -305,6 +318,7 @@ orbit sync
 - M3: packaging and release automation. Implemented.
 - M4: labels, comments, and triage integration. Implemented.
 - M5: one-command onboarding. `init` creates the Board and reconciles detected harnesses idempotently; `link` and `unlink` share one Board across repositories; hooks record the absolute binary; `setup --check` reports drift. Implemented.
+- M6: workspaces, SubTasks, dot-hierarchical IDs, repo/label-scoped queues, and deterministic export. `orbit workspace`, `add --parent`, `list/ready/prime --repo/--label`, and `export --json` are implemented.
 
 ### M4 commands
 
@@ -318,14 +332,21 @@ orbit comment list <id>
 
 ### Command rules
 
-- `list` hides `done` and `cancelled` unless `--all`.
-- `done` never bypasses unfinished dependencies. `--force` only overrides a competing live claim.
+- `list` hides `done` and `cancelled` unless `--all`. `--label` is repeatable and every label must match; `--repo NAME` is shorthand for `--label repo:NAME`. `--unlabeled` conflicts with both.
+- `ready` and `prime` accept the same `--repo` and repeatable `--label` filters. `ready` also accepts `--parent`; all filters combine with AND.
+- `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `1`.
+- `done` never bypasses unfinished dependencies. `--force` overrides a competing live claim and, on a Parent Task, cancels open SubTasks before closing it.
 - A forced `reopen` can leave an already-done dependent with an unfinished dependency. That is a historical fact, not corruption: `doctor` reports it as a warning, and the next `done` of that dependent still enforces its dependencies.
-- `reopen` refuses when a done dependent exists unless `--force`.
-- `delete` refuses when dependents exist unless `--force`; `--force` removes the ID from each dependent first.
-- `depend` refuses self-dependencies, missing tasks, cycles, and adding a dependency to a terminal task.
+- `reopen` refuses when a done dependent exists unless `--force`. Reopening a SubTask of a done parent reopens the parent too.
+- `delete` refuses when dependents exist unless `--force`; `--force` removes the ID from each dependent first. A Parent Task with SubTasks is refused unless `--force`, which deletes the whole subtree.
+- `depend` refuses self-dependencies, missing tasks, cycles, adding a dependency to a terminal task, and parent/child edges in either direction. Parentage is not a Dependency; use `add --parent`.
+- `add --parent <id>` creates a SubTask and stores `parent`. The parent must exist, be non-terminal, and not itself be a SubTask; SubTasks are one level deep.
+- A Parent Task is Ready only when every SubTask is `done` or `cancelled`. `claim`, `done`, and `cancel` refuse with `SUBTASKS_OPEN` while open SubTasks remain. `done --force` and `cancel --force` cancel the open SubTasks first; `delete` refuses a Parent Task with SubTasks unless `--force`, which deletes the whole subtree.
+- `reopen` of a SubTask under a done Parent Task reopens the parent too. A SubTask under a cancelled parent is refused until the parent is reopened.
+- `list --parent <id>` filters to that Parent Task's SubTasks; `list --tree` keeps parents and SubTasks together in human output.
+- `doctor` reports missing parents (`DANGLING_PARENT`), nested or self parents (`NESTED_SUBTASK`), and parent/ID mismatches (`PARENT_MISMATCH`).
 - `undepend` is idempotent.
-- `cancel` resolves dependents. It requires the claim holder unless `--force`.
+- `cancel` resolves dependents. It requires the claim holder unless `--force`; on a Parent Task, `--force` also cancels open SubTasks.
 - `label add` and `label remove` are idempotent. Labels are lowercase slugs; invalid labels are rejected with `INVALID_LABEL`.
 - A Task carrying a configured hold label is not Ready; `claim` returns `LABEL_BLOCKED`. `--steal` does not bypass hold labels; remove the label first.
 - `done` and `cancel` accept `--comment TEXT` or `--comment-file PATH`; the note is appended in the same locked operation as the terminal status change, so an agent cannot record a completion note before the task is closed.
@@ -365,7 +386,49 @@ Error:
 - `doctor` reports `data.healthy: false` and exits `1` when it finds issues.
 - `orbit prime --hook-json` is the one exception to the envelope: it prints Claude Code's SessionStart payload, `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}`. It cannot be combined with `--json`.
 
-Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`, `NOT_A_REPOSITORY`, `ALREADY_LINKED`, `LINK_NOT_FOUND`, `EPHEMERAL_BIN`.
+### Export snapshot
+
+`orbit export --json` returns the standard envelope with this `data` shape:
+
+```json
+{
+  "schema_version": 1,
+  "board": {"branch": "orbit", "task_count": 1, "comment_count": 0},
+  "tasks": [
+    {
+      "id": "orb-a7b2c9",
+      "kind": "task",
+      "title": "Build the CLI router",
+      "status": "todo",
+      "priority": 2,
+      "labels": ["repo:api"],
+      "parent": null,
+      "subtasks": [],
+      "open_subtasks": [],
+      "depends_on": [],
+      "waiting_on": null,
+      "claimed_by": null,
+      "claimed_at": null,
+      "lease_until": null,
+      "created_at": "2026-10-23T11:00:00Z",
+      "updated_at": "2026-10-23T12:00:00Z",
+      "ready": true,
+      "blocking": [],
+      "dependents": [],
+      "body": "Body text, acceptance criteria, notes.",
+      "comments": [],
+      "comment_count": 0
+    }
+  ]
+}
+```
+
+- `tasks` contains every Task and SubTask, including `done` and `cancelled`, sorted by ID.
+- Each entry is the `show --json` detail shape: `kind`, `parent`, `subtasks`, `open_subtasks`, `labels`, `depends_on`, `dependents`, derived `ready` and `blocking`, the body, and the full comments.
+- The snapshot is a pure function of board state: no export timestamp and no machine-local paths. Comments keep their file order.
+- Consumers should pin `schema_version` and ignore unknown fields.
+
+Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `SUBTASKS_OPEN`, `SUBTASKS_EXIST`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`, `NOT_A_REPOSITORY`, `ALREADY_LINKED`, `LINK_NOT_FOUND`, `WORKSPACE_INSIDE_REPO`, `EPHEMERAL_BIN`.
 
 `LOCKED` is retryable. Everything else is not unless `details` says otherwise.
 
@@ -384,7 +447,7 @@ CLI + `orbit prime` is the primary interface. `prime` prints ~1k tokens: workflo
 
 `orbit init` and `orbit setup` write project-local files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and mattpocock (`docs/agents/issue-tracker.md`). `init` selects harnesses by detection or `--agents`; `setup` selects one explicitly named client. Orbit-managed sections and files use markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries. A hand-written `docs/agents/issue-tracker.md` without the marker is reported as `skipped` and left untouched, while `--check` still treats the integration as installed.
 
-MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
+MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. `create` accepts `parent` to make a SubTask; `list` and `ready` accept `parent`, `repo`, and `labels` to scope a feature or repository. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
 
 ## 10. Milestones
 
@@ -408,7 +471,8 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Worktree integration: initialize in the main worktree, claim from a linked worktree, assert one board.
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, and `--remove` preserving user content.
 - Onboarding tests: idempotent `init`, harness detection and selection, link precedence over a local Board, `--dir`/`ORBIT_DIR` overrides, linked-worktree resolution, vanished links, and ephemeral binary rejection.
-- MCP tests: initialize, tools/list, label/comment round-trips, resources, and error envelopes over a real stdio child process.
+- Workspace, SubTask, ID, filter, and export integration tests: `tests/workspace.rs`, `tests/subtasks.rs`, and `tests/export.rs`.
+- MCP tests: initialize, tools/list, label/comment round-trips, SubTask/parent filtering, resources, and error envelopes over a real stdio child process.
 - Golden JSON and error-envelope tests.
 - CI on macOS, Linux, and Windows: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
 - A Linux `setup-check` CI job runs `orbit setup opencode --no-mcp --check`, so the checked-in `AGENTS.md` managed block stays in sync with the generator; `--no-mcp` keeps machine-local MCP configuration out of the check.

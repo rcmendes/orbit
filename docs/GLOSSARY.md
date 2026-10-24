@@ -5,8 +5,16 @@ Orbit is a local work queue for coding agents. Its unit of work is a Task stored
 ## Language
 
 **Task**:
-A single unit of work that one agent can claim and complete.
+A single unit of work that one agent can claim and complete. A Task may stand alone or group SubTasks as a Parent Task.
 _Avoid_: Issue, ticket, bead, bean
+
+**SubTask**:
+A Task that belongs to exactly one Parent Task. A SubTask is claimable and completable in its own right; it is not a checklist item.
+_Avoid_: Child task, checklist item, step
+
+**Parent Task**:
+A Task that groups SubTasks and whose completion depends on them.
+_Avoid_: Epic, story
 
 **Status**:
 The stored lifecycle position of a Task: `todo`, `in_progress`, `done`, or `cancelled`.

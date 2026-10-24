@@ -158,24 +158,47 @@ Because the generated MCP command is machine-specific, keep those config files u
 
 ### Several related repositories
 
-A Workspace is one Board plus every repository linked to it. Create the Board once, then link the repositories that share it:
+A Workspace is one Board plus every repository linked to it. Create the workspace and its Board once, then link the repositories that share it:
 
 ```bash
-# In the first repository: create the product Board and link to it
-orbit init --board ~/src/acme-board
+# Create ~/src/acme/board as an independent Board
+orbit workspace ~/src/acme
 
 # In each related repository: use the same Board
-orbit link ~/src/acme-board
+orbit link ~/src/acme
 ```
 
-Commands in a linked repository find the shared Board without an environment variable, including from Git worktrees. `orbit unlink` returns a repository to its own Board. An explicit override wins for one command:
+`orbit workspace` only creates the workspace and Board; it does not clone or link repositories, and it refuses to put the workspace inside a Git working tree. Commands in a linked repository find the shared Board without an environment variable, including from Git worktrees. `orbit unlink` returns a repository to its own Board. An explicit override wins for one command:
 
 ```bash
-orbit --dir ~/src/acme-board list
-ORBIT_DIR=~/src/acme-board orbit ready
+orbit --dir ~/src/acme/board list
+ORBIT_DIR=~/src/acme/board orbit ready
 ```
 
 Discovery order is `--dir`, then `ORBIT_DIR`, then the repository link, then the repository's own Board.
+
+### Features and SubTasks
+
+A Parent Task groups SubTasks. Create the parent once, then add one SubTask per piece:
+
+```bash
+orbit add "SSO login across api, web, infra" --body-file feature.md
+# created orb-a7b2c9
+orbit add "api: OIDC callback" --parent orb-a7b2c9 --label repo:api
+orbit add "web: login redirect" --parent orb-a7b2c9 --label repo:web
+```
+
+A SubTask ID is the parent ID, a dot, and a fresh suffix (`orb-a7b2c9.b3c4d5`). SubTasks are one level deep and are claimed independently. The parent is not Ready until every SubTask is done or cancelled; `orbit done` on the parent with open SubTasks is refused unless `--force`, which cancels them. `orbit list --parent <id> --tree` shows the family, and `orbit ready --parent <id>` scopes an agent to one feature. Use `orbit list --repo <name>` and `orbit ready --repo <name>` to scope work to one repository.
+
+### Export the board
+
+`orbit export --json` emits a deterministic snapshot of every Task and SubTask, including terminal work, labels, dependency and parent edges, comments, and derived readiness. It is ordered by task ID, carries `schema_version`, and contains no timestamp or machine-local paths.
+
+```bash
+orbit export --json > board.json
+```
+
+Use it to feed a knowledge base, archive a board, or diff two snapshots. Pin `schema_version` in the collector.
 
 ### Triage metadata
 
@@ -198,7 +221,7 @@ The default hold labels are `needs-triage`, `needs-info`, and `ready-for-human`:
 orbit mcp
 ```
 
-`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. It also serves `orbit://tasks/{id}` as a Markdown resource. Tool calls reuse the CLI's lock, atomic writes, auto-commit, and error envelope. See [SPEC.md](./docs/SPEC.md) section 9.
+`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. `create` accepts `parent` to make a SubTask, and `list`/`ready` accept `parent`, `repo`, and `labels` to scope a feature or repository. It also serves `orbit://tasks/{id}` as a Markdown resource. Tool calls reuse the CLI's lock, atomic writes, auto-commit, and error envelope. See [SPEC.md](./docs/SPEC.md) section 9.
 
 ### Why not Beads or Beans?
 

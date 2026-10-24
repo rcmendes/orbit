@@ -140,7 +140,10 @@ fn tool_definitions() -> Vec<Value> {
             json!({
                 "claim": { "type": "boolean", "description": "Claim the first ready task." },
                 "by": { "type": "string", "description": "Agent identity for the claim." },
-                "limit": { "type": "integer", "minimum": 1, "description": "Maximum tasks to list." }
+                "limit": { "type": "integer", "minimum": 1, "description": "Maximum tasks to list." },
+                "parent": { "type": "string", "description": "Only Ready SubTasks of this Parent Task." },
+                "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
+                "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." }
             }),
             &[],
         ),
@@ -154,6 +157,9 @@ fn tool_definitions() -> Vec<Value> {
                 "waiting": { "type": "boolean", "description": "Only tasks with an external blocker." },
                 "label": { "type": "string", "description": "Filter by label." },
                 "unlabeled": { "type": "boolean", "description": "Only tasks with no labels." },
+                "parent": { "type": "string", "description": "Only SubTasks of this Parent Task." },
+                "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
+                "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
                 "all": { "type": "boolean", "description": "Include done and cancelled tasks." }
             }),
             &[],
@@ -172,6 +178,7 @@ fn tool_definitions() -> Vec<Value> {
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
                 "labels": { "type": "array", "items": { "type": "string" } },
                 "depends_on": { "type": "array", "items": { "type": "string" } },
+                "parent": { "type": "string", "description": "Create a SubTask under this Parent Task." },
                 "waiting_on": { "type": "string", "description": "External blocker." },
                 "body": { "type": "string", "description": "Markdown body and acceptance criteria." }
             }),
@@ -380,6 +387,24 @@ fn dispatch_tool(
     if name == "list" && arguments.get("label").is_some() && bool_arg(arguments, "unlabeled") {
         return tool_invalid("`label` and `unlabeled` are mutually exclusive");
     }
+    if arguments
+        .get("parent")
+        .is_some_and(|value| !value.is_string())
+    {
+        return tool_invalid("`parent` must be a task id string");
+    }
+    if arguments
+        .get("repo")
+        .is_some_and(|value| !value.is_string())
+    {
+        return tool_invalid("`repo` must be a string");
+    }
+    if arguments
+        .get("labels")
+        .is_some_and(|value| !value.is_array())
+    {
+        return tool_invalid("`labels` must be an array of strings");
+    }
 
     let mut args: Vec<String> = Vec::new();
 
@@ -396,6 +421,23 @@ fn dispatch_tool(
             if let Some(limit) = optional_u64(arguments, "limit") {
                 args.push("--limit".to_string());
                 args.push(limit.to_string());
+            }
+            if let Some(parent) = optional_str(arguments, "parent") {
+                args.push("--parent".to_string());
+                args.push(parent);
+            }
+            if let Some(repo) = optional_str(arguments, "repo") {
+                args.push("--repo".to_string());
+                args.push(repo);
+            }
+            if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
+                for label in labels {
+                    let Some(label) = label.as_str() else {
+                        return tool_invalid("`labels` must be an array of strings");
+                    };
+                    args.push("--label".to_string());
+                    args.push(label.to_string());
+                }
             }
         }
         "list" => {
@@ -419,6 +461,23 @@ fn dispatch_tool(
             if bool_arg(arguments, "unlabeled") {
                 args.push("--unlabeled".to_string());
             }
+            if let Some(parent) = optional_str(arguments, "parent") {
+                args.push("--parent".to_string());
+                args.push(parent);
+            }
+            if let Some(repo) = optional_str(arguments, "repo") {
+                args.push("--repo".to_string());
+                args.push(repo);
+            }
+            if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
+                for label in labels {
+                    let Some(label) = label.as_str() else {
+                        return tool_invalid("`labels` must be an array of strings");
+                    };
+                    args.push("--label".to_string());
+                    args.push(label.to_string());
+                }
+            }
             if bool_arg(arguments, "waiting") {
                 args.push("--waiting".to_string());
             }
@@ -439,6 +498,10 @@ fn dispatch_tool(
             };
             args.push("add".to_string());
             args.push(title);
+            if let Some(parent) = optional_str(arguments, "parent") {
+                args.push("--parent".to_string());
+                args.push(parent);
+            }
             if let Some(priority) = optional_u64(arguments, "priority") {
                 args.push("-p".to_string());
                 args.push(priority.to_string());

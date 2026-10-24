@@ -65,7 +65,7 @@ pub fn ensure_identity(cwd: &Path) -> Result<()> {
     let email = config_get(cwd, "user.email")?;
     if name.is_none() || email.is_none() {
         return Err(OrbitError::config(
-            "git user.name and user.email must be configured before `orbit init`",
+            "git user.name and user.email must be configured before creating a Board",
         ));
     }
     Ok(())
@@ -210,6 +210,30 @@ pub fn is_git_repo(path: &Path) -> bool {
     run_git_raw(Some(path), &["rev-parse", "--git-dir"], None)
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+/// Returns the working tree that contains `path`, looking at the nearest
+/// existing ancestor when the path itself does not exist yet.
+pub fn toplevel_containing(path: &Path) -> Option<PathBuf> {
+    let mut candidate = path;
+    loop {
+        if candidate.exists() {
+            break;
+        }
+        candidate = candidate.parent()?;
+    }
+
+    let output = run_git_raw(Some(candidate), &["rev-parse", "--show-toplevel"], None).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(value))
+    }
 }
 
 pub fn has_head(path: &Path) -> Result<bool> {

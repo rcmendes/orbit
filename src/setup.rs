@@ -1776,6 +1776,8 @@ Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit t
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 {COMPLETION_LINE}
 - `orbit add \"title\" -p N --depends-on <id>` creates work.
+- `orbit add \"title\" --parent <id>` creates a SubTask; SubTasks are one level deep and the parent waits for them.
+- In a multi-repository workspace, add `--repo <name>` to `orbit ready` or `orbit list`.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.
@@ -1824,6 +1826,8 @@ We use Orbit, a local AI-native issue tracker. Tasks live as Markdown on the boa
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
 - To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change.
 - To create work, run `orbit add \"Title\" -p N --depends-on <ID>`.
+- To break a feature into pieces, run `orbit add \"Title\" --parent <PARENT_ID>`; SubTasks are one level deep and the parent waits for them.
+- In a multi-repository workspace, add `--repo <NAME>` to `orbit ready` or `orbit list`.
 - To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`.
 - To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.
 - The hold labels `needs-triage`, `needs-info`, and `ready-for-human` keep tasks out of the ready queue and prevent claims until removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.

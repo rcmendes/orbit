@@ -10,7 +10,7 @@ use crate::cli::{
     AddArgs, CancelArgs, ClaimArgs, Cli, Command, CommentAddArgs, CommentArgs, CommentCommand,
     CommentListArgs, DeleteArgs, DependArgs, DoctorArgs, DoneArgs, HeartbeatArgs, InitArgs,
     LabelArgs, LabelCommand, LabelMutationArgs, LinkArgs, ListArgs, PrimeArgs, ReadyArgs,
-    ReleaseArgs, ReopenArgs, ShowArgs, UndependArgs, UpdateArgs,
+    ReleaseArgs, ReopenArgs, ShowArgs, UndependArgs, UpdateArgs, WorkspaceArgs,
 };
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
@@ -31,6 +31,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
 
     match command {
         Command::Init(args) => cmd_init(args, dir.as_deref()),
+        Command::Workspace(args) => cmd_workspace(args),
         Command::Link(args) => cmd_link(args),
         Command::Unlink => cmd_unlink(),
         Command::Add(args) => with_board(dir.as_deref(), true, |board| cmd_add(board, args)),
@@ -65,6 +66,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         }
         Command::Delete(args) => with_board(dir.as_deref(), true, |board| cmd_delete(board, args)),
         Command::Prime(args) => with_board(dir.as_deref(), false, |board| cmd_prime(board, args)),
+        Command::Export => with_board(dir.as_deref(), false, cmd_export),
         Command::Setup(args) => crate::setup::run(args, dir.as_deref()),
         Command::Mcp => crate::mcp::serve(dir.as_deref())
             .map(|()| crate::output::CommandOutput::new(Value::Null, "").with_silent()),
@@ -228,6 +230,100 @@ fn init_board_at(dir: Option<&Path>, print: bool) -> Result<(std::path::PathBuf,
     Ok((board_root, created, true))
 }
 
+fn cmd_workspace(args: WorkspaceArgs) -> Result<crate::output::CommandOutput> {
+    let requested = crate::board::resolve_external(&args.folder)?;
+
+    if requested.exists() && !requested.is_dir() {
+        return Err(OrbitError::config(format!(
+            "workspace path {} exists and is not a directory",
+            requested.display()
+        )));
+    }
+
+    if requested
+        .components()
+        .any(|component| component.as_os_str() == ".git")
+    {
+        return Err(OrbitError::new(
+            code::WORKSPACE_INSIDE_REPO,
+            format!(
+                "a workspace must live outside every Git working tree; {} is inside a Git directory",
+                requested.display()
+            ),
+        ));
+    }
+
+    if let Some(repository) = crate::git::toplevel_containing(&requested) {
+        return Err(OrbitError::new(
+            code::WORKSPACE_INSIDE_REPO,
+            format!(
+                "a workspace must live outside every Git working tree; {} is inside {}",
+                requested.display(),
+                repository.display()
+            ),
+        )
+        .with_details(json!({
+            "workspace": requested,
+            "repository": repository,
+        })));
+    }
+
+    std::fs::create_dir_all(&requested)
+        .map_err(|error| OrbitError::io(format!("create {}", requested.display()), error))?;
+    let workspace = dunce::canonicalize(&requested)
+        .map_err(|error| OrbitError::io(format!("resolve {}", requested.display()), error))?;
+    let board_root = workspace.join("board");
+
+    let created = !Board::is_board(&board_root);
+    let branch = if created {
+        if board_root.exists() && !board_root.is_dir() {
+            return Err(OrbitError::config(format!(
+                "board path {} exists and is not a directory",
+                board_root.display()
+            )));
+        }
+        Board::init(Some(&board_root))?.branch
+    } else {
+        Board::discover(Some(&board_root))?.config.board.branch
+    };
+
+    let mut human = if created {
+        format!("created workspace at {}\n", workspace.display())
+    } else {
+        format!("workspace already initialized at {}\n", workspace.display())
+    };
+    human.push_str(&format!(
+        "board: {} (branch {branch})\n\n",
+        board_root.display()
+    ));
+    human.push_str("link each repository from its root:\n");
+    human.push_str(&format!("  orbit link {}\n", workspace.display()));
+
+    Ok(crate::output::CommandOutput::new(
+        json!({
+            "workspace": workspace,
+            "board": board_root,
+            "branch": branch,
+            "created": created,
+        }),
+        human,
+    ))
+}
+
+fn resolve_link_target(path: &Path) -> Result<std::path::PathBuf> {
+    let root = crate::board::resolve_external(path)?;
+    if root.join("config.toml").exists() {
+        return Ok(root);
+    }
+
+    let nested = root.join("board");
+    if nested.join("config.toml").exists() {
+        return Ok(nested);
+    }
+
+    Ok(root)
+}
+
 fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
     let cwd = std::env::current_dir()
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
@@ -238,7 +334,7 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
         ));
     }
 
-    let target = Board::resolve_root(Some(&args.path))?;
+    let target = resolve_link_target(&args.path)?;
     let board = Board::discover(Some(&target))?;
     let local = Board::local_root()?;
     let shadowed = Board::is_board(&local) && local != board.root;
@@ -374,9 +470,36 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
         }
     }
 
+    let parent = match args.parent {
+        Some(parent_id) => {
+            let parent_task = graph.get(&parent_id)?;
+            if parent_task.front.status.is_terminal() {
+                return Err(OrbitError::invalid_argument(format!(
+                    "parent {parent_id} is {}; a SubTask needs an active Parent Task",
+                    parent_task.front.status.as_str()
+                )));
+            }
+            if parent_task.front.parent.is_some() {
+                return Err(OrbitError::invalid_argument(format!(
+                    "parent {parent_id} is a SubTask; SubTasks are one level deep"
+                )));
+            }
+            Some(parent_id)
+        }
+        None => None,
+    };
+
+    if let Some(parent_id) = &parent
+        && depends_on.iter().any(|dep| dep == parent_id)
+    {
+        return Err(OrbitError::invalid_argument(
+            "a SubTask cannot depend on its Parent Task; parentage already makes the parent wait",
+        ));
+    }
+
     let waiting_on = normalize_waiting(args.waiting_on)?;
     let body = resolve_body(args.body, args.body_file)?;
-    let id = generate_unique_id(board)?;
+    let id = generate_unique_id(board, parent.as_deref())?;
     let now = Utc::now();
 
     let task = Task {
@@ -387,6 +510,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
             priority,
             labels,
             depends_on,
+            parent,
             waiting_on,
             claim: None,
             stray_claim_times: None,
@@ -401,13 +525,11 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
     atomic::write_atomic(&board.task_path(&id), rendered.as_bytes(), false)?;
     graph.tasks.insert(id.clone(), task.clone());
 
-    task_output(
-        board,
-        &graph,
-        &task,
-        format!("created {id}  P{priority}  {title}"),
-        &format!("orbit: add {id}"),
-    )
+    let human = match &task.front.parent {
+        Some(parent) => format!("created {id}  P{priority}  {title}  (subtask of {parent})"),
+        None => format!("created {id}  P{priority}  {title}"),
+    };
+    task_output(board, &graph, &task, human, &format!("orbit: add {id}"))
 }
 
 fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutput> {
@@ -415,11 +537,15 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
     if let Some(priority) = args.priority {
         validate_priority(priority)?;
     }
-    let label_filter = args
-        .label
-        .as_deref()
-        .map(task::normalize_label)
-        .transpose()?;
+    let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
+    if let Some(parent) = args.parent.as_deref() {
+        let parent_task = graph.get(parent)?;
+        if parent_task.front.parent.is_some() {
+            return Err(OrbitError::invalid_argument(format!(
+                "{parent} is a SubTask; `--parent` expects a Parent Task"
+            )));
+        }
+    }
 
     let mut tasks: Vec<&Task> = graph
         .tasks
@@ -443,12 +569,15 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
             {
                 return false;
             }
-            if let Some(label) = &label_filter
-                && !task.front.labels.iter().any(|candidate| candidate == label)
-            {
+            if !task.has_labels(&label_filters) {
                 return false;
             }
             if args.unlabeled && !task.front.labels.is_empty() {
+                return false;
+            }
+            if let Some(parent) = args.parent.as_deref()
+                && task.front.parent.as_deref() != Some(parent)
+            {
                 return false;
             }
             !args.waiting || task.front.waiting_on.is_some()
@@ -468,6 +597,43 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
             ))
     });
 
+    if args.tree {
+        tasks.sort_by(|left, right| {
+            let left_root = left.front.parent.as_deref().unwrap_or(left.id.as_str());
+            let right_root = right.front.parent.as_deref().unwrap_or(right.id.as_str());
+            let left_root_key = graph.tasks.get(left_root).map(|task| {
+                (
+                    task.front.priority,
+                    task.front.created_at.timestamp_millis(),
+                    task.id.as_str(),
+                )
+            });
+            let right_root_key = graph.tasks.get(right_root).map(|task| {
+                (
+                    task.front.priority,
+                    task.front.created_at.timestamp_millis(),
+                    task.id.as_str(),
+                )
+            });
+            left_root_key
+                .cmp(&right_root_key)
+                .then_with(|| {
+                    left.front
+                        .parent
+                        .is_some()
+                        .cmp(&right.front.parent.is_some())
+                })
+                .then_with(|| left.front.priority.cmp(&right.front.priority))
+                .then_with(|| {
+                    left.front
+                        .created_at
+                        .timestamp_millis()
+                        .cmp(&right.front.created_at.timestamp_millis())
+                })
+                .then_with(|| left.id.cmp(&right.id))
+        });
+    }
+
     let summaries: Vec<Value> = tasks
         .iter()
         .map(|task| graph::task_summary(&graph, task))
@@ -479,7 +645,14 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
         tasks
             .iter()
             .copied()
-            .map(format_summary)
+            .map(|task| {
+                let line = format_summary(task);
+                if args.tree && task.front.parent.is_some() {
+                    format!("  {line}")
+                } else {
+                    line
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -492,10 +665,19 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
 
 fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
+    if let Some(parent) = args.parent.as_deref() {
+        let parent_task = graph.get(parent)?;
+        if parent_task.front.parent.is_some() {
+            return Err(OrbitError::invalid_argument(format!(
+                "{parent} is a SubTask; `--parent` expects a Parent Task"
+            )));
+        }
+    }
 
     if args.claim {
         let agent = resolve_agent(args.by)?;
-        let ready = graph.ready_tasks();
+        let ready = ready_for_filters(graph.ready_tasks(), args.parent.as_deref(), &label_filters);
         if ready.is_empty() {
             return Ok(
                 crate::output::CommandOutput::new(Value::Null, "no ready tasks")
@@ -529,7 +711,7 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         return Ok(output);
     }
 
-    let mut ready = graph.ready_tasks();
+    let mut ready = ready_for_filters(graph.ready_tasks(), args.parent.as_deref(), &label_filters);
     if let Some(limit) = args.limit {
         ready.truncate(limit);
     }
@@ -662,14 +844,31 @@ fn cmd_done(board: &Board, args: DoneArgs) -> Result<crate::output::CommandOutpu
     };
     let now = Utc::now();
 
+    let open_subtasks = graph.open_children(&args.id);
+    if !open_subtasks.is_empty() && !args.force {
+        return Err(subtasks_open_error(&args.id, &open_subtasks));
+    }
     let blocking = graph.blocking_ids(graph.get(&args.id)?);
+    if !blocking.is_empty() {
+        return Err(TransitionError::DependencyBlocked {
+            id: args.id.clone(),
+            blocking,
+        }
+        .into());
+    }
+    let cancelled_subtasks = if open_subtasks.is_empty() {
+        Vec::new()
+    } else {
+        cancel_open_subtasks(board, &mut graph, &args.id, caller.as_deref(), now)?
+    };
+
     let outcome =
         graph
             .get_mut(&args.id)?
-            .complete(caller.as_deref(), args.force, &blocking, now)?;
+            .complete(caller.as_deref(), args.force, &blocking, &[], now)?;
 
     let comment = author.zip(comment);
-    settle_terminal(
+    let mut output = settle_terminal(
         board,
         &mut graph,
         &args.id,
@@ -677,7 +876,14 @@ fn cmd_done(board: &Board, args: DoneArgs) -> Result<crate::output::CommandOutpu
         comment,
         now,
         TerminalKind::Done,
-    )
+    )?;
+    if !cancelled_subtasks.is_empty() {
+        output.warnings.push(format!(
+            "cancelled open SubTasks: {}",
+            cancelled_subtasks.join(", ")
+        ));
+    }
+    Ok(output)
 }
 
 fn cmd_cancel(board: &Board, args: CancelArgs) -> Result<crate::output::CommandOutput> {
@@ -690,12 +896,22 @@ fn cmd_cancel(board: &Board, args: CancelArgs) -> Result<crate::output::CommandO
     };
     let now = Utc::now();
 
+    let open_subtasks = graph.open_children(&args.id);
+    if !open_subtasks.is_empty() && !args.force {
+        return Err(subtasks_open_error(&args.id, &open_subtasks));
+    }
+    let cancelled_subtasks = if open_subtasks.is_empty() {
+        Vec::new()
+    } else {
+        cancel_open_subtasks(board, &mut graph, &args.id, caller.as_deref(), now)?
+    };
+
     let outcome = graph
         .get_mut(&args.id)?
         .cancel(caller.as_deref(), args.force, now)?;
 
     let comment = author.zip(comment);
-    settle_terminal(
+    let mut output = settle_terminal(
         board,
         &mut graph,
         &args.id,
@@ -703,7 +919,14 @@ fn cmd_cancel(board: &Board, args: CancelArgs) -> Result<crate::output::CommandO
         comment,
         now,
         TerminalKind::Cancelled,
-    )
+    )?;
+    if !cancelled_subtasks.is_empty() {
+        output.warnings.push(format!(
+            "cancelled open SubTasks: {}",
+            cancelled_subtasks.join(", ")
+        ));
+    }
+    Ok(output)
 }
 
 #[derive(Clone, Copy)]
@@ -792,27 +1015,99 @@ fn settle_terminal(
     }
 }
 
+fn cancel_open_subtasks(
+    board: &Board,
+    graph: &mut Graph,
+    parent_id: &str,
+    caller: Option<&str>,
+    now: chrono::DateTime<Utc>,
+) -> Result<Vec<String>> {
+    let ids = graph.open_children(parent_id);
+    for id in &ids {
+        let task = graph.get_mut(id)?;
+        task.cancel(caller, true, now)?;
+        let task = task.clone();
+        write_task(board, &task)?;
+    }
+    Ok(ids)
+}
+
+fn subtasks_open_error(id: &str, subtasks: &[String]) -> OrbitError {
+    OrbitError::new(
+        code::SUBTASKS_OPEN,
+        format!("{id} has open SubTasks: {}", subtasks.join(", ")),
+    )
+    .with_details(json!({ "task": id, "subtasks": subtasks }))
+}
+
+fn subtasks_exist_error(id: &str, subtasks: &[String]) -> OrbitError {
+    OrbitError::new(
+        code::SUBTASKS_EXIST,
+        format!("{id} has SubTasks: {}", subtasks.join(", ")),
+    )
+    .with_details(json!({ "task": id, "subtasks": subtasks }))
+}
+
 fn cmd_reopen(board: &Board, args: ReopenArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let now = Utc::now();
 
-    let done_dependents: Vec<String> = graph
+    let task = graph.get(&args.id)?.clone();
+    let child_dependents: Vec<String> = graph
         .dependents(&args.id)
         .iter()
         .filter(|dependent| dependent.front.status == Status::Done)
         .map(|dependent| dependent.id.clone())
         .collect();
-    let ((), task) = transition(&mut graph, &args.id, |task| {
-        task.reopen(args.force, &done_dependents, Utc::now())
-    })?;
+    let mut probe = task.clone();
+    probe.reopen(args.force, &child_dependents, now)?;
+
+    let mut reopened_parent = None;
+    if let Some(parent_id) = task.front.parent.clone() {
+        let parent_status = graph.get(&parent_id)?.front.status;
+        match parent_status {
+            Status::Done => {
+                let done_dependents: Vec<String> = graph
+                    .dependents(&parent_id)
+                    .iter()
+                    .filter(|dependent| dependent.front.status == Status::Done)
+                    .map(|dependent| dependent.id.clone())
+                    .collect();
+                graph
+                    .get_mut(&parent_id)?
+                    .reopen(args.force, &done_dependents, now)?;
+                let parent = graph.get(&parent_id)?.clone();
+                write_task(board, &parent)?;
+                reopened_parent = Some(parent_id);
+            }
+            Status::Cancelled => {
+                return Err(invalid_transition(format!(
+                    "{} is a SubTask of cancelled {parent_id}; reopen the parent first",
+                    args.id
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    let task = {
+        let task = graph.get_mut(&args.id)?;
+        task.reopen(args.force, &child_dependents, now)?;
+        task.clone()
+    };
     write_task(board, &task)?;
 
-    task_output(
+    let mut output = task_output(
         board,
         &graph,
         &task,
         format!("reopened {}", args.id),
         &format!("orbit: reopen {}", args.id),
-    )
+    )?;
+    if let Some(parent) = reopened_parent {
+        output.warnings.push(format!("reopened parent {parent}"));
+    }
+    Ok(output)
 }
 
 fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandOutput> {
@@ -1050,6 +1345,14 @@ fn cmd_depend(board: &Board, args: DependArgs) -> Result<crate::output::CommandO
 
     {
         let task = graph.get(&args.id)?;
+        let dep = graph.get(&args.dep_id)?;
+        if task.front.parent.as_deref() == Some(args.dep_id.as_str())
+            || dep.front.parent.as_deref() == Some(args.id.as_str())
+        {
+            return Err(OrbitError::invalid_argument(
+                "parentage is not a dependency; use `orbit add --parent` to create a SubTask",
+            ));
+        }
         if task.front.status.is_terminal() {
             return Err(invalid_transition(format!(
                 "{} is {}; cannot add a dependency to a terminal task",
@@ -1057,7 +1360,6 @@ fn cmd_depend(board: &Board, args: DependArgs) -> Result<crate::output::CommandO
                 task.front.status.as_str()
             )));
         }
-        graph.get(&args.dep_id)?;
     }
 
     if args.id == args.dep_id {
@@ -1142,32 +1444,96 @@ fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::output::CommandO
         .get(&args.id)?
         .authorize_live(caller.as_deref(), args.force, now)?;
 
+    let child_ids: Vec<String> = graph
+        .children(&args.id)
+        .iter()
+        .map(|task| task.id.clone())
+        .collect();
+    if !child_ids.is_empty() && !args.force {
+        return Err(subtasks_exist_error(&args.id, &child_ids));
+    }
+
+    let mut deleted_ids = Vec::new();
+    let mut cleaned_ids = Vec::new();
+    delete_subtree(
+        board,
+        &mut graph,
+        &args.id,
+        args.force,
+        now,
+        &mut deleted_ids,
+        &mut cleaned_ids,
+    )?;
+
+    let outcome = board.commit(&format!("orbit: delete {}", args.id), false)?;
+    let subtasks_deleted = deleted_ids.len().saturating_sub(1);
+    let human = if subtasks_deleted == 0 {
+        format!("deleted {}", args.id)
+    } else {
+        format!("deleted {} and {} SubTask(s)", args.id, subtasks_deleted)
+    };
+    let mut output = crate::output::CommandOutput::new(
+        json!({
+            "id": args.id,
+            "deleted": true,
+            "deleted_ids": deleted_ids,
+            "cleaned": cleaned_ids,
+        }),
+        human,
+    );
+    if let CommitOutcome::Failed(message) = outcome {
+        output.warnings.push(format!("COMMIT_FAILED: {message}"));
+    }
+    Ok(output)
+}
+
+fn delete_subtree(
+    board: &Board,
+    graph: &mut Graph,
+    id: &str,
+    force: bool,
+    now: chrono::DateTime<Utc>,
+    deleted: &mut Vec<String>,
+    cleaned: &mut Vec<String>,
+) -> Result<()> {
     let dependent_ids: Vec<String> = graph
-        .dependents(&args.id)
+        .dependents(id)
         .iter()
         .map(|dependent| dependent.id.clone())
         .collect();
-    if !dependent_ids.is_empty() && !args.force {
+    if !dependent_ids.is_empty() && !force {
         return Err(OrbitError::new(
             code::DEPENDENCY_BLOCKED,
-            format!("{} has dependents: {}", args.id, dependent_ids.join(", ")),
+            format!("{id} has dependents: {}", dependent_ids.join(", ")),
         )
-        .with_details(json!({ "task": args.id, "dependents": dependent_ids })));
+        .with_details(json!({ "task": id, "dependents": dependent_ids })));
     }
 
-    if args.force {
+    if force {
         for dependent in &dependent_ids {
             let updated = {
                 let task = graph.get_mut(dependent)?;
-                task.front.depends_on.retain(|dep| dep != &args.id);
+                task.front.depends_on.retain(|dep| dep != id);
                 task.front.updated_at = now;
                 task.clone()
             };
             write_task(board, &updated)?;
+            if !cleaned.iter().any(|seen| seen == dependent) {
+                cleaned.push(dependent.clone());
+            }
         }
     }
 
-    let path = board.task_path(&args.id);
+    let child_ids: Vec<String> = graph
+        .children(id)
+        .iter()
+        .map(|task| task.id.clone())
+        .collect();
+    for child in child_ids {
+        delete_subtree(board, graph, &child, force, now, deleted, cleaned)?;
+    }
+
+    let path = board.task_path(id);
     match std::fs::remove_file(&path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1176,7 +1542,7 @@ fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::output::CommandO
         }
     }
 
-    let comments_path = board.comment_path(&args.id);
+    let comments_path = board.comment_path(id);
     match std::fs::remove_file(&comments_path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1188,20 +1554,15 @@ fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::output::CommandO
         }
     }
 
-    let outcome = board.commit(&format!("orbit: delete {}", args.id), false)?;
-    let mut output = crate::output::CommandOutput::new(
-        json!({ "id": args.id, "deleted": true, "cleaned": dependent_ids }),
-        format!("deleted {}", args.id),
-    );
-    if let CommitOutcome::Failed(message) = outcome {
-        output.warnings.push(format!("COMMIT_FAILED: {message}"));
-    }
-    Ok(output)
+    graph.tasks.remove(id);
+    deleted.push(id.to_string());
+    Ok(())
 }
 
 fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let counts = graph.counts();
+    let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
+    let counts = graph.counts_matching(&label_filters);
     let agent = optional_agent(args.by).unwrap_or_else(|| "unknown (set ORBIT_AGENT)".to_string());
     let instructions = format!(
         "Orbit is the task tracker for this repository.\n\
@@ -1216,13 +1577,15 @@ Use the CLI; never edit task files directly.\n\
 
     let ready: Vec<Value> = graph
         .ready_tasks()
-        .iter()
+        .into_iter()
+        .filter(|task| task.has_labels(&label_filters))
         .take(10)
-        .map(|task| graph::task_summary(&graph, task))
+        .map(|task| graph::task_summary(&graph, &task))
         .collect();
     let stale: Vec<Value> = graph
         .stale_tasks()
-        .iter()
+        .into_iter()
+        .filter(|task| task.has_labels(&label_filters))
         .take(10)
         .map(|task| graph::task_summary(&graph, task))
         .collect();
@@ -1231,6 +1594,9 @@ Use the CLI; never edit task files directly.\n\
     human.push_str(&instructions);
     human.push_str("\n\n");
     human.push_str(&format!("agent: {agent}\n"));
+    if !label_filters.is_empty() {
+        human.push_str(&format!("scope: {}\n", label_filters.join(", ")));
+    }
     human.push_str(&format!(
         "counts: total={} ready={} stale={} in_progress={} waiting={} blocked={}\n",
         counts.total,
@@ -1261,6 +1627,7 @@ Use the CLI; never edit task files directly.\n\
         json!({
             "agent": agent,
             "instructions": instructions,
+            "labels": label_filters,
             "counts": counts,
             "ready": ready,
             "stale": stale,
@@ -1281,6 +1648,36 @@ Use the CLI; never edit task files directly.\n\
     }
 
     Ok(output)
+}
+
+fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let mut ids: Vec<&String> = graph.tasks.keys().collect();
+    ids.sort();
+
+    let mut tasks = Vec::with_capacity(ids.len());
+    let mut comment_count = 0;
+    for id in ids {
+        let comments = board.read_comments(id)?;
+        comment_count += comments.len();
+        let task = graph.get(id)?;
+        tasks.push(graph::task_detail_with_comments(&graph, task, &comments));
+    }
+
+    let task_count = tasks.len();
+    let snapshot = json!({
+        "schema_version": 1,
+        "board": {
+            "branch": board.config.board.branch,
+            "task_count": task_count,
+            "comment_count": comment_count,
+        },
+        "tasks": tasks,
+    });
+    Ok(crate::output::CommandOutput::new(
+        snapshot,
+        format!("exported {task_count} tasks and {comment_count} comments (schema 1)"),
+    ))
 }
 
 fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandOutput> {
@@ -1325,6 +1722,42 @@ fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandO
         if no_times || task.front.stray_claim_times.is_some() {
             warnings.push(format!("{}: claim metadata is incomplete", task.id));
         }
+
+        let encoded_parent = task::parent_id_from_id(&task.id, &board.config.id.prefix);
+        match (&task.front.parent, encoded_parent) {
+            (Some(parent), Some(encoded)) if parent != &encoded => {
+                issues.push(Issue::new(
+                    code::PARENT_MISMATCH,
+                    Some(&task.id),
+                    format!(
+                        "{} has parent {parent} but its ID encodes {encoded}",
+                        task.id
+                    ),
+                ));
+            }
+            (None, Some(encoded)) => {
+                issues.push(Issue::new(
+                    code::PARENT_MISMATCH,
+                    Some(&task.id),
+                    format!(
+                        "{} is a SubTask ID but has no parent; expected {encoded}",
+                        task.id
+                    ),
+                ));
+            }
+            (Some(parent), None) => {
+                issues.push(Issue::new(
+                    code::PARENT_MISMATCH,
+                    Some(&task.id),
+                    format!(
+                        "{} has parent {parent} but its ID is not a SubTask ID",
+                        task.id
+                    ),
+                ));
+            }
+            _ => {}
+        }
+
         if task.front.status == Status::Done {
             let unfinished = graph.blocking_ids(task);
             if !unfinished.is_empty() {
@@ -1332,6 +1765,14 @@ fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandO
                     "{} is done but has unfinished dependencies: {}",
                     task.id,
                     unfinished.join(", ")
+                ));
+            }
+            let open_subtasks = graph.open_children(&task.id);
+            if !open_subtasks.is_empty() {
+                warnings.push(format!(
+                    "{} is done but has open SubTasks: {}",
+                    task.id,
+                    open_subtasks.join(", ")
                 ));
             }
         }
@@ -1477,6 +1918,7 @@ fn claim_task(
     let gate = ClaimGate {
         hold_labels: graph.hold_labels(task),
         blocking: graph.blocking_ids(task),
+        open_subtasks: graph.open_children(id),
     };
     graph.get_mut(id)?.claim(
         agent,
@@ -1558,7 +2000,7 @@ fn resolve_optional_comment(
     Ok(Some(body))
 }
 
-fn generate_unique_id(board: &Board) -> Result<String> {
+fn generate_unique_id(board: &Board, parent: Option<&str>) -> Result<String> {
     let config = &board.config.id;
     for attempt in 0..50 {
         let length = if attempt < 40 {
@@ -1566,7 +2008,10 @@ fn generate_unique_id(board: &Board) -> Result<String> {
         } else {
             (config.length + 2).min(8)
         };
-        let id = task::generate_id(&config.prefix, length);
+        let id = match parent {
+            Some(parent) => task::generate_subtask_id(parent, length),
+            None => task::generate_id(&config.prefix, length),
+        };
         if !board.task_path(&id).exists() {
             return Ok(id);
         }
@@ -1575,6 +2020,16 @@ fn generate_unique_id(board: &Board) -> Result<String> {
         code::ID_COLLISION,
         "could not generate a unique task id",
     ))
+}
+
+fn ready_for_filters(mut ready: Vec<Task>, parent: Option<&str>, labels: &[String]) -> Vec<Task> {
+    if let Some(parent) = parent {
+        ready.retain(|task| task.front.parent.as_deref() == Some(parent));
+    }
+    if !labels.is_empty() {
+        ready.retain(|task| task.has_labels(labels));
+    }
+    ready
 }
 
 fn validate_priority(priority: u8) -> Result<()> {
@@ -1590,6 +2045,20 @@ fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {
     let mut normalized = Vec::with_capacity(labels.len());
     for label in labels {
         normalized.push(task::normalize_label(label)?);
+    }
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn normalize_label_filters(labels: &[String], repo: Option<&str>) -> Result<Vec<String>> {
+    let mut normalized = normalize_labels(labels)?;
+    if let Some(repo) = repo {
+        let repo = repo.trim();
+        if repo.is_empty() {
+            return Err(OrbitError::invalid_argument("--repo must not be empty"));
+        }
+        normalized.push(task::normalize_label(&format!("repo:{repo}"))?);
     }
     normalized.sort();
     normalized.dedup();
@@ -1676,14 +2145,21 @@ fn format_summary(task: &Task) -> String {
     } else {
         format!("  [{}]", task.front.labels.join(", "))
     };
+    let parent = task
+        .front
+        .parent
+        .as_deref()
+        .map(|parent| format!("  (subtask of {parent})"))
+        .unwrap_or_default();
     format!(
-        "{}  {:<11}  P{}  {}{}{}",
+        "{}  {:<11}  P{}  {}{}{}{}",
         task.id,
         task.front.status.as_str(),
         task.front.priority,
         task.front.title,
         labels,
-        claim
+        claim,
+        parent
     )
 }
 
@@ -1709,14 +2185,23 @@ fn format_summary_value(value: &Value) -> String {
             }
         })
         .unwrap_or_default();
-    format!("{id}  {status:<11}  P{priority}  {title}{labels}{claim}")
+    let parent = value
+        .get("parent")
+        .and_then(Value::as_str)
+        .map(|parent| format!("  (subtask of {parent})"))
+        .unwrap_or_default();
+    format!("{id}  {status:<11}  P{priority}  {title}{labels}{claim}{parent}")
 }
 
 fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
     let mut lines = Vec::new();
     lines.push(format!("{}  {}", task.id, task.front.title));
     lines.push(format!("status: {}", task.front.status.as_str()));
+    lines.push(format!("kind: {}", task.kind()));
     lines.push(format!("priority: P{}", task.front.priority));
+    if let Some(parent) = &task.front.parent {
+        lines.push(format!("parent: {parent}"));
+    }
     if task.front.depends_on.is_empty() {
         lines.push("depends_on: -".to_string());
     } else {
@@ -1752,6 +2237,18 @@ fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
         .collect();
     if !dependents.is_empty() {
         lines.push(format!("dependents: {}", dependents.join(", ")));
+    }
+    let children: Vec<&str> = graph
+        .children(&task.id)
+        .iter()
+        .map(|child| child.id.as_str())
+        .collect();
+    if !children.is_empty() {
+        lines.push(format!("subtasks: {}", children.join(", ")));
+    }
+    let open_subtasks = graph.open_children(&task.id);
+    if !open_subtasks.is_empty() {
+        lines.push(format!("open_subtasks: {}", open_subtasks.join(", ")));
     }
     if !comments.is_empty() {
         lines.push(format!("comments: {}", comments.len()));

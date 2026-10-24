@@ -6,8 +6,13 @@ pub mod code {
     pub const NOT_FOUND: &str = "NOT_FOUND";
     pub const CORRUPT_TASK: &str = "CORRUPT_TASK";
     pub const DANGLING_DEP: &str = "DANGLING_DEP";
+    pub const DANGLING_PARENT: &str = "DANGLING_PARENT";
+    pub const NESTED_SUBTASK: &str = "NESTED_SUBTASK";
+    pub const PARENT_MISMATCH: &str = "PARENT_MISMATCH";
     pub const CYCLE_DETECTED: &str = "CYCLE_DETECTED";
     pub const DEPENDENCY_BLOCKED: &str = "DEPENDENCY_BLOCKED";
+    pub const SUBTASKS_OPEN: &str = "SUBTASKS_OPEN";
+    pub const SUBTASKS_EXIST: &str = "SUBTASKS_EXIST";
     pub const ALREADY_CLAIMED: &str = "ALREADY_CLAIMED";
     pub const CLAIM_STALE: &str = "CLAIM_STALE";
     pub const NOT_CLAIM_HOLDER: &str = "NOT_CLAIM_HOLDER";
@@ -29,6 +34,7 @@ pub mod code {
     pub const NOT_A_REPOSITORY: &str = "NOT_A_REPOSITORY";
     pub const ALREADY_LINKED: &str = "ALREADY_LINKED";
     pub const LINK_NOT_FOUND: &str = "LINK_NOT_FOUND";
+    pub const WORKSPACE_INSIDE_REPO: &str = "WORKSPACE_INSIDE_REPO";
     pub const EPHEMERAL_BIN: &str = "EPHEMERAL_BIN";
 }
 

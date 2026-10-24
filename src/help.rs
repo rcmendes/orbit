@@ -16,7 +16,10 @@ Run `orbit init` once per repository, then let agents take work with
 object on stdout.
 
 Board discovery order: --dir, then ORBIT_DIR, then the repository link, then the
-repository's own Board.";
+repository's own Board.
+
+For work that spans repositories, create a shared workspace with
+`orbit workspace <folder>` and link each repository with `orbit link <folder>`.";
 
 pub const ROOT_EXAMPLES: &str = "\
 Typical agent loop:
@@ -57,11 +60,35 @@ Examples:
   # Create the Board only; skip agent integration
   orbit init --agents none";
 
+pub const WORKSPACE_LONG: &str = "\
+Creates a workspace directory and a shared Board at <folder>/board. The Board is
+an external Board: its own Git repository on the orbit branch, independent of
+every member repository.
+
+The command only creates. It does not clone repositories, link them, or write
+agent configuration. Each repository joins explicitly with
+`orbit link <folder>`. A workspace must live outside every Git working tree, so
+the Board is never tied to one repository's lifecycle. Re-running is safe: an
+existing Board is reported, not overwritten.";
+
+pub const WORKSPACE_EXAMPLES: &str = "\
+Examples:
+  # Create a workspace next to the repositories
+  orbit workspace acme
+
+  # Join from each repository root
+  orbit link ~/src/acme
+
+  # Inspect the workspace as JSON
+  orbit workspace acme --json";
+
 pub const LINK_LONG: &str = "\
-Writes a repository-local pointer to an existing Board. Task commands in this
-repository then read and write that Board, including from all of its Git
-worktrees. Existing harness configurations are refreshed to point at the shared
-Board unless --no-refresh is passed.
+Writes a repository-local pointer to an existing Board. PATH may be a Board
+directory or a workspace root; a workspace root resolves to its board/
+subdirectory, so `orbit link <workspace>` joins a workspace created with
+`orbit workspace`. Task commands in this repository then read and write that
+Board, including from all of its Git worktrees. Existing harness configurations
+are refreshed to point at the shared Board unless --no-refresh is passed.
 
 Linking does not delete a repository's own Board. If one exists it is shadowed,
 and link prints a warning; the old Board stays on disk.";
@@ -70,6 +97,9 @@ pub const LINK_EXAMPLES: &str = "\
 Examples:
   # Share one product Board from a second repository
   orbit link ~/src/acme-board
+
+  # Join a workspace created with `orbit workspace`
+  orbit link ~/src/acme
 
   # Link without rewriting agent configuration
   orbit link ~/src/acme-board --no-refresh";
@@ -98,7 +128,13 @@ reads it from stdin so long bodies never hit shell quoting.
 Priority runs from 0 (highest) to 3 (lowest); the default comes from the Board
 config (2 unless changed). --depends-on is repeatable and creates blocking edges
 at creation time. --waiting-on records a blocker that lives outside the Board,
-such as an upstream release.";
+such as an upstream release.
+
+--parent creates a SubTask under an existing Parent Task. The SubTask ID is the
+parent ID, a dot, and a fresh suffix (for example orb-a7b2c9.d4b3df). SubTasks are
+one level deep. Parentage is not a dependency: the Parent Task waits for its
+SubTasks, not the other way around. A SubTask can still have real --depends-on
+edges.";
 
 pub const ADD_EXAMPLES: &str = "\
 Examples:
@@ -109,7 +145,10 @@ Examples:
   orbit add \"Publish the release\" -p 1 --depends-on orb-a7b2c9
 
   # Record an external blocker while the body comes from stdin
-  orbit add \"Upgrade the parser\" --waiting-on \"upstream 2.4\" --body-file -";
+  orbit add \"Upgrade the parser\" --waiting-on \"upstream 2.4\" --body-file -
+
+  # Break a feature into a SubTask
+  orbit add \"API: add the endpoint\" --parent orb-a7b2c9 --label repo:api";
 
 pub const LIST_LONG: &str = "\
 Lists tasks from a consistent snapshot of the Board. Done and cancelled tasks are
@@ -117,9 +156,12 @@ hidden by default; pass --all to include them, or name a terminal status with
 --status. Filters combine, so --status in_progress --claimed-by claude shows
 everything one agent is holding.
 
-Use --json when another program consumes the result: it returns data.tasks and
-data.count. For work an agent can start, use `orbit ready` instead of filtering
-this list.";
+--parent lists only the SubTasks of one Parent Task. --tree keeps each Parent
+Task next to its SubTasks and indents the children in human output. --label is
+repeatable and every label must match; --repo NAME is shorthand for
+--label repo:NAME. Use --json when another program consumes the result: it
+returns data.tasks and data.count. For work an agent can start, use `orbit ready`
+instead of filtering this list.";
 
 pub const LIST_EXAMPLES: &str = "\
 Examples:
@@ -133,7 +175,17 @@ Examples:
   orbit list --status in_progress --claimed-by claude
 
   # Full history, including closed work
-  orbit list --all --json";
+  orbit list --all --json
+
+  # The pieces of one feature
+  orbit list --parent orb-a7b2c9
+
+  # Parents and their SubTasks together
+  orbit list --tree
+
+  # Everything for one repository, optionally with another label
+  orbit list --repo api
+  orbit list --repo api --label ready-for-agent";
 
 pub const READY_LONG: &str = "\
 Shows tasks that can start now: todo, unclaimed, not waiting on an external
@@ -143,7 +195,12 @@ are ordered by priority, then creation time.
 With --claim, the first ready task is claimed atomically in the same command and
 moves to in_progress with a lease; --by names the agent and requires --claim.
 When nothing is ready the command still succeeds, with data null and
-meta.reason NO_READY_TASKS, so a polling loop can wait and retry.";
+meta.reason NO_READY_TASKS, so a polling loop can wait and retry.
+
+With --parent, only that Parent Task's Ready SubTasks are considered. --repo NAME
+and repeatable --label scope the queue to a repository or a set of labels; filters
+combine with --parent using AND. Use them to scope an agent to one feature or one
+repository instead of the whole Board.";
 
 pub const READY_EXAMPLES: &str = "\
 Examples:
@@ -154,7 +211,13 @@ Examples:
   orbit ready --claim --by claude --json
 
   # Ask whether an agent should wake up
-  orbit ready --json";
+  orbit ready --json
+
+  # Claim the next ready piece of one feature
+  orbit ready --parent orb-a7b2c9 --claim --by claude
+
+  # Claim the next task for one repository
+  orbit ready --repo api --claim --by claude";
 
 pub const SHOW_LONG: &str = "\
 Prints the full task: frontmatter fields, Markdown body, labels, dependencies,
@@ -223,8 +286,10 @@ Examples:
 
 pub const DONE_LONG: &str = "\
 Moves the task to done and records the completion. Unfinished dependencies always
-block completion; --force overrides only a competing live claim. Calling done on
-an already-done task is harmless, and with --comment it appends another note.
+block completion. A Parent Task with open SubTasks is also refused; --force
+cancels those SubTasks and then closes the parent, and also overrides a competing
+live claim. Calling done on an already-done task is harmless, and with --comment
+it appends another note.
 
 Pass --comment or --comment-file to write the completion note in the same locked
 transaction as the status change, so a note cannot be recorded before the task is
@@ -239,13 +304,16 @@ Examples:
   orbit done orb-a7b2c9 --by claude --comment-file notes.md
 
   # See what the completion unblocked
-  orbit ready --json";
+  orbit ready --json
+
+  # Close a feature whose remaining SubTasks are no longer needed
+  orbit done orb-a7b2c9 --force --comment \"Deferred the remaining pieces\"";
 
 pub const CANCEL_LONG: &str = "\
 Abandons a task without completing it. Cancelled tasks count as resolved for
-dependents, so blocked work becomes ready. A live claim from another agent blocks
-cancellation unless you pass --force. Pass --comment to record the reason with the
-status change.";
+dependents, so blocked work becomes ready. A Parent Task with open SubTasks is
+refused; --force cancels those SubTasks too, and also overrides a live claim from
+another agent. Pass --comment to record the reason with the status change.";
 
 pub const CANCEL_EXAMPLES: &str = "\
 Examples:
@@ -253,14 +321,18 @@ Examples:
   orbit cancel orb-a7b2c9 --by claude --comment \"Superseded by orb-f14c02\"
 
   # Cancel another agent's task after a handoff
-  orbit cancel orb-a7b2c9 --force";
+  orbit cancel orb-a7b2c9 --force
+
+  # Abandon a feature and its remaining SubTasks
+  orbit cancel orb-a7b2c9 --force --comment \"Superseded\"";
 
 pub const REOPEN_LONG: &str = "\
-Returns a done or cancelled task to todo and clears any claim. Reopening is
-refused when a dependent task is already done, because that would leave a
-completed task with an unfinished dependency; --force allows it. Doctor reports
-the resulting historical warning, and a later completion of that dependent still
-enforces its dependencies.";
+Returns a done or cancelled task to todo and clears any claim. Reopening a SubTask
+of a done Parent Task reopens the parent too. Reopening is refused when a
+dependent task is already done, because that would leave a completed task with an
+unfinished dependency; --force allows it. Doctor reports the resulting historical
+warning, and a later completion of that dependent still enforces its
+dependencies.";
 
 pub const REOPEN_EXAMPLES: &str = "\
 Examples:
@@ -268,7 +340,10 @@ Examples:
   orbit reopen orb-a7b2c9
 
   # Reopen even though a dependent was already completed
-  orbit reopen orb-a7b2c9 --force";
+  orbit reopen orb-a7b2c9 --force
+
+  # Reopen a SubTask; its done parent reopens with it
+  orbit reopen orb-a7b2c9.d4b3df";
 
 pub const UPDATE_LONG: &str = "\
 Edits a task without changing its lifecycle. Use --title, --body/--body-file,
@@ -371,7 +446,8 @@ Examples:
 pub const DEPEND_LONG: &str = "\
 Creates a blocking edge: the first task will not be ready until the second one is
 done or cancelled. The command rejects self-dependencies, missing tasks, cycles,
-and adding a dependency to a terminal task.
+adding a dependency to a terminal task, and parent/child edges. Parentage is
+created with `orbit add --parent`, not with depend.
 
 Prefer `orbit add --depends-on` when the edge is known at creation time. Use
 depend later, when a blocker is discovered after both tasks exist.";
@@ -382,7 +458,10 @@ Examples:
   orbit depend orb-a7b2c9 orb-f14c02
 
   # Inspect the resulting graph
-  orbit show orb-a7b2c9 --json";
+  orbit show orb-a7b2c9 --json
+
+  # Parentage is not a dependency
+  orbit add \"API: add the endpoint\" --parent orb-a7b2c9";
 
 pub const UNDEPEND_LONG: &str = "\
 Removes a blocking edge between two tasks. Idempotent: removing an edge that is
@@ -396,8 +475,9 @@ Examples:
 
 pub const DELETE_LONG: &str = "\
 Permanently removes a task and its comment thread from the Board. By default it
-refuses when dependents exist or another agent holds a live claim; --force removes
-the ID from each dependent's dependency list and deletes anyway.
+refuses when dependents exist, when the task has SubTasks, or when another agent
+holds a live claim; --force removes the ID from each dependent's dependency list,
+deletes the whole SubTask subtree, and deletes anyway.
 
 Prefer cancel when the work should stay visible in history. Delete is for tasks
 created by mistake.";
@@ -408,6 +488,9 @@ Examples:
   orbit delete orb-a7b2c9
 
   # Remove a task that other tasks still reference
+  orbit delete orb-a7b2c9 --force
+
+  # Remove a feature and every SubTask under it
   orbit delete orb-a7b2c9 --force";
 
 pub const PRIME_LONG: &str = "\
@@ -415,8 +498,9 @@ Prints the agent workflow instructions, Board counts, the top ready tasks, and
 stale claims. This is the context an agent session starts with; the Claude Code
 SessionStart hook calls `orbit prime --hook-json` automatically.
 
---hook-json prints Claude Code's hook envelope instead of the normal output and
-cannot be combined with --json.";
+--repo NAME and repeatable --label scope the counts, ready tasks, and stale
+claims to a repository or label set. --hook-json prints Claude Code's hook
+envelope instead of the normal output and cannot be combined with --json.";
 
 pub const PRIME_EXAMPLES: &str = "\
 Examples:
@@ -424,7 +508,28 @@ Examples:
   orbit prime --by claude
 
   # Inspect stale claims through JSON
-  orbit prime --json";
+  orbit prime --json
+
+  # Scope the session context to one repository
+  orbit prime --by claude --repo api";
+
+pub const EXPORT_LONG: &str = "\
+Emits a deterministic JSON snapshot of the whole Board: every Task and SubTask,
+including terminal work, with labels, dependency and parent edges, derived
+readiness, and comments. The snapshot is ordered by task ID and contains no
+timestamps or machine-local paths, so the same board state always produces the
+same data.
+
+The top-level data object carries schema_version; consumers should pin it. Use
+export to feed a knowledge base, archive a board, or diff two snapshots.";
+
+pub const EXPORT_EXAMPLES: &str = "\
+Examples:
+  # Write a snapshot for a collector
+  orbit export --json > board.json
+
+  # Inspect the schema version and task count
+  orbit export --json | jq '.data | {schema_version, tasks: (.tasks | length)}'";
 
 pub const SETUP_LONG: &str = "\
 Installs or repairs one harness integration. Each client writes its instruction
@@ -456,7 +561,9 @@ Runs the Model Context Protocol server over stdio. Editors start this process fr
 their MCP configuration, so it is rarely run by hand. It exposes 13 tools (ready,
 list, get, create, update, claim, release, heartbeat, finish, link, delete, label,
 comment) and the orbit://tasks/{id} Markdown resource, reusing the CLI's lock,
-atomic writes, and auto-commit.
+atomic writes, and auto-commit. `create` accepts `parent` to make a SubTask;
+`list` and `ready` accept `parent`, `repo`, and `labels` to scope a feature or
+repository.
 
 Use `orbit mcp` as the command in a client configuration. Pass --dir globally to
 serve a specific Board.";
@@ -470,9 +577,10 @@ Examples:
   orbit --dir ~/src/acme-board mcp";
 
 pub const DOCTOR_LONG: &str = "\
-Checks the Board for malformed tasks, dangling dependencies, cycles, orphan or
-corrupt comments, stale temp files, uncommitted changes, the checked-out branch,
-and a Claude hook that cannot find the Orbit binary on PATH.
+Checks the Board for malformed tasks, dangling dependencies, missing or nested
+parents, cycles, orphan or corrupt comments, stale temp files, uncommitted
+changes, the checked-out branch, and a Claude hook that cannot find the Orbit
+binary on PATH.
 
 It exits 1 when it finds issues. --fix only removes stale temp files; it never
 rewrites tasks or comments.";

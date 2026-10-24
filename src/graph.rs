@@ -163,6 +163,35 @@ impl Graph {
                     ));
                 }
             }
+
+            if let Some(parent_id) = &task.front.parent {
+                if parent_id == &task.id {
+                    issues.push(Issue::new(
+                        code::NESTED_SUBTASK,
+                        Some(&task.id),
+                        format!("{} is its own parent", task.id),
+                    ));
+                } else if !self.tasks.contains_key(parent_id) {
+                    issues.push(Issue::new(
+                        code::DANGLING_PARENT,
+                        Some(&task.id),
+                        format!("{} has missing parent {parent_id}", task.id),
+                    ));
+                } else if self
+                    .tasks
+                    .get(parent_id)
+                    .is_some_and(|parent| parent.front.parent.is_some())
+                {
+                    issues.push(Issue::new(
+                        code::NESTED_SUBTASK,
+                        Some(&task.id),
+                        format!(
+                            "{} has parent {parent_id}, which is itself a SubTask; only one level is allowed",
+                            task.id
+                        ),
+                    ));
+                }
+            }
         }
 
         if let Some(cycle) = self.find_cycle() {
@@ -182,6 +211,7 @@ impl Graph {
             && task.front.waiting_on.is_none()
             && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
+            && self.open_children(&task.id).is_empty()
     }
 
     pub fn hold_labels(&self, task: &Task) -> Vec<String> {
@@ -222,6 +252,24 @@ impl Graph {
             .collect();
         dependents.sort_by(|left, right| left.id.cmp(&right.id));
         dependents
+    }
+
+    pub fn children(&self, id: &str) -> Vec<&Task> {
+        let mut children: Vec<&Task> = self
+            .tasks
+            .values()
+            .filter(|task| task.front.parent.as_deref() == Some(id))
+            .collect();
+        children.sort_by(|left, right| left.id.cmp(&right.id));
+        children
+    }
+
+    pub fn open_children(&self, id: &str) -> Vec<String> {
+        self.children(id)
+            .into_iter()
+            .filter(|task| !task.front.status.is_terminal())
+            .map(|task| task.id.clone())
+            .collect()
     }
 
     pub fn ready_tasks(&self) -> Vec<Task> {
@@ -290,13 +338,19 @@ impl Graph {
     }
 
     pub fn counts(&self) -> Counts {
+        self.counts_matching(&[])
+    }
+
+    pub fn counts_matching(&self, labels: &[String]) -> Counts {
         let now = Utc::now();
-        let mut counts = Counts {
-            total: self.tasks.len(),
-            ..Counts::default()
-        };
+        let mut counts = Counts::default();
 
         for task in self.tasks.values() {
+            if !task.has_labels(labels) {
+                continue;
+            }
+
+            counts.total += 1;
             match task.front.status {
                 Status::Todo => counts.todo += 1,
                 Status::InProgress => counts.in_progress += 1,
@@ -319,7 +373,9 @@ impl Graph {
             if !task.front.status.is_terminal() && task.front.waiting_on.is_some() {
                 counts.waiting += 1;
             }
-            if !task.front.status.is_terminal() && !self.blocking_ids(task).is_empty() {
+            if !task.front.status.is_terminal()
+                && (!self.blocking_ids(task).is_empty() || !self.open_children(&task.id).is_empty())
+            {
                 counts.blocked += 1;
             }
         }
@@ -398,8 +454,12 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "title": task.front.title,
         "status": task.front.status,
         "priority": task.front.priority,
+        "kind": task.kind(),
         "labels": task.front.labels,
         "depends_on": task.front.depends_on,
+        "parent": task.front.parent,
+        "subtasks": graph.children(&task.id).iter().map(|child| child.id.clone()).collect::<Vec<_>>(),
+        "open_subtasks": graph.open_children(&task.id),
         "waiting_on": task.front.waiting_on,
         "claimed_by": task.holder(),
         "claimed_at": task.claimed_at(),
@@ -452,6 +512,7 @@ mod tests {
                 priority: default_priority(),
                 labels: Vec::new(),
                 depends_on: deps.iter().map(|dep| dep.to_string()).collect(),
+                parent: None,
                 waiting_on: None,
                 claim: None,
                 stray_claim_times: None,
@@ -487,6 +548,55 @@ mod tests {
         assert_eq!(
             graph.blocked_by(graph.get("orb-bbbbbb").unwrap()),
             vec!["orb-aaaaaa (todo)".to_string()]
+        );
+    }
+
+    #[test]
+    fn parent_waits_for_open_subtasks() {
+        let mut child = task("orb-bbbbbb", Status::Todo, &[]);
+        child.front.parent = Some("orb-aaaaaa".to_string());
+        let graph = Graph::from_tasks(vec![task("orb-aaaaaa", Status::Todo, &[]), child]);
+
+        let parent = graph.get("orb-aaaaaa").unwrap();
+        assert!(!graph.is_ready(parent));
+        assert_eq!(graph.open_children("orb-aaaaaa"), vec!["orb-bbbbbb"]);
+        assert_eq!(
+            graph
+                .children("orb-aaaaaa")
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["orb-bbbbbb"]
+        );
+
+        let mut done_child = task("orb-bbbbbb", Status::Done, &[]);
+        done_child.front.parent = Some("orb-aaaaaa".to_string());
+        let graph = Graph::from_tasks(vec![task("orb-aaaaaa", Status::Todo, &[]), done_child]);
+        assert!(graph.is_ready(graph.get("orb-aaaaaa").unwrap()));
+    }
+
+    #[test]
+    fn missing_parent_and_nested_subtasks_are_issues() {
+        let mut orphan = task("orb-aaaaaa", Status::Todo, &[]);
+        orphan.front.parent = Some("orb-missing".to_string());
+        let graph = Graph::from_tasks(vec![orphan]);
+        assert!(
+            graph
+                .validate()
+                .iter()
+                .any(|issue| issue.code == code::DANGLING_PARENT)
+        );
+
+        let mut parent = task("orb-aaaaaa", Status::Todo, &[]);
+        parent.front.parent = Some("orb-cccccc".to_string());
+        let mut child = task("orb-bbbbbb", Status::Todo, &[]);
+        child.front.parent = Some("orb-aaaaaa".to_string());
+        let graph = Graph::from_tasks(vec![task("orb-cccccc", Status::Todo, &[]), parent, child]);
+        assert!(
+            graph
+                .validate()
+                .iter()
+                .any(|issue| issue.code == code::NESTED_SUBTASK)
         );
     }
 

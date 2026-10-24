@@ -4,7 +4,9 @@ Issues and specs for this repo live in the Orbit board. A Board is a hidden Git
 worktree on the orphan `orbit` branch. In the default layout it lives at
 `.git/orbit/board` and every worktree of this repository shares it; a repository
 linked to a shared Board uses that Board instead. Tasks are Markdown files with
-YAML frontmatter and are served by the `orbit` CLI.
+YAML frontmatter and are served by the `orbit` CLI. For a workspace that spans
+repositories, `orbit workspace <folder>` creates `<folder>/board` and each
+repository joins with `orbit link <folder>`.
 
 For the full command reference, examples, and usage scenarios, see
 [../commands.md](../commands.md).
@@ -19,7 +21,8 @@ repository link stored in the Git common directory, then the repository's own Bo
 In practice:
 
 ```bash
-orbit link <PATH>          # use a shared Board from this repository
+orbit workspace <FOLDER>   # create <FOLDER>/board for a multi-repository workspace
+orbit link <PATH>          # use a shared Board or workspace from this repository
 orbit unlink               # return to this repository's own Board
 orbit --dir <PATH> list    # override the link for one command
 ```
@@ -37,7 +40,12 @@ Board on disk; linking did not delete it. A missing linked Board fails with
 - `orbit ready --json` returns `data.tasks`, each with `id`, `title`, `priority`,
   `labels`, `blocking`, and claim fields.
 - `orbit show <ID> --json` returns the full task, including `body`, `labels`,
-  `dependents`, and `comments`.
+  `kind`, `parent`, `subtasks`, `dependents`, and `comments`.
+- Break a feature into SubTasks with `orbit add "<title>" --parent <parent-id>`.
+  SubTasks are one level deep. Use `--depends-on` only for real blockers between
+  units of work; the Parent Task waits for its SubTasks automatically.
+- In a multi-repository workspace, add `--repo <name>` to `orbit ready` or
+  `orbit list` to narrow the queue to one repository label.
 
 ## Labels
 
@@ -87,10 +95,11 @@ returned ID for any dependent ticket. To add a blocking edge later:
 orbit depend <dependent-id> <blocker-id>
 ```
 
-Orbit has no label registry and no parent/child hierarchy. Labels are free-form
-strings, comments are per-task threads, and blocking edges are `--depends-on`. Put
-parent context and acceptance criteria in the body; use labels for state and category,
-and comments for triage notes.
+Orbit has no label registry. Parentage is one level deep: create a SubTask with
+`orbit add --parent <id>`, and use `--depends-on` only for real blockers. Labels
+are free-form strings, comments are per-task threads, and blocking edges are
+`--depends-on`. Put parent context and acceptance criteria in the body; use labels
+for state and category, and comments for triage notes.
 
 ## Triage operations
 
@@ -134,8 +143,9 @@ after a short backoff.
 
 ## Wayfinding operations
 
-A Wayfinder map is an ordinary Task; Orbit has no parent/child hierarchy. Labels
-and task bodies carry the map-to-child relationship.
+A Wayfinder map is a Parent Task labelled `wayfinder:map`; its children are
+SubTasks created with `--parent <map-id>`. The parent edge records the
+relationship; the `wayfinder:<map-id>` label remains useful for filtering.
 
 - **Map**: one Task labelled `wayfinder:map`. Put the destination, scope, and
   decisions in its body, then capture the returned `data.id`:
@@ -146,33 +156,29 @@ and task bodies carry the map-to-child relationship.
 
   Find maps with `orbit list --label wayfinder:map --json`.
 
-- **Child Task**: one Task per child, labelled with the map's per-map label
-  `wayfinder:<map-id>`, and with `Map: <map-id>` at the top of its body:
+- **Child SubTask**: create one SubTask per child with the map as its parent and
+  the map's per-map label:
 
   ```bash
-  orbit add "<child title>" --label "wayfinder:<map-id>" --body-file - --json
+  orbit add "<child title>" --parent <map-id> --label "wayfinder:<map-id>" --body-file - --json
   ```
 
 - **Dependency**: `--depends-on <dependency-id>` at creation or
   `orbit depend <task-id> <dependency-id>` later creates a real Dependency: the
   first Task cannot become Ready until the second is `done` or `cancelled`. Use it
-  only when one Task genuinely must wait for another, such as one child waiting
-  for another child. Never make the map a Dependency of a child; that would block
-  the child on the map instead of recording parentage.
+  only when one child must wait for another. Never use `depend` to record
+  parentage; `--parent` does that, and the map waits for its SubTasks
+  automatically.
 
-- **Frontier**: the Ready children of one map, not the whole Board. Filter by the
-  per-map label and keep Tasks whose `ready` field is true:
+- **Frontier**: the Ready SubTasks of one map, not the whole Board:
 
   ```bash
-  orbit list --label "wayfinder:<map-id>" --json \
-    | jq '[.data.tasks[] | select(.ready)]'
+  orbit ready --parent <map-id> --json
   ```
 
-  `orbit list` hides done and cancelled Tasks, and `ready` is true only for
-  `todo` Tasks with no Claim, not Waiting, no Hold Label, and no Dependency that
-  is neither Done nor Cancelled. Claim an ID from this list with
-  `orbit claim <ID> --by <agent>`. Do not use `orbit ready --claim` to pick map
-  work: it claims the highest-priority Ready Task anywhere on the Board.
+  `orbit ready --parent` returns only that map's Ready SubTasks; `--claim` takes
+  the first one. Without `--parent`, `orbit ready --claim` claims the
+  highest-priority Ready Task anywhere on the Board.
 
-- **Resolve**: `orbit done` each child as its work lands, and the map once the
-  destination is reached.
+- **Resolve**: `orbit done` each SubTask as its work lands. The map becomes Ready
+  when every SubTask is done or cancelled, and `orbit done` closes it.

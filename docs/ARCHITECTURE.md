@@ -157,7 +157,7 @@ The pointer lives in the Git common directory, not in a worktree. That is why a 
 
 ### Domain relationships
 
-A Task is the unit of work. Its claim fields are a single time-bounded claim, and its comments live in a sidecar file keyed by the same ID. Dependency edges are IDs stored in frontmatter, so they can point across the whole Workspace.
+A Task is the unit of work. Its claim fields are a single time-bounded claim, and its comments live in a sidecar file keyed by the same ID. Dependency edges are IDs stored in frontmatter, so they can point across the whole Workspace. A SubTask is a Task whose `parent` names another Task; parentage is one level deep and is not a Dependency.
 
 ```mermaid
 classDiagram
@@ -185,6 +185,7 @@ classDiagram
         +u8 priority
         +Vec labels
         +Vec depends_on
+        +String parent
         +String waiting_on
         +DateTime created_at
         +DateTime updated_at
@@ -211,6 +212,8 @@ classDiagram
         +Map tasks
         +is_ready(task)
         +blocking_ids(task)
+        +children(id)
+        +open_children(id)
         +ready_tasks()
         +stale_tasks()
         +would_create_cycle(id, dep)
@@ -222,6 +225,7 @@ classDiagram
     Task "1" *-- "0..1" Claim : stored as flat claimed_by, claimed_at, lease_until keys
     Task "1" o-- "0..*" Comment : sidecar
     Task "0..*" --> "0..*" Task : depends_on
+    Task "0..*" --> "0..1" Task : parent
 ```
 
 ## 2. Task state machine
@@ -277,20 +281,20 @@ These rules live in `src/transition.rs`: a Task owns its transitions and returns
 
 | From | Command | To | Rules |
 | --- | --- | --- | --- |
-| none | `add` | `todo` | Creates `tasks/ID.md`. Priority defaults to `2`; dependencies must exist. |
-| `todo` | `claim` or `ready --claim` | `in_progress` | The readiness gate must pass. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
+| none | `add` | `todo` | Creates `tasks/ID.md`. Priority defaults to `2`; dependencies must exist. `--parent` must name an existing, non-terminal Task that is not itself a SubTask. |
+| `todo` | `claim` or `ready --claim` | `in_progress` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
 | `in_progress` | `heartbeat` | `in_progress` | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
 | `in_progress` | `claim --steal` | `in_progress` | Replaces the holder and resets `claimed_at` and `lease_until`. `--steal` does not bypass hold labels or dependencies. |
 | `in_progress` | `release` | `todo` | The holder must release unless `--force`; clears all claim fields. Releasing an unclaimed task is a no-op. |
-| `todo` or `in_progress` | `done` | `done` | Every dependency must be `done` or `cancelled`. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields and `waiting_on`. |
-| `todo` or `in_progress` | `cancel` | `cancelled` | A live claim requires the holder unless `--force`. Clears claim fields and `waiting_on`. Resolves dependents. |
-| `done` or `cancelled` | `reopen` | `todo` | Refuses when a dependent is already `done` unless `--force`. Clears claim fields and `waiting_on`. |
+| `todo` or `in_progress` | `done` | `done` | Every dependency must be `done` or `cancelled`, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields and `waiting_on`. |
+| `todo` or `in_progress` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields and `waiting_on`. Resolves dependents. |
+| `done` or `cancelled` | `reopen` | `todo` | Reopening a SubTask of a done parent reopens the parent too; a cancelled parent must be reopened first. Refuses when a dependent is already `done` unless `--force`. Clears claim fields and `waiting_on`. |
 | `done` | `done --comment` | `done` | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
 | `cancelled` | `cancel --comment` | `cancelled` | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
 | `done` | `cancel` | rejected | `INVALID_TRANSITION`; reopen first. |
 | `cancelled` | `done` | rejected | `INVALID_TRANSITION`; reopen first. |
-| any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live claim requires the holder unless `--force`. With dependents, requires `--force`, which first removes the edge from each dependent. |
-| any | `update`, `label`, `comment`, `depend`, `undepend` | unchanged | Metadata only. `update`, `label`, and `comment` also work on terminal tasks. `depend` refuses terminal tasks and cycles; `undepend` is idempotent. |
+| any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live claim requires the holder unless `--force`. With dependents or SubTasks, requires `--force`, which first removes edges from dependents and deletes the whole SubTask subtree. |
+| any | `update`, `label`, `comment`, `depend`, `undepend` | unchanged | Metadata only. `update`, `label`, and `comment` also work on terminal tasks. `depend` refuses terminal tasks, cycles, and parent/child edges; `undepend` is idempotent. |
 
 ### The readiness gate
 
@@ -308,10 +312,12 @@ flowchart TD
     HELD -->|yes| NOTREADY
     HELD -->|no| DEPS{"every dependency done or cancelled?"}
     DEPS -->|no| BLOCKED["not ready<br/>blocked by dependencies"]
-    DEPS -->|yes| READY["ready<br/>eligible for ready and claim"]
+    DEPS -->|yes| SUBTASKS{"every SubTask done or cancelled?"}
+    SUBTASKS -->|no| SUBTASKSOPEN["not ready<br/>open SubTasks"]
+    SUBTASKS -->|yes| READY["ready<br/>eligible for ready and claim"]
 ```
 
-The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate.
+The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open SubTasks, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate.
 
 ### Stored versus derived
 
@@ -321,11 +327,13 @@ The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_B
 | Priority | yes | `priority`, integer `0`–`3` |
 | Labels | yes | `labels`, normalized, sorted, deduplicated |
 | Dependencies | yes | `depends_on` IDs |
+| Parent | yes | `parent` ID on a SubTask |
+| SubTasks | yes, on the child | `parent` points at the Parent Task |
 | External wait | yes | `waiting_on` text |
 | Claim and lease | yes | `claimed_by`, `claimed_at`, `lease_until` |
 | Comments | yes, separately | `comments/ID.md` |
 | Ready | no | `Graph::is_ready` |
-| Blocked | no | `Graph::blocking_ids` |
+| Blocked | no | `Graph::blocking_ids` and `Graph::open_children` |
 | Stale | no | `in_progress` with `lease_until <= now` |
 | Held | no | labels intersect `non_ready_labels` |
 
@@ -357,6 +365,7 @@ flowchart TB
         SHOW["show"]
         READY["ready"]
         PRIME["prime"]
+        EXPORT["export"]
     end
 
     subgraph Execute["4. Claim and resolve"]
@@ -387,6 +396,7 @@ flowchart TB
     SHOW -.->|reads detail| CLAIM
     COMMENT -.->|annotates| SHOW
     PRIME -.->|prints context| READY
+    EXPORT -.->|snapshots| READY
     READY -->|lists candidates| CLAIM
     CLAIM -->|in_progress and lease| HEART
     HEART -->|extends lease| DONE
@@ -404,7 +414,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | --- | --- | --- |
 | Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board, then reconcile harness files, MCP entries, and hooks. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `ready`, `prime` | Read-only. `ready` is the derived queue; `prime` is the compact agent context. |
+| Inspection | `list`, `show`, `ready`, `prime`, `export` | Read-only. `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen` | Change Status or the claim. Writes take the exclusive lock. |
 | Maintenance | `doctor`, `sync`, `mcp` | Check integrity, commit heartbeat-only changes, and serve MCP over stdio. |
 
@@ -412,12 +422,12 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 
 ### Workspace topology
 
-A Workspace is one Board plus every Repository linked to it. Linking writes a pointer in the Repository's Git common directory; the Board itself stays in one place, so cross-repository Dependencies share one graph. `unlink` removes the pointer and returns the Repository to its local Board, if one exists.
+A Workspace is one Board plus every Repository linked to it. `orbit workspace <folder>` creates the Board at `<folder>/board`; linking writes a pointer in each Repository's Git common directory, so cross-repository Dependencies share one graph. `unlink` removes the pointer and returns the Repository to its local Board, if one exists.
 
 ```mermaid
 flowchart LR
     subgraph Shared["Shared Workspace"]
-        BOARD["shared Board<br/>~/src/acme-board"]
+        BOARD["shared Board<br/><workspace>/board"]
         R1["repository A<br/>.git/orbit/link"]
         R2["repository B<br/>.git/orbit/link"]
     end
@@ -434,7 +444,23 @@ flowchart LR
     LOCAL --> LOCALGRAPH["local task graph<br/>tasks and comments"]
 ```
 
-### Initializing a workspace
+### Creating the workspace folder
+
+`orbit workspace <folder>` creates `<folder>/board` and nothing else. It rejects a workspace root inside a Git working tree, reuses the external-Board initialization, and leaves joining to `orbit link <folder>`.
+
+```mermaid
+flowchart TD
+    W["orbit workspace <folder>"] --> R["resolve folder"]
+    R --> INSIDE{"inside a Git working tree?"}
+    INSIDE -->|yes| ERR["WORKSPACE_INSIDE_REPO"]
+    INSIDE -->|no| EXISTS{"<folder>/board/config.toml exists?"}
+    EXISTS -->|yes| REUSE["report existing workspace"]
+    EXISTS -->|no| INIT["init external Board<br/>own Git repo, HEAD orbit"]
+    INIT --> DONE["print orbit link <folder>"]
+    REUSE --> DONE
+```
+
+### Initializing a repository Board
 
 `orbit init` is idempotent. It creates or reuses the Board, links an explicit target, and reconciles the selected harnesses instead of rejecting an existing installation.
 
@@ -647,7 +673,7 @@ sequenceDiagram
 | Heartbeat-only changes | Not committed immediately. The next meaningful mutation or `orbit sync` commits them. |
 | Missing linked Board | `LINK_NOT_FOUND`; re-link or restore the Board. |
 | Missing local Board | `BOARD_NOT_FOUND`; run `orbit init`. |
-| Corrupt task, comment, or graph | `doctor` reports `CORRUPT_TASK`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `DANGLING_DEP`, or `CYCLE_DETECTED`. `doctor --fix` only removes stale temp files; it does not rewrite tasks or comments. |
+| Corrupt task, comment, or graph | `doctor` reports `CORRUPT_TASK`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, or `CYCLE_DETECTED`. `doctor --fix` only removes stale temp files; it does not rewrite tasks or comments. |
 | Forced reopen of a done dependency | A done dependent can keep an unfinished dependency as a historical fact. `doctor` warns; the next `done` of that dependent still enforces its dependencies. |
 
 ## 8. Where to change what
@@ -667,8 +693,10 @@ sequenceDiagram
 - Readers take the shared lock for a consistent snapshot. Writers take the exclusive lock for the read-modify-write.
 - Each file is published with a temp file, `fsync`, and rename. A crash cannot truncate a task.
 - Ready and blocked are derived on every command. They are never stored in frontmatter.
-- `done` and `cancelled` both resolve dependents. `delete` is not a status; it removes the task and its comments.
+- Parentage is one level deep and is not a Dependency. A Parent Task is Ready only when every SubTask is `done` or `cancelled`.
+- `done` and `cancelled` both resolve dependents. `delete` is not a status; it removes the task and its comments, and `--force` removes a SubTask subtree.
 - Comments are append-only and immutable. A correction is a new comment.
 - Meaningful mutations auto-commit to the `orbit` branch. Heartbeats wait for the next mutation or `sync`. Nothing is pushed.
+- `export` takes the shared lock and writes nothing. Its snapshot is sorted by task ID and contains no timestamps or machine-local paths.
 - MCP does not bypass the CLI. Every tool call reuses the same lock, atomic-write, auto-commit, and error envelope.
 - Agent configuration is written with managed markers or key-level merges so `setup --remove` deletes only Orbit-managed content.

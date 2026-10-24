@@ -54,9 +54,13 @@ impl Config {
         if !(6..=8).contains(&self.id.length) {
             return Err(OrbitError::config("id.length must be between 6 and 8"));
         }
-        if self.id.prefix.trim().is_empty() || self.id.prefix.chars().any(char::is_whitespace) {
+        if self.id.prefix.is_empty()
+            || !self.id.prefix.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+            })
+        {
             return Err(OrbitError::config(
-                "id.prefix must be non-empty and contain no whitespace",
+                "id.prefix must contain only lowercase letters, digits, and dashes (no dots)",
             ));
         }
         if self.board.branch.trim().is_empty() {
@@ -516,7 +520,7 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
 }
 
-fn resolve_external(dir: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_external(dir: &Path) -> Result<PathBuf> {
     let root = if dir.is_absolute() {
         dir.to_path_buf()
     } else {
@@ -589,6 +593,14 @@ mod tests {
 
         let mut config = Config::default();
         config.board.non_ready_labels = vec!["Has Space".to_string()];
+        assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
+
+        let mut config = Config::default();
+        config.id.prefix = "orb.v2-".to_string();
+        assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
+
+        let mut config = Config::default();
+        config.id.prefix = "Orb-".to_string();
         assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
     }
 }

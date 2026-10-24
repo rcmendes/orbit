@@ -98,6 +98,10 @@ pub enum TransitionError {
         id: String,
         blocking: Vec<String>,
     },
+    SubTasksOpen {
+        id: String,
+        subtasks: Vec<String>,
+    },
     WaitingExternal {
         id: String,
         waiting_on: Option<String>,
@@ -113,6 +117,7 @@ pub enum TransitionError {
 pub struct ClaimGate {
     pub hold_labels: Vec<String>,
     pub blocking: Vec<String>,
+    pub open_subtasks: Vec<String>,
 }
 
 impl Task {
@@ -267,6 +272,12 @@ impl Task {
                 blocking: gate.blocking.clone(),
             });
         }
+        if !gate.open_subtasks.is_empty() {
+            return Err(TransitionError::SubTasksOpen {
+                id,
+                subtasks: gate.open_subtasks.clone(),
+            });
+        }
         if let Some(claim) = &self.front.claim
             && !steal
         {
@@ -302,12 +313,19 @@ impl Task {
         caller: Option<&str>,
         force: bool,
         blocking: &[String],
+        open_subtasks: &[String],
         now: DateTime<Utc>,
     ) -> Result<Outcome, TransitionError> {
         match self.front.status {
             Status::Done => return Ok(Outcome::Unchanged),
             Status::Cancelled => return Err(self.invalid(InvalidReason::CompleteCancelled)),
             _ => {}
+        }
+        if !open_subtasks.is_empty() {
+            return Err(TransitionError::SubTasksOpen {
+                id: self.id.clone(),
+                subtasks: open_subtasks.to_vec(),
+            });
         }
         if !blocking.is_empty() {
             return Err(TransitionError::DependencyBlocked {
@@ -387,6 +405,11 @@ impl From<TransitionError> for OrbitError {
                 format!("{id} has unfinished dependencies"),
             )
             .with_details(json!({ "task": id, "blocking": blocking })),
+            SubTasksOpen { id, subtasks } => OrbitError::new(
+                code::SUBTASKS_OPEN,
+                format!("{id} has open SubTasks: {}", subtasks.join(", ")),
+            )
+            .with_details(json!({ "task": id, "subtasks": subtasks })),
             WaitingExternal { id, waiting_on } => OrbitError::new(
                 code::WAITING_EXTERNAL,
                 format!("{id} is waiting on an external blocker"),
@@ -437,6 +460,7 @@ mod tests {
                 priority: 2,
                 labels: Vec::new(),
                 depends_on: Vec::new(),
+                parent: None,
                 waiting_on: Some("vendor".to_string()),
                 stray_claim_times: None,
                 claim: lease_until.map(|lease_until| Claim {
@@ -590,6 +614,10 @@ mod tests {
             hold_labels: vec!["hold".into()],
             ..Default::default()
         };
+        let subtasks_open = ClaimGate {
+            open_subtasks: vec!["orb-child".into()],
+            ..Default::default()
+        };
         let open = ClaimGate::default();
         let lease_until = |h: Held| {
             task(InProgress, h)
@@ -630,6 +658,13 @@ mod tests {
                 TransitionError::DependencyBlocked {
                     id: id(),
                     blocking: vec!["orb-dep".into()],
+                },
+            ),
+            (
+                &subtasks_open,
+                TransitionError::SubTasksOpen {
+                    id: id(),
+                    subtasks: vec!["orb-child".into()],
                 },
             ),
         ] {
@@ -689,7 +724,7 @@ mod tests {
         for (status, held, caller, force, expected) in rows {
             let mut t = task(status, held);
             assert_eq!(
-                t.complete(caller, force, &[], now()),
+                t.complete(caller, force, &[], &[], now()),
                 expected,
                 "done {status:?} {held:?} {caller:?}"
             );
@@ -716,14 +751,17 @@ mod tests {
         // already in the target state: no-op, untouched
         let mut t = task(Done, No);
         let before = t.front.updated_at;
-        assert_eq!(t.complete(None, false, &[], now()), Ok(Outcome::Unchanged));
+        assert_eq!(
+            t.complete(None, false, &[], &[], now()),
+            Ok(Outcome::Unchanged)
+        );
         assert_eq!(t.front.updated_at, before);
         let mut t = task(Cancelled, No);
         assert_eq!(t.cancel(None, false, now()), Ok(Outcome::Unchanged));
 
         // the other terminal state is rejected
         assert_eq!(
-            task(Cancelled, No).complete(None, false, &[], now()),
+            task(Cancelled, No).complete(None, false, &[], &[], now()),
             Err(invalid(InvalidReason::CompleteCancelled))
         );
         assert_eq!(
@@ -733,10 +771,19 @@ mod tests {
 
         // unfinished dependencies block done only, even when forced
         assert_eq!(
-            task(InProgress, Live).complete(Some("alice"), true, &["orb-dep".into()], now()),
+            task(InProgress, Live).complete(Some("alice"), true, &["orb-dep".into()], &[], now()),
             Err(TransitionError::DependencyBlocked {
                 id: ID.into(),
                 blocking: vec!["orb-dep".into()]
+            })
+        );
+
+        // open SubTasks also block done, even when forced
+        assert_eq!(
+            task(InProgress, Live).complete(Some("alice"), true, &[], &["orb-child".into()], now()),
+            Err(TransitionError::SubTasksOpen {
+                id: ID.into(),
+                subtasks: vec!["orb-child".into()]
             })
         );
     }
@@ -796,7 +843,7 @@ mod tests {
         for run in [
             |t: &mut Task| t.release(None, true, now()).map(|_| ()),
             |t: &mut Task| t.cancel(None, true, now()).map(|_| ()),
-            |t: &mut Task| t.complete(None, true, &[], now()).map(|_| ()),
+            |t: &mut Task| t.complete(None, true, &[], &[], now()).map(|_| ()),
         ] {
             let mut t = task(InProgress, Live);
             t.front.extra.insert("owner_note".into(), extra.clone());

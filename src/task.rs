@@ -83,6 +83,8 @@ struct RawFrontmatter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     waiting_on: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_by: Option<String>,
@@ -116,6 +118,7 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             priority: raw.priority,
             labels: raw.labels,
             depends_on: raw.depends_on,
+            parent: raw.parent,
             waiting_on: raw.waiting_on,
             claim,
             stray_claim_times,
@@ -139,6 +142,7 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             priority: front.priority,
             labels: front.labels,
             depends_on: front.depends_on,
+            parent: front.parent,
             waiting_on: front.waiting_on,
             claimed_by,
             claimed_at,
@@ -158,6 +162,7 @@ pub struct TaskFrontmatter {
     pub priority: u8,
     pub labels: Vec<String>,
     pub depends_on: Vec<String>,
+    pub parent: Option<String>,
     pub waiting_on: Option<String>,
     pub claim: Option<Claim>,
     pub stray_claim_times: Option<StrayClaimTimes>,
@@ -171,6 +176,26 @@ pub struct Task {
     pub id: String,
     pub front: TaskFrontmatter,
     pub body: String,
+}
+
+impl Task {
+    pub fn parent_id(&self) -> Option<&str> {
+        self.front.parent.as_deref()
+    }
+
+    pub fn is_subtask(&self) -> bool {
+        self.front.parent.is_some()
+    }
+
+    pub fn kind(&self) -> &'static str {
+        if self.is_subtask() { "subtask" } else { "task" }
+    }
+
+    pub fn has_labels(&self, labels: &[String]) -> bool {
+        labels
+            .iter()
+            .all(|label| self.front.labels.iter().any(|candidate| candidate == label))
+    }
 }
 
 pub fn parse_task(id: String, content: &str) -> Result<Task> {
@@ -196,6 +221,15 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
     if front.depends_on.iter().any(|dep| dep.trim().is_empty()) {
         return Err(OrbitError::corrupt_task(format!(
             "task {id} has an empty dependency id"
+        )));
+    }
+    if front
+        .parent
+        .as_deref()
+        .is_some_and(|parent| parent.trim().is_empty())
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an empty parent id"
         )));
     }
 
@@ -273,7 +307,36 @@ pub fn is_valid_id(id: &str, prefix: &str) -> bool {
     let Some(rest) = id.strip_prefix(prefix) else {
         return false;
     };
-    (6..=8).contains(&rest.len()) && rest.bytes().all(|byte| ID_ALPHABET.contains(&byte))
+
+    match rest.split_once('.') {
+        None => is_valid_rand(rest),
+        Some((parent, child)) => {
+            !parent.is_empty()
+                && !child.is_empty()
+                && !child.contains('.')
+                && is_valid_rand(parent)
+                && is_valid_rand(child)
+        }
+    }
+}
+
+fn is_valid_rand(value: &str) -> bool {
+    (6..=8).contains(&value.len()) && value.bytes().all(|byte| ID_ALPHABET.contains(&byte))
+}
+
+/// Returns the Parent Task encoded in a SubTask ID, if the ID is valid.
+pub fn parent_id_from_id(id: &str, prefix: &str) -> Option<String> {
+    let rest = id.strip_prefix(prefix)?;
+    let (parent, child) = rest.split_once('.')?;
+    if parent.is_empty()
+        || child.is_empty()
+        || child.contains('.')
+        || !is_valid_rand(parent)
+        || !is_valid_rand(child)
+    {
+        return None;
+    }
+    Some(format!("{prefix}{parent}"))
 }
 
 pub fn is_valid_label(label: &str) -> bool {
@@ -305,9 +368,16 @@ pub fn normalize_label(input: &str) -> Result<String> {
 }
 
 pub fn generate_id(prefix: &str, len: usize) -> String {
+    format!("{prefix}{}", generate_rand(len))
+}
+
+pub fn generate_subtask_id(parent_id: &str, len: usize) -> String {
+    format!("{parent_id}.{}", generate_rand(len))
+}
+
+fn generate_rand(len: usize) -> String {
     let mut rng = rand::rng();
-    let mut id = String::with_capacity(prefix.len() + len);
-    id.push_str(prefix);
+    let mut id = String::with_capacity(len);
     for _ in 0..len {
         let index = rng.random_range(0..ID_ALPHABET.len());
         id.push(ID_ALPHABET[index] as char);
@@ -333,6 +403,7 @@ mod tests {
                 priority: 1,
                 labels: Vec::new(),
                 depends_on: vec!["orb-f14c02".to_string()],
+                parent: None,
                 waiting_on: None,
                 claim: None,
                 stray_claim_times: None,
@@ -407,9 +478,30 @@ updated_at: 2026-10-23T12:00:00Z
     fn ids_are_validated() {
         assert!(is_valid_id("orb-a7b2c9", "orb-"));
         assert!(is_valid_id("orb-a7b2c9d", "orb-"));
+        assert!(is_valid_id("orb-a7b2c9.d4b3df", "orb-"));
+        assert!(is_valid_id("orb-5q7bbn.d4b3df", "orb-"));
         assert!(!is_valid_id("orb-a7b2c", "orb-"));
         assert!(!is_valid_id("orb-a7b2c9i", "orb-"));
         assert!(!is_valid_id("task-a7b2c9", "orb-"));
+        assert!(!is_valid_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"));
+        assert!(!is_valid_id("orb-a7b2c9.", "orb-"));
+        assert!(!is_valid_id("orb-.d4b3df", "orb-"));
+        assert!(!is_valid_id("orb-a7b2c9..d4b3df", "orb-"));
+    }
+
+    #[test]
+    fn parent_id_from_id_reads_only_one_level() {
+        assert_eq!(
+            parent_id_from_id("orb-a7b2c9.d4b3df", "orb-"),
+            Some("orb-a7b2c9".to_string())
+        );
+        assert_eq!(
+            parent_id_from_id("orb-5q7bbn.d4b3df", "orb-"),
+            Some("orb-5q7bbn".to_string())
+        );
+        assert_eq!(parent_id_from_id("orb-a7b2c9", "orb-"), None);
+        assert_eq!(parent_id_from_id("orb-a7b2c9.", "orb-"), None);
+        assert_eq!(parent_id_from_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"), None);
     }
 
     #[test]
@@ -417,6 +509,9 @@ updated_at: 2026-10-23T12:00:00Z
         for _ in 0..100 {
             let id = generate_id("orb-", 6);
             assert!(is_valid_id(&id, "orb-"), "{id}");
+            let child = generate_subtask_id(&id, 6);
+            assert!(child.starts_with(&format!("{id}.")), "{child}");
+            assert!(is_valid_id(&child, "orb-"), "{child}");
         }
     }
 

@@ -411,6 +411,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - MCP tests: initialize, tools/list, label/comment round-trips, resources, and error envelopes over a real stdio child process.
 - Golden JSON and error-envelope tests.
 - CI on macOS, Linux, and Windows: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
+- A Linux `setup-check` CI job runs `orbit setup opencode --no-mcp --check`, so the checked-in `AGENTS.md` managed block stays in sync with the generator; `--no-mcp` keeps machine-local MCP configuration out of the check.
 - A Linux `dist-check` CI job runs `dist generate --check` so the release workflow stays in sync with `dist-workspace.toml`.
 - Non-gating benchmark: 10k tasks hydrate in under 100ms.
 

@@ -31,6 +31,19 @@ jobs:
       - name: Test
         run: cargo test --all
 
+  setup-check:
+    name: agent setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check AGENTS.md managed block
+        run: cargo run --locked --quiet -- setup opencode --no-mcp --check
+
   dist-check:
     name: release workflow
     runs-on: ubuntu-latest

@@ -676,7 +676,7 @@ fn plan_install(
             }
         }
         SetupClient::Mattpocock => {
-            plan_section_if_managed(
+            plan_section_unless_custom(
                 root,
                 "docs/agents/issue-tracker.md",
                 &mattpocock_section(),
@@ -783,7 +783,7 @@ fn plan_section(
 
 /// Install a managed section only when the file is absent or already managed.
 /// A hand-written file is reported as skipped instead of gaining a second section.
-fn plan_section_if_managed(
+fn plan_section_unless_custom(
     root: &Path,
     relative: &str,
     section: &str,
@@ -795,20 +795,23 @@ fn plan_section_if_managed(
         && !existing.contains(BEGIN_MARKER)
         && !existing.contains(END_MARKER)
     {
-        return insert_plan(
-            plan,
-            FilePlan {
-                absolute,
-                relative: PathBuf::from(relative),
-                action: Action::Skipped,
-                content: None,
-                warning: Some(format!(
-                    "{relative} is not managed by Orbit; leaving it in place"
-                )),
-            },
-        );
+        return insert_plan(plan, skipped_plan(absolute, PathBuf::from(relative)));
     }
     plan_section(root, relative, section, plan)
+}
+
+fn skipped_plan(absolute: PathBuf, relative: PathBuf) -> FilePlan {
+    let warning = format!(
+        "{} is not managed by Orbit; leaving it in place",
+        relative.display()
+    );
+    FilePlan {
+        absolute,
+        relative,
+        action: Action::Skipped,
+        content: None,
+        warning: Some(warning),
+    }
 }
 
 fn plan_section_remove(
@@ -892,17 +895,7 @@ fn plan_full_file_remove(
             },
         )?;
     } else {
-        let warning = format!("{relative} is not managed by Orbit; leaving it in place");
-        insert_plan(
-            plan,
-            FilePlan {
-                absolute,
-                relative: PathBuf::from(relative),
-                action: Action::Skipped,
-                content: None,
-                warning: Some(warning),
-            },
-        )?;
+        insert_plan(plan, skipped_plan(absolute, PathBuf::from(relative)))?;
     }
     Ok(())
 }

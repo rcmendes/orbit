@@ -35,7 +35,9 @@ pub const INIT_LONG: &str = "\
 Creates the Board as a hidden Git worktree on the orbit branch, then detects
 installed coding-agent harnesses (Claude Code, Cursor, Codex, OpenCode, and the
 mattpocock bridge) and writes only the integrations that apply. Files carry a
-managed marker, so re-running reconciles integration instead of failing.
+managed marker, so re-running reconciles integration instead of failing. A
+hand-written docs/agents/issue-tracker.md without the marker is reported as
+skipped and left alone.
 
 In a terminal, init asks which harnesses to wire. Without a terminal it wires the
 ones it detects. Use --board to create a shared Board and link this repository to
@@ -428,7 +430,8 @@ pub const SETUP_LONG: &str = "\
 Installs or repairs one harness integration. Each client writes its instruction
 file, skill, and MCP configuration as appropriate; Claude can also receive the
 SessionStart hook with --hooks. Re-running is safe: only managed sections are
-rewritten.
+rewritten. A hand-written docs/agents/issue-tracker.md without the marker is
+reported as skipped and left alone.
 
 Use init for first-time setup. setup is for adjusting one harness later, checking
 drift in CI with --check (non-zero when missing or stale), or removing Orbit's

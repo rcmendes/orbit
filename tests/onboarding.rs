@@ -409,7 +409,7 @@ fn link_refreshes_existing_agent_configuration() {
 }
 
 #[test]
-fn link_refreshes_a_custom_mattpocock_tracker_doc() {
+fn link_recognizes_and_preserves_a_custom_mattpocock_tracker_doc() {
     let repo = TestRepo::new();
     repo.ok_json(&["init", "--agents", "none", "--json"]);
     let custom = "# Issue tracker: Orbit\n\nHand-written guidance.\n";

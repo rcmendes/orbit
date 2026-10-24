@@ -247,6 +247,25 @@ Examples:
   # Load the ticket as JSON, including comments
   orbit show orb-a7b2c9 --json";
 
+pub const TREE_LONG: &str = "\
+Shows one Parent Task, its direct SubTasks, and the blocking edges around them.
+Unlike `list --tree`, which shows the whole Board, and `list --parent`, which
+shows only the children, `tree` always includes the root and its family. It is
+the scoped view for an epic, spec, or feature.
+
+SubTasks are one level deep. `--json` returns data.root, data.tasks (root first),
+and data.count; each row has the same shape as `list` and `ready`. The root line
+shows resolved/total progress and is marked ready to close when every SubTask is
+done or cancelled.";
+
+pub const TREE_EXAMPLES: &str = "\
+Examples:
+  # Inspect one epic or spec and its tickets
+  orbit tree orb-a7b2c9
+
+  # Load the family for an agent
+  orbit tree orb-a7b2c9 --json";
+
 pub const CLAIM_LONG: &str = "\
 Claims one specific task instead of taking the top of the ready queue. The task
 must be active and unclaimed (a stale claim needs --steal), must not wait on an

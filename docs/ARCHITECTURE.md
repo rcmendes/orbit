@@ -363,6 +363,7 @@ flowchart TB
     subgraph Inspect["3. Inspect"]
         LIST["list"]
         SHOW["show"]
+        TREE["tree"]
         READY["ready"]
         PRIME["prime"]
         EXPORT["export"]
@@ -394,6 +395,7 @@ flowchart TB
     DELETE -->|removes| DELETED
     LIST -.->|filters| READY
     SHOW -.->|reads detail| CLAIM
+    TREE -.->|reads one family| SHOW
     COMMENT -.->|annotates| SHOW
     PRIME -.->|prints context| READY
     EXPORT -.->|snapshots| READY
@@ -414,7 +416,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | --- | --- | --- |
 | Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board, then reconcile harness files, MCP entries, and hooks. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `ready`, `prime`, `export` | Read-only. `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen` | Change Status or the claim. Writes take the exclusive lock. |
 | Maintenance | `doctor`, `sync`, `mcp` | Check integrity, commit heartbeat-only changes, and serve MCP over stdio. |
 

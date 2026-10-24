@@ -207,7 +207,7 @@ This is the compatibility mapping for Beads and Matt Pocock's skills:
 - **Sub-issue** = SubTask, created with `--parent`
 - **Epic** or **spec** = Parent Task, conventionally labelled `epic`
 
-The parent is held out of the ready queue until every SubTask is resolved, and `orbit ready --parent <id>` is the frontier for the family. Use `--exclude-label epic` on `list` or `ready` to keep spec containers out of a board-wide query. SubTasks are one level deep: if a ticket needs its own breakdown, flatten it into sibling tickets with `--depends-on` instead of nesting further. Never use `done --force` or `cancel --force` on a spec parent while tickets are open; unlike Beads' force-close, it cancels every open SubTask. See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md).
+The parent is held out of the ready queue until every SubTask is resolved, and `orbit ready --parent <id>` is the frontier for the family. `orbit tree <id>` shows the parent, its tickets, and their blocking edges in one scoped view. Use `--exclude-label epic` on `list` or `ready` to keep spec containers out of a board-wide query. SubTasks are one level deep: if a ticket needs its own breakdown, flatten it into sibling tickets with `--depends-on` instead of nesting further. Never use `done --force` or `cancel --force` on a spec parent while tickets are open; unlike Beads' force-close, it cancels every open SubTask. See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md).
 
 ### Export the board
 

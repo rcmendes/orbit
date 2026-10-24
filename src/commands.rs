@@ -10,7 +10,7 @@ use crate::cli::{
     AddArgs, CancelArgs, ClaimArgs, Cli, Command, CommentAddArgs, CommentArgs, CommentCommand,
     CommentListArgs, DeleteArgs, DependArgs, DoctorArgs, DoneArgs, HeartbeatArgs, InitArgs,
     LabelArgs, LabelCommand, LabelMutationArgs, LinkArgs, ListArgs, PrimeArgs, ReadyArgs,
-    ReleaseArgs, ReopenArgs, ShowArgs, UndependArgs, UpdateArgs, WorkspaceArgs,
+    ReleaseArgs, ReopenArgs, ShowArgs, TreeArgs, UndependArgs, UpdateArgs, WorkspaceArgs,
 };
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
@@ -41,6 +41,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             with_board(dir.as_deref(), exclusive, |board| cmd_ready(board, args))
         }
         Command::Show(args) => with_board(dir.as_deref(), false, |board| cmd_show(board, args)),
+        Command::Tree(args) => with_board(dir.as_deref(), false, |board| cmd_tree(board, args)),
         Command::Claim(args) => with_board(dir.as_deref(), true, |board| cmd_claim(board, args)),
         Command::Release(args) => {
             with_board(dir.as_deref(), true, |board| cmd_release(board, args))
@@ -760,6 +761,40 @@ fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::CommandOutpu
         graph::task_detail_with_comments(&graph, task, &comments),
         format_detail(&graph, task, &comments),
     ))
+}
+
+fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::CommandOutput> {
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let root = graph.get(&args.id)?;
+    if root.front.parent.is_some() {
+        return Err(OrbitError::invalid_argument(format!(
+            "{} is a SubTask; `orbit tree` expects a Parent Task",
+            root.id
+        )));
+    }
+
+    let children = graph.children(&root.id);
+    let mut tasks = Vec::with_capacity(children.len() + 1);
+    tasks.push(root.clone());
+    tasks.extend(children.into_iter().cloned());
+
+    let summaries: Vec<Value> = tasks
+        .iter()
+        .map(|task| graph::task_summary(&graph, task))
+        .collect();
+    let count = summaries.len();
+
+    let mut human = format_tree_line(root, &graph, true);
+    for child in &tasks[1..] {
+        human.push('\n');
+        human.push_str(&format_tree_line(child, &graph, false));
+    }
+
+    Ok(crate::output::CommandOutput::new(
+        json!({ "root": root.id, "tasks": summaries, "count": count }),
+        human,
+    )
+    .with_meta(json!({ "count": count })))
 }
 
 fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output::CommandOutput> {
@@ -2159,6 +2194,10 @@ fn optional_agent(by: Option<String>) -> Option<String> {
 }
 
 fn format_summary(task: &Task) -> String {
+    format_summary_with_parent(task, true)
+}
+
+fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
     let claim = task
         .holder()
         .map(|holder| format!("  claimed by {holder}"))
@@ -2168,12 +2207,15 @@ fn format_summary(task: &Task) -> String {
     } else {
         format!("  [{}]", task.front.labels.join(", "))
     };
-    let parent = task
-        .front
-        .parent
-        .as_deref()
-        .map(|parent| format!("  (subtask of {parent})"))
-        .unwrap_or_default();
+    let parent = if include_parent {
+        task.front
+            .parent
+            .as_deref()
+            .map(|parent| format!("  (subtask of {parent})"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     format!(
         "{}  {:<11}  P{}  {}{}{}{}",
         task.id,
@@ -2184,6 +2226,26 @@ fn format_summary(task: &Task) -> String {
         claim,
         parent
     )
+}
+
+fn format_tree_line(task: &Task, graph: &Graph, root: bool) -> String {
+    let mut line = format_summary_with_parent(task, false);
+    if root {
+        let subtask_count = graph.children(&task.id).len();
+        if subtask_count > 0 {
+            let open_count = graph.open_children(&task.id).len();
+            let resolved = subtask_count.saturating_sub(open_count);
+            line.push_str(&format!("  {resolved}/{subtask_count} resolved"));
+            if open_count == 0 && !task.front.status.is_terminal() {
+                line.push_str("  (ready to close)");
+            }
+        }
+    }
+    let blocking = graph.blocked_by(task);
+    if !blocking.is_empty() {
+        line.push_str(&format!("  blocked by: {}", blocking.join(", ")));
+    }
+    if root { line } else { format!("  {line}") }
 }
 
 fn format_summary_value(value: &Value) -> String {

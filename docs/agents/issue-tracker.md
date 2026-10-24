@@ -60,6 +60,8 @@ There is no separate Epic type and no deeper nesting. `kind` is always `task` or
   units of work; the Parent Task waits for its SubTasks automatically.
 - Use `orbit ready --parent <id>` as the frontier for one epic or spec. A Parent
   Task is not Ready while any SubTask is open.
+- Use `orbit tree <id>` to see the parent, its SubTasks, and their blocking edges
+  in one scoped view.
 - Use `--exclude-label epic` on `list` or `ready` to keep spec/epic containers
   out of a board-wide query.
 - Never use `done --force` or `cancel --force` on a Parent Task with open

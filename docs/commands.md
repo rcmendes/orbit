@@ -42,7 +42,7 @@ the multi-repository model.
 | Finish or abandon work | `orbit done`, `orbit cancel` |
 | Undo a close or remove a mistake | `orbit reopen`, `orbit delete` |
 | Add context to a ticket | `orbit comment add`, `orbit update` |
-| Read the board | `orbit list`, `orbit show`, `orbit prime` |
+| Read the board | `orbit list`, `orbit show`, `orbit tree`, `orbit prime` |
 | Collect or archive the board | `orbit export` |
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
 | Recover or maintain the board | `orbit doctor`, `orbit sync` |
@@ -337,6 +337,24 @@ or when reading a handoff comment.
 orbit show orb-a7b2c9
 orbit show orb-a7b2c9 --json
 ```
+
+### `orbit tree` — inspect one epic or spec
+
+Shows one Parent Task, its direct SubTasks, and their blocking edges. Unlike
+`list --tree` (the whole Board) and `list --parent` (children only), `tree`
+always includes the root and its family, with resolved/total progress on the
+root.
+
+**Good fit:** inspecting a spec, epic, or feature before publishing tickets,
+checking the frontier, or seeing why one ticket is blocked.
+
+```bash
+orbit tree orb-a7b2c9
+orbit tree orb-a7b2c9 --json
+```
+
+`tree` expects a Parent Task; a SubTask returns `INVALID_ARGUMENT`. `--json`
+returns `data.root`, `data.tasks` with the root first, and `data.count`.
 
 ### `orbit prime` — starting context for a session
 

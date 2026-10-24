@@ -86,6 +86,65 @@ fn parent_progress_fields_track_children_and_close_eligibility() {
 }
 
 #[test]
+fn tree_shows_the_parent_children_and_blockers() {
+    let repo = TestRepo::new();
+    repo.init();
+    let parent = repo.add("Feature", &[]);
+    let blocker = repo.add("Blocker", &[]);
+    let first = subtask(&repo, &parent, "First");
+    let second = repo.ok_json(&[
+        "add",
+        "Second",
+        "--parent",
+        &parent,
+        "--depends-on",
+        &blocker,
+        "--json",
+    ])["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let tree = repo.ok_json(&["tree", &parent, "--json"]);
+    assert_eq!(tree["data"]["root"], parent.as_str());
+    assert_eq!(tree["data"]["count"], 3);
+    assert_eq!(tree["data"]["tasks"][0]["id"], parent.as_str());
+
+    let ids: Vec<&str> = tree["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert!(ids.contains(&first.as_str()));
+    assert!(ids.contains(&second.as_str()));
+
+    let second_json = tree["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == second.as_str())
+        .unwrap();
+    assert_eq!(second_json["blocking"][0], blocker.as_str());
+
+    let output = repo.orbit(&["tree", &parent]);
+    assert!(output.status.success());
+    let human = String::from_utf8_lossy(&output.stdout);
+    assert!(human.contains(&parent));
+    assert!(human.contains(&first));
+    assert!(human.contains("blocked by"));
+
+    let (status, value) = repo.json(&["tree", &first, "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+
+    let ordinary = repo.add("Ordinary", &[]);
+    let tree = repo.ok_json(&["tree", &ordinary, "--json"]);
+    assert_eq!(tree["data"]["count"], 1);
+    assert_eq!(tree["data"]["tasks"][0]["id"], ordinary.as_str());
+}
+
+#[test]
 fn subtask_ids_encode_the_parent() {
     let repo = TestRepo::new();
     repo.init();

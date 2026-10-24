@@ -61,6 +61,10 @@ pub enum Command {
     #[command(long_about = help::SHOW_LONG, after_long_help = help::SHOW_EXAMPLES)]
     Show(ShowArgs),
 
+    /// Show a Parent Task, its SubTasks, and blocking edges.
+    #[command(long_about = help::TREE_LONG, after_long_help = help::TREE_EXAMPLES)]
+    Tree(TreeArgs),
+
     /// Claim a specific task and start its lease.
     #[command(long_about = help::CLAIM_LONG, after_long_help = help::CLAIM_EXAMPLES)]
     Claim(ClaimArgs),
@@ -298,6 +302,12 @@ pub struct ReadyArgs {
 #[derive(Debug, Args)]
 pub struct ShowArgs {
     /// Task ID, for example orb-a7b2c9.
+    pub id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct TreeArgs {
+    /// Parent Task ID, for example orb-a7b2c9.
     pub id: String,
 }
 

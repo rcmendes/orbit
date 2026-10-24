@@ -10,6 +10,7 @@ Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit t
 - `orbit add "title" --parent <id>` creates a SubTask. A spec or epic is a top-level Parent Task labelled `epic`; its issues are SubTasks. SubTasks are one level deep and the parent waits for them.
 - Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
 - Use `--exclude-label epic` on `orbit ready` or `orbit list` to skip spec/epic containers.
+- Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
 - In a multi-repository workspace, add `--repo <name>` to `orbit ready` or `orbit list`.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.

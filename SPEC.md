@@ -18,7 +18,7 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 - Dolt, SQLite, or any second source of truth.
 - A daemon or background watcher.
 - Web UI.
-- Epics, hierarchy, labels, types, comments, or attachments.
+- Epics, hierarchy, types, or attachments.
 - GitHub/Jira/Linear sync.
 - Automatic pushes to a remote.
 
@@ -26,9 +26,10 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 
 1. **Board (truth):** a dedicated orphan Git branch named `orbit`, checked out in a hidden worktree at `<git-common-dir>/orbit/board`. Every worktree of the repository resolves to the same board.
 2. **Tasks:** Markdown files at `tasks/<id>.md` inside the board.
-3. **Index (speed):** every process rebuilds an in-memory graph from the task files. There is no persistent cache and no watcher.
-4. **Writes (safety):** every mutation takes one repo-wide exclusive lock, performs a read-modify-write, and publishes each file with a temp-file + `fsync` + rename. Readers take a shared lock for a consistent snapshot.
-5. **History:** meaningful mutations auto-commit to the `orbit` branch. Heartbeat/lease-only changes are committed by `orbit sync`. Nothing is pushed automatically.
+3. **Comments:** append-only Markdown sidecars at `comments/<id>.md` inside the board.
+4. **Index (speed):** every process rebuilds an in-memory graph from the task files. There is no persistent cache and no watcher.
+5. **Writes (safety):** every mutation takes one repo-wide exclusive lock, performs a read-modify-write, and publishes each file with a temp-file + `fsync` + rename. Readers take a shared lock for a consistent snapshot.
+6. **History:** meaningful mutations auto-commit to the `orbit` branch. Heartbeat/lease-only changes are committed by `orbit sync`. Nothing is pushed automatically.
 
 The board is deliberately outside code branches: task churn never enters a feature PR, and agents in separate worktrees share one queue. See `docs/adr/0001-markdown-board-on-orphan-branch.md` and `docs/adr/0002-single-writer-lock-and-atomic-rename.md`.
 
@@ -37,12 +38,14 @@ The board is deliberately outside code branches: task churn never enters a featu
 The canonical vocabulary lives in `GLOSSARY.md`. In short:
 
 - A Task has one stored **Status**: `todo`, `in_progress`, `done`, or `cancelled`.
-- **Ready** is derived: `todo`, no Claim (including no Stale Claim), not Waiting, and every Dependency is `done` or `cancelled`.
+- **Ready** is derived: `todo`, no Claim (including no Stale Claim), not Waiting, no Hold Label, and every Dependency is `done` or `cancelled`.
 - **Blocked** is derived: at least one Dependency is not `done` or `cancelled`.
 - **Waiting** is an external blocker recorded by `waiting_on`; it is not a Status.
 - A **Claim** is exclusive, time-bounded responsibility for a Task. The time window is a **Lease**. An expired, unreleased Claim is **Stale**: the Task is not Ready, but it can be released or stolen.
 - **Done** and **Cancelled** both resolve dependents. Cancelled exists so abandoned work does not have to lie with `done` or destroy history with `delete`.
 - **Priority** is `P0` (highest) through `P3` (lowest); the stored value is an integer `0`–`3`.
+- **Label** is a short lowercase string attached to a Task for filtering or workflow state. **Hold Labels** are configured labels that suspend readiness; the defaults are `needs-triage`, `needs-info`, and `ready-for-human`. `ready-for-agent`, `bug`, and `enhancement` are neutral.
+- **Comment** is an append-only, authored, timestamped note on a Task. Comments do not affect Status or readiness.
 
 ## 4. Task file
 
@@ -58,11 +61,16 @@ Examples: `orb-a7b2c9`, `orb-f14c02`. IDs of 6–8 characters are accepted so th
 <board_root>/
 ├── config.toml
 ├── .gitignore
-└── tasks/
+├── tasks/
+│   ├── .gitkeep
+│   ├── orb-a7b2c9.md
+│   └── orb-f14c02.md
+└── comments/
     ├── .gitkeep
-    ├── orb-a7b2c9.md
-    └── orb-f14c02.md
+    └── orb-a7b2c9.md
 ```
+
+Comments are optional; the file is created on the first comment. The task file remains the description and acceptance criteria; `orbit show` merges the task and its comments.
 
 The lock is runtime state outside the board for the default layout: `<git-common-dir>/orbit/lock`. For an external board (`ORBIT_DIR`), it is `<board_root>/.lock` and is gitignored.
 
@@ -73,6 +81,9 @@ The lock is runtime state outside the board for the default layout: `<git-common
 title: Build the CLI router
 status: todo
 priority: 2
+labels:
+- ready-for-agent
+- bug
 depends_on:
 - orb-f14c02
 waiting_on: Waiting for API credentials
@@ -86,9 +97,23 @@ updated_at: 2026-10-23T12:00:00Z
 Body text, acceptance criteria, notes.
 ```
 
-Required: `title`, `status`, `created_at`, `updated_at`. Optional: `priority` (default `2`), `depends_on` (default empty), `waiting_on`, `claimed_by`, `claimed_at`, `lease_until`. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC.
+Required: `title`, `status`, `created_at`, `updated_at`. Optional: `priority` (default `2`), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `waiting_on`, `claimed_by`, `claimed_at`, `lease_until`. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC.
 
 The body is free-form Markdown. Orbit does not duplicate the title as an H1. Frontmatter is parsed as the first `---` block, not by splitting the whole file on `---`.
+
+### Comments
+
+`comments/<id>.md` is created on the first comment. Each comment is an immutable block:
+
+```markdown
+# Comments: orb-a7b2c9
+
+<!-- orbit:comment {"author":"opencode","created_at":"2026-10-23T12:00:00Z"} -->
+Body text.
+<!-- /orbit:comment -->
+```
+
+Comments are append-only; there is no edit or delete command. A correction is a new comment. `orbit show` and `orbit comment list` parse the blocks. The body must not contain the Orbit comment markers.
 
 ### Config
 
@@ -97,6 +122,7 @@ The body is free-form Markdown. Orbit does not duplicate the title as an H1. Fro
 branch = "orbit"
 lease_minutes = 30
 default_priority = 2
+non_ready_labels = ["needs-triage", "needs-info", "ready-for-human"]
 auto_commit = true
 lock_timeout_ms = 2000
 
@@ -112,12 +138,12 @@ prefix = "orb-"
 1. Requires a Git repository and a configured `user.name` / `user.email`. The repository does not need an initial commit.
 2. Creates the `orbit` orphan branch if needed.
 3. Adds a hidden worktree at `<git-common-dir>/orbit/board`.
-4. Writes `config.toml`, `.gitignore`, and `tasks/.gitkeep`.
+4. Writes `config.toml`, `.gitignore`, `tasks/.gitkeep`, and `comments/.gitkeep`.
 5. Commits `orbit: initialize board`.
 
 Every command resolves the board through `git rev-parse --path-format=absolute --git-common-dir`, so linked worktrees share it automatically. This requires Git 2.31 or newer. `--dir` / `ORBIT_DIR` points at an external board root; the root must contain `config.toml` and `tasks/`.
 
-Auto-commit policy: create/update/claim/release/done/cancel/reopen/depend/undepend/delete commit immediately as `orbit: <verb> <id>`. Heartbeat and lease-only writes are not committed until the next meaningful mutation or `orbit sync`. A failed commit does not fail the operation: the state is already on disk and the result carries `meta.warnings: ["COMMIT_FAILED: ..."]`. `doctor` reports uncommitted board changes. Nothing is pushed.
+Auto-commit policy: create/update/claim/release/done/cancel/reopen/depend/undepend/delete/comment/label commit immediately as `orbit: <verb> <id>`. Heartbeat and lease-only writes are not committed until the next meaningful mutation or `orbit sync`. A failed commit does not fail the operation: the state is already on disk and the result carries `meta.warnings: ["COMMIT_FAILED: ..."]`. `doctor` reports uncommitted board changes. Nothing is pushed.
 
 ## 6. Commands
 
@@ -127,8 +153,8 @@ Auto-commit policy: create/update/claim/release/done/cancel/reopen/depend/undepe
 
 ```text
 orbit init [--dir PATH]
-orbit add <title> [-p N] [--depends-on ID]... [--waiting-on TEXT] [--body TEXT|--body-file PATH|-]
-orbit list [--status S] [--priority N] [--claimed-by NAME] [--waiting] [--all]
+orbit add <title> [-p N] [--label LABEL]... [--depends-on ID]... [--waiting-on TEXT] [--body TEXT|--body-file PATH|-]
+orbit list [--status S] [--priority N] [--claimed-by NAME] [--label LABEL|--unlabeled] [--waiting] [--all]
 orbit ready [--limit N] [--claim] [--by NAME]
 orbit show <id>
 orbit claim <id> [--by NAME] [--steal]
@@ -150,7 +176,18 @@ orbit sync
 
 - M1: `setup <claude|cursor|codex|opencode|mattpocock|all> [--hooks] [--print] [--remove]`; `prime --hook-json`; managed instruction files. Implemented.
 - M2: `orbit mcp` (stdio MCP server); `setup ... --mcp`; project-local MCP configs. Implemented.
-- M3: packaging and release automation.
+- M3: packaging and release automation. Implemented.
+- M4: labels, comments, and triage integration. Implemented.
+
+### M4 commands
+
+```text
+orbit label add <id> <label>...
+orbit label remove <id> <label>...
+orbit label list
+orbit comment add <id> --body TEXT|--body-file PATH|- [--by NAME]
+orbit comment list <id>
+```
 
 ### Command rules
 
@@ -162,7 +199,11 @@ orbit sync
 - `depend` refuses self-dependencies, missing tasks, cycles, and adding a dependency to a terminal task.
 - `undepend` is idempotent.
 - `cancel` resolves dependents. It requires the claim holder unless `--force`.
-- `doctor --fix` only removes stale temp files; it does not rewrite task content.
+- `label add` and `label remove` are idempotent. Labels are lowercase slugs; invalid labels are rejected with `INVALID_LABEL`.
+- A Task carrying a configured hold label is not Ready; `claim` returns `LABEL_BLOCKED`. `--steal` does not bypass hold labels; remove the label first.
+- `comment add` is append-only and immutable. A comment has an author and RFC 3339 timestamp; corrections are new comments. `delete` removes the task's comment file.
+- `doctor` reports malformed comments (`CORRUPT_COMMENT`) and comment files with no task (`ORPHAN_COMMENT`).
+- `doctor --fix` only removes stale temp files; it does not rewrite tasks or comments.
 - `setup` is idempotent, preserves unrelated content, and refuses to overwrite an existing rule or skill file it does not manage. `--remove` removes only Orbit-managed sections, files, and hooks.
 - `setup --hooks` installs Claude Code's SessionStart hook. Other clients ignore it in M1 with a warning.
 - `setup --mcp` writes project-local MCP configs for Claude, Cursor, Codex, and OpenCode; `mattpocock` has no MCP client and ignores it with a warning.
@@ -189,7 +230,7 @@ Error:
 - `doctor` reports `data.healthy: false` and exits `1` when it finds issues.
 - `orbit prime --hook-json` is the one exception to the envelope: it prints Claude Code's SessionStart payload, `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}`. It cannot be combined with `--json`.
 
-Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`.
+Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`.
 
 `LOCKED` is retryable. Everything else is not unless `details` says otherwise.
 
@@ -197,9 +238,9 @@ Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `CYCLE_DETECTED`, `DEP
 
 - Writers acquire `<lock>` exclusively with a short bounded retry (`lock_timeout_ms`), then fail with `LOCKED` (retryable).
 - Readers acquire the same lock shared for the duration of the command, so multi-file reads see a consistent snapshot.
-- Each file is written to a temp file in `tasks/`, fsynced, renamed over the target, and the directory is fsynced on Unix.
+- Each file is written to a temp file in its directory (`tasks/` or `comments/`), fsynced, renamed over the target, and the directory is fsynced on Unix.
 - A crash mid-write leaves the old file intact and a stale temp file; `doctor` reports it and `doctor --fix` removes it.
-- Multi-file mutations (`delete --force`) are serialized but not transactional across files. A crash can leave a partially cleaned board; `doctor` reports dangling dependencies and a repeated `delete --force` resumes the cleanup.
+- Multi-file mutations (`delete --force`, comment append plus task `updated_at`) are serialized but not transactional across files. A crash can leave a partially cleaned board; `doctor` reports dangling dependencies and a repeated `delete --force` resumes the cleanup.
 - Network filesystems are unsupported. Locks are advisory; all writes must go through Orbit.
 
 ## 9. Agent integration
@@ -208,7 +249,7 @@ CLI + `orbit prime` is the primary interface. `prime` prints ~1k tokens: workflo
 
 `setup` writes project-local files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and mattpocock (`docs/agents/issue-tracker.md`). Every file uses managed markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries.
 
-MCP is the fallback for clients without a shell. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 11 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
+MCP is the fallback for clients without a shell. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
 
 ## 10. Milestones
 
@@ -216,19 +257,22 @@ MCP is the fallback for clients without a shell. `orbit mcp` speaks JSON-RPC 2.0
 
 **M1 — agent setup.** `setup` recipes, `prime --hook-json`, Claude hooks, skill files, mattpocock bridge. Implemented: one command writes managed instructions for Claude, Cursor, Codex, and OpenCode, with idempotent updates and clean removal.
 
-**M2 — MCP.** `orbit mcp` over stdio with the 11 tools, `orbit://tasks/{id}` resources, project-local MCP configs, `setup --mcp`, and protocol-level tests against the CLI. Implemented.
+**M2 — MCP.** `orbit mcp` over stdio with the 13 tools, `orbit://tasks/{id}` resources, project-local MCP configs, `setup --mcp`, and protocol-level tests against the CLI. Implemented.
 
 **M3 — distribution.** cargo-dist configuration in `dist-workspace.toml`, shell/PowerShell installers, the `@rcmendes/orbit` npm package, the generated release workflow, and `RELEASING.md`. Implemented; the first public release still requires a `v*` tag and an `NPM_TOKEN` secret.
 
+**M4 — triage metadata.** Labels, comments, hold-label readiness, label/comment CLI and MCP tools, and the triage integration docs. Implemented.
+
 ## 11. Testing
 
-- Unit tests for frontmatter parsing/serialization, ID generation, graph validation, readiness, and transitions.
+- Unit tests for frontmatter parsing/serialization, label normalization, comment parsing/appending, ID generation, graph validation, readiness, and transitions.
 - Property tests (`proptest`) over random DAGs: acyclicity, readiness consistency, terminal states resolving dependencies, no dangling refs.
+- Label/comment integration tests: hold labels block readiness and claims, label filters, comment append-only behavior, delete cascade, and doctor diagnostics.
 - Multi-process tests: concurrent claims, dependencies, and deletes against one board; assert serializability and distinct claims.
 - Crash test: abort a writer between temp write and rename; the old file survives and `doctor --fix` removes the temp.
 - Worktree integration: initialize in the main worktree, claim from a linked worktree, assert one board.
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, and `--remove` preserving user content.
-- MCP tests: initialize, tools/list, tool round-trips, resources, and error envelopes over a real stdio child process.
+- MCP tests: initialize, tools/list, label/comment round-trips, resources, and error envelopes over a real stdio child process.
 - Golden JSON and error-envelope tests.
 - CI on macOS, Linux, and Windows: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
 - A Linux `dist-check` CI job runs `dist generate --check` so the release workflow stays in sync with `dist-workspace.toml`.
@@ -246,3 +290,4 @@ Tagging `v*` triggers `.github/workflows/release.yml`: it plans, builds, creates
 - `docs/adr/0002-single-writer-lock-and-atomic-rename.md`
 - `docs/adr/0003-hand-rolled-mcp-jsonrpc.md`
 - `docs/adr/0004-mcp-tool-calls-spawn-the-cli.md`
+- `docs/adr/0005-comments-sidecar-files.md`

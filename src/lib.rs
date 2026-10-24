@@ -2,6 +2,7 @@ pub mod atomic;
 pub mod board;
 pub mod cli;
 pub mod commands;
+pub mod comment;
 pub mod error;
 pub mod git;
 pub mod graph;

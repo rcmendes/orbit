@@ -9,6 +9,7 @@ use crate::error::{OrbitError, Result};
 pub const ID_ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 pub const DEFAULT_PREFIX: &str = "orb-";
 pub const DEFAULT_ID_LENGTH: usize = 6;
+pub const MAX_LABEL_LENGTH: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +46,8 @@ pub struct TaskFrontmatter {
     pub status: Status,
     #[serde(default = "default_priority")]
     pub priority: u8,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +96,19 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             "task {id} has an empty dependency id"
         )));
     }
+
+    let mut labels = Vec::with_capacity(front.labels.len());
+    for label in &front.labels {
+        let normalized = normalize_label(label).map_err(|error| {
+            OrbitError::corrupt_task(format!("task {id} has an invalid label: {}", error.message))
+        })?;
+        labels.push(normalized);
+    }
+    labels.sort();
+    labels.dedup();
+
+    let mut front = front;
+    front.labels = labels;
 
     Ok(Task {
         id,
@@ -158,6 +174,34 @@ pub fn is_valid_id(id: &str, prefix: &str) -> bool {
     (6..=8).contains(&rest.len()) && rest.bytes().all(|byte| ID_ALPHABET.contains(&byte))
 }
 
+pub fn is_valid_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= MAX_LABEL_LENGTH
+        && label.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || character == '-'
+                || character == ':'
+        })
+        && label
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+}
+
+pub fn normalize_label(input: &str) -> Result<String> {
+    let label = input.trim().to_ascii_lowercase();
+    if !is_valid_label(&label) {
+        return Err(OrbitError::new(
+            crate::error::code::INVALID_LABEL,
+            format!(
+                "invalid label `{input}`; use lowercase letters, digits, `-`, or `:`, at most {MAX_LABEL_LENGTH} characters"
+            ),
+        ));
+    }
+    Ok(label)
+}
+
 pub fn generate_id(prefix: &str, len: usize) -> String {
     let mut rng = rand::rng();
     let mut id = String::with_capacity(prefix.len() + len);
@@ -185,6 +229,7 @@ mod tests {
                 title: "Build the CLI router".to_string(),
                 status: Status::Todo,
                 priority: 1,
+                labels: Vec::new(),
                 depends_on: vec!["orb-f14c02".to_string()],
                 waiting_on: None,
                 claimed_by: None,
@@ -272,5 +317,38 @@ updated_at: 2026-10-23T12:00:00Z
             let id = generate_id("orb-", 6);
             assert!(is_valid_id(&id, "orb-"), "{id}");
         }
+    }
+
+    #[test]
+    fn labels_are_normalized_sorted_and_deduped() {
+        let content = r#"---
+title: Labels
+status: todo
+priority: 2
+labels:
+- Bug
+- needs-triage
+- bug
+created_at: 2026-10-23T12:00:00Z
+updated_at: 2026-10-23T12:00:00Z
+---
+
+Body.
+"#;
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        assert_eq!(task.front.labels, vec!["bug", "needs-triage"]);
+
+        let rendered = render_task(&task).unwrap();
+        assert!(rendered.contains("labels:\n- bug\n- needs-triage"));
+    }
+
+    #[test]
+    fn invalid_labels_are_rejected() {
+        for label in ["has spaces", "UPPER", "-leading", "emoji-✨", ""] {
+            assert!(!is_valid_label(label), "{label}");
+        }
+        assert!(is_valid_label("ready-for-agent"));
+        assert!(is_valid_label("bug"));
+        assert_eq!(normalize_label("Needs-Info").unwrap(), "needs-info");
     }
 }

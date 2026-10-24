@@ -152,6 +152,8 @@ fn tool_definitions() -> Vec<Value> {
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
                 "claimed_by": { "type": "string" },
                 "waiting": { "type": "boolean", "description": "Only tasks with an external blocker." },
+                "label": { "type": "string", "description": "Filter by label." },
+                "unlabeled": { "type": "boolean", "description": "Only tasks with no labels." },
                 "all": { "type": "boolean", "description": "Include done and cancelled tasks." }
             }),
             &[],
@@ -168,6 +170,7 @@ fn tool_definitions() -> Vec<Value> {
             json!({
                 "title": { "type": "string" },
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
+                "labels": { "type": "array", "items": { "type": "string" } },
                 "depends_on": { "type": "array", "items": { "type": "string" } },
                 "waiting_on": { "type": "string", "description": "External blocker." },
                 "body": { "type": "string", "description": "Markdown body and acceptance criteria." }
@@ -246,6 +249,27 @@ fn tool_definitions() -> Vec<Value> {
                 "force": { "type": "boolean" }
             }),
             &["id"],
+        ),
+        tool(
+            "label",
+            "Add, remove, or list task labels.",
+            json!({
+                "action": { "type": "string", "enum": ["add", "remove", "list"] },
+                "id": { "type": "string" },
+                "labels": { "type": "array", "items": { "type": "string" } }
+            }),
+            &["action"],
+        ),
+        tool(
+            "comment",
+            "Add or list task comments.",
+            json!({
+                "action": { "type": "string", "enum": ["add", "list"] },
+                "id": { "type": "string" },
+                "body": { "type": "string" },
+                "by": { "type": "string" }
+            }),
+            &["action"],
         ),
     ]
 }
@@ -346,6 +370,15 @@ fn dispatch_tool(
     {
         return tool_invalid("`depends_on` must be an array of task ids");
     }
+    if name == "create"
+        && let Some(labels) = arguments.get("labels")
+        && !labels.is_array()
+    {
+        return tool_invalid("`labels` must be an array of strings");
+    }
+    if name == "list" && arguments.get("label").is_some() && bool_arg(arguments, "unlabeled") {
+        return tool_invalid("`label` and `unlabeled` are mutually exclusive");
+    }
 
     let mut args: Vec<String> = Vec::new();
 
@@ -378,6 +411,13 @@ fn dispatch_tool(
                 args.push("--claimed-by".to_string());
                 args.push(claimed_by);
             }
+            if let Some(label) = optional_str(arguments, "label") {
+                args.push("--label".to_string());
+                args.push(label);
+            }
+            if bool_arg(arguments, "unlabeled") {
+                args.push("--unlabeled".to_string());
+            }
             if bool_arg(arguments, "waiting") {
                 args.push("--waiting".to_string());
             }
@@ -401,6 +441,15 @@ fn dispatch_tool(
             if let Some(priority) = optional_u64(arguments, "priority") {
                 args.push("-p".to_string());
                 args.push(priority.to_string());
+            }
+            if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
+                for label in labels {
+                    let Some(label) = label.as_str() else {
+                        return tool_invalid("`labels` must be an array of strings");
+                    };
+                    args.push("--label".to_string());
+                    args.push(label.to_string());
+                }
             }
             if let Some(depends_on) = arguments.get("depends_on").and_then(Value::as_array) {
                 for dependency in depends_on {
@@ -538,6 +587,71 @@ fn dispatch_tool(
             }
             if bool_arg(arguments, "force") {
                 args.push("--force".to_string());
+            }
+        }
+        "label" => {
+            let Some(action) = required_str(arguments, "action") else {
+                return tool_invalid("missing or invalid `action`");
+            };
+            match action.as_str() {
+                "add" | "remove" => {
+                    let Some(id) = required_str(arguments, "id") else {
+                        return tool_invalid("missing or invalid `id`");
+                    };
+                    let Some(labels) = arguments.get("labels").and_then(Value::as_array) else {
+                        return tool_invalid("missing or invalid `labels`");
+                    };
+                    if labels.is_empty() {
+                        return tool_invalid("`labels` must not be empty");
+                    }
+                    args.push("label".to_string());
+                    args.push(action);
+                    args.push(id);
+                    for label in labels {
+                        let Some(label) = label.as_str() else {
+                            return tool_invalid("`labels` must be an array of strings");
+                        };
+                        args.push(label.to_string());
+                    }
+                }
+                "list" => {
+                    args.push("label".to_string());
+                    args.push("list".to_string());
+                }
+                _ => return tool_invalid("`action` must be `add`, `remove`, or `list`"),
+            }
+        }
+        "comment" => {
+            let Some(action) = required_str(arguments, "action") else {
+                return tool_invalid("missing or invalid `action`");
+            };
+            match action.as_str() {
+                "add" => {
+                    let Some(id) = required_str(arguments, "id") else {
+                        return tool_invalid("missing or invalid `id`");
+                    };
+                    let Some(body) = required_str(arguments, "body") else {
+                        return tool_invalid("missing or invalid `body`");
+                    };
+                    args.push("comment".to_string());
+                    args.push("add".to_string());
+                    args.push(id);
+                    args.push("--body".to_string());
+                    args.push(body);
+                    if let Some(by) = optional_str(arguments, "by") {
+                        args.push("--by".to_string());
+                        args.push(by);
+                    }
+                }
+                "list" => {
+                    let Some(id) = required_str(arguments, "id") else {
+                        return tool_invalid("missing or invalid `id`");
+                    };
+                    args.push("comment".to_string());
+                    args.push("list".to_string());
+                    args.push(id);
+                }
+                _ => return tool_invalid("`action` must be `add` or `list`"),
             }
         }
         other => return tool_invalid(format!("unknown tool `{other}`")),
@@ -716,9 +830,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_list_contains_all_eleven_tools() {
+    fn tool_list_contains_all_thirteen_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 11);
+        assert_eq!(tools.len(), 13);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -735,6 +849,8 @@ mod tests {
             "finish",
             "link",
             "delete",
+            "label",
+            "comment",
         ] {
             assert!(names.contains(&expected), "{expected}");
         }

@@ -14,6 +14,10 @@ pub mod code {
     pub const WAITING_EXTERNAL: &str = "WAITING_EXTERNAL";
     pub const INVALID_TRANSITION: &str = "INVALID_TRANSITION";
     pub const INVALID_ARGUMENT: &str = "INVALID_ARGUMENT";
+    pub const INVALID_LABEL: &str = "INVALID_LABEL";
+    pub const LABEL_BLOCKED: &str = "LABEL_BLOCKED";
+    pub const CORRUPT_COMMENT: &str = "CORRUPT_COMMENT";
+    pub const ORPHAN_COMMENT: &str = "ORPHAN_COMMENT";
     pub const LOCKED: &str = "LOCKED";
     pub const ALREADY_INITIALIZED: &str = "ALREADY_INITIALIZED";
     pub const BOARD_NOT_FOUND: &str = "BOARD_NOT_FOUND";

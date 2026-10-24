@@ -80,12 +80,38 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
     let mut plan = BTreeMap::new();
     let mut warnings = Vec::new();
 
-    if args.mcp && matches!(args.client, SetupClient::Mattpocock) {
-        warnings.push("mattpocock is not an MCP client; ignoring --mcp".to_string());
+    if matches!(args.client, SetupClient::Mattpocock) && (args.mcp || args.mcp_bin.is_some()) {
+        warnings.push("mattpocock is not an MCP client; ignoring MCP options".to_string());
     }
     if args.hooks && !args.remove && !matches!(args.client, SetupClient::Claude | SetupClient::All)
     {
         warnings.push("hooks are only supported for Claude in M1; ignoring --hooks".to_string());
+    }
+
+    let mcp = !args.no_mcp;
+    let mcp_bin = if args.remove || !mcp {
+        None
+    } else {
+        Some(resolve_mcp_bin(args.mcp_bin.as_deref())?)
+    };
+
+    if let Some(bin) = &mcp_bin {
+        if bin.components().count() == 1 {
+            warnings.push(
+                "MCP config uses the bare `orbit` command; the editor's PATH must contain Orbit"
+                    .to_string(),
+            );
+        } else if is_build_artifact(bin) {
+            warnings.push(format!(
+                "MCP config points at a build artifact ({}); install Orbit to a stable location or re-run setup after rebuilding",
+                bin.display()
+            ));
+        } else if bin.starts_with(std::env::temp_dir()) {
+            warnings.push(format!(
+                "MCP config points at a temporary path ({}); install Orbit to a stable location",
+                bin.display()
+            ));
+        }
     }
 
     for client in expand(args.client) {
@@ -96,7 +122,8 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
                 &root,
                 client,
                 args.hooks,
-                args.mcp,
+                mcp,
+                mcp_bin.as_deref(),
                 mcp_dir.as_deref(),
                 &mut plan,
                 &mut warnings,
@@ -171,10 +198,12 @@ fn plan_install(
     client: SetupClient,
     hooks: bool,
     mcp: bool,
+    mcp_bin: Option<&Path>,
     mcp_dir: Option<&Path>,
     plan: &mut BTreeMap<PathBuf, FilePlan>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
+    let mcp_bin = mcp_bin.filter(|_| mcp);
     match client {
         SetupClient::Claude => {
             plan_section(root, "CLAUDE.md", &workflow_section(), plan)?;
@@ -186,7 +215,10 @@ fn plan_install(
                     root,
                     ".mcp.json",
                     McpJsonKind::Servers,
-                    mcp_servers_entry(mcp_dir),
+                    mcp_servers_entry(
+                        mcp_bin.expect("MCP binary resolved when MCP is enabled"),
+                        mcp_dir,
+                    ),
                     false,
                     plan,
                     warnings,
@@ -201,7 +233,10 @@ fn plan_install(
                     root,
                     ".cursor/mcp.json",
                     McpJsonKind::Servers,
-                    mcp_servers_entry(mcp_dir),
+                    mcp_servers_entry(
+                        mcp_bin.expect("MCP binary resolved when MCP is enabled"),
+                        mcp_dir,
+                    ),
                     false,
                     plan,
                     warnings,
@@ -999,6 +1034,7 @@ Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit t
 - `orbit add \"title\" -p N --depends-on <id>` creates work.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
+- Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.
 - Run `orbit prime` at session start for ready work, stale claims, and counts.
 
 Parse the JSON envelope: `ok`, `data`, `error.code`, and `error.retryable`. If a command returns `LOCKED`, retry after a short backoff. Never infer state from prose.
@@ -1044,6 +1080,9 @@ We use Orbit, a local AI-native issue tracker. Tasks live as Markdown on the boa
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
 - To finish or abandon work, run `orbit done <ID> --by <agent>` or `orbit cancel <ID> --by <agent>`.
 - To create work, run `orbit add \"Title\" -p N --depends-on <ID>`.
+- To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`.
+- To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.
+- The hold labels `needs-triage`, `needs-info`, and `ready-for-human` keep tasks out of the ready queue and prevent claims until removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.
 - Never edit task frontmatter directly; that bypasses dependency validation, leases, and the write lock.
 - Use `orbit show <ID>` to read acceptance criteria.
 {END_MARKER}"

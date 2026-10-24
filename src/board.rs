@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
 use crate::lock::{self, BoardLock};
@@ -43,6 +44,13 @@ impl Config {
                 "board.default_priority must be between 0 and 3",
             ));
         }
+        for label in &self.board.non_ready_labels {
+            if !task::is_valid_label(label) {
+                return Err(OrbitError::config(format!(
+                    "board.non_ready_labels contains invalid label `{label}`"
+                )));
+            }
+        }
         if !(6..=8).contains(&self.id.length) {
             return Err(OrbitError::config("id.length must be between 6 and 8"));
         }
@@ -71,6 +79,8 @@ pub struct BoardConfig {
     pub lease_minutes: i64,
     #[serde(default = "task::default_priority")]
     pub default_priority: u8,
+    #[serde(default = "default_non_ready_labels")]
+    pub non_ready_labels: Vec<String>,
     #[serde(default = "default_true")]
     pub auto_commit: bool,
     #[serde(default = "default_lock_timeout")]
@@ -83,6 +93,7 @@ impl Default for BoardConfig {
             branch: default_branch(),
             lease_minutes: default_lease(),
             default_priority: task::default_priority(),
+            non_ready_labels: default_non_ready_labels(),
             auto_commit: true,
             lock_timeout_ms: default_lock_timeout(),
         }
@@ -112,6 +123,14 @@ fn default_branch() -> String {
 
 fn default_lease() -> i64 {
     30
+}
+
+fn default_non_ready_labels() -> Vec<String> {
+    vec![
+        "needs-triage".to_string(),
+        "needs-info".to_string(),
+        "ready-for-human".to_string(),
+    ]
 }
 
 fn default_true() -> bool {
@@ -213,6 +232,69 @@ impl Board {
 
     pub fn tasks_dir(&self) -> PathBuf {
         self.root.join("tasks")
+    }
+
+    pub fn comments_dir(&self) -> PathBuf {
+        self.root.join("comments")
+    }
+
+    pub fn comment_path(&self, id: &str) -> PathBuf {
+        self.comments_dir().join(format!("{id}.md"))
+    }
+
+    pub fn comment_ids(&self) -> Result<Vec<String>> {
+        let directory = self.comments_dir();
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(OrbitError::io(
+                    format!("read {}", directory.display()),
+                    error,
+                ));
+            }
+        };
+
+        let mut ids = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("md") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if stem.starts_with('.') {
+                continue;
+            }
+            ids.push(stem.to_string());
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
+    pub fn read_comments(&self, id: &str) -> Result<Vec<Comment>> {
+        let path = self.comment_path(id);
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(OrbitError::io(format!("read {}", path.display()), error));
+            }
+        };
+
+        comment::parse_comments(&content).map_err(|error| {
+            OrbitError::new(
+                code::CORRUPT_COMMENT,
+                format!("{}: {}", path.display(), error.message),
+            )
+        })
+    }
+
+    pub fn write_comments(&self, id: &str, comments: &[Comment]) -> Result<()> {
+        let path = self.comment_path(id);
+        let content = comment::render_comments_file(id, comments);
+        crate::atomic::write_atomic(&path, content.as_bytes(), true)
     }
 
     pub fn lock_exclusive(&self) -> Result<BoardLock> {
@@ -353,12 +435,16 @@ fn initialize_board_files(root: &Path, branch: &str, external: bool) -> Result<I
     write_file(&root.join("config.toml"), config_toml.as_bytes())?;
     write_file(
         &root.join(".gitignore"),
-        b".lock\n.init.lock\n.tmp-orbit-*\ntasks/.tmp-orbit-*\n",
+        b".lock\n.init.lock\n.tmp-orbit-*\ntasks/.tmp-orbit-*\ncomments/.tmp-orbit-*\n",
     )?;
     std::fs::create_dir_all(root.join("tasks")).map_err(|error| {
         OrbitError::io(format!("create {}", root.join("tasks").display()), error)
     })?;
     write_file(&root.join("tasks").join(".gitkeep"), b"")?;
+    std::fs::create_dir_all(root.join("comments")).map_err(|error| {
+        OrbitError::io(format!("create {}", root.join("comments").display()), error)
+    })?;
+    write_file(&root.join("comments").join(".gitkeep"), b"")?;
 
     git::commit(root, "orbit: initialize board")?;
 
@@ -393,6 +479,10 @@ mod tests {
 
         assert_eq!(parsed.board.branch, "orbit");
         assert_eq!(parsed.board.lease_minutes, 30);
+        assert_eq!(
+            parsed.board.non_ready_labels,
+            vec!["needs-triage", "needs-info", "ready-for-human"]
+        );
         assert_eq!(parsed.id.length, 6);
         assert_eq!(parsed.id.prefix, "orb-");
     }
@@ -405,6 +495,10 @@ mod tests {
 
         let mut config = Config::default();
         config.board.default_priority = 9;
+        assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
+
+        let mut config = Config::default();
+        config.board.non_ready_labels = vec!["Has Space".to_string()];
         assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
     }
 }

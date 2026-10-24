@@ -1,10 +1,10 @@
 # Orbit: an AI-native issue tracker
 
-**Status:** pre-alpha; M0 (core CLI), M1 (agent setup), M2 (MCP), and M3 (release tooling) are implemented. No public release has been tagged yet. The canonical design is in [SPEC.md](./SPEC.md); vocabulary is in [GLOSSARY.md](./GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
+**Status:** pre-alpha; M0 (core CLI), M1 (agent setup), M2 (MCP), M3 (release tooling), and M4 (labels, comments, triage) are implemented. No public release has been tagged yet. The canonical design is in [SPEC.md](./SPEC.md); vocabulary is in [GLOSSARY.md](./GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 ### Brief description
 
-Orbit is a zero-daemon, AI-native local issue tracker built in Rust. Tasks are plain Markdown files on a dedicated Git branch, served through a strict `--json` CLI and an optional MCP server. A single locked writer and atomic renames make concurrent agents safe without a database server.
+Orbit is a zero-daemon, AI-native local issue tracker built in Rust. Tasks are plain Markdown files on a dedicated Git branch, served through a strict `--json` CLI and an optional MCP server. Labels, append-only comments, atomic claims, and a single locked writer make triage and concurrent agents safe without a database server.
 
 ### The goal
 
@@ -64,13 +64,28 @@ orbit setup all --remove     # remove only Orbit-managed content
 
 `setup --mcp` writes `.mcp.json` (Claude), `.cursor/mcp.json` (Cursor), `.codex/config.toml` (Codex), and `opencode.json` (OpenCode) with an `orbit` server entry. The server entry passes `--dir <board>` when the board is external. The Claude hook runs `orbit prime --hook-json --by claude`, which injects a compact workflow reminder and the current ready queue at session start. It assumes `orbit` is on `PATH`.
 
+### Triage metadata
+
+```bash
+orbit label add <id> bug needs-triage
+orbit label remove <id> needs-triage
+orbit label list
+orbit list --label ready-for-agent
+orbit list --unlabeled
+
+orbit comment add <id> --by opencode --body "Triage notes..."
+orbit comment list <id>
+```
+
+The default hold labels are `needs-triage`, `needs-info`, and `ready-for-human`: tasks carrying one are excluded from `ready` and cannot be claimed until the label is removed. `ready-for-agent`, `bug`, and `enhancement` are neutral. Comments are append-only and stored per task under `comments/`.
+
 ### MCP
 
 ```bash
 orbit mcp
 ```
 
-`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 11 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`. It also serves `orbit://tasks/{id}` as a Markdown resource. Tool calls reuse the CLI's lock, atomic writes, auto-commit, and error envelope. See [SPEC.md](./SPEC.md) section 9.
+`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. It also serves `orbit://tasks/{id}` as a Markdown resource. Tool calls reuse the CLI's lock, atomic writes, auto-commit, and error envelope. See [SPEC.md](./SPEC.md) section 9.
 
 ### Why not Beads or Beans?
 

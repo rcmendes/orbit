@@ -63,6 +63,12 @@ pub enum Command {
     /// Change a task's title, body, priority, or external wait.
     Update(UpdateArgs),
 
+    /// Add, remove, or list task labels.
+    Label(LabelArgs),
+
+    /// Add or list task comments.
+    Comment(CommentArgs),
+
     /// Add a dependency.
     Depend(DependArgs),
 
@@ -105,6 +111,10 @@ pub struct AddArgs {
     #[arg(long, value_name = "TEXT")]
     pub waiting_on: Option<String>,
 
+    /// Initial labels. Repeatable.
+    #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
+    pub label: Vec<String>,
+
     /// Task body. Use "-" to read stdin.
     #[arg(long, value_name = "TEXT", conflicts_with = "body_file")]
     pub body: Option<String>,
@@ -131,6 +141,14 @@ pub struct ListArgs {
     /// Only tasks waiting on an external blocker.
     #[arg(long)]
     pub waiting: bool,
+
+    /// Filter by label.
+    #[arg(long, value_name = "LABEL")]
+    pub label: Option<String>,
+
+    /// Only tasks with no labels.
+    #[arg(long, conflicts_with = "label")]
+    pub unlabeled: bool,
 
     /// Include done and cancelled tasks.
     #[arg(long)]
@@ -291,6 +309,66 @@ pub struct DeleteArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct LabelArgs {
+    #[command(subcommand)]
+    pub command: LabelCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LabelCommand {
+    /// Add one or more labels to a task.
+    Add(LabelMutationArgs),
+    /// Remove one or more labels from a task.
+    Remove(LabelMutationArgs),
+    /// List labels in use and their task counts.
+    List,
+}
+
+#[derive(Debug, Args)]
+pub struct LabelMutationArgs {
+    pub id: String,
+
+    #[arg(required = true, num_args = 1.., value_name = "LABEL")]
+    pub labels: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct CommentArgs {
+    #[command(subcommand)]
+    pub command: CommentCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CommentCommand {
+    /// Append a comment to a task.
+    Add(CommentAddArgs),
+    /// List a task's comments.
+    List(CommentListArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CommentAddArgs {
+    pub id: String,
+
+    /// Comment body. Use "-" to read stdin.
+    #[arg(long, value_name = "TEXT", conflicts_with = "body_file")]
+    pub body: Option<String>,
+
+    /// Read the comment body from a file. Use "-" to read stdin.
+    #[arg(long = "body-file", value_name = "PATH", conflicts_with = "body")]
+    pub body_file: Option<PathBuf>,
+
+    /// Comment author. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct CommentListArgs {
+    pub id: String,
+}
+
+#[derive(Debug, Args)]
 pub struct DoctorArgs {
     /// Remove stale temp files.
     #[arg(long)]
@@ -318,9 +396,19 @@ pub struct SetupArgs {
     #[arg(long)]
     pub hooks: bool,
 
-    /// Write project-local MCP server configuration.
-    #[arg(long)]
+    /// Deprecated: MCP configuration is installed by default.
+    #[arg(long, conflicts_with_all = ["no_mcp"])]
     pub mcp: bool,
+
+    /// Skip MCP configuration and install instruction files only.
+    #[arg(long = "no-mcp", conflicts_with_all = ["mcp", "mcp_bin"])]
+    pub no_mcp: bool,
+
+    /// Orbit executable to record in MCP configs. Defaults to the running binary.
+    ///
+    /// Pass `orbit` to write a portable command that relies on the editor's PATH.
+    #[arg(long = "mcp-bin", value_name = "PATH")]
+    pub mcp_bin: Option<PathBuf>,
 
     /// Preview the files that would change without writing them.
     #[arg(long)]

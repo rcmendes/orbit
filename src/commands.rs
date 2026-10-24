@@ -1,16 +1,18 @@
-use std::io::Read;
-use std::path::Path;
-
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::io::Read;
+use std::path::Path;
 
 use crate::atomic;
 use crate::board::Board;
 use crate::cli::{
-    AddArgs, CancelArgs, ClaimArgs, Cli, Command, DeleteArgs, DependArgs, DoctorArgs, DoneArgs,
-    HeartbeatArgs, ListArgs, PrimeArgs, ReadyArgs, ReleaseArgs, ReopenArgs, ShowArgs, UndependArgs,
-    UpdateArgs,
+    AddArgs, CancelArgs, ClaimArgs, Cli, Command, CommentAddArgs, CommentArgs, CommentCommand,
+    CommentListArgs, DeleteArgs, DependArgs, DoctorArgs, DoneArgs, HeartbeatArgs, LabelArgs,
+    LabelCommand, LabelMutationArgs, ListArgs, PrimeArgs, ReadyArgs, ReleaseArgs, ReopenArgs,
+    ShowArgs, UndependArgs, UpdateArgs,
 };
+use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::CommitOutcome;
 use crate::graph::{self, Graph, Issue, LoadMode};
@@ -45,6 +47,14 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Cancel(args) => with_board(dir.as_deref(), true, |board| cmd_cancel(board, args)),
         Command::Reopen(args) => with_board(dir.as_deref(), true, |board| cmd_reopen(board, args)),
         Command::Update(args) => with_board(dir.as_deref(), true, |board| cmd_update(board, args)),
+        Command::Label(args) => {
+            let exclusive = !matches!(args.command, LabelCommand::List);
+            with_board(dir.as_deref(), exclusive, |board| cmd_label(board, args))
+        }
+        Command::Comment(args) => {
+            let exclusive = matches!(args.command, CommentCommand::Add(_));
+            with_board(dir.as_deref(), exclusive, |board| cmd_comment(board, args))
+        }
         Command::Depend(args) => with_board(dir.as_deref(), true, |board| cmd_depend(board, args)),
         Command::Undepend(args) => {
             with_board(dir.as_deref(), true, |board| cmd_undepend(board, args))
@@ -103,6 +113,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
 
     let priority = args.priority.unwrap_or(board.config.board.default_priority);
     validate_priority(priority)?;
+    let labels = normalize_labels(&args.label)?;
 
     let mut depends_on = Vec::new();
     for dep in args.depends_on {
@@ -125,6 +136,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
             title: title.clone(),
             status: Status::Todo,
             priority,
+            labels,
             depends_on,
             waiting_on,
             claimed_by: None,
@@ -155,6 +167,11 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
     if let Some(priority) = args.priority {
         validate_priority(priority)?;
     }
+    let label_filter = args
+        .label
+        .as_deref()
+        .map(task::normalize_label)
+        .transpose()?;
 
     let mut tasks: Vec<&Task> = graph
         .tasks
@@ -176,6 +193,14 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
             if let Some(claimed_by) = &args.claimed_by
                 && task.front.claimed_by.as_deref() != Some(claimed_by.as_str())
             {
+                return false;
+            }
+            if let Some(label) = &label_filter
+                && !task.front.labels.iter().any(|candidate| candidate == label)
+            {
+                return false;
+            }
+            if args.unlabeled && !task.front.labels.is_empty() {
                 return false;
             }
             !args.waiting || task.front.waiting_on.is_some()
@@ -287,9 +312,10 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
 fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.id)?;
+    let comments = board.read_comments(&args.id)?;
     Ok(crate::output::CommandOutput::new(
-        graph::task_detail(&graph, task),
-        format_detail(&graph, task),
+        graph::task_detail_with_comments(&graph, task, &comments),
+        format_detail(&graph, task, &comments),
     ))
 }
 
@@ -657,6 +683,185 @@ fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandO
     )
 }
 
+fn cmd_label(board: &Board, args: LabelArgs) -> Result<crate::output::CommandOutput> {
+    match args.command {
+        LabelCommand::Add(args) => mutate_labels(board, args, true),
+        LabelCommand::Remove(args) => mutate_labels(board, args, false),
+        LabelCommand::List => list_labels(board),
+    }
+}
+
+fn mutate_labels(
+    board: &Board,
+    args: LabelMutationArgs,
+    add: bool,
+) -> Result<crate::output::CommandOutput> {
+    let labels = normalize_labels(&args.labels)?;
+    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let now = Utc::now();
+
+    let (task, changed) = {
+        let task = graph.get_mut(&args.id)?;
+        let before = task.front.labels.clone();
+        if add {
+            for label in &labels {
+                if !task.front.labels.contains(label) {
+                    task.front.labels.push(label.clone());
+                }
+            }
+        } else {
+            task.front.labels.retain(|label| !labels.contains(label));
+        }
+        task.front.labels.sort();
+        task.front.labels.dedup();
+        let changed = task.front.labels != before;
+        if changed {
+            task.front.updated_at = now;
+        }
+        (task.clone(), changed)
+    };
+
+    if !changed {
+        return Ok(crate::output::CommandOutput::new(
+            json!({ "id": args.id, "labels": task.front.labels, "changed": false }),
+            format!("{} labels unchanged", args.id),
+        ));
+    }
+
+    write_task(board, &task)?;
+    let outcome = board.commit(
+        &format!(
+            "orbit: label {} {}",
+            if add { "add" } else { "remove" },
+            args.id
+        ),
+        false,
+    )?;
+    let mut output = crate::output::CommandOutput::new(
+        json!({ "id": args.id, "labels": task.front.labels, "changed": true }),
+        format!(
+            "{} {}: {}",
+            if add { "added to" } else { "removed from" },
+            args.id,
+            labels.join(", ")
+        ),
+    );
+    if let CommitOutcome::Failed(message) = outcome {
+        output = output.with_warning(format!("COMMIT_FAILED: {message}"));
+    }
+    Ok(output)
+}
+
+fn list_labels(board: &Board) -> Result<crate::output::CommandOutput> {
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for task in graph.tasks.values() {
+        for label in &task.front.labels {
+            *counts.entry(label.clone()).or_default() += 1;
+        }
+    }
+
+    let labels: Vec<Value> = counts
+        .iter()
+        .map(|(label, count)| json!({ "label": label, "count": count }))
+        .collect();
+    let human = if labels.is_empty() {
+        "no labels".to_string()
+    } else {
+        labels
+            .iter()
+            .map(|value| {
+                format!(
+                    "{}  {}",
+                    value["label"].as_str().unwrap_or("?"),
+                    value["count"].as_u64().unwrap_or(0)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    Ok(
+        crate::output::CommandOutput::new(json!({ "labels": labels }), human)
+            .with_meta(json!({ "count": counts.len() })),
+    )
+}
+
+fn cmd_comment(board: &Board, args: CommentArgs) -> Result<crate::output::CommandOutput> {
+    match args.command {
+        CommentCommand::Add(args) => cmd_comment_add(board, args),
+        CommentCommand::List(args) => cmd_comment_list(board, args),
+    }
+}
+
+fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output::CommandOutput> {
+    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    graph.get(&args.id)?;
+    let author = resolve_agent(args.by)?;
+    let body = resolve_body(args.body, args.body_file)?;
+    comment::validate_body(&body)?;
+
+    let comment = Comment {
+        author: author.clone(),
+        created_at: Utc::now(),
+        body,
+    };
+    let mut comments = board.read_comments(&args.id)?;
+    comments.push(comment.clone());
+    board.write_comments(&args.id, &comments)?;
+
+    let now = Utc::now();
+    let task = {
+        let task = graph.get_mut(&args.id)?;
+        task.front.updated_at = now;
+        task.clone()
+    };
+    write_task(board, &task)?;
+
+    let outcome = board.commit(&format!("orbit: comment {}", args.id), false)?;
+    let mut output = crate::output::CommandOutput::new(
+        json!({
+            "id": args.id,
+            "comment": comment,
+            "count": comments.len()
+        }),
+        format!("commented {} as {author}", args.id),
+    );
+    if let CommitOutcome::Failed(message) = outcome {
+        output = output.with_warning(format!("COMMIT_FAILED: {message}"));
+    }
+    Ok(output)
+}
+
+fn cmd_comment_list(board: &Board, args: CommentListArgs) -> Result<crate::output::CommandOutput> {
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    graph.get(&args.id)?;
+    let comments = board.read_comments(&args.id)?;
+    let human = if comments.is_empty() {
+        format!("{} has no comments", args.id)
+    } else {
+        comments
+            .iter()
+            .map(format_comment)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
+
+    Ok(
+        crate::output::CommandOutput::new(json!({ "id": args.id, "comments": comments }), human)
+            .with_meta(json!({ "count": comments.len() })),
+    )
+}
+
+fn format_comment(comment: &Comment) -> String {
+    format!(
+        "{}  {}\n{}",
+        comment.created_at.to_rfc3339(),
+        comment.author,
+        comment.body
+    )
+}
+
 fn cmd_depend(board: &Board, args: DependArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
 
@@ -803,6 +1008,18 @@ fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::output::CommandO
         }
     }
 
+    let comments_path = board.comment_path(&args.id);
+    match std::fs::remove_file(&comments_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(OrbitError::io(
+                format!("delete {}", comments_path.display()),
+                error,
+            ));
+        }
+    }
+
     let outcome = board.commit(&format!("orbit: delete {}", args.id), false)?;
     let mut output = crate::output::CommandOutput::new(
         json!({ "id": args.id, "deleted": true, "cleaned": dependent_ids }),
@@ -900,6 +1117,27 @@ fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandO
     let (graph, mut issues) = Graph::load(board, LoadMode::Lenient)?;
     let mut warnings = Vec::new();
 
+    match board.comment_ids() {
+        Ok(ids) => {
+            for id in ids {
+                if !graph.tasks.contains_key(&id) {
+                    issues.push(Issue::new(
+                        code::ORPHAN_COMMENT,
+                        Some(&id),
+                        format!("comments/{id}.md has no matching task"),
+                    ));
+                    continue;
+                }
+                if let Err(error) = board.read_comments(&id) {
+                    issues.push(Issue::new(error.code, Some(&id), error.message));
+                }
+            }
+        }
+        Err(error) => {
+            issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message));
+        }
+    }
+
     for task in graph.stale_tasks() {
         warnings.push(format!(
             "{}: stale claim by {}",
@@ -947,16 +1185,25 @@ fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandO
         Err(error) => issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message)),
     }
 
-    let stale_temps = atomic::stale_temps(&board.tasks_dir(), std::time::Duration::ZERO);
+    let mut stale_temps = atomic::stale_temps(&board.tasks_dir(), std::time::Duration::ZERO);
+    stale_temps.extend(atomic::stale_temps(
+        &board.comments_dir(),
+        std::time::Duration::ZERO,
+    ));
     if !stale_temps.is_empty() && !args.fix {
         warnings.push(format!(
-            "{} stale temp file(s) in tasks/; run `orbit doctor --fix`",
+            "{} stale temp file(s) in the board; run `orbit doctor --fix`",
             stale_temps.len()
         ));
     }
 
     let fixed = if args.fix {
-        atomic::clean_stale_temps(&board.tasks_dir(), std::time::Duration::ZERO)?
+        let mut fixed = atomic::clean_stale_temps(&board.tasks_dir(), std::time::Duration::ZERO)?;
+        fixed.extend(atomic::clean_stale_temps(
+            &board.comments_dir(),
+            std::time::Duration::ZERO,
+        )?);
+        fixed
             .into_iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>()
@@ -1046,6 +1293,15 @@ fn claim_task(
                 format!("{id} is waiting on an external blocker"),
             )
             .with_details(json!({ "task": id, "waiting_on": task.front.waiting_on })));
+        }
+
+        let holds = graph.hold_labels(task);
+        if !holds.is_empty() {
+            return Err(OrbitError::new(
+                code::LABEL_BLOCKED,
+                format!("{id} has hold labels: {}", holds.join(", ")),
+            )
+            .with_details(json!({ "task": id, "labels": holds })));
         }
 
         let blocking = graph.blocking_ids(task);
@@ -1141,6 +1397,16 @@ fn validate_priority(priority: u8) -> Result<()> {
     Ok(())
 }
 
+fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {
+    let mut normalized = Vec::with_capacity(labels.len());
+    for label in labels {
+        normalized.push(task::normalize_label(label)?);
+    }
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
 fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {
     match waiting_on {
         None => Ok(None),
@@ -1218,12 +1484,18 @@ fn format_summary(task: &Task) -> String {
         .as_ref()
         .map(|holder| format!("  claimed by {holder}"))
         .unwrap_or_default();
+    let labels = if task.front.labels.is_empty() {
+        String::new()
+    } else {
+        format!("  [{}]", task.front.labels.join(", "))
+    };
     format!(
-        "{}  {:<11}  P{}  {}{}",
+        "{}  {:<11}  P{}  {}{}{}",
         task.id,
         task.front.status.as_str(),
         task.front.priority,
         task.front.title,
+        labels,
         claim
     )
 }
@@ -1238,10 +1510,22 @@ fn format_summary_value(value: &Value) -> String {
         .and_then(Value::as_str)
         .map(|holder| format!("  claimed by {holder}"))
         .unwrap_or_default();
-    format!("{id}  {status:<11}  P{priority}  {title}{claim}")
+    let labels = value
+        .get("labels")
+        .and_then(Value::as_array)
+        .map(|labels| {
+            let labels = labels.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            if labels.is_empty() {
+                String::new()
+            } else {
+                format!("  [{}]", labels.join(", "))
+            }
+        })
+        .unwrap_or_default();
+    format!("{id}  {status:<11}  P{priority}  {title}{labels}{claim}")
 }
 
-fn format_detail(graph: &Graph, task: &Task) -> String {
+fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
     let mut lines = Vec::new();
     lines.push(format!("{}  {}", task.id, task.front.title));
     lines.push(format!("status: {}", task.front.status.as_str()));
@@ -1283,6 +1567,19 @@ fn format_detail(graph: &Graph, task: &Task) -> String {
         .collect();
     if !dependents.is_empty() {
         lines.push(format!("dependents: {}", dependents.join(", ")));
+    }
+    if !comments.is_empty() {
+        lines.push(format!("comments: {}", comments.len()));
+        for comment in comments {
+            lines.push(format!(
+                "  [{}] {}",
+                comment.created_at.to_rfc3339(),
+                comment.author
+            ));
+            for line in comment.body.lines() {
+                lines.push(format!("    {line}"));
+            }
+        }
     }
     lines.push(String::new());
     lines.push(task.body.clone());

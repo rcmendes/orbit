@@ -115,7 +115,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 11);
+    assert_eq!(names.len(), 13);
     for expected in [
         "ready",
         "list",
@@ -128,6 +128,8 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "finish",
         "link",
         "delete",
+        "label",
+        "comment",
     ] {
         assert!(names.contains(&expected), "{expected}");
     }
@@ -257,6 +259,90 @@ fn update_claim_and_release_are_available() {
     let released = tool_envelope(&released);
     assert_eq!(released["data"]["status"], "todo");
     assert!(released["data"]["claimed_by"].is_null());
+}
+
+#[test]
+fn label_and_comment_tools_work() {
+    let repo = TestRepo::new();
+    repo.init();
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let created = client.call(
+        60,
+        "create",
+        json!({
+            "title": "Labeled over MCP",
+            "labels": ["needs-triage"]
+        }),
+    );
+    let created = tool_envelope(&created);
+    let id = created["data"]["id"].as_str().unwrap().to_string();
+
+    let ready = client.call(61, "ready", json!({}));
+    let ready = tool_envelope(&ready);
+    assert_eq!(ready["data"]["count"], 0);
+
+    let blocked = client.call(62, "claim", json!({ "id": id, "by": "claude" }));
+    assert_eq!(blocked["result"]["isError"], true);
+    let blocked = tool_envelope(&blocked);
+    assert_eq!(blocked["error"]["code"], "LABEL_BLOCKED");
+
+    let labeled = client.call(
+        63,
+        "label",
+        json!({ "action": "add", "id": id, "labels": ["ready-for-agent"] }),
+    );
+    let labeled = tool_envelope(&labeled);
+    assert_eq!(
+        labeled["data"]["labels"],
+        json!(["needs-triage", "ready-for-agent"])
+    );
+
+    client.call(
+        64,
+        "label",
+        json!({ "action": "remove", "id": id, "labels": ["needs-triage"] }),
+    );
+    let labels = client.call(65, "label", json!({ "action": "list" }));
+    let labels = tool_envelope(&labels);
+    assert!(
+        labels["data"]["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["label"] == "ready-for-agent")
+    );
+
+    let ready = client.call(66, "ready", json!({ "claim": true, "by": "claude" }));
+    let ready = tool_envelope(&ready);
+    assert_eq!(ready["data"]["status"], "in_progress");
+
+    let comment = client.call(
+        67,
+        "comment",
+        json!({ "action": "add", "id": id, "body": "MCP note", "by": "claude" }),
+    );
+    let comment = tool_envelope(&comment);
+    assert_eq!(comment["data"]["count"], 1);
+
+    let comments = client.call(68, "comment", json!({ "action": "list", "id": id }));
+    let comments = tool_envelope(&comments);
+    assert_eq!(comments["data"]["comments"][0]["body"], "MCP note");
+    assert_eq!(comments["data"]["comments"][0]["author"], "claude");
+
+    let get = client.call(69, "get", json!({ "id": id }));
+    let get = tool_envelope(&get);
+    assert_eq!(get["data"]["comment_count"], 1);
+    assert_eq!(get["data"]["labels"][0], "ready-for-agent");
+
+    let filtered = client.call(70, "list", json!({ "label": "ready-for-agent" }));
+    let filtered = tool_envelope(&filtered);
+    assert_eq!(filtered["data"]["count"], 1);
+
+    let unlabeled = client.call(71, "list", json!({ "unlabeled": true }));
+    let unlabeled = tool_envelope(&unlabeled);
+    assert_eq!(unlabeled["data"]["count"], 0);
 }
 
 #[test]

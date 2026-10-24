@@ -16,12 +16,24 @@ _Avoid_: State, phase
 The stored ordering weight of a Task, from P0 (highest) to P3 (lowest).
 _Avoid_: Rank, severity
 
+**Label**:
+A short lowercase string attached to a Task for filtering or workflow state. A Label does not affect readiness unless it is a Hold Label.
+_Avoid_: Tag, category
+
+**Hold Label**:
+A Label configured in `non_ready_labels` that makes a Task not Ready while present. The defaults are `needs-triage`, `needs-info`, and `ready-for-human`.
+_Avoid_: Blocked label, pause label
+
+**Comment**:
+An append-only, authored, timestamped note attached to a Task.
+_Avoid_: Note, message
+
 **Dependency**:
 Another Task that must be `done` or `cancelled` before this Task can become Ready.
 _Avoid_: Blocker, prerequisite, parent
 
 **Ready**:
-A condition of a Task that is `todo`, has no Claim (including no Stale Claim), is not Waiting, and whose every Dependency is `done` or `cancelled`. Ready is derived, never stored.
+A condition of a Task that is `todo`, has no Claim (including no Stale Claim), is not Waiting, carries no Hold Label, and whose every Dependency is `done` or `cancelled`. Ready is derived, never stored.
 _Avoid_: Unblocked, available, actionable
 
 **Blocked**:

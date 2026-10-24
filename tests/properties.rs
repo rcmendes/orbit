@@ -12,6 +12,7 @@ fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
             title: "property task".to_string(),
             status,
             priority: 2,
+            labels: Vec::new(),
             depends_on: dependencies,
             waiting_on: None,
             claimed_by: None,

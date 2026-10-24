@@ -4,6 +4,7 @@ use chrono::Utc;
 use serde::Serialize;
 
 use crate::board::Board;
+use crate::comment::Comment;
 use crate::error::{OrbitError, Result, code};
 use crate::task::{self, Status, Task};
 
@@ -46,6 +47,7 @@ pub struct Counts {
 
 pub struct Graph {
     pub tasks: HashMap<String, Task>,
+    non_ready_labels: Vec<String>,
 }
 
 impl Graph {
@@ -55,6 +57,17 @@ impl Graph {
                 .into_iter()
                 .map(|task| (task.id.clone(), task))
                 .collect(),
+            non_ready_labels: Vec::new(),
+        }
+    }
+
+    pub fn from_tasks_with_holds(tasks: Vec<Task>, non_ready_labels: Vec<String>) -> Self {
+        Self {
+            tasks: tasks
+                .into_iter()
+                .map(|task| (task.id.clone(), task))
+                .collect(),
+            non_ready_labels,
         }
     }
 
@@ -102,7 +115,10 @@ impl Graph {
             }
         }
 
-        let graph = Self { tasks };
+        let graph = Self {
+            tasks,
+            non_ready_labels: board.config.board.non_ready_labels.clone(),
+        };
         let validation = graph.validate();
         if mode == LoadMode::Strict && !validation.is_empty() {
             return Err(OrbitError::board_corrupt(
@@ -164,7 +180,17 @@ impl Graph {
         task.front.status == Status::Todo
             && task.front.claimed_by.is_none()
             && task.front.waiting_on.is_none()
+            && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
+    }
+
+    pub fn hold_labels(&self, task: &Task) -> Vec<String> {
+        task.front
+            .labels
+            .iter()
+            .filter(|label| self.non_ready_labels.iter().any(|hold| hold == *label))
+            .cloned()
+            .collect()
     }
 
     pub fn blocking_ids(&self, task: &Task) -> Vec<String> {
@@ -366,6 +392,7 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "title": task.front.title,
         "status": task.front.status,
         "priority": task.front.priority,
+        "labels": task.front.labels,
         "depends_on": task.front.depends_on,
         "waiting_on": task.front.waiting_on,
         "claimed_by": task.front.claimed_by,
@@ -391,6 +418,17 @@ pub fn task_detail(graph: &Graph, task: &Task) -> serde_json::Value {
     value
 }
 
+pub fn task_detail_with_comments(
+    graph: &Graph,
+    task: &Task,
+    comments: &[Comment],
+) -> serde_json::Value {
+    let mut value = task_detail(graph, task);
+    value["comments"] = serde_json::to_value(comments).unwrap_or_else(|_| serde_json::json!([]));
+    value["comment_count"] = serde_json::json!(comments.len());
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +444,7 @@ mod tests {
                 title: id.to_string(),
                 status,
                 priority: default_priority(),
+                labels: Vec::new(),
                 depends_on: deps.iter().map(|dep| dep.to_string()).collect(),
                 waiting_on: None,
                 claimed_by: None,
@@ -456,6 +495,20 @@ mod tests {
                 .iter()
                 .any(|issue| issue.code == code::DANGLING_DEP)
         );
+    }
+
+    #[test]
+    fn hold_labels_block_readiness() {
+        let mut held = task("orb-aaaaaa", Status::Todo, &[]);
+        held.front.labels = vec!["needs-triage".to_string()];
+        let graph = Graph::from_tasks_with_holds(vec![held], vec!["needs-triage".to_string()]);
+        let held_task = graph.get("orb-aaaaaa").unwrap().clone();
+        assert!(!graph.is_ready(&held_task));
+        assert_eq!(graph.hold_labels(&held_task), vec!["needs-triage"]);
+        assert!(graph.ready_tasks().is_empty());
+
+        let graph = Graph::from_tasks_with_holds(vec![held_task], Vec::new());
+        assert!(graph.is_ready(graph.get("orb-aaaaaa").unwrap()));
     }
 
     #[test]

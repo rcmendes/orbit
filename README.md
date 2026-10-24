@@ -150,6 +150,8 @@ A hand-written tracker guide is respected. If `docs/agents/issue-tracker.md` exi
 
 MCP configuration is written by default for Claude, Cursor, Codex, and OpenCode. Entries record the absolute path of the running binary, so editors launched outside a shell do not need `PATH`. The Claude SessionStart hook records the same absolute binary and runs `orbit prime --hook-json --by claude` at session start. Use `--mcp-bin orbit` if you want a portable command that relies on the editor's `PATH`.
 
+OpenCode uses the V2 shape: the Orbit server lives at `mcp.servers.orbit` with `type: local` and a command array, and no `enabled` flag. Setup migrates a legacy `mcp.orbit` entry to that location without duplicating the server, and `--remove` clears both forms while preserving unrelated servers.
+
 `orbit init` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory. Install globally, or pass `--mcp-bin orbit`.
 
 Because the generated MCP command is machine-specific, keep those config files untracked when possible. If one is committed, regenerate it after installing Orbit elsewhere, or use `--mcp-bin orbit`.

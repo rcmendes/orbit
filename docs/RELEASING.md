@@ -4,8 +4,9 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.4.0` — latest
-- `v0.3.0` — previous release
+- `v0.5.0` — latest
+- `v0.4.0` — previous release
+- `v0.3.0`
 - `v0.2.0`
 - `v0.1.0` — initial release
 

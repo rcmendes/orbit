@@ -1,6 +1,6 @@
 # Orbit: an AI-native issue tracker
 
-**Status:** pre-alpha. v0.4.0 is the latest published release. M0 (core CLI), M1 (agent setup), M2 (MCP), M3 (release tooling), M4 (labels, comments, triage), M5 (one-command onboarding), and M6 (workspaces, SubTasks, scoped queues, deterministic export) are implemented. The unreleased 0.5.0 adds a metadata-only Task Type. The canonical design is in [SPEC.md](./docs/SPEC.md); vocabulary is in [GLOSSARY.md](./docs/GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
+**Status:** pre-alpha. v0.5.0 is the latest release. M0 (core CLI), M1 (agent setup), M2 (MCP), M3 (release tooling), M4 (labels, comments, triage), M5 (one-command onboarding), and M6 (workspaces, SubTasks, scoped queues, deterministic export) are implemented. v0.5.0 adds a metadata-only Task Type. The canonical design is in [SPEC.md](./docs/SPEC.md); vocabulary is in [GLOSSARY.md](./docs/GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 ### Brief description
 
@@ -95,7 +95,7 @@ Board commands accept `--json`, and `orbit <command> --help` explains its semant
 
 ### Install
 
-Prebuilt binaries are the primary path. v0.4.0 is the latest release.
+Prebuilt binaries are the primary path. v0.5.0 is the latest release.
 
 ```bash
 # macOS / Linux

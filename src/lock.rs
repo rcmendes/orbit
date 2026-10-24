@@ -56,6 +56,7 @@ impl Drop for BoardLock {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
     #[test]

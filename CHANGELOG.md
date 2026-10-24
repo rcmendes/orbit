@@ -5,6 +5,7 @@
 - `orbit list` and `orbit ready` accept repeatable `--exclude-label`; MCP `list` and `ready` accept `exclude_labels`. A task carrying any excluded label is hidden, so agents can skip `epic`/`spec` containers without changing the board's hold-label configuration.
 - Task JSON now carries `subtask_count`, `resolved_subtask_count`, `open_subtask_count`, and `eligible_for_close` in `show`, `list`, `ready`, and `export`. Export moves to `schema_version` 2.
 - Added `orbit tree <id>`, a scoped view of one Parent Task, its SubTasks, resolved/total progress, and blocking edges. `--json` returns `data.root`, `data.tasks` with the root first, and `data.count`.
+- `orbit prime` now reports `close_candidates`: non-terminal Parent Tasks with at least one SubTask and no open SubTasks. The human output marks each as ready to close; nothing is auto-closed.
 - Documented the Beads and Matt Pocock compatibility mapping: Issue = Task, Sub-issue = SubTask, Epic/spec = Parent Task labelled `epic`. Added ADR 0009, the one-level hierarchy limit, the frontier command, and the `done --force`/`cancel --force` child-cancellation warning to the README, SPEC, glossary, tracker guide, setup templates, and CLI help.
 
 ## 0.4.0 - 2026-10-24

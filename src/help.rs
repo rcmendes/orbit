@@ -528,13 +528,15 @@ Examples:
   orbit delete orb-a7b2c9 --force";
 
 pub const PRIME_LONG: &str = "\
-Prints the agent workflow instructions, Board counts, the top ready tasks, and
-stale claims. This is the context an agent session starts with; the Claude Code
-SessionStart hook calls `orbit prime --hook-json` automatically.
+Prints the agent workflow instructions, Board counts, the top ready tasks, open
+Parent Tasks ready to close, and stale claims. This is the context an agent
+session starts with; the Claude Code SessionStart hook calls
+`orbit prime --hook-json` automatically.
 
---repo NAME and repeatable --label scope the counts, ready tasks, and stale
-claims to a repository or label set. --hook-json prints Claude Code's hook
-envelope instead of the normal output and cannot be combined with --json.";
+--repo NAME and repeatable --label scope the counts, ready tasks, close
+candidates, and stale claims to a repository or label set. --hook-json prints
+Claude Code's hook envelope instead of the normal output and cannot be combined
+with --json.";
 
 pub const PRIME_EXAMPLES: &str = "\
 Examples:

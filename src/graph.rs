@@ -272,6 +272,33 @@ impl Graph {
             .collect()
     }
 
+    pub fn eligible_for_close(&self, task: &Task) -> bool {
+        if task.front.status.is_terminal() {
+            return false;
+        }
+        let children = self.children(&task.id);
+        !children.is_empty()
+            && children
+                .iter()
+                .all(|child| child.front.status.is_terminal())
+    }
+
+    pub fn close_candidates(&self) -> Vec<&Task> {
+        let mut candidates: Vec<&Task> = self
+            .tasks
+            .values()
+            .filter(|task| self.eligible_for_close(task))
+            .collect();
+        candidates.sort_by(|left, right| {
+            (left.front.priority, left.front.created_at, left.id.as_str()).cmp(&(
+                right.front.priority,
+                right.front.created_at,
+                right.id.as_str(),
+            ))
+        });
+        candidates
+    }
+
     pub fn ready_tasks(&self) -> Vec<Task> {
         let mut ready: Vec<Task> = self
             .tasks

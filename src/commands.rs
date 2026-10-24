@@ -1622,6 +1622,7 @@ Use the CLI; never edit task files directly.\n\
 {COMPLETION_LINE}\n\
 - `orbit add \"title\" -p N --depends-on <id>` creates work.\n\
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.\n\
+- A Parent Task whose SubTasks are all resolved appears under close candidates; close it explicitly when the family is done.\n\
 - `orbit show <id>` reads the full body."
     );
 
@@ -1631,6 +1632,13 @@ Use the CLI; never edit task files directly.\n\
         .filter(|task| task.has_labels(&label_filters))
         .take(10)
         .map(|task| graph::task_summary(&graph, &task))
+        .collect();
+    let close_candidates: Vec<Value> = graph
+        .close_candidates()
+        .into_iter()
+        .filter(|task| task.has_labels(&label_filters))
+        .take(10)
+        .map(|task| graph::task_summary(&graph, task))
         .collect();
     let stale: Vec<Value> = graph
         .stale_tasks()
@@ -1664,6 +1672,17 @@ Use the CLI; never edit task files directly.\n\
             human.push_str(&format!("  {}\n", format_summary_value(task)));
         }
     }
+    human.push_str("close candidates:\n");
+    if close_candidates.is_empty() {
+        human.push_str("  (none)\n");
+    } else {
+        for task in &close_candidates {
+            human.push_str(&format!(
+                "  {}  (ready to close)\n",
+                format_summary_value(task)
+            ));
+        }
+    }
     human.push_str("stale claims:\n");
     if stale.is_empty() {
         human.push_str("  (none)\n");
@@ -1680,6 +1699,7 @@ Use the CLI; never edit task files directly.\n\
             "labels": label_filters,
             "counts": counts,
             "ready": ready,
+            "close_candidates": close_candidates,
             "stale": stale,
         }),
         human,

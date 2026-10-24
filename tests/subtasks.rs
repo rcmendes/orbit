@@ -86,6 +86,50 @@ fn parent_progress_fields_track_children_and_close_eligibility() {
 }
 
 #[test]
+fn prime_lists_parents_ready_to_close() {
+    let repo = TestRepo::new();
+    repo.init();
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let ordinary = repo.add("Ordinary", &[]);
+
+    let prime = repo.ok_json(&["prime", "--json"]);
+    assert!(
+        prime["data"]["close_candidates"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    repo.ok_json(&["done", &child, "--by", "test", "--json"]);
+    let prime = repo.ok_json(&["prime", "--json"]);
+    let candidates = prime["data"]["close_candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["id"], parent.as_str());
+    assert_eq!(candidates[0]["eligible_for_close"], true);
+    assert!(
+        !candidates
+            .iter()
+            .any(|task| task["id"] == ordinary.as_str())
+    );
+
+    let output = repo.orbit(&["prime"]);
+    assert!(output.status.success());
+    let human = String::from_utf8_lossy(&output.stdout);
+    assert!(human.contains("close candidates:"));
+    assert!(human.contains("ready to close"));
+
+    repo.ok_json(&["done", &parent, "--by", "test", "--json"]);
+    let prime = repo.ok_json(&["prime", "--json"]);
+    assert!(
+        prime["data"]["close_candidates"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn tree_shows_the_parent_children_and_blockers() {
     let repo = TestRepo::new();
     repo.init();

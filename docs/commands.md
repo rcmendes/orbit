@@ -358,9 +358,9 @@ returns `data.root`, `data.tasks` with the root first, and `data.count`.
 
 ### `orbit prime` — starting context for a session
 
-Prints the agent workflow instructions, board counts, top ready tasks, and stale
-claims. The Claude Code SessionStart hook runs `orbit prime --hook-json`
-automatically.
+Prints the agent workflow instructions, board counts, top ready tasks, Parent
+Tasks whose SubTasks are all resolved (close candidates), and stale claims. The
+Claude Code SessionStart hook runs `orbit prime --hook-json` automatically.
 
 **Good fit:** the first command of an agent session, a status prompt, or a quick
 health view of what is ready and what was abandoned.
@@ -371,8 +371,10 @@ orbit prime --by claude --repo api   # scope counts and the queue to one reposit
 orbit prime --json
 ```
 
-`--repo` and repeatable `--label` scope the counts, ready tasks, and stale claims
-to a repository or label set.
+`--repo` and repeatable `--label` scope the counts, ready tasks, close
+candidates, and stale claims to a repository or label set. A close candidate is
+a non-terminal Parent Task with at least one SubTask and no open SubTasks; Orbit
+never closes it automatically.
 
 ### `orbit export` — snapshot the board
 

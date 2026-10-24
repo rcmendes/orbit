@@ -1,9 +1,26 @@
 # Issue tracker: Orbit
 
-Issues and specs for this repo live in the Orbit board. The board is a hidden Git
-worktree on the orphan `orbit` branch at `.git/orbit/board`; every worktree of this
-repository shares it. Tasks are Markdown files with YAML frontmatter and are served
-by the `orbit` CLI.
+Issues and specs for this repo live in the Orbit board. A Board is a hidden Git
+worktree on the orphan `orbit` branch. In the default layout it lives at
+`.git/orbit/board` and every worktree of this repository shares it; a repository
+linked to a shared Board uses that Board instead. Tasks are Markdown files with
+YAML frontmatter and are served by the `orbit` CLI.
+
+## Board discovery
+
+Every command resolves the Board in this order: `--dir`, then `ORBIT_DIR`, then the
+repository link stored in the Git common directory, then the repository's own Board.
+In practice:
+
+```bash
+orbit link <PATH>          # use a shared Board from this repository
+orbit unlink               # return to this repository's own Board
+orbit --dir <PATH> list    # override the link for one command
+```
+
+A `link` warning about a shadowed Board means the repository still has its own
+Board on disk; linking did not delete it. A missing linked Board fails with
+`LINK_NOT_FOUND`; re-link or restore the Board.
 
 ## Conventions
 

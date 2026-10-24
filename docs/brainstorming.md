@@ -1,5 +1,7 @@
 # 🪐 Orbit — Brainstorming Session
 
+> **Historical research note.** This document records the exploration that led to Orbit. It is not maintained; the canonical design is [SPEC.md](../SPEC.md) and the current onboarding flow is in [README.md](../README.md).
+>
 > Raw brainstorming session (Gemini) that took the project from *"which issue tracker should I use with mattpocock-skills?"* to *"let's build our own: **Orbit**, a Rust, AI-native, local issue tracker."*
 >
 > Source conversation: <https://gemini.google.com/app/0f445e8ce5f375fc>

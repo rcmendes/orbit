@@ -24,7 +24,7 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 
 ## 2. Architecture
 
-1. **Board (truth):** a dedicated orphan Git branch named `orbit`, checked out in a hidden worktree at `<git-common-dir>/orbit/board`. Every worktree of the repository resolves to the same board.
+1. **Board (truth):** a dedicated orphan Git branch named `orbit`, checked out in a hidden worktree at `<git-common-dir>/orbit/board`. Every worktree of the repository resolves to the same board. A repository may instead link to a shared external Board (section 5).
 2. **Tasks:** Markdown files at `tasks/<id>.md` inside the board.
 3. **Comments:** append-only Markdown sidecars at `comments/<id>.md` inside the board.
 4. **Index (speed):** every process rebuilds an in-memory graph from the task files. There is no persistent cache and no watcher.
@@ -187,6 +187,7 @@ orbit sync
 - M2: `orbit mcp` (stdio MCP server); project-local MCP configs written by default; `--no-mcp` opts out. Implemented.
 - M3: packaging and release automation. Implemented.
 - M4: labels, comments, and triage integration. Implemented.
+- M5: one-command onboarding. `init` creates the Board and reconciles detected harnesses idempotently; `link` and `unlink` share one Board across repositories; hooks record the absolute binary; `setup --check` reports drift. Implemented.
 
 ### M4 commands
 
@@ -214,7 +215,12 @@ orbit comment list <id>
 - `doctor` reports malformed comments (`CORRUPT_COMMENT`) and comment files with no task (`ORPHAN_COMMENT`).
 - `doctor --fix` only removes stale temp files; it does not rewrite tasks or comments.
 - `setup` is idempotent, preserves unrelated content, and refuses to overwrite an existing rule or skill file it does not manage. `--remove` removes only Orbit-managed sections, files, and hooks.
-- `setup --hooks` installs Claude Code's SessionStart hook. Other clients ignore it in M1 with a warning.
+- `init` is idempotent: it creates or reuses the Board and reconciles agent integration, reporting `created`, `updated`, and `unchanged` files. In a linked repository it refuses unless `--local` is passed.
+- `init --board PATH` creates or reuses an external Board and links the repository. `link PATH` writes the pointer; `unlink` removes it and refreshes agent config back to the local Board.
+- `init` detects Claude, Cursor, Codex, OpenCode, and the mattpocock bridge from installed commands, home markers, and project markers. `--agents auto|all|none|ask|list` overrides detection; without a terminal the default is `auto`.
+- `setup --check` reports `installed`, `missing`, or `stale` per file and exits non-zero unless the integration is installed.
+- `setup --hooks` installs Claude Code's SessionStart hook, recording the absolute binary path. `--remove` recognizes both the absolute and legacy bare command forms.
+- `init` and `setup` refuse to record a binary under npm's `_npx` cache or a temporary directory (`EPHEMERAL_BIN`); use `--mcp-bin orbit` for a portable command.
 - `setup` writes project-local MCP configs for Claude, Cursor, Codex, and OpenCode by default, recording the absolute path of the running Orbit binary; `--no-mcp` skips them and `--mcp-bin PATH` overrides the recorded command. `mattpocock` has no MCP client and ignores explicit MCP options with a warning.
 - Generated MCP configs are machine-specific. A config whose command is a bare `orbit` is portable but requires the editor's `PATH` to contain Orbit.
 - `setup --remove` always removes MCP configs, but only entries that look like Orbit's; a foreign `orbit` server is left in place with a warning.
@@ -257,7 +263,7 @@ Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `CYCLE_DETECTED`, `DEP
 
 CLI + `orbit prime` is the primary interface. `prime` prints ~1k tokens: workflow rules, agent identity, ready tasks, stale claims, and counts. `prime --hook-json` emits Claude Code's SessionStart envelope with the same text as `additionalContext`. The Claude hook records the resolved binary path, and `doctor` reports when `orbit` is not that binary on `PATH`.
 
-`setup` writes project-local files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and mattpocock (`docs/agents/issue-tracker.md`). Every file uses managed markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries.
+`orbit init` and `orbit setup` write project-local files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and mattpocock (`docs/agents/issue-tracker.md`). `init` selects harnesses by detection or `--agents`; `setup` selects one explicitly named client. Every file uses managed markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries.
 
 MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
 
@@ -282,6 +288,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Crash test: abort a writer between temp write and rename; the old file survives and `doctor --fix` removes the temp.
 - Worktree integration: initialize in the main worktree, claim from a linked worktree, assert one board.
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, and `--remove` preserving user content.
+- Onboarding tests: idempotent `init`, harness detection and selection, link precedence over a local Board, `--dir`/`ORBIT_DIR` overrides, linked-worktree resolution, vanished links, and ephemeral binary rejection.
 - MCP tests: initialize, tools/list, label/comment round-trips, resources, and error envelopes over a real stdio child process.
 - Golden JSON and error-envelope tests.
 - CI on macOS, Linux, and Windows: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.

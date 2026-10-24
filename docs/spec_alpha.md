@@ -1,3 +1,5 @@
+> **Historical research note.** This document is an early blueprint, kept for context. It is not maintained; the canonical design is [SPEC.md](../SPEC.md) and the current onboarding flow is in [README.md](../README.md).
+
 Here is the complete blueprint and implementation guide for Orbit, synthesizing everything we discussed into a single, copy-pasteable Markdown document.
 
 You can save this as `orbit-spec.md` or `README.md` to serve as the master architecture document for your repository.

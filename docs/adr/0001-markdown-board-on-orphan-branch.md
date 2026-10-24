@@ -2,6 +2,8 @@
 
 Orbit stores Tasks as Markdown files on a dedicated `orbit` branch, checked out in a hidden worktree under `<git-common-dir>/orbit/board` and shared by every worktree of the repository. The board is auto-committed on meaningful mutations, so `git log orbit` is the task audit trail and task changes never enter code PRs. `ORBIT_DIR` can point at an external board root for monorepos or local-only use.
 
+_Extended by ADR 0006: a repository may link to an external Board shared with related repositories; the local worktree remains the default._
+
 ## Considered options
 
 - Committing `.orbit/` on the code branch: ties the board to whichever branch is checked out and puts task churn into code PRs.

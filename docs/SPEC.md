@@ -1,6 +1,6 @@
 # Orbit Specification
 
-Status: pre-alpha; v0.4.0 is the latest release. This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
+Status: pre-alpha. v0.4.0 is the latest published release; this document describes the unreleased 0.5.0. This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
 
 ## 1. What Orbit is
 

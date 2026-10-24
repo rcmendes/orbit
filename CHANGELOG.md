@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-10-24
 
 - Added a first-class `type` field: `task` (default), `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness; `kind` remains `task`/`subtask`. `epic` is top-level only. Every save writes `type`, including `type: task`; pre-type files read as `task`.
 - Added `--type` to `add`/`update`, repeatable `--type`/`--exclude-type` to `list`/`ready`, MCP `type`/`types`/`exclude_types`, JSON `type`, and non-task prefixes in human output. The `epic` label is now legacy: no backfill or inference, and `--exclude-label epic` still works.

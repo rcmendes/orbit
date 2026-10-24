@@ -409,6 +409,21 @@ fn link_refreshes_existing_agent_configuration() {
 }
 
 #[test]
+fn init_reports_a_custom_tracker_doc_as_skipped() {
+    let repo = TestRepo::new();
+    let custom = "# Issue tracker: Orbit\n\nHand-written guidance.\n";
+    std::fs::create_dir_all(repo.path().join("docs/agents")).unwrap();
+    std::fs::write(repo.path().join("docs/agents/issue-tracker.md"), custom).unwrap();
+
+    let value = repo.ok_json(&["init", "--agents", "mattpocock", "--json"]);
+    assert_eq!(repo.read("docs/agents/issue-tracker.md"), custom);
+    let files = value["data"]["files"].as_array().unwrap();
+    assert!(files.iter().any(|file| {
+        file["path"] == "docs/agents/issue-tracker.md" && file["action"] == "skipped"
+    }));
+}
+
+#[test]
 fn link_recognizes_and_preserves_a_custom_mattpocock_tracker_doc() {
     let repo = TestRepo::new();
     repo.ok_json(&["init", "--agents", "none", "--json"]);

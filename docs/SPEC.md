@@ -18,7 +18,9 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 - Dolt, SQLite, or any second source of truth.
 - A daemon or background watcher.
 - Web UI.
-- Epics, hierarchy, types, or attachments.
+- Arbitrary-depth hierarchy, first-class issue types, or attachments. Parent
+  Tasks group one level of SubTasks; an epic or spec is a convention on top of
+  that, not a stored type.
 - GitHub/Jira/Linear sync.
 - Automatic pushes to a remote.
 
@@ -111,6 +113,7 @@ The canonical vocabulary lives in `docs/GLOSSARY.md`. In short:
 
 - A Task has one stored **Status**: `todo`, `in_progress`, `done`, or `cancelled`.
 - A **Parent Task** groups **SubTasks**, and its completion depends on them. A **SubTask** is a Task with a `parent`; it is claimable and completable in its own right. Parentage is one level deep and is not a Dependency.
+- An **Epic** or **spec** is not a stored type. It is a top-level Task, conventionally labelled `epic`, that groups SubTasks. External trackers call the unit an Issue and a child a Sub-issue; see [`docs/GLOSSARY.md`](./GLOSSARY.md) and [ADR 0009](./adr/0009-keep-task-vocabulary.md).
 - **Ready** is derived: `todo`, no Claim (including no Stale Claim), not Waiting, no Hold Label, every Dependency is `done` or `cancelled`, and every SubTask is `done` or `cancelled`.
 - **Blocked** is derived: at least one Dependency is not `done` or `cancelled`, or a Parent Task has at least one open SubTask.
 - **Waiting** is an external blocker recorded by `waiting_on`; it is not a Status.
@@ -332,8 +335,8 @@ orbit comment list <id>
 
 ### Command rules
 
-- `list` hides `done` and `cancelled` unless `--all`. `--label` is repeatable and every label must match; `--repo NAME` is shorthand for `--label repo:NAME`. `--unlabeled` conflicts with both.
-- `ready` and `prime` accept the same `--repo` and repeatable `--label` filters. `ready` also accepts `--parent`; all filters combine with AND.
+- `list` hides `done` and `cancelled` unless `--all`. `--label` is repeatable and every label must match; `--exclude-label` is repeatable and hides a Task carrying any named label. `--repo NAME` is shorthand for `--label repo:NAME`. `--unlabeled` conflicts with `--label` and `--repo`.
+- `ready` and `prime` accept the same `--repo` and repeatable `--label` filters. `ready` also accepts `--parent` and `--exclude-label`; all filters combine with AND.
 - `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `1`.
 - `done` never bypasses unfinished dependencies. `--force` overrides a competing live claim and, on a Parent Task, cancels open SubTasks before closing it.
 - A forced `reopen` can leave an already-done dependent with an unfinished dependency. That is a historical fact, not corruption: `doctor` reports it as a warning, and the next `done` of that dependent still enforces its dependencies.
@@ -447,7 +450,7 @@ CLI + `orbit prime` is the primary interface. `prime` prints ~1k tokens: workflo
 
 `orbit init` and `orbit setup` write project-local files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and mattpocock (`docs/agents/issue-tracker.md`). `init` selects harnesses by detection or `--agents`; `setup` selects one explicitly named client. Orbit-managed sections and files use markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries. A hand-written `docs/agents/issue-tracker.md` without the marker is reported as `skipped` and left untouched, while `--check` still treats the integration as installed.
 
-MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. `create` accepts `parent` to make a SubTask; `list` and `ready` accept `parent`, `repo`, and `labels` to scope a feature or repository. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
+MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. `create` accepts `parent` to make a SubTask; `list` and `ready` accept `parent`, `repo`, `labels`, and `exclude_labels` to scope a feature or repository. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
 
 ## 10. Milestones
 

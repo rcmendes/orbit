@@ -31,6 +31,20 @@ A `link` warning about a shadowed Board means the repository still has its own
 Board on disk; linking did not delete it. A missing linked Board fails with
 `LINK_NOT_FOUND`; re-link or restore the Board.
 
+## Vocabulary
+
+Orbit calls the unit a **Task** and a child a **SubTask**. Translate external
+tracker terms rather than inventing a second model:
+
+- **Issue** means Task. Create one with `orbit add`.
+- **Sub-issue** means SubTask. Create one with `--parent <id>`.
+- **Epic** or **spec** means a top-level Parent Task, conventionally labelled
+  `epic`. Put the scope, decisions, and acceptance criteria in its body.
+
+There is no separate Epic type and no deeper nesting. `kind` is always `task` or
+`subtask`; an epic is a `task` with children and an `epic` label. See
+[ADR 0009](../adr/0009-keep-task-vocabulary.md).
+
 ## Conventions
 
 - Use a stable agent identity per session and pass it as `--by` on `claim`,
@@ -44,6 +58,13 @@ Board on disk; linking did not delete it. A missing linked Board fails with
 - Break a feature into SubTasks with `orbit add "<title>" --parent <parent-id>`.
   SubTasks are one level deep. Use `--depends-on` only for real blockers between
   units of work; the Parent Task waits for its SubTasks automatically.
+- Use `orbit ready --parent <id>` as the frontier for one epic or spec. A Parent
+  Task is not Ready while any SubTask is open.
+- Use `--exclude-label epic` on `list` or `ready` to keep spec/epic containers
+  out of a board-wide query.
+- Never use `done --force` or `cancel --force` on a Parent Task with open
+  SubTasks: it cancels every open child. Close or cancel the children first, or
+  leave the parent open until the family is finished.
 - In a multi-repository workspace, add `--repo <name>` to `orbit ready` or
   `orbit list` to narrow the queue to one repository label.
 
@@ -88,8 +109,10 @@ orbit add "<title>" -p <0-3> --body-file - --depends-on <blocker-id>...
 ```
 
 Feed the Markdown body on stdin. Add `--label ready-for-agent` to publish a ticket
-that is ready for an agent, or add it afterward with `orbit label add`. Then use the
-returned ID for any dependent ticket. To add a blocking edge later:
+that is ready for an agent, or add it afterward with `orbit label add`. If the
+source is an existing issue or spec, create each ticket as a SubTask with
+`--parent <source-id>`; otherwise create top-level Tasks. Then use the returned
+ID for any dependent ticket. To add a blocking edge later:
 
 ```bash
 orbit depend <dependent-id> <blocker-id>

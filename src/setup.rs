@@ -1776,7 +1776,9 @@ Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit t
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 {COMPLETION_LINE}
 - `orbit add \"title\" -p N --depends-on <id>` creates work.
-- `orbit add \"title\" --parent <id>` creates a SubTask; SubTasks are one level deep and the parent waits for them.
+- `orbit add \"title\" --parent <id>` creates a SubTask. A spec or epic is a top-level Parent Task labelled `epic`; its issues are SubTasks. SubTasks are one level deep and the parent waits for them.
+- Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
+- Use `--exclude-label epic` on `orbit ready` or `orbit list` to skip spec/epic containers.
 - In a multi-repository workspace, add `--repo <name>` to `orbit ready` or `orbit list`.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
@@ -1826,7 +1828,10 @@ We use Orbit, a local AI-native issue tracker. Tasks live as Markdown on the boa
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
 - To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change.
 - To create work, run `orbit add \"Title\" -p N --depends-on <ID>`.
-- To break a feature into pieces, run `orbit add \"Title\" --parent <PARENT_ID>`; SubTasks are one level deep and the parent waits for them.
+- Orbit calls the unit a Task. A skill's \"issue\" is a Task; a \"sub-issue\" is a SubTask; an \"epic\" or \"spec\" is a top-level Task, usually labelled `epic`.
+- To publish tickets under an existing issue or spec, run `orbit add \"Title\" --parent <PARENT_ID>`; SubTasks are one level deep and the parent waits for them.
+- Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
+- Use `--exclude-label epic` on `orbit ready` or `orbit list` to skip spec/epic containers.
 - In a multi-repository workspace, add `--repo <NAME>` to `orbit ready` or `orbit list`.
 - To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`.
 - To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.

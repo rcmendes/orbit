@@ -188,7 +188,26 @@ orbit add "api: OIDC callback" --parent orb-a7b2c9 --label repo:api
 orbit add "web: login redirect" --parent orb-a7b2c9 --label repo:web
 ```
 
-A SubTask ID is the parent ID, a dot, and a fresh suffix (`orb-a7b2c9.b3c4d5`). SubTasks are one level deep and are claimed independently. The parent is not Ready until every SubTask is done or cancelled; `orbit done` on the parent with open SubTasks is refused unless `--force`, which cancels them. `orbit list --parent <id> --tree` shows the family, and `orbit ready --parent <id>` scopes an agent to one feature. Use `orbit list --repo <name>` and `orbit ready --repo <name>` to scope work to one repository.
+A SubTask ID is the parent ID, a dot, and a fresh suffix (`orb-a7b2c9.b3c4d5`). SubTasks are one level deep and are claimed independently. The parent is not Ready until every SubTask is done or cancelled; `orbit done` on the parent with open SubTasks is refused unless `--force`, which cancels them. `orbit list --tree` keeps each Parent Task next to its SubTasks, `orbit list --parent <id>` lists only that family's children, and `orbit ready --parent <id>` scopes an agent to one feature. Use `orbit list --repo <name>` and `orbit ready --repo <name>` to scope work to one repository.
+
+### Epics, specs, and issues
+
+Orbit has no separate Epic or Issue type. A spec, epic, or feature is a top-level Task, conventionally labelled `epic`; the tickets under it are SubTasks:
+
+```bash
+orbit add "Spec: SSO login" --label epic --body-file spec.md
+# created orb-a7b2c9
+orbit add "api: OIDC callback" --parent orb-a7b2c9 --label ready-for-agent
+orbit add "web: login redirect" --parent orb-a7b2c9 --label ready-for-agent
+```
+
+This is the compatibility mapping for Beads and Matt Pocock's skills:
+
+- **Issue** = Task
+- **Sub-issue** = SubTask, created with `--parent`
+- **Epic** or **spec** = Parent Task, conventionally labelled `epic`
+
+The parent is held out of the ready queue until every SubTask is resolved, and `orbit ready --parent <id>` is the frontier for the family. Use `--exclude-label epic` on `list` or `ready` to keep spec containers out of a board-wide query. SubTasks are one level deep: if a ticket needs its own breakdown, flatten it into sibling tickets with `--depends-on` instead of nesting further. Never use `done --force` or `cancel --force` on a spec parent while tickets are open; unlike Beads' force-close, it cancels every open SubTask. See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md).
 
 ### Export the board
 
@@ -221,13 +240,13 @@ The default hold labels are `needs-triage`, `needs-info`, and `ready-for-human`:
 orbit mcp
 ```
 
-`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. `create` accepts `parent` to make a SubTask, and `list`/`ready` accept `parent`, `repo`, and `labels` to scope a feature or repository. It also serves `orbit://tasks/{id}` as a Markdown resource. Tool calls reuse the CLI's lock, atomic writes, auto-commit, and error envelope. See [SPEC.md](./docs/SPEC.md) section 9.
+`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. `create` accepts `parent` to make a SubTask, and `list`/`ready` accept `parent`, `repo`, `labels`, and `exclude_labels` to scope a feature or repository. It also serves `orbit://tasks/{id}` as a Markdown resource. Tool calls reuse the CLI's lock, atomic writes, auto-commit, and error envelope. See [SPEC.md](./docs/SPEC.md) section 9.
 
 ### Why not Beads or Beans?
 
 - **Beans** proved that Markdown-as-truth is pleasant for humans, but it has no atomic claims, leases, or dependency-aware ready queue.
 - **Beads** proved that agents need claims, ready-work detection, priorities, and hash IDs, but its source of truth is a Dolt database and its multi-writer mode needs a server.
 
-Orbit is the narrow overlap: Beans' human-readable storage with Beads' queue semantics, in one static Rust binary with no daemon.
+Orbit is the narrow overlap: Beans' human-readable storage with Beads' queue semantics, in one static Rust binary with no daemon. Coming from Beads, an **issue** is a Task, a **sub-issue** is a SubTask, and an **epic** is a Parent Task labelled `epic`; there is no separate issue type or arbitrary-depth hierarchy.
 
 For several related repositories, Orbit links each one to the same Board instead of copying Tasks into a hub, so cross-repository Dependencies share one graph. Beads hydrates copies into a central database; Beans has no multi-repository model. See [ADR 0006](./docs/adr/0006-shared-board-across-repositories.md).

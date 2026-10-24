@@ -14,7 +14,7 @@ _Avoid_: Child task, checklist item, step
 
 **Parent Task**:
 A Task that groups SubTasks and whose completion depends on them.
-_Avoid_: Epic, story
+_Avoid_: Epic (as a stored type), story
 
 **Status**:
 The stored lifecycle position of a Task: `todo`, `in_progress`, `done`, or `cancelled`.
@@ -88,7 +88,21 @@ _Avoid_: Database, store, project
 A Repository whose Agents use a Board that does not live inside it.
 _Avoid_: Submodule, project, workspace
 
+## Compatibility vocabulary
+
+Beads, GitHub, Linear, and Matt Pocock's skills call the unit an **Issue**, a
+child a **Sub-issue**, and a grouping issue an **Epic**. These are translations,
+not stored types:
+
+- **Issue** = Task
+- **Sub-issue** = SubTask, created with `--parent`
+- **Epic** or **spec** = Parent Task, conventionally labelled `epic`
+
+See [ADR 0009](./adr/0009-keep-task-vocabulary.md) for why Orbit keeps its own
+vocabulary and translates at the boundary.
+
 ## See also
 
 - [`SPEC.md`](./SPEC.md) for behavior, commands, and the JSON contract.
 - [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
+- [`docs/adr/0009-keep-task-vocabulary.md`](./adr/0009-keep-task-vocabulary.md) for the Task/Issue naming decision.

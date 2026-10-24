@@ -196,6 +196,12 @@ impl Task {
             .iter()
             .all(|label| self.front.labels.iter().any(|candidate| candidate == label))
     }
+
+    pub fn has_any_label(&self, labels: &[String]) -> bool {
+        labels
+            .iter()
+            .any(|label| self.front.labels.iter().any(|candidate| candidate == label))
+    }
 }
 
 pub fn parse_task(id: String, content: &str) -> Result<Task> {

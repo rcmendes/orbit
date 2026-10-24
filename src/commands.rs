@@ -538,6 +538,7 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
         validate_priority(priority)?;
     }
     let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
+    let excluded_labels = normalize_labels(&args.exclude_label)?;
     if let Some(parent) = args.parent.as_deref() {
         let parent_task = graph.get(parent)?;
         if parent_task.front.parent.is_some() {
@@ -570,6 +571,9 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
                 return false;
             }
             if !task.has_labels(&label_filters) {
+                return false;
+            }
+            if task.has_any_label(&excluded_labels) {
                 return false;
             }
             if args.unlabeled && !task.front.labels.is_empty() {
@@ -666,6 +670,7 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
 fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
     let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
+    let excluded_labels = normalize_labels(&args.exclude_label)?;
     if let Some(parent) = args.parent.as_deref() {
         let parent_task = graph.get(parent)?;
         if parent_task.front.parent.is_some() {
@@ -677,7 +682,12 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
 
     if args.claim {
         let agent = resolve_agent(args.by)?;
-        let ready = ready_for_filters(graph.ready_tasks(), args.parent.as_deref(), &label_filters);
+        let ready = ready_for_filters(
+            graph.ready_tasks(),
+            args.parent.as_deref(),
+            &label_filters,
+            &excluded_labels,
+        );
         if ready.is_empty() {
             return Ok(
                 crate::output::CommandOutput::new(Value::Null, "no ready tasks")
@@ -711,7 +721,12 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         return Ok(output);
     }
 
-    let mut ready = ready_for_filters(graph.ready_tasks(), args.parent.as_deref(), &label_filters);
+    let mut ready = ready_for_filters(
+        graph.ready_tasks(),
+        args.parent.as_deref(),
+        &label_filters,
+        &excluded_labels,
+    );
     if let Some(limit) = args.limit {
         ready.truncate(limit);
     }
@@ -2022,12 +2037,20 @@ fn generate_unique_id(board: &Board, parent: Option<&str>) -> Result<String> {
     ))
 }
 
-fn ready_for_filters(mut ready: Vec<Task>, parent: Option<&str>, labels: &[String]) -> Vec<Task> {
+fn ready_for_filters(
+    mut ready: Vec<Task>,
+    parent: Option<&str>,
+    labels: &[String],
+    excluded: &[String],
+) -> Vec<Task> {
     if let Some(parent) = parent {
         ready.retain(|task| task.front.parent.as_deref() == Some(parent));
     }
     if !labels.is_empty() {
         ready.retain(|task| task.has_labels(labels));
+    }
+    if !excluded.is_empty() {
+        ready.retain(|task| !task.has_any_label(excluded));
     }
     ready
 }

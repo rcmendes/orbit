@@ -239,6 +239,10 @@ pub struct ListArgs {
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
 
+    /// Exclude tasks carrying any of these labels. Repeatable.
+    #[arg(long = "exclude-label", value_name = "LABEL", action = clap::ArgAction::Append)]
+    pub exclude_label: Vec<String>,
+
     /// Filter by repository label. Shorthand for --label repo:NAME.
     #[arg(long, value_name = "NAME")]
     pub repo: Option<String>,
@@ -277,6 +281,10 @@ pub struct ReadyArgs {
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
+
+    /// Exclude Ready tasks carrying any of these labels. Repeatable.
+    #[arg(long = "exclude-label", value_name = "LABEL", action = clap::ArgAction::Append)]
+    pub exclude_label: Vec<String>,
 
     /// Claim the first ready task in the same transaction.
     #[arg(long)]

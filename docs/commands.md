@@ -142,7 +142,7 @@ normally.
 Runs the Model Context Protocol server over stdio with 13 tools and the
 `orbit://tasks/{id}` resource. Editors launch it from their MCP configuration.
 `create` accepts `parent` to make a SubTask; `list` and `ready` accept `parent`,
-`repo`, and `labels` to scope a feature or repository.
+`repo`, `labels`, and `exclude_labels` to scope a feature or repository.
 
 **Good fit:** an editor or agent that speaks MCP should read and update the Board
 directly instead of shelling out to the CLI.
@@ -189,6 +189,15 @@ parent ID, a dot, and a fresh suffix (`orb-a7b2c9.b3c4d5`); the `parent` field
 stores the same parent. SubTasks are one level deep and can still have real
 dependencies. The Parent Task becomes Ready only when every SubTask is done or
 cancelled.
+
+A spec or epic is a top-level Task, conventionally labelled `epic`; its tickets
+are SubTasks. This is also the compatibility mapping for Beads and Matt Pocock's
+skills: **Issue** = Task, **Sub-issue** = SubTask, **Epic** = Parent Task. Put the
+spec in the parent body, publish tickets with `--parent`, and use
+`orbit ready --parent <id>` as the frontier. There is no deeper nesting; flatten a
+ticket's own breakdown into sibling tickets with `--depends-on`. Never use
+`done --force` or `cancel --force` on a spec parent with open tickets: it cancels
+them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md).
 
 ### `orbit update` — edit a ticket in place
 
@@ -274,11 +283,13 @@ orbit list --status done            # closed work, without --all
 orbit list --unlabeled
 orbit list --parent orb-a7b2c9      # only this feature's SubTasks
 orbit list --tree                   # parents and SubTasks together
+orbit list --exclude-label epic     # hide spec/epic containers
 orbit list --all --json
 ```
 
-`--label` is repeatable and every label must match; `--repo NAME` is shorthand
-for `--label repo:NAME`. `--tree` keeps each Parent Task next to its SubTasks and
+`--label` is repeatable and every label must match; `--exclude-label` is
+repeatable and hides a task carrying any of the named labels. `--repo NAME` is
+shorthand for `--label repo:NAME`. `--tree` keeps each Parent Task next to its SubTasks and
 indents the children in human output; JSON always carries `kind`, `parent`,
 `subtasks`, and `open_subtasks`. A Parent Task with open SubTasks is not Ready, so
 `list` may show it even though `ready` does not.
@@ -306,10 +317,12 @@ orbit ready --limit 5
 orbit ready --claim --by claude --json
 orbit ready --parent orb-a7b2c9 --claim --by claude   # one feature only
 orbit ready --repo api --claim --by claude            # one repository only
+orbit ready --exclude-label epic --claim --by claude  # skip spec containers
 orbit ready --json              # NO_READY_TASKS means wait and retry
 ```
 
-`--parent`, `--repo`, and repeatable `--label` combine with AND.
+`--parent`, `--repo`, repeatable `--label`, and repeatable `--exclude-label`
+combine with AND. An excluded task is hidden if it carries any excluded label.
 
 ### `orbit show` — load one ticket
 

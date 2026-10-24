@@ -246,6 +246,14 @@ fn subtasks_are_available_over_mcp() {
     let ready_scoped = tool_envelope(&ready_scoped);
     assert_eq!(ready_scoped["data"]["count"], 1);
     assert_eq!(ready_scoped["data"]["tasks"][0]["id"], child_id.as_str());
+
+    let excluded = client.call(
+        76,
+        "ready",
+        json!({ "exclude_labels": ["ready-for-agent"] }),
+    );
+    let excluded = tool_envelope(&excluded);
+    assert_eq!(excluded["data"]["count"], 0);
 }
 
 #[test]

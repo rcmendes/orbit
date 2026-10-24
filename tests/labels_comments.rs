@@ -163,6 +163,43 @@ fn comments_are_append_only_and_appear_in_show() {
 }
 
 #[test]
+fn exclude_label_hides_tasks_from_list_and_ready() {
+    let repo = TestRepo::new();
+    repo.init();
+    let epic = repo.add("Epic probe", &["--label", "epic"]);
+    let task = repo.add("Task probe", &["--label", "ready-for-agent"]);
+    repo.add("Bug probe", &["--label", "bug"]);
+
+    let ready = repo.ok_json(&["ready", "--json"]);
+    assert_eq!(ready["data"]["count"], 3);
+
+    let ready = repo.ok_json(&["ready", "--exclude-label", "EPIC", "--json"]);
+    assert_eq!(ready["data"]["count"], 2);
+    assert!(
+        ready["data"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["id"] != epic.as_str())
+    );
+
+    let listed = repo.ok_json(&[
+        "list",
+        "--exclude-label",
+        "epic",
+        "--exclude-label",
+        "bug",
+        "--json",
+    ]);
+    assert_eq!(listed["data"]["count"], 1);
+    assert_eq!(listed["data"]["tasks"][0]["id"], task);
+
+    let scoped = repo.ok_json(&["list", "--label", "ready-for-agent", "--json"]);
+    assert_eq!(scoped["data"]["count"], 1);
+    assert_eq!(scoped["data"]["tasks"][0]["id"], task);
+}
+
+#[test]
 fn doctor_reports_corrupt_and_orphan_comments() {
     let repo = TestRepo::new();
     repo.init();

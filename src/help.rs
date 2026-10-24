@@ -132,9 +132,12 @@ such as an upstream release.
 
 --parent creates a SubTask under an existing Parent Task. The SubTask ID is the
 parent ID, a dot, and a fresh suffix (for example orb-a7b2c9.d4b3df). SubTasks are
-one level deep. Parentage is not a dependency: the Parent Task waits for its
-SubTasks, not the other way around. A SubTask can still have real --depends-on
-edges.";
+one level deep. A spec or epic is a top-level Parent Task, conventionally labelled
+`epic`; its tickets are SubTasks. When an external tracker or skill says
+\"sub-issue\", use --parent. Parentage is not a dependency: the Parent Task waits
+for its SubTasks, not the other way around. A SubTask can still have real
+--depends-on edges. Closing a Parent Task with open SubTasks is refused; --force
+cancels them.";
 
 pub const ADD_EXAMPLES: &str = "\
 Examples:
@@ -148,7 +151,10 @@ Examples:
   orbit add \"Upgrade the parser\" --waiting-on \"upstream 2.4\" --body-file -
 
   # Break a feature into a SubTask
-  orbit add \"API: add the endpoint\" --parent orb-a7b2c9 --label repo:api";
+  orbit add \"API: add the endpoint\" --parent orb-a7b2c9 --label repo:api
+
+  # Publish a ticket under a spec or epic parent
+  orbit add \"web: login redirect\" --parent orb-a7b2c9 --label ready-for-agent";
 
 pub const LIST_LONG: &str = "\
 Lists tasks from a consistent snapshot of the Board. Done and cancelled tasks are
@@ -158,7 +164,8 @@ everything one agent is holding.
 
 --parent lists only the SubTasks of one Parent Task. --tree keeps each Parent
 Task next to its SubTasks and indents the children in human output. --label is
-repeatable and every label must match; --repo NAME is shorthand for
+repeatable and every label must match; --exclude-label is repeatable and hides a
+task carrying any of the named labels. --repo NAME is shorthand for
 --label repo:NAME. Use --json when another program consumes the result: it
 returns data.tasks and data.count. For work an agent can start, use `orbit ready`
 instead of filtering this list.";
@@ -185,7 +192,10 @@ Examples:
 
   # Everything for one repository, optionally with another label
   orbit list --repo api
-  orbit list --repo api --label ready-for-agent";
+  orbit list --repo api --label ready-for-agent
+
+  # Hide epics and specs from the list
+  orbit list --exclude-label epic";
 
 pub const READY_LONG: &str = "\
 Shows tasks that can start now: todo, unclaimed, not waiting on an external
@@ -198,9 +208,11 @@ When nothing is ready the command still succeeds, with data null and
 meta.reason NO_READY_TASKS, so a polling loop can wait and retry.
 
 With --parent, only that Parent Task's Ready SubTasks are considered. --repo NAME
-and repeatable --label scope the queue to a repository or a set of labels; filters
-combine with --parent using AND. Use them to scope an agent to one feature or one
-repository instead of the whole Board.";
+and repeatable --label scope the queue to a repository or a set of labels;
+repeatable --exclude-label hides tasks carrying any of the named labels, which is
+how an agent skips epics, specs, or other containers. Filters combine with
+--parent using AND. Use them to scope an agent to one feature or one repository
+instead of the whole Board.";
 
 pub const READY_EXAMPLES: &str = "\
 Examples:
@@ -217,7 +229,10 @@ Examples:
   orbit ready --parent orb-a7b2c9 --claim --by claude
 
   # Claim the next task for one repository
-  orbit ready --repo api --claim --by claude";
+  orbit ready --repo api --claim --by claude
+
+  # Skip epics and specs while claiming normal work
+  orbit ready --exclude-label epic --claim --by claude";
 
 pub const SHOW_LONG: &str = "\
 Prints the full task: frontmatter fields, Markdown body, labels, dependencies,

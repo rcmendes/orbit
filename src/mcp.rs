@@ -143,7 +143,8 @@ fn tool_definitions() -> Vec<Value> {
                 "limit": { "type": "integer", "minimum": 1, "description": "Maximum tasks to list." },
                 "parent": { "type": "string", "description": "Only Ready SubTasks of this Parent Task." },
                 "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
-                "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." }
+                "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
+                "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." }
             }),
             &[],
         ),
@@ -160,6 +161,7 @@ fn tool_definitions() -> Vec<Value> {
                 "parent": { "type": "string", "description": "Only SubTasks of this Parent Task." },
                 "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
                 "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
+                "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
                 "all": { "type": "boolean", "description": "Include done and cancelled tasks." }
             }),
             &[],
@@ -405,6 +407,12 @@ fn dispatch_tool(
     {
         return tool_invalid("`labels` must be an array of strings");
     }
+    if arguments
+        .get("exclude_labels")
+        .is_some_and(|value| !value.is_array())
+    {
+        return tool_invalid("`exclude_labels` must be an array of strings");
+    }
 
     let mut args: Vec<String> = Vec::new();
 
@@ -436,6 +444,15 @@ fn dispatch_tool(
                         return tool_invalid("`labels` must be an array of strings");
                     };
                     args.push("--label".to_string());
+                    args.push(label.to_string());
+                }
+            }
+            if let Some(labels) = arguments.get("exclude_labels").and_then(Value::as_array) {
+                for label in labels {
+                    let Some(label) = label.as_str() else {
+                        return tool_invalid("`exclude_labels` must be an array of strings");
+                    };
+                    args.push("--exclude-label".to_string());
                     args.push(label.to_string());
                 }
             }
@@ -475,6 +492,15 @@ fn dispatch_tool(
                         return tool_invalid("`labels` must be an array of strings");
                     };
                     args.push("--label".to_string());
+                    args.push(label.to_string());
+                }
+            }
+            if let Some(labels) = arguments.get("exclude_labels").and_then(Value::as_array) {
+                for label in labels {
+                    let Some(label) = label.as_str() else {
+                        return tool_invalid("`exclude_labels` must be an array of strings");
+                    };
+                    args.push("--exclude-label".to_string());
                     args.push(label.to_string());
                 }
             }

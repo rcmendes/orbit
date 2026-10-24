@@ -33,6 +33,78 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 
 The board is deliberately outside code branches: task churn never enters a feature PR, and agents in separate worktrees share one queue. See `docs/adr/0001-markdown-board-on-orphan-branch.md` and `docs/adr/0002-single-writer-lock-and-atomic-rename.md`.
 
+### 2.1 Component view
+
+Orbit is one binary with two front doors: the JSON CLI and the MCP stdio server. `orbit mcp` is a bridge, not a second implementation; each tool call spawns the CLI. There is no daemon, watcher, or persistent index.
+
+```mermaid
+flowchart LR
+    subgraph Interfaces["Interfaces"]
+        CLI["JSON CLI<br/>src/cli.rs"]
+        MCP["MCP stdio server<br/>src/mcp.rs"]
+        OUT["JSON envelope<br/>src/output.rs"]
+    end
+
+    subgraph Application["Application"]
+        CMD["Command handlers<br/>src/commands.rs"]
+    end
+
+    subgraph Domain["Domain"]
+        BOARD["Board resolution and config<br/>src/board.rs"]
+        GRAPH["Task graph<br/>src/graph.rs"]
+        TASK["Task model<br/>src/task.rs"]
+        COMMENTS["Comment sidecars<br/>src/comment.rs"]
+    end
+
+    subgraph Durability["Durability"]
+        LOCK["Board lock<br/>src/lock.rs"]
+        ATOMIC["Atomic publish<br/>src/atomic.rs"]
+        GIT["Git adapter<br/>src/git.rs"]
+        ERR["Error contract<br/>src/error.rs"]
+    end
+
+    subgraph Data["Durable state"]
+        BRANCH["orphan branch: orbit"]
+        WORKTREE["hidden worktree<br/>.git/orbit/board"]
+        LINK["link pointer<br/>.git/orbit/link"]
+        FILES["tasks/ID.md and comments/ID.md"]
+        CONFIG["config.toml"]
+        LOCKFILE["lock file"]
+    end
+
+    CLI --> CMD
+    MCP -->|spawns CLI per tool call| CLI
+    CMD --> OUT
+    CMD --> Domain
+    CMD --> Durability
+    Domain --> Data
+    Durability --> Data
+    GRAPH --> TASK
+    BOARD --> WORKTREE
+    BOARD --> LINK
+    BOARD --> CONFIG
+    GIT --> BRANCH
+    ATOMIC --> FILES
+    COMMENTS --> FILES
+    LOCK --> LOCKFILE
+    WORKTREE --> FILES
+    WORKTREE --> CONFIG
+
+    classDef iface fill:#eef2ff,stroke:#4f46e5,color:#1e1b4b
+    classDef app fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef domain fill:#ecfeff,stroke:#0e7490,color:#083344
+    classDef durable fill:#fef3c7,stroke:#b45309,color:#451a03
+    classDef store fill:#f0fdf4,stroke:#15803d,color:#052e16
+
+    class CLI,MCP,OUT iface
+    class CMD app
+    class BOARD,GRAPH,TASK,COMMENTS domain
+    class LOCK,ATOMIC,GIT,ERR durable
+    class BRANCH,WORKTREE,LINK,FILES,CONFIG,LOCKFILE store
+```
+
+The detailed module map, board-resolution flow, domain relationships, state machine, command map, and sequence diagrams are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ## 3. Domain model
 
 The canonical vocabulary lives in `GLOSSARY.md`. In short:
@@ -46,6 +118,47 @@ The canonical vocabulary lives in `GLOSSARY.md`. In short:
 - **Priority** is `P0` (highest) through `P3` (lowest); the stored value is an integer `0`–`3`.
 - **Label** is a short lowercase string attached to a Task for filtering or workflow state. **Hold Labels** are configured labels that suspend readiness; the defaults are `needs-triage`, `needs-info`, and `ready-for-human`. `ready-for-agent`, `bug`, and `enhancement` are neutral.
 - **Comment** is an append-only, authored, timestamped note on a Task. Comments do not affect Status or readiness.
+
+### 3.1 Status state machine
+
+Only four values are stored in `status`:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> todo: add
+
+    todo --> in_progress: claim or ready --claim
+    todo --> done: done
+    todo --> cancelled: cancel
+
+    in_progress --> todo: release
+    in_progress --> in_progress: heartbeat
+    in_progress --> in_progress: claim --steal
+    in_progress --> done: done
+    in_progress --> cancelled: cancel
+
+    done --> todo: reopen
+    cancelled --> todo: reopen
+
+    done --> done: done --comment
+    cancelled --> cancelled: cancel --comment
+
+    note right of in_progress
+        Stale is derived:
+        in_progress with lease_until <= now.
+    end note
+
+    note left of todo
+        Ready is derived:
+        todo, no claim, no waiting_on,
+        no hold label, and every dependency
+        done or cancelled.
+    end note
+```
+
+`done` and `cancelled` both resolve dependents. `reopen` returns a terminal Task to `todo`; `release` returns an active claim to `todo`; `cancel` is not `delete`. Waiting, hold labels, and dependency edges are gates on readiness and claims, not Statuses. The full transition table and readiness gate are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## 4. Task file
 
@@ -152,7 +265,11 @@ Auto-commit policy: create/update/claim/release/done/cancel/reopen/depend/undepe
 
 ## 6. Commands
 
-`--json` is global. `orbit <command> --help` is the reference.
+`--json` is global. `orbit <command> --help` is the reference: it carries a long
+description and copy-pasteable examples for every command and subcommand.
+`docs/commands.md` mirrors that reference and adds the scenario each command fits.
+The command map and the `init` and task-lifecycle sequences are in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### M0 (walking skeleton)
 

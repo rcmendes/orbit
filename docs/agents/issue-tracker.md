@@ -6,6 +6,12 @@ worktree on the orphan `orbit` branch. In the default layout it lives at
 linked to a shared Board uses that Board instead. Tasks are Markdown files with
 YAML frontmatter and are served by the `orbit` CLI.
 
+For the full command reference, examples, and usage scenarios, see
+[../commands.md](../commands.md).
+
+For the component map, task state machine, readiness gate, and sequence
+diagrams, see [../ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Board discovery
 
 Every command resolves the Board in this order: `--dir`, then `ORBIT_DIR`, then the

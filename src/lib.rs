@@ -6,6 +6,7 @@ pub mod comment;
 pub mod error;
 pub mod git;
 pub mod graph;
+pub mod help;
 pub mod lock;
 pub mod mcp;
 pub mod output;

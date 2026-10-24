@@ -16,6 +16,68 @@ When building micro-SaaS products at maximum velocity, your autonomous toolchain
 
 Orbit keeps the board as Markdown, but compiles it into an in-process graph on every command. Agents ask `orbit ready --claim` for exactly one piece of work, hold a time-bounded lease, and get structured errors when a dependency is unfinished or another agent already owns the task. Writes serialize on one repo-wide lock and publish through temp-file plus rename, so a crash cannot truncate a task and two agents cannot corrupt the queue. Installation is a single binary, with shell/PowerShell installers and an npm wrapper. There is no daemon, no watcher, and no Dolt.
 
+### Architecture
+
+Commands are short-lived processes. A board command resolves one Board, takes a shared or exclusive lock, rebuilds the task graph from Markdown, applies one transition, publishes changed files atomically, and optionally commits to the orphan `orbit` branch. The MCP server is a bridge over the same CLI, so it reuses the same lock, write path, and error contract.
+
+```mermaid
+flowchart LR
+    subgraph Clients["Clients"]
+        DEV["Developer"]
+        AGENT["Coding agent"]
+        MCPC["MCP client"]
+    end
+
+    subgraph Binary["orbit binary"]
+        ROUTER["CLI router<br/>clap"]
+        MCP["MCP stdio server"]
+        CMD["command handlers"]
+        GRAPH["in-memory task graph"]
+        LOCK["board lock"]
+        ATOMIC["atomic writer"]
+        GIT["Git adapter"]
+        SETUP["setup recipes"]
+    end
+
+    subgraph State["Board state"]
+        BOARD["Board<br/>hidden worktree or shared path"]
+        TASKS["tasks/ID.md"]
+        COMMENTS["comments/ID.md"]
+        CONFIG["config.toml"]
+        BRANCH["orphan branch: orbit"]
+    end
+
+    subgraph Harness["Harness files"]
+        FILES["CLAUDE.md · AGENTS.md<br/>.mcp.json · opencode.json"]
+        HOOK["SessionStart hook"]
+    end
+
+    DEV --> ROUTER
+    AGENT --> ROUTER
+    AGENT --> HOOK
+    HOOK -->|prime --hook-json| ROUTER
+    MCPC --> MCP
+    MCP -->|spawns CLI per call| ROUTER
+    ROUTER --> CMD
+    CMD --> GRAPH
+    GRAPH -->|reads| TASKS
+    CMD --> LOCK
+    CMD --> ATOMIC
+    ATOMIC -->|writes| TASKS
+    ATOMIC -->|writes| COMMENTS
+    CMD --> GIT
+    GIT --> BRANCH
+    BOARD --- TASKS
+    BOARD --- COMMENTS
+    BOARD --- CONFIG
+    BRANCH --- BOARD
+    CMD --> SETUP
+    SETUP --> FILES
+    SETUP --> HOOK
+```
+
+The full component map, board-resolution flow, domain model, state machine, readiness gate, command map, and sequence diagrams for `init`, the task lifecycle, concurrent claims, and MCP live in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+
 ### Quick start
 
 ```bash
@@ -28,6 +90,8 @@ orbit done orb-a7b2c9 --by claude --comment "Implemented and verified"
 ```
 
 `orbit init` creates the Board and wires the coding-agent harnesses it detects. In a terminal it shows what it found and asks which ones to wire; without a terminal it wires the detected ones and never prompts.
+
+Every command accepts `--json`, and `orbit <command> --help` explains its semantics with examples. [docs/commands.md](./docs/commands.md) is the full command guide, including when to use each command and end-to-end scenarios.
 
 ### Install
 

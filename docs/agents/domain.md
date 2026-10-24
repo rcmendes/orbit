@@ -7,6 +7,8 @@ How the engineering skills should consume this repo's domain documentation when 
 - **`GLOSSARY.md`** at the repo root, or
 - **`GLOSSARY-MAP.md`** at the repo root if it exists: it points at one `GLOSSARY.md`
   per context. Read each one relevant to the topic.
+- **`docs/ARCHITECTURE.md`**: component map, state machine, command flow, and
+  sequence diagrams.
 - **`docs/adr/`**: read ADRs that touch the area you're about to work in. In
   multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
 

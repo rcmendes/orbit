@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::help;
 use crate::setup::SetupClient;
 use crate::task::Status;
 
@@ -10,10 +11,11 @@ use crate::task::Status;
     name = "orbit",
     version,
     about = "A Markdown-native work queue for coding agents",
-    long_about = None
+    long_about = help::ROOT_LONG,
+    after_long_help = help::ROOT_EXAMPLES
 )]
 pub struct Cli {
-    /// Emit a single JSON object on stdout.
+    /// Emit exactly one JSON object on stdout, including errors.
     #[arg(global = true, long)]
     pub json: bool,
 
@@ -27,76 +29,100 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Initialize a Board and wire coding-agent harnesses.
+    /// Create the Board and wire coding-agent harnesses.
+    #[command(long_about = help::INIT_LONG, after_long_help = help::INIT_EXAMPLES)]
     Init(InitArgs),
 
     /// Point this repository at a shared Board.
+    #[command(long_about = help::LINK_LONG, after_long_help = help::LINK_EXAMPLES)]
     Link(LinkArgs),
 
     /// Return this repository to its own Board.
+    #[command(long_about = help::UNLINK_LONG, after_long_help = help::UNLINK_EXAMPLES)]
     Unlink,
 
     /// Create a task.
+    #[command(long_about = help::ADD_LONG, after_long_help = help::ADD_EXAMPLES)]
     Add(AddArgs),
 
-    /// List tasks. Terminal tasks are hidden unless --all.
+    /// List tasks with filters. Closed work is hidden unless --all.
+    #[command(long_about = help::LIST_LONG, after_long_help = help::LIST_EXAMPLES)]
     List(ListArgs),
 
-    /// List ready tasks, optionally claiming the first one atomically.
+    /// List or atomically claim the next ready task.
+    #[command(long_about = help::READY_LONG, after_long_help = help::READY_EXAMPLES)]
     Ready(ReadyArgs),
 
-    /// Show a task, including its body.
+    /// Show a task with its body, dependencies, and comments.
+    #[command(long_about = help::SHOW_LONG, after_long_help = help::SHOW_EXAMPLES)]
     Show(ShowArgs),
 
-    /// Claim a specific task.
+    /// Claim a specific task and start its lease.
+    #[command(long_about = help::CLAIM_LONG, after_long_help = help::CLAIM_EXAMPLES)]
     Claim(ClaimArgs),
 
     /// Release a claim and return the task to todo.
+    #[command(long_about = help::RELEASE_LONG, after_long_help = help::RELEASE_EXAMPLES)]
     Release(ReleaseArgs),
 
-    /// Extend a claim's lease.
+    /// Extend the lease on a claimed task.
+    #[command(long_about = help::HEARTBEAT_LONG, after_long_help = help::HEARTBEAT_EXAMPLES)]
     Heartbeat(HeartbeatArgs),
 
-    /// Complete a task.
+    /// Complete a claimed task.
+    #[command(long_about = help::DONE_LONG, after_long_help = help::DONE_EXAMPLES)]
     Done(DoneArgs),
 
-    /// Cancel a task.
+    /// Cancel a task without completing it.
+    #[command(long_about = help::CANCEL_LONG, after_long_help = help::CANCEL_EXAMPLES)]
     Cancel(CancelArgs),
 
     /// Reopen a done or cancelled task.
+    #[command(long_about = help::REOPEN_LONG, after_long_help = help::REOPEN_EXAMPLES)]
     Reopen(ReopenArgs),
 
-    /// Change a task's title, body, priority, or external wait.
+    /// Edit a task's title, body, priority, or external blocker.
+    #[command(long_about = help::UPDATE_LONG, after_long_help = help::UPDATE_EXAMPLES)]
     Update(UpdateArgs),
 
     /// Add, remove, or list task labels.
+    #[command(long_about = help::LABEL_LONG, after_long_help = help::LABEL_EXAMPLES)]
     Label(LabelArgs),
 
-    /// Add or list task comments.
+    /// Add to or read a task's comment thread.
+    #[command(long_about = help::COMMENT_LONG, after_long_help = help::COMMENT_EXAMPLES)]
     Comment(CommentArgs),
 
-    /// Add a dependency.
+    /// Make one task wait for another.
+    #[command(long_about = help::DEPEND_LONG, after_long_help = help::DEPEND_EXAMPLES)]
     Depend(DependArgs),
 
-    /// Remove a dependency.
+    /// Remove a dependency edge between two tasks.
+    #[command(long_about = help::UNDEPEND_LONG, after_long_help = help::UNDEPEND_EXAMPLES)]
     Undepend(UndependArgs),
 
-    /// Delete a task.
+    /// Permanently delete a task and its comments.
+    #[command(long_about = help::DELETE_LONG, after_long_help = help::DELETE_EXAMPLES)]
     Delete(DeleteArgs),
 
-    /// Print agent workflow context.
+    /// Print starting context for an agent session.
+    #[command(long_about = help::PRIME_LONG, after_long_help = help::PRIME_EXAMPLES)]
     Prime(PrimeArgs),
 
-    /// Install agent instructions, skills, and hooks.
+    /// Install, check, or remove one agent integration.
+    #[command(long_about = help::SETUP_LONG, after_long_help = help::SETUP_EXAMPLES)]
     Setup(SetupArgs),
 
-    /// Start the MCP stdio server.
+    /// Serve the MCP tools and resources over stdio.
+    #[command(long_about = help::MCP_LONG, after_long_help = help::MCP_EXAMPLES)]
     Mcp,
 
-    /// Check the board for integrity issues.
+    /// Check the Board for integrity issues.
+    #[command(long_about = help::DOCTOR_LONG, after_long_help = help::DOCTOR_EXAMPLES)]
     Doctor(DoctorArgs),
 
     /// Commit pending lease-only changes to the board branch.
+    #[command(long_about = help::SYNC_LONG, after_long_help = help::SYNC_EXAMPLES)]
     Sync,
 }
 
@@ -144,18 +170,18 @@ pub struct LinkArgs {
 
 #[derive(Debug, Args)]
 pub struct AddArgs {
-    /// Task title.
+    /// Task title. Required and must not be empty.
     pub title: String,
 
     /// Priority from 0 (highest) to 3 (lowest).
     #[arg(short = 'p', long, value_name = "N")]
     pub priority: Option<u8>,
 
-    /// Make the new task depend on an existing task. Repeatable.
+    /// Make the new task wait for an existing task. Repeatable.
     #[arg(long = "depends-on", value_name = "ID", action = clap::ArgAction::Append)]
     pub depends_on: Vec<String>,
 
-    /// Record an external blocker.
+    /// Record a blocker that lives outside the Board.
     #[arg(long, value_name = "TEXT")]
     pub waiting_on: Option<String>,
 
@@ -174,7 +200,7 @@ pub struct AddArgs {
 
 #[derive(Debug, Args)]
 pub struct ListArgs {
-    /// Filter by status.
+    /// Filter by status. Requesting done or cancelled includes closed work.
     #[arg(long, value_enum)]
     pub status: Option<Status>,
 
@@ -209,7 +235,7 @@ pub struct ReadyArgs {
     #[arg(long, value_name = "N")]
     pub limit: Option<usize>,
 
-    /// Claim the first ready task atomically.
+    /// Claim the first ready task in the same transaction.
     #[arg(long)]
     pub claim: bool,
 
@@ -220,24 +246,27 @@ pub struct ReadyArgs {
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 }
 
 #[derive(Debug, Args)]
 pub struct ClaimArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
     #[arg(long, value_name = "NAME")]
     pub by: Option<String>,
 
-    /// Take over a live or stale claim.
+    /// Take over another agent's claim, even while its lease is live.
     #[arg(long)]
     pub steal: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct ReleaseArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -251,6 +280,7 @@ pub struct ReleaseArgs {
 
 #[derive(Debug, Args)]
 pub struct HeartbeatArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -260,6 +290,7 @@ pub struct HeartbeatArgs {
 
 #[derive(Debug, Args)]
 pub struct DoneArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -281,6 +312,7 @@ pub struct DoneArgs {
 
 #[derive(Debug, Args)]
 pub struct CancelArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -302,6 +334,7 @@ pub struct CancelArgs {
 
 #[derive(Debug, Args)]
 pub struct ReopenArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// Reopen even when a dependent task is already done.
@@ -311,6 +344,7 @@ pub struct ReopenArgs {
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// New title.
@@ -344,6 +378,7 @@ pub struct UpdateArgs {
 
 #[derive(Debug, Args)]
 pub struct DependArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// The task that must finish first.
@@ -353,14 +388,17 @@ pub struct DependArgs {
 
 #[derive(Debug, Args)]
 pub struct UndependArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
+    /// The dependency to remove.
     #[arg(value_name = "DEP_ID")]
     pub dep_id: String,
 }
 
 #[derive(Debug, Args)]
 pub struct DeleteArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -381,17 +419,33 @@ pub struct LabelArgs {
 #[derive(Debug, Subcommand)]
 pub enum LabelCommand {
     /// Add one or more labels to a task.
+    #[command(
+        long_about = help::LABEL_ADD_LONG,
+        after_long_help = help::LABEL_ADD_EXAMPLES
+    )]
     Add(LabelMutationArgs),
+
     /// Remove one or more labels from a task.
+    #[command(
+        long_about = help::LABEL_REMOVE_LONG,
+        after_long_help = help::LABEL_REMOVE_EXAMPLES
+    )]
     Remove(LabelMutationArgs),
+
     /// List labels in use and their task counts.
+    #[command(
+        long_about = help::LABEL_LIST_LONG,
+        after_long_help = help::LABEL_LIST_EXAMPLES
+    )]
     List,
 }
 
 #[derive(Debug, Args)]
 pub struct LabelMutationArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
+    /// One or more lowercase labels.
     #[arg(required = true, num_args = 1.., value_name = "LABEL")]
     pub labels: Vec<String>,
 }
@@ -405,13 +459,23 @@ pub struct CommentArgs {
 #[derive(Debug, Subcommand)]
 pub enum CommentCommand {
     /// Append a comment to a task.
+    #[command(
+        long_about = help::COMMENT_ADD_LONG,
+        after_long_help = help::COMMENT_ADD_EXAMPLES
+    )]
     Add(CommentAddArgs),
+
     /// List a task's comments.
+    #[command(
+        long_about = help::COMMENT_LIST_LONG,
+        after_long_help = help::COMMENT_LIST_EXAMPLES
+    )]
     List(CommentListArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct CommentAddArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// Comment body. Use "-" to read stdin.
@@ -429,6 +493,7 @@ pub struct CommentAddArgs {
 
 #[derive(Debug, Args)]
 pub struct CommentListArgs {
+    /// Task ID, for example orb-a7b2c9.
     pub id: String,
 }
 

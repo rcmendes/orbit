@@ -79,3 +79,8 @@ _Avoid_: Database, store, project
 **Linked Repository**:
 A Repository whose Agents use a Board that does not live inside it.
 _Avoid_: Submodule, project, workspace
+
+## See also
+
+- [`SPEC.md`](./SPEC.md) for behavior, commands, and the JSON contract.
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.

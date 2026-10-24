@@ -409,6 +409,38 @@ fn link_refreshes_existing_agent_configuration() {
 }
 
 #[test]
+fn link_refreshes_a_custom_mattpocock_tracker_doc() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["init", "--agents", "none", "--json"]);
+    let custom = "# Issue tracker: Orbit\n\nHand-written guidance.\n";
+    std::fs::create_dir_all(repo.path().join("docs/agents")).unwrap();
+    std::fs::write(repo.path().join("docs/agents/issue-tracker.md"), custom).unwrap();
+
+    let shared = tempfile::tempdir().unwrap();
+    let board = shared.path().join("board");
+    let other = TestRepo::new();
+    other.ok_json(&[
+        "init",
+        "--board",
+        board.to_str().unwrap(),
+        "--agents",
+        "none",
+        "--json",
+    ]);
+
+    let value = repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
+    assert_eq!(repo.read("docs/agents/issue-tracker.md"), custom);
+    assert!(
+        value["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("not managed")),
+        "{value}"
+    );
+}
+
+#[test]
 fn setup_check_reports_missing_and_installed() {
     let repo = TestRepo::new();
     repo.init();

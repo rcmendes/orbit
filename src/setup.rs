@@ -341,7 +341,7 @@ fn configured_clients(root: &Path) -> Vec<SetupClient> {
     if contains("opencode.json", "\"orbit\"") {
         clients.push(SetupClient::Opencode);
     }
-    if contains("docs/agents/issue-tracker.md", BEGIN_MARKER) {
+    if root.join("docs/agents/issue-tracker.md").is_file() {
         clients.push(SetupClient::Mattpocock);
     }
 
@@ -676,7 +676,7 @@ fn plan_install(
             }
         }
         SetupClient::Mattpocock => {
-            plan_section(
+            plan_section_if_managed(
                 root,
                 "docs/agents/issue-tracker.md",
                 &mattpocock_section(),
@@ -779,6 +779,36 @@ fn plan_section(
             warning: None,
         },
     )
+}
+
+/// Install a managed section only when the file is absent or already managed.
+/// A hand-written file is reported as skipped instead of gaining a second section.
+fn plan_section_if_managed(
+    root: &Path,
+    relative: &str,
+    section: &str,
+    plan: &mut BTreeMap<PathBuf, FilePlan>,
+) -> Result<()> {
+    let absolute = root.join(relative);
+    let existing = read_optional(&absolute)?;
+    if let Some(existing) = existing.as_deref()
+        && !existing.contains(BEGIN_MARKER)
+        && !existing.contains(END_MARKER)
+    {
+        return insert_plan(
+            plan,
+            FilePlan {
+                absolute,
+                relative: PathBuf::from(relative),
+                action: Action::Skipped,
+                content: None,
+                warning: Some(format!(
+                    "{relative} is not managed by Orbit; leaving it in place"
+                )),
+            },
+        );
+    }
+    plan_section(root, relative, section, plan)
 }
 
 fn plan_section_remove(

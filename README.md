@@ -144,6 +144,8 @@ orbit setup all --no-mcp     # instruction files only
 orbit setup all --remove     # remove only Orbit-managed content
 ```
 
+A hand-written integration file is respected. If `docs/agents/issue-tracker.md` exists without Orbit's managed marker, `orbit setup mattpocock` reports it as `skipped` and leaves it untouched; `--check` treats the custom doc as installed, and `--remove` does not delete it. Files Orbit wrote continue to update and remove normally.
+
 MCP configuration is written by default for Claude, Cursor, Codex, and OpenCode. Entries record the absolute path of the running binary, so editors launched outside a shell do not need `PATH`. The Claude SessionStart hook records the same absolute binary and runs `orbit prime --hook-json --by claude` at session start. Use `--mcp-bin orbit` if you want a portable command that relies on the editor's `PATH`.
 
 `orbit init` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory. Install globally, or pass `--mcp-bin orbit`.

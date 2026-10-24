@@ -109,6 +109,12 @@ orbit setup cursor --print     # preview
 orbit setup all --remove       # remove only Orbit-managed content
 ```
 
+An existing `docs/agents/issue-tracker.md` without Orbit's managed marker is
+treated as a hand-written guide: setup reports it as `skipped` and leaves it
+unchanged, `--check` treats the integration as satisfied, and agent refresh
+still recognizes the file. Tracker files with the marker update and remove
+normally.
+
 ### `orbit mcp` — expose the Board to an MCP client
 
 Runs the Model Context Protocol server over stdio with 13 tools and the

@@ -156,6 +156,64 @@ fn setup_mattpocock_writes_the_issue_tracker_bridge() {
 }
 
 #[test]
+fn setup_mattpocock_updates_and_removes_a_managed_tracker_doc() {
+    let repo = TestRepo::new();
+    let (status, value) = repo.json(&["setup", "mattpocock", "--check", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["data"]["status"], "missing");
+
+    repo.ok_json(&["setup", "mattpocock", "--json"]);
+    let tracker = repo.read("docs/agents/issue-tracker.md");
+    let edited = tracker.replace("We use Orbit", "We use Orbit daily");
+    std::fs::write(repo.path().join("docs/agents/issue-tracker.md"), &edited).unwrap();
+
+    let (status, value) = repo.json(&["setup", "mattpocock", "--check", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["data"]["status"], "stale");
+
+    let value = repo.ok_json(&["setup", "mattpocock", "--json"]);
+    let files = value["data"]["files"].as_array().unwrap();
+    assert!(files.iter().any(|file| {
+        file["path"] == "docs/agents/issue-tracker.md" && file["action"] == "updated"
+    }));
+    let tracker = repo.read("docs/agents/issue-tracker.md");
+    assert!(tracker.contains("We use Orbit"));
+    assert!(!tracker.contains("We use Orbit daily"));
+
+    repo.ok_json(&["setup", "mattpocock", "--remove", "--json"]);
+    assert!(!repo.exists("docs/agents/issue-tracker.md"));
+}
+
+#[test]
+fn setup_mattpocock_leaves_a_custom_tracker_doc_alone() {
+    let repo = TestRepo::new();
+    let custom = "# Issue tracker: Orbit\n\nHand-written guidance.\n";
+    std::fs::create_dir_all(repo.path().join("docs/agents")).unwrap();
+    std::fs::write(repo.path().join("docs/agents/issue-tracker.md"), custom).unwrap();
+
+    let value = repo.ok_json(&["setup", "mattpocock", "--json"]);
+    assert_eq!(repo.read("docs/agents/issue-tracker.md"), custom);
+    let files = value["data"]["files"].as_array().unwrap();
+    assert!(files.iter().any(|file| {
+        file["path"] == "docs/agents/issue-tracker.md" && file["action"] == "skipped"
+    }));
+    assert!(
+        value["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("not managed"))
+    );
+
+    let (status, value) = repo.json(&["setup", "mattpocock", "--check", "--json"]);
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["status"], "installed");
+
+    repo.ok_json(&["setup", "mattpocock", "--remove", "--json"]);
+    assert_eq!(repo.read("docs/agents/issue-tracker.md"), custom);
+}
+
+#[test]
 fn setup_all_writes_every_integration_and_removes_it() {
     let repo = TestRepo::new();
     repo.ok_json(&["setup", "all", "--hooks", "--json"]);

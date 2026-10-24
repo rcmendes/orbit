@@ -37,6 +37,55 @@ fn add_parent_exposes_kind_parent_and_subtasks() {
 }
 
 #[test]
+fn parent_progress_fields_track_children_and_close_eligibility() {
+    let repo = TestRepo::new();
+    repo.init();
+    let parent = repo.add("Feature", &[]);
+    let first = subtask(&repo, &parent, "First");
+    let second = subtask(&repo, &parent, "Second");
+
+    let value = repo.ok_json(&["show", &parent, "--json"]);
+    assert_eq!(value["data"]["subtask_count"], 2);
+    assert_eq!(value["data"]["resolved_subtask_count"], 0);
+    assert_eq!(value["data"]["open_subtask_count"], 2);
+    assert_eq!(value["data"]["eligible_for_close"], false);
+
+    repo.ok_json(&["done", &first, "--by", "test", "--json"]);
+    let value = repo.ok_json(&["show", &parent, "--json"]);
+    assert_eq!(value["data"]["resolved_subtask_count"], 1);
+    assert_eq!(value["data"]["open_subtask_count"], 1);
+    assert_eq!(value["data"]["eligible_for_close"], false);
+
+    repo.ok_json(&["cancel", &second, "--by", "test", "--json"]);
+    let value = repo.ok_json(&["show", &parent, "--json"]);
+    assert_eq!(value["data"]["subtask_count"], 2);
+    assert_eq!(value["data"]["resolved_subtask_count"], 2);
+    assert_eq!(value["data"]["open_subtask_count"], 0);
+    assert_eq!(value["data"]["eligible_for_close"], true);
+
+    let ready = repo.ok_json(&["ready", "--json"]);
+    let parent_json = ready["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == parent.as_str())
+        .expect("resolved parent should be ready to close");
+    assert_eq!(parent_json["eligible_for_close"], true);
+
+    repo.ok_json(&["done", &parent, "--by", "test", "--json"]);
+    let value = repo.ok_json(&["show", &parent, "--json"]);
+    assert_eq!(value["data"]["status"], "done");
+    assert_eq!(value["data"]["eligible_for_close"], false);
+
+    let ordinary = repo.add("Ordinary", &[]);
+    let value = repo.ok_json(&["show", &ordinary, "--json"]);
+    assert_eq!(value["data"]["subtask_count"], 0);
+    assert_eq!(value["data"]["resolved_subtask_count"], 0);
+    assert_eq!(value["data"]["open_subtask_count"], 0);
+    assert_eq!(value["data"]["eligible_for_close"], false);
+}
+
+#[test]
 fn subtask_ids_encode_the_parent() {
     let repo = TestRepo::new();
     repo.init();

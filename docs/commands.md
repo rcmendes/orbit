@@ -359,7 +359,8 @@ to a repository or label set.
 ### `orbit export` — snapshot the board
 
 Emits a deterministic JSON snapshot of every Task and SubTask, including terminal
-work, with labels, dependency and parent edges, derived readiness, and comments.
+work, with labels, dependency and parent edges, parent progress fields, derived
+readiness, and comments.
 The snapshot is ordered by task ID and contains no timestamps or machine-local
 paths.
 

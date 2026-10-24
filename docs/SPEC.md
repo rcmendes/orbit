@@ -337,7 +337,7 @@ orbit comment list <id>
 
 - `list` hides `done` and `cancelled` unless `--all`. `--label` is repeatable and every label must match; `--exclude-label` is repeatable and hides a Task carrying any named label. `--repo NAME` is shorthand for `--label repo:NAME`. `--unlabeled` conflicts with `--label` and `--repo`.
 - `ready` and `prime` accept the same `--repo` and repeatable `--label` filters. `ready` also accepts `--parent` and `--exclude-label`; all filters combine with AND.
-- `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `1`.
+- `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `2`.
 - `done` never bypasses unfinished dependencies. `--force` overrides a competing live claim and, on a Parent Task, cancels open SubTasks before closing it.
 - A forced `reopen` can leave an already-done dependent with an unfinished dependency. That is a historical fact, not corruption: `doctor` reports it as a warning, and the next `done` of that dependent still enforces its dependencies.
 - `reopen` refuses when a done dependent exists unless `--force`. Reopening a SubTask of a done parent reopens the parent too.
@@ -395,7 +395,7 @@ Error:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "board": {"branch": "orbit", "task_count": 1, "comment_count": 0},
   "tasks": [
     {
@@ -408,6 +408,10 @@ Error:
       "parent": null,
       "subtasks": [],
       "open_subtasks": [],
+      "subtask_count": 0,
+      "resolved_subtask_count": 0,
+      "open_subtask_count": 0,
+      "eligible_for_close": false,
       "depends_on": [],
       "waiting_on": null,
       "claimed_by": null,
@@ -427,7 +431,7 @@ Error:
 ```
 
 - `tasks` contains every Task and SubTask, including `done` and `cancelled`, sorted by ID.
-- Each entry is the `show --json` detail shape: `kind`, `parent`, `subtasks`, `open_subtasks`, `labels`, `depends_on`, `dependents`, derived `ready` and `blocking`, the body, and the full comments.
+- Each entry is the `show --json` detail shape: `kind`, `parent`, `subtasks`, `open_subtasks`, `subtask_count`, `resolved_subtask_count`, `open_subtask_count`, `eligible_for_close`, `labels`, `depends_on`, `dependents`, derived `ready` and `blocking`, the body, and the full comments. `eligible_for_close` is true only for a non-terminal Parent Task with at least one SubTask and no open SubTasks.
 - The snapshot is a pure function of board state: no export timestamp and no machine-local paths. Comments keep their file order.
 - Consumers should pin `schema_version` and ignore unknown fields.
 

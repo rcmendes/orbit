@@ -449,6 +449,18 @@ impl Graph {
 }
 
 pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
+    let subtasks: Vec<String> = graph
+        .children(&task.id)
+        .iter()
+        .map(|child| child.id.clone())
+        .collect();
+    let open_subtasks = graph.open_children(&task.id);
+    let subtask_count = subtasks.len();
+    let open_subtask_count = open_subtasks.len();
+    let resolved_subtask_count = subtask_count.saturating_sub(open_subtask_count);
+    let eligible_for_close =
+        subtask_count > 0 && open_subtask_count == 0 && !task.front.status.is_terminal();
+
     serde_json::json!({
         "id": task.id,
         "title": task.front.title,
@@ -458,8 +470,12 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "labels": task.front.labels,
         "depends_on": task.front.depends_on,
         "parent": task.front.parent,
-        "subtasks": graph.children(&task.id).iter().map(|child| child.id.clone()).collect::<Vec<_>>(),
-        "open_subtasks": graph.open_children(&task.id),
+        "subtasks": subtasks,
+        "open_subtasks": open_subtasks,
+        "subtask_count": subtask_count,
+        "resolved_subtask_count": resolved_subtask_count,
+        "open_subtask_count": open_subtask_count,
+        "eligible_for_close": eligible_for_close,
         "waiting_on": task.front.waiting_on,
         "claimed_by": task.holder(),
         "claimed_at": task.claimed_at(),

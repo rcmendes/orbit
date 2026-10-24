@@ -211,7 +211,7 @@ The parent is held out of the ready queue until every SubTask is resolved, and `
 
 ### Export the board
 
-`orbit export --json` emits a deterministic snapshot of every Task and SubTask, including terminal work, labels, dependency and parent edges, comments, and derived readiness. It is ordered by task ID, carries `schema_version`, and contains no timestamp or machine-local paths.
+`orbit export --json` emits a deterministic snapshot of every Task and SubTask, including terminal work, labels, dependency and parent edges, parent progress fields, comments, and derived readiness. It is ordered by task ID, carries `schema_version`, and contains no timestamp or machine-local paths.
 
 ```bash
 orbit export --json > board.json

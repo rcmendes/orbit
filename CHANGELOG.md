@@ -3,6 +3,7 @@
 ## Unreleased
 
 - `orbit list` and `orbit ready` accept repeatable `--exclude-label`; MCP `list` and `ready` accept `exclude_labels`. A task carrying any excluded label is hidden, so agents can skip `epic`/`spec` containers without changing the board's hold-label configuration.
+- Task JSON now carries `subtask_count`, `resolved_subtask_count`, `open_subtask_count`, and `eligible_for_close` in `show`, `list`, `ready`, and `export`. Export moves to `schema_version` 2.
 - Documented the Beads and Matt Pocock compatibility mapping: Issue = Task, Sub-issue = SubTask, Epic/spec = Parent Task labelled `epic`. Added ADR 0009, the one-level hierarchy limit, the frontier command, and the `done --force`/`cancel --force` child-cancellation warning to the README, SPEC, glossary, tracker guide, setup templates, and CLI help.
 
 ## 0.4.0 - 2026-10-24

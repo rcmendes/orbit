@@ -49,7 +49,7 @@ fn export_is_deterministic_and_includes_edges_comments_and_terminal_work() {
     let second = repo.ok_json(&["export", "--json"]);
 
     assert_eq!(first["data"], second["data"]);
-    assert_eq!(first["data"]["schema_version"], 1);
+    assert_eq!(first["data"]["schema_version"], 2);
     assert_eq!(first["data"]["board"]["branch"], "orbit");
     assert_eq!(first["data"]["board"]["task_count"], 4);
     assert_eq!(first["data"]["board"]["comment_count"], 1);
@@ -63,6 +63,10 @@ fn export_is_deterministic_and_includes_edges_comments_and_terminal_work() {
     assert_eq!(parent_json["kind"], "task");
     assert!(parent_json["parent"].is_null());
     assert_eq!(parent_json["subtasks"][0], child.as_str());
+    assert_eq!(parent_json["subtask_count"], 1);
+    assert_eq!(parent_json["resolved_subtask_count"], 0);
+    assert_eq!(parent_json["open_subtask_count"], 1);
+    assert_eq!(parent_json["eligible_for_close"], false);
 
     let child_json = exported(&first, &child);
     assert_eq!(child_json["kind"], "subtask");
@@ -163,7 +167,7 @@ fn export_of_an_empty_board_has_the_schema_envelope() {
 
     let value = repo.ok_json(&["export", "--json"]);
 
-    assert_eq!(value["data"]["schema_version"], 1);
+    assert_eq!(value["data"]["schema_version"], 2);
     assert_eq!(value["data"]["board"]["branch"], "orbit");
     assert_eq!(value["data"]["board"]["task_count"], 0);
     assert_eq!(value["data"]["board"]["comment_count"], 0);

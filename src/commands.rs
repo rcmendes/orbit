@@ -1681,7 +1681,7 @@ fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {
 
     let task_count = tasks.len();
     let snapshot = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "board": {
             "branch": board.config.board.branch,
             "task_count": task_count,
@@ -1691,7 +1691,7 @@ fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {
     });
     Ok(crate::output::CommandOutput::new(
         snapshot,
-        format!("exported {task_count} tasks and {comment_count} comments (schema 1)"),
+        format!("exported {task_count} tasks and {comment_count} comments (schema 2)"),
     ))
 }
 

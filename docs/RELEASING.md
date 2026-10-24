@@ -48,7 +48,13 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
    - creates the GitHub Release with changelog notes;
    - publishes `@rcmendes/orbit` to npm using `NPM_TOKEN`.
 
-5. The `Install smoke` workflow runs on the published release. It installs the public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init`, `orbit add`, `orbit ready`, and `orbit setup --print`. A red run means the published artifacts are broken even though the release exists.
+5. Trigger the post-release smoke check immediately after the Release workflow finishes:
+
+   ```bash
+   gh workflow run "Install smoke" --ref v0.4.0
+   ```
+
+   A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init`, `orbit add`, `orbit ready`, and `orbit setup --print`. A red run means the published artifacts are broken even though the release exists.
 
 ## Packaging checks
 

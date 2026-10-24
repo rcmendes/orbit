@@ -4,7 +4,7 @@
 
 ### Brief description
 
-Orbit is a zero-daemon, AI-native local issue tracker built in Rust. Tasks are plain Markdown files on a dedicated Git branch, served through a strict `--json` CLI and an optional MCP server. Labels, append-only comments, atomic claims, and a single locked writer make triage and concurrent agents safe without a database server.
+Orbit is a zero-daemon, AI-native local issue tracker built in Rust. Tasks are plain Markdown files on a dedicated Git branch, served through a strict `--json` CLI and an MCP server. Labels, append-only comments, atomic claims, and a single locked writer make triage and concurrent agents safe without a database server.
 
 ### The goal
 
@@ -22,7 +22,6 @@ Orbit keeps the board as Markdown, but compiles it into an in-process graph on e
 cargo install --path .
 orbit init
 orbit setup claude --hooks
-orbit setup claude --mcp
 orbit add "Build the CLI router" -p 1
 orbit ready --claim --by claude
 orbit heartbeat orb-a7b2c9 --by claude
@@ -52,17 +51,20 @@ The npm package is `@rcmendes/orbit`; the shell and PowerShell installers use th
 `orbit setup` writes project-local instruction files with managed markers, so re-running it is safe and `--remove` removes only what Orbit added.
 
 ```bash
-orbit setup claude --hooks   # CLAUDE.md + SessionStart hook
-orbit setup cursor           # .cursor/rules/orbit.mdc + skill
-orbit setup codex            # AGENTS.md + skill
-orbit setup opencode         # AGENTS.md
+orbit setup claude --hooks   # CLAUDE.md + SessionStart hook + MCP
+orbit setup cursor           # .cursor/rules/orbit.mdc + skill + MCP
+orbit setup codex            # AGENTS.md + skill + MCP
+orbit setup opencode         # AGENTS.md + MCP
 orbit setup mattpocock       # docs/agents/issue-tracker.md
-orbit setup all --hooks --mcp  # everything, including MCP configs
+orbit setup all --hooks      # everything, including MCP configs
+orbit setup all --no-mcp     # instruction files only
 orbit setup all --print      # preview without writing
 orbit setup all --remove     # remove only Orbit-managed content
 ```
 
-`setup --mcp` writes `.mcp.json` (Claude), `.cursor/mcp.json` (Cursor), `.codex/config.toml` (Codex), and `opencode.json` (OpenCode) with an `orbit` server entry. The server entry passes `--dir <board>` when the board is external. The Claude hook runs `orbit prime --hook-json --by claude`, which injects a compact workflow reminder and the current ready queue at session start. It assumes `orbit` is on `PATH`.
+`setup` writes `.mcp.json` (Claude), `.cursor/mcp.json` (Cursor), `.codex/config.toml` (Codex), and `opencode.json` (OpenCode) by default. Each entry records the absolute path of the running Orbit binary so GUI-launched editors do not need shell `PATH` entries; use `--no-mcp` to skip MCP or `--mcp-bin orbit` to write a portable command that relies on the editor's `PATH`. The server entry passes `--dir <board>` when the board is external. The Claude hook runs `orbit prime --hook-json --by claude`, which injects a compact workflow reminder and the current ready queue at session start.
+
+Because the generated MCP command is machine-specific, keep those config files untracked when possible. If one is committed, regenerate it after installing Orbit elsewhere, or use `--mcp-bin orbit`.
 
 ### Triage metadata
 

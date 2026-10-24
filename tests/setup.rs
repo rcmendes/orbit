@@ -1,7 +1,30 @@
 mod common;
 
+use std::path::Path;
+
 use common::TestRepo;
 use serde_json::Value;
+
+fn assert_orbit_command(value: &Value) {
+    let command = value.as_str().expect("command is a string");
+    assert!(
+        Path::new(command).is_absolute(),
+        "{command} is not an absolute path"
+    );
+    let name = Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str());
+    assert!(
+        name == Some("orbit") || name == Some("orbit.exe"),
+        "unexpected command {command}"
+    );
+}
+
+fn assert_orbit_toml_command(value: &toml::Value) {
+    assert_orbit_command(&Value::String(
+        value.as_str().expect("command is a string").to_string(),
+    ));
+}
 
 #[test]
 fn setup_claude_preserves_settings_and_is_idempotent() {
@@ -116,6 +139,10 @@ fn setup_all_writes_every_integration_and_removes_it() {
         ".cursor/rules/orbit.mdc",
         ".agents/skills/orbit/SKILL.md",
         "docs/agents/issue-tracker.md",
+        ".mcp.json",
+        ".cursor/mcp.json",
+        ".codex/config.toml",
+        "opencode.json",
     ] {
         assert!(repo.exists(path), "{path} was not written");
     }
@@ -131,6 +158,10 @@ fn setup_all_writes_every_integration_and_removes_it() {
         ".cursor/rules/orbit.mdc",
         ".agents/skills/orbit/SKILL.md",
         "docs/agents/issue-tracker.md",
+        ".mcp.json",
+        ".cursor/mcp.json",
+        ".codex/config.toml",
+        "opencode.json",
     ] {
         assert!(!repo.exists(path), "{path} was not removed");
     }
@@ -169,7 +200,7 @@ fn setup_mcp_configs_are_merged_and_removed() {
 
     repo.ok_json(&["setup", "claude", "--mcp", "--json"]);
     let config = repo.read_json(".mcp.json");
-    assert_eq!(config["mcpServers"]["orbit"]["command"], "orbit");
+    assert_orbit_command(&config["mcpServers"]["orbit"]["command"]);
     assert_eq!(config["mcpServers"]["orbit"]["args"][0], "mcp");
     assert_eq!(config["mcpServers"]["other"]["command"], "other-server");
 
@@ -185,18 +216,15 @@ fn setup_all_writes_mcp_configs_for_every_client() {
     repo.ok_json(&["setup", "all", "--mcp", "--json"]);
 
     let claude = repo.read_json(".mcp.json");
-    assert_eq!(claude["mcpServers"]["orbit"]["command"], "orbit");
+    assert_orbit_command(&claude["mcpServers"]["orbit"]["command"]);
     assert_eq!(claude["mcpServers"]["orbit"]["args"][0], "mcp");
 
     let cursor = repo.read_json(".cursor/mcp.json");
-    assert_eq!(cursor["mcpServers"]["orbit"]["command"], "orbit");
+    assert_orbit_command(&cursor["mcpServers"]["orbit"]["command"]);
     assert_eq!(cursor["mcpServers"]["orbit"]["args"][0], "mcp");
 
     let codex: toml::Value = toml::from_str(&repo.read(".codex/config.toml")).unwrap();
-    assert_eq!(
-        codex["mcp_servers"]["orbit"]["command"].as_str(),
-        Some("orbit")
-    );
+    assert_orbit_toml_command(&codex["mcp_servers"]["orbit"]["command"]);
     assert_eq!(
         codex["mcp_servers"]["orbit"]["args"][0].as_str(),
         Some("mcp")
@@ -204,7 +232,7 @@ fn setup_all_writes_mcp_configs_for_every_client() {
 
     let opencode = repo.read_json("opencode.json");
     assert_eq!(opencode["mcp"]["orbit"]["type"], "local");
-    assert_eq!(opencode["mcp"]["orbit"]["command"][0], "orbit");
+    assert_orbit_command(&opencode["mcp"]["orbit"]["command"][0]);
     assert_eq!(opencode["mcp"]["orbit"]["command"][1], "mcp");
     assert_eq!(opencode["mcp"]["orbit"]["enabled"], true);
 
@@ -214,6 +242,56 @@ fn setup_all_writes_mcp_configs_for_every_client() {
     assert!(!repo.exists(".codex/config.toml"));
     assert!(!repo.exists(".claude/settings.json"));
     assert!(!repo.exists("opencode.json"));
+}
+
+#[test]
+fn setup_opencode_installs_mcp_by_default() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["setup", "opencode", "--json"]);
+
+    assert!(repo.exists("AGENTS.md"));
+    let opencode = repo.read_json("opencode.json");
+    assert_orbit_command(&opencode["mcp"]["orbit"]["command"][0]);
+    assert_eq!(opencode["mcp"]["orbit"]["command"][1], "mcp");
+}
+
+#[test]
+fn setup_no_mcp_writes_instructions_only() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["setup", "opencode", "--no-mcp", "--json"]);
+
+    assert!(repo.exists("AGENTS.md"));
+    assert!(!repo.exists("opencode.json"));
+}
+
+#[test]
+fn setup_migrates_a_bare_orbit_mcp_entry() {
+    let repo = TestRepo::new();
+    std::fs::write(
+        repo.path().join(".mcp.json"),
+        "{\n  \"mcpServers\": {\n    \"orbit\": {\n      \"command\": \"orbit\",\n      \"args\": [\"mcp\"]\n    }\n  }\n}\n",
+    )
+    .unwrap();
+
+    repo.ok_json(&["setup", "claude", "--json"]);
+    let config = repo.read_json(".mcp.json");
+    assert_orbit_command(&config["mcpServers"]["orbit"]["command"]);
+}
+
+#[test]
+fn setup_mcp_bin_can_write_a_portable_command() {
+    let repo = TestRepo::new();
+    let value = repo.ok_json(&["setup", "opencode", "--mcp-bin", "orbit", "--json"]);
+
+    let opencode = repo.read_json("opencode.json");
+    assert_eq!(opencode["mcp"]["orbit"]["command"][0], "orbit");
+    assert!(
+        value["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("PATH"))
+    );
 }
 
 #[test]

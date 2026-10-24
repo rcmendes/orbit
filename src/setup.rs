@@ -122,7 +122,6 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
                 &root,
                 client,
                 args.hooks,
-                mcp,
                 mcp_bin.as_deref(),
                 mcp_dir.as_deref(),
                 &mut plan,
@@ -197,13 +196,12 @@ fn plan_install(
     root: &Path,
     client: SetupClient,
     hooks: bool,
-    mcp: bool,
     mcp_bin: Option<&Path>,
     mcp_dir: Option<&Path>,
     plan: &mut BTreeMap<PathBuf, FilePlan>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
-    let mcp_bin = mcp_bin.filter(|_| mcp);
+    let mcp = mcp_bin.is_some();
     match client {
         SetupClient::Claude => {
             plan_section(root, "CLAUDE.md", &workflow_section(), plan)?;
@@ -250,6 +248,7 @@ fn plan_install(
                 plan_mcp_toml(
                     root,
                     ".codex/config.toml",
+                    mcp_bin.expect("MCP binary resolved when MCP is enabled"),
                     mcp_args(mcp_dir),
                     false,
                     plan,
@@ -264,7 +263,10 @@ fn plan_install(
                     root,
                     "opencode.json",
                     McpJsonKind::Opencode,
-                    opencode_entry(mcp_dir),
+                    opencode_entry(
+                        mcp_bin.expect("MCP binary resolved when MCP is enabled"),
+                        mcp_dir,
+                    ),
                     false,
                     plan,
                     warnings,
@@ -299,7 +301,7 @@ fn plan_remove(
                 root,
                 ".mcp.json",
                 McpJsonKind::Servers,
-                mcp_servers_entry(mcp_dir),
+                mcp_servers_entry(Path::new("orbit"), mcp_dir),
                 true,
                 plan,
                 warnings,
@@ -312,7 +314,7 @@ fn plan_remove(
                 root,
                 ".cursor/mcp.json",
                 McpJsonKind::Servers,
-                mcp_servers_entry(mcp_dir),
+                mcp_servers_entry(Path::new("orbit"), mcp_dir),
                 true,
                 plan,
                 warnings,
@@ -324,7 +326,8 @@ fn plan_remove(
             plan_mcp_toml(
                 root,
                 ".codex/config.toml",
-                mcp_args(mcp_dir),
+                Path::new("orbit"),
+                Vec::new(),
                 true,
                 plan,
                 warnings,
@@ -336,7 +339,7 @@ fn plan_remove(
                 root,
                 "opencode.json",
                 McpJsonKind::Opencode,
-                opencode_entry(mcp_dir),
+                opencode_entry(Path::new("orbit"), mcp_dir),
                 true,
                 plan,
                 warnings,
@@ -536,15 +539,15 @@ fn mcp_args(dir: Option<&Path>) -> Vec<String> {
     args
 }
 
-fn mcp_servers_entry(dir: Option<&Path>) -> Value {
+fn mcp_servers_entry(bin: &Path, dir: Option<&Path>) -> Value {
     json!({
-        "command": "orbit",
+        "command": bin.to_string_lossy(),
         "args": mcp_args(dir)
     })
 }
 
-fn opencode_entry(dir: Option<&Path>) -> Value {
-    let mut command = vec!["orbit".to_string()];
+fn opencode_entry(bin: &Path, dir: Option<&Path>) -> Value {
+    let mut command = vec![bin.to_string_lossy().to_string()];
     command.extend(mcp_args(dir));
     json!({
         "type": "local",
@@ -669,6 +672,7 @@ fn plan_mcp_json(
 fn plan_mcp_toml(
     root: &Path,
     relative: &str,
+    bin: &Path,
     args: Vec<String>,
     remove: bool,
     plan: &mut BTreeMap<PathBuf, FilePlan>,
@@ -720,7 +724,7 @@ fn plan_mcp_toml(
             .ok_or_else(|| {
                 OrbitError::config(format!("{relative} `mcp_servers` must be a table"))
             })?;
-        let expected = toml_mcp_entry(&args);
+        let expected = toml_mcp_entry(bin, &args);
         let existing_entry = servers.get("orbit").cloned();
         match existing_entry {
             Some(existing_entry) if existing_entry == expected => {}
@@ -776,11 +780,11 @@ fn plan_mcp_toml(
     )
 }
 
-fn toml_mcp_entry(args: &[String]) -> toml::Value {
+fn toml_mcp_entry(bin: &Path, args: &[String]) -> toml::Value {
     let mut table = toml::Table::new();
     table.insert(
         "command".to_string(),
-        toml::Value::String("orbit".to_string()),
+        toml::Value::String(bin.to_string_lossy().to_string()),
     );
     table.insert(
         "args".to_string(),
@@ -793,17 +797,13 @@ fn is_orbit_mcp_entry(entry: &Value) -> bool {
     let command_is_orbit = entry
         .get("command")
         .and_then(Value::as_str)
-        .is_some_and(|command| {
-            command == "orbit" || command.ends_with("orbit") || command.ends_with("orbit.exe")
-        })
+        .is_some_and(is_orbit_command)
         || entry
             .get("command")
             .and_then(Value::as_array)
             .and_then(|command| command.first())
             .and_then(Value::as_str)
-            .is_some_and(|command| {
-                command == "orbit" || command.ends_with("orbit") || command.ends_with("orbit.exe")
-            });
+            .is_some_and(is_orbit_command);
 
     let has_mcp = entry
         .get("args")
@@ -821,14 +821,147 @@ fn is_orbit_toml_entry(entry: &toml::Value) -> bool {
     let command_is_orbit = entry
         .get("command")
         .and_then(toml::Value::as_str)
-        .is_some_and(|command| {
-            command == "orbit" || command.ends_with("orbit") || command.ends_with("orbit.exe")
-        });
+        .is_some_and(is_orbit_command);
     let has_mcp = entry
         .get("args")
         .and_then(toml::Value::as_array)
         .is_some_and(|args| args.iter().any(|arg| arg.as_str() == Some("mcp")));
     command_is_orbit && has_mcp
+}
+
+fn is_orbit_command(command: &str) -> bool {
+    if command == "orbit" || command == "orbit.exe" {
+        return true;
+    }
+    let Some(name) = Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+    #[cfg(windows)]
+    {
+        name.eq_ignore_ascii_case("orbit") || name.eq_ignore_ascii_case("orbit.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        name == "orbit" || name == "orbit.exe"
+    }
+}
+
+fn resolve_mcp_bin(explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        if path.components().count() == 1 {
+            if !is_orbit_command(&path.to_string_lossy()) {
+                return Err(OrbitError::config(
+                    "`--mcp-bin` must name `orbit` or `orbit.exe`",
+                ));
+            }
+            return Ok(path.to_path_buf());
+        }
+        let absolute = absolute_executable(path)?;
+        if !is_orbit_command(&absolute.to_string_lossy()) {
+            return Err(OrbitError::config(
+                "`--mcp-bin` must point to an executable named `orbit` or `orbit.exe`",
+            ));
+        }
+        return Ok(absolute);
+    }
+
+    if let Some(arg0) = std::env::args_os().next().map(PathBuf::from)
+        && arg0.components().count() > 1
+    {
+        let absolute = absolute_executable(&arg0)?;
+        if !is_orbit_command(&absolute.to_string_lossy()) {
+            return Err(OrbitError::config(format!(
+                "the running executable is named `{}`; rename it to `orbit` or pass `--mcp-bin`",
+                absolute
+                    .file_name()
+                    .map(|name| name.to_string_lossy())
+                    .unwrap_or_default()
+            )));
+        }
+        return Ok(absolute);
+    }
+
+    if let Some(found) = find_on_path(binary_name()) {
+        return Ok(found);
+    }
+
+    let current = std::env::current_exe()
+        .map_err(|error| OrbitError::io("resolve the orbit executable", error))?;
+    if !is_executable(&current) {
+        return Err(OrbitError::config(format!(
+            "the running executable is not accessible: {}",
+            current.display()
+        )));
+    }
+    Ok(current)
+}
+
+fn absolute_executable(path: &Path) -> Result<PathBuf> {
+    let absolute = std::path::absolute(path)
+        .map_err(|error| OrbitError::io(format!("resolve {}", path.display()), error))?;
+    if !is_executable(&absolute) {
+        return Err(OrbitError::config(format!(
+            "{} is not an executable file",
+            absolute.display()
+        )));
+    }
+    Ok(absolute)
+}
+
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = if dir.as_os_str().is_empty() {
+            PathBuf::from(name)
+        } else {
+            dir.join(name)
+        };
+        let Ok(absolute) = std::path::absolute(&candidate) else {
+            continue;
+        };
+        if is_executable(&absolute) {
+            return Some(absolute);
+        }
+    }
+    None
+}
+
+fn binary_name() -> &'static str {
+    if cfg!(windows) { "orbit.exe" } else { "orbit" }
+}
+
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn is_build_artifact(path: &Path) -> bool {
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        if component.as_os_str() == "target"
+            && let Some(next) = components.peek()
+            && (next.as_os_str() == "debug" || next.as_os_str() == "release")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn insert_plan(plan: &mut BTreeMap<PathBuf, FilePlan>, file: FilePlan) -> Result<()> {

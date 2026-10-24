@@ -1059,7 +1059,9 @@ fn upsert_section(existing: &str, section: &str, relative: &str) -> Result<Strin
         (Some(begin), Some(end)) if end > begin => {
             let end = end + END_MARKER.len();
             let before = existing[..begin].trim_end_matches('\n');
-            let after = existing[end..].trim_start_matches('\n');
+            let after = existing[end..]
+                .trim_start_matches('\n')
+                .trim_end_matches('\n');
             let mut result = String::new();
             if !before.is_empty() {
                 result.push_str(before);
@@ -1309,6 +1311,22 @@ mod tests {
         let second = upsert_section(&first, &section, "AGENTS.md").unwrap();
         assert_eq!(first, second);
         assert_eq!(first.matches(BEGIN_MARKER).count(), 1);
+    }
+
+    #[test]
+    fn upsert_does_not_accumulate_trailing_blank_lines() {
+        let section = workflow_section();
+        let existing = format!("Before.\n\n{section}\n\nAfter.\n\n\n");
+        let first = upsert_section(&existing, &section, "AGENTS.md").unwrap();
+        let second = upsert_section(&first, &section, "AGENTS.md").unwrap();
+        assert_eq!(first, second);
+        assert!(first.ends_with("After.\n"));
+
+        let only_section =
+            upsert_section(&format!("{section}\n\n\n"), &section, "AGENTS.md").unwrap();
+        let again = upsert_section(&only_section, &section, "AGENTS.md").unwrap();
+        assert_eq!(only_section, again);
+        assert_eq!(only_section, format!("{section}\n"));
     }
 
     #[test]

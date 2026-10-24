@@ -28,4 +28,3 @@ Canonical five roles plus `bug`/`enhancement`; see `docs/agents/triage-labels.md
 ### Domain docs
 
 Single-context; see `docs/agents/domain.md`.
-

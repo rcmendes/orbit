@@ -9,6 +9,9 @@ use std::process::Stdio;
 fn concurrent_ready_claims_are_distinct() {
     let repo = TestRepo::new();
     repo.init();
+    // Eight contending processes can exceed the default 2s lock wait on a
+    // slow CI runner. This test is about distinct claims, not timeout tuning.
+    repo.set_lock_timeout(15_000);
 
     for index in 0..8 {
         repo.add(&format!("Task {index}"), &["-p", "1"]);
@@ -33,7 +36,8 @@ fn concurrent_ready_claims_are_distinct() {
         let output = child.wait_with_output().unwrap();
         assert!(
             output.status.success(),
-            "{}",
+            "ready --claim failed\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();

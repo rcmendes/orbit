@@ -74,6 +74,23 @@ impl TestRepo {
         self.path().join(".git/orbit/board")
     }
 
+    pub fn set_lock_timeout(&self, millis: u64) {
+        let path = self.board_path().join("config.toml");
+        let config = std::fs::read_to_string(&path).unwrap();
+        let config = config
+            .lines()
+            .map(|line| {
+                if line.trim_start().starts_with("lock_timeout_ms") {
+                    format!("lock_timeout_ms = {millis}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(path, format!("{config}\n")).unwrap();
+    }
+
     pub fn init(&self) {
         self.ok_json(&["init", "--agents", "none", "--json"]);
     }

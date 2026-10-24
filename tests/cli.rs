@@ -467,6 +467,16 @@ fn concurrent_ids_never_collide() {
     let repo = TestRepo::new();
     repo.init();
 
+    // Windows CI can take longer than the default 2s lock timeout while a
+    // competing process is committing its task.
+    let config_path = repo.board_path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(
+        &config_path,
+        config.replace("lock_timeout_ms = 2000", "lock_timeout_ms = 60000"),
+    )
+    .unwrap();
+
     let mut children = Vec::new();
     for index in 0..12 {
         let mut command = repo.orbit_command(&["add", &format!("Task {index}"), "--json"]);

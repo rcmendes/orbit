@@ -4,8 +4,9 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.3.0` — latest
-- `v0.2.0` — previous release
+- `v0.4.0` — latest
+- `v0.3.0` — previous release
+- `v0.2.0`
 - `v0.1.0` — initial release
 
 ## One-time setup
@@ -32,13 +33,13 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
 
 ## Cut a release
 
-1. Update `version` in `Cargo.toml` and add a matching heading to `../CHANGELOG.md` (for example `## 0.3.0 - 2026-10-24`). The changelog must stay at the repository root: cargo-dist only discovers release-note entries there.
+1. Update `version` in `Cargo.toml` and add a matching heading to `../CHANGELOG.md` (for example `## 0.4.0 - 2026-10-24`). The changelog must stay at the repository root: cargo-dist only discovers release-note entries there.
 2. Commit the changes.
 3. Tag and push:
 
    ```bash
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v0.4.0
+   git push origin v0.4.0
    ```
 
 4. The `Release` workflow:

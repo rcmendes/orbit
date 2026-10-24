@@ -669,19 +669,7 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
     let human = if tasks.is_empty() {
         "no tasks".to_string()
     } else {
-        tasks
-            .iter()
-            .copied()
-            .map(|task| {
-                let line = format_summary(task);
-                if args.tree && task.front.parent.is_some() {
-                    format!("  {line}")
-                } else {
-                    line
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        format_table(&tasks, args.tree)
     };
 
     Ok(
@@ -2257,6 +2245,55 @@ fn optional_agent(by: Option<String>) -> Option<String> {
         }
     }
     None
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max - 1).collect();
+    format!("{head}…")
+}
+
+fn format_table(tasks: &[&Task], tree: bool) -> String {
+    let mut rows =
+        vec![["ID", "STATUS", "P", "TYPE", "TITLE", "LABELS", "CLAIMED BY"].map(String::from)];
+    for task in tasks {
+        let indent = if tree && task.front.parent.is_some() {
+            "  "
+        } else {
+            ""
+        };
+        rows.push([
+            task.id.to_string(),
+            task.front.status.as_str().to_string(),
+            format!("P{}", task.front.priority),
+            task.front.task_type.as_str().to_string(),
+            format!("{indent}{}", truncate(&task.front.title, 60)),
+            task.front.labels.join(", "),
+            task.holder().map(|h| h.to_string()).unwrap_or_default(),
+        ]);
+    }
+    let widths: Vec<usize> = (0..7)
+        .map(|col| {
+            rows.iter()
+                .map(|row| row[col].chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    rows.iter()
+        .map(|row| {
+            let line = row
+                .iter()
+                .zip(&widths)
+                .map(|(cell, width)| format!("{cell:<width$}"))
+                .collect::<Vec<_>>()
+                .join("  ");
+            line.trim_end().to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn format_summary(task: &Task) -> String {

@@ -117,7 +117,11 @@ fn human_output_marks_non_task_types() {
     let output = repo.orbit(&["list"]);
     assert!(output.status.success());
     let human = String::from_utf8_lossy(&output.stdout);
-    assert!(human.contains("epic  Epic"), "{human}");
+    assert!(human.lines().next().unwrap().contains("TYPE"), "{human}");
+    assert!(
+        human.lines().nth(1).unwrap().contains("epic  Epic"),
+        "{human}"
+    );
 
     let output = repo.orbit(&["show", &epic]);
     assert!(output.status.success());

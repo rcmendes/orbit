@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::help;
 use crate::setup::SetupClient;
-use crate::task::Status;
+use crate::task::{Status, TaskType};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -196,6 +196,10 @@ pub struct AddArgs {
     #[arg(short = 'p', long, value_name = "N")]
     pub priority: Option<u8>,
 
+    /// Work shape: task, epic, spike, chore, or decision.
+    #[arg(long = "type", value_name = "TYPE", value_enum)]
+    pub task_type: Option<TaskType>,
+
     /// Make the new task wait for an existing task. Repeatable.
     #[arg(long = "depends-on", value_name = "ID", action = clap::ArgAction::Append)]
     pub depends_on: Vec<String>,
@@ -239,6 +243,14 @@ pub struct ListArgs {
     #[arg(long)]
     pub waiting: bool,
 
+    /// Filter by work shape. Repeatable; matches any listed type.
+    #[arg(long = "type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
+    pub task_type: Vec<TaskType>,
+
+    /// Exclude work shapes. Repeatable; excludes any listed type.
+    #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
+    pub exclude_type: Vec<TaskType>,
+
     /// Filter by label. Repeatable; every label must match.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
@@ -281,6 +293,14 @@ pub struct ReadyArgs {
     /// Only Ready tasks with this repository label. Shorthand for --label repo:NAME.
     #[arg(long, value_name = "NAME")]
     pub repo: Option<String>,
+
+    /// Only Ready tasks with one of these work shapes. Repeatable.
+    #[arg(long = "type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
+    pub task_type: Vec<TaskType>,
+
+    /// Exclude Ready tasks with any of these work shapes. Repeatable.
+    #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
+    pub exclude_type: Vec<TaskType>,
 
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -423,6 +443,10 @@ pub struct UpdateArgs {
     /// New priority (0-3).
     #[arg(long, value_name = "N")]
     pub priority: Option<u8>,
+
+    /// New work shape: task, epic, spike, chore, or decision.
+    #[arg(long = "type", value_name = "TYPE", value_enum)]
+    pub task_type: Option<TaskType>,
 
     /// New external blocker.
     #[arg(

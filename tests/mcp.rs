@@ -257,6 +257,47 @@ fn subtasks_are_available_over_mcp() {
 }
 
 #[test]
+fn type_is_available_over_mcp() {
+    let repo = TestRepo::new();
+    repo.init();
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let epic = client.call(80, "create", json!({ "title": "Epic", "type": "epic" }));
+    let epic = tool_envelope(&epic);
+    assert_eq!(epic["data"]["type"], "epic");
+    let epic_id = epic["data"]["id"].as_str().unwrap().to_string();
+
+    let task = client.call(81, "create", json!({ "title": "Task" }));
+    let task = tool_envelope(&task);
+    assert_eq!(task["data"]["type"], "task");
+    let task_id = task["data"]["id"].as_str().unwrap().to_string();
+
+    let listed = client.call(82, "list", json!({ "types": ["epic"] }));
+    let listed = tool_envelope(&listed);
+    assert_eq!(listed["data"]["count"], 1);
+    assert_eq!(listed["data"]["tasks"][0]["id"], epic_id.as_str());
+
+    let ready = client.call(83, "ready", json!({ "exclude_types": ["epic"] }));
+    let ready = tool_envelope(&ready);
+    assert_eq!(ready["data"]["count"], 1);
+    assert_eq!(ready["data"]["tasks"][0]["id"], task_id.as_str());
+
+    let updated = client.call(84, "update", json!({ "id": task_id, "type": "spike" }));
+    let updated = tool_envelope(&updated);
+    assert_eq!(updated["data"]["type"], "spike");
+
+    let nested = client.call(
+        85,
+        "create",
+        json!({ "title": "Nested epic", "parent": epic_id, "type": "epic" }),
+    );
+    let nested = tool_envelope(&nested);
+    assert_eq!(nested["ok"], false);
+    assert_eq!(nested["error"]["code"], "INVALID_TYPE");
+}
+
+#[test]
 fn link_and_delete_are_available_over_mcp() {
     let repo = TestRepo::new();
     repo.init();

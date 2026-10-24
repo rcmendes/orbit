@@ -141,8 +141,9 @@ normally.
 
 Runs the Model Context Protocol server over stdio with 13 tools and the
 `orbit://tasks/{id}` resource. Editors launch it from their MCP configuration.
-`create` accepts `parent` to make a SubTask; `list` and `ready` accept `parent`,
-`repo`, `labels`, and `exclude_labels` to scope a feature or repository.
+`create` accepts `parent` and `type`; `update` accepts `type`; `list` and `ready`
+accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`
+to scope a feature or repository.
 
 **Good fit:** an editor or agent that speaks MCP should read and update the Board
 directly instead of shelling out to the CLI.
@@ -173,6 +174,9 @@ orbit add "Publish the release" -p 1 --depends-on orb-a7b2c9
 # A ticket waiting on something outside the Board
 orbit add "Upgrade the parser" --waiting-on "upstream 2.4" --body-file -
 
+# A top-level epic or spec
+orbit add "Spec: SSO login" --type epic --body-file spec.md
+
 # Publish several tickets, blockers first; each add prints the new ID
 orbit add "Design the schema" -p 0 --label ready-for-agent
 # created orb-f14c02  P0  Design the schema
@@ -190,25 +194,31 @@ stores the same parent. SubTasks are one level deep and can still have real
 dependencies. The Parent Task becomes Ready only when every SubTask is done or
 cancelled.
 
-A spec or epic is a top-level Task, conventionally labelled `epic`; its tickets
-are SubTasks. This is also the compatibility mapping for Beads and Matt Pocock's
-skills: **Issue** = Task, **Sub-issue** = SubTask, **Epic** = Parent Task. Put the
-spec in the parent body, publish tickets with `--parent`, and use
-`orbit ready --parent <id>` as the frontier. There is no deeper nesting; flatten a
-ticket's own breakdown into sibling tickets with `--depends-on`. Never use
-`done --force` or `cancel --force` on a spec parent with open tickets: it cancels
-them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md).
+`--type` sets the work shape: `task` (default), `epic`, `spike`, `chore`, or
+`decision`. Type is metadata and does not affect readiness. `epic` is refused on a
+SubTask. `bug` and `enhancement` remain labels, not Types.
+
+A spec or epic is a top-level Task with `type: epic`; its tickets are SubTasks.
+This is also the compatibility mapping for Beads and Matt Pocock's skills:
+**Issue** = Task, **Sub-issue** = SubTask, **Epic** = top-level Task with
+`type: epic`. Put the spec in the parent body, publish tickets with `--parent`,
+and use `orbit ready --parent <id>` as the frontier. There is no deeper nesting;
+flatten a ticket's own breakdown into sibling tickets with `--depends-on`. Never
+use `done --force` or `cancel --force` on a spec parent with open tickets: it
+cancels them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md) and
+[ADR 0010](./adr/0010-structural-type-field.md).
 
 ### `orbit update` — edit a ticket in place
 
-Changes the title, body, priority, or external blocker without touching status,
-claims, labels, or dependencies.
+Changes the title, body, priority, type, or external blocker without touching
+status, claims, labels, or dependencies. `--type epic` is refused on a SubTask.
 
 **Good fit:** scope changed after triage, a spec needs refinement, or an external
 blocker was resolved.
 
 ```bash
 orbit update orb-a7b2c9 --priority 0
+orbit update orb-a7b2c9 --type spike
 orbit update orb-a7b2c9 --body-file refined-spec.md
 orbit update orb-a7b2c9 --clear-waiting
 ```
@@ -282,17 +292,20 @@ orbit list --status in_progress --claimed-by claude
 orbit list --status done            # closed work, without --all
 orbit list --unlabeled
 orbit list --parent orb-a7b2c9      # only this feature's SubTasks
+orbit list --type epic              # only epics and specs
 orbit list --tree                   # parents and SubTasks together
-orbit list --exclude-label epic     # hide spec/epic containers
+orbit list --exclude-type epic      # hide spec/epic containers
 orbit list --all --json
 ```
 
-`--label` is repeatable and every label must match; `--exclude-label` is
-repeatable and hides a task carrying any of the named labels. `--repo NAME` is
-shorthand for `--label repo:NAME`. `--tree` keeps each Parent Task next to its SubTasks and
-indents the children in human output; JSON always carries `kind`, `parent`,
-`subtasks`, and `open_subtasks`. A Parent Task with open SubTasks is not Ready, so
-`list` may show it even though `ready` does not.
+`--type` is repeatable and matches any listed work shape; `--exclude-type` hides
+any listed shape. `--label` is repeatable and every label must match;
+`--exclude-label` is repeatable and hides a task carrying any of the named labels.
+`--repo NAME` is shorthand for `--label repo:NAME`. `--tree` keeps each Parent
+Task next to its SubTasks and indents the children in human output; JSON always
+carries `kind`, `type`, `parent`, `subtasks`, and `open_subtasks`. A Parent Task
+with open SubTasks is not Ready, so `list` may show it even though `ready` does
+not.
 
 For work that can start now, use `orbit ready` instead: `list` shows all open
 work, including blocked tasks.
@@ -317,16 +330,17 @@ orbit ready --limit 5
 orbit ready --claim --by claude --json
 orbit ready --parent orb-a7b2c9 --claim --by claude   # one feature only
 orbit ready --repo api --claim --by claude            # one repository only
-orbit ready --exclude-label epic --claim --by claude  # skip spec containers
+orbit ready --exclude-type epic --claim --by claude   # skip spec containers
 orbit ready --json              # NO_READY_TASKS means wait and retry
 ```
 
-`--parent`, `--repo`, repeatable `--label`, and repeatable `--exclude-label`
-combine with AND. An excluded task is hidden if it carries any excluded label.
+`--parent`, `--repo`, repeatable `--label`, `--type`, and `--exclude-label`
+combine with AND. `--type` matches any listed shape; `--exclude-type` hides any
+listed shape. `--exclude-label` remains for legacy label-only boards.
 
 ### `orbit show` — load one ticket
 
-Prints the full task: body, labels, dependencies, kind, parent, SubTasks,
+Prints the full task: body, labels, dependencies, kind, type, parent, SubTasks,
 dependents, claim state, and comments. `--json` is the form an agent should load
 before starting work.
 
@@ -379,8 +393,8 @@ never closes it automatically.
 ### `orbit export` — snapshot the board
 
 Emits a deterministic JSON snapshot of every Task and SubTask, including terminal
-work, with labels, dependency and parent edges, parent progress fields, derived
-readiness, and comments.
+work, with type, labels, dependency and parent edges, parent progress fields,
+derived readiness, and comments.
 The snapshot is ordered by task ID and contains no timestamps or machine-local
 paths.
 
@@ -681,6 +695,7 @@ orbit sync              # commit anything left uncommitted
 | `PARENT_MISMATCH` | The SubTask ID and its `parent` field disagree. Rename the file or fix the frontmatter so the ID encodes the same parent. |
 | `DANGLING_PARENT` | Run `doctor`; the parent ID is missing. Recreate the parent or fix the SubTask's frontmatter. |
 | `NESTED_SUBTASK` | A SubTask points to itself or to another SubTask. SubTasks are one level deep. |
+| `INVALID_TYPE` | `epic` was used on a SubTask. Epic is top-level only; use `task`, `spike`, `chore`, or `decision` for a child. |
 | `WORKSPACE_INSIDE_REPO` | Choose a workspace folder outside every Git working tree; the Board must not live inside a member repository. |
 | `LOCKED` | Retryable: another writer holds the lock. Retry after a short backoff. |
 

@@ -157,7 +157,7 @@ The pointer lives in the Git common directory, not in a worktree. That is why a 
 
 ### Domain relationships
 
-A Task is the unit of work. Its claim fields are a single time-bounded claim, and its comments live in a sidecar file keyed by the same ID. Dependency edges are IDs stored in frontmatter, so they can point across the whole Workspace. A SubTask is a Task whose `parent` names another Task; parentage is one level deep and is not a Dependency.
+A Task is the unit of work. Its claim fields are a single time-bounded claim, and its comments live in a sidecar file keyed by the same ID. Dependency edges are IDs stored in frontmatter, so they can point across the whole Workspace. A SubTask is a Task whose `parent` names another Task; parentage is one level deep and is not a Dependency. A Task also has a metadata-only Type (`task`, `epic`, `spike`, `chore`, or `decision`); `epic` is top-level only.
 
 ```mermaid
 classDiagram
@@ -281,7 +281,7 @@ These rules live in `src/transition.rs`: a Task owns its transitions and returns
 
 | From | Command | To | Rules |
 | --- | --- | --- | --- |
-| none | `add` | `todo` | Creates `tasks/ID.md`. Priority defaults to `2`; dependencies must exist. `--parent` must name an existing, non-terminal Task that is not itself a SubTask. |
+| none | `add` | `todo` | Creates `tasks/ID.md`. Type defaults to `task`; priority defaults to `2`; dependencies must exist. `--parent` must name an existing, non-terminal Task that is not itself a SubTask, and cannot be combined with `--type epic`. |
 | `todo` | `claim` or `ready --claim` | `in_progress` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
 | `in_progress` | `heartbeat` | `in_progress` | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
 | `in_progress` | `claim --steal` | `in_progress` | Replaces the holder and resets `claimed_at` and `lease_until`. `--steal` does not bypass hold labels or dependencies. |

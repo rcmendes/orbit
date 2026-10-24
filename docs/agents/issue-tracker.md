@@ -38,12 +38,17 @@ tracker terms rather than inventing a second model:
 
 - **Issue** means Task. Create one with `orbit add`.
 - **Sub-issue** means SubTask. Create one with `--parent <id>`.
-- **Epic** or **spec** means a top-level Parent Task, conventionally labelled
-  `epic`. Put the scope, decisions, and acceptance criteria in its body.
+- **Epic** or **spec** means a top-level Task with `type: epic`. Create it with
+  `orbit add "..." --type epic`. Put the scope, decisions, and acceptance
+  criteria in its body.
 
-There is no separate Epic type and no deeper nesting. `kind` is always `task` or
-`subtask`; an epic is a `task` with children and an `epic` label. See
-[ADR 0009](../adr/0009-keep-task-vocabulary.md).
+`kind` is structural (`task` or `subtask`). `type` is the work shape (`task`,
+`epic`, `spike`, `chore`, or `decision`) and is metadata only. `epic` is refused
+on a SubTask. See [ADR 0010](../adr/0010-structural-type-field.md).
+
+The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
+`--exclude-label epic` still works on older boards. New work should use
+`--type epic` and `--exclude-type epic`.
 
 ## Conventions
 
@@ -54,7 +59,7 @@ There is no separate Epic type and no deeper nesting. `kind` is always `task` or
 - `orbit ready --json` returns `data.tasks`, each with `id`, `title`, `priority`,
   `labels`, `blocking`, and claim fields.
 - `orbit show <ID> --json` returns the full task, including `body`, `labels`,
-  `kind`, `parent`, `subtasks`, `dependents`, and `comments`.
+  `kind`, `type`, `parent`, `subtasks`, `dependents`, and `comments`.
 - Break a feature into SubTasks with `orbit add "<title>" --parent <parent-id>`.
   SubTasks are one level deep. Use `--depends-on` only for real blockers between
   units of work; the Parent Task waits for its SubTasks automatically.
@@ -64,8 +69,8 @@ There is no separate Epic type and no deeper nesting. `kind` is always `task` or
   in one scoped view. `orbit prime` lists parents whose SubTasks are all resolved
   as close candidates; apply the finishing task's result and close the parent
   explicitly.
-- Use `--exclude-label epic` on `list` or `ready` to keep spec/epic containers
-  out of a board-wide query.
+- Use `--type epic` or `--exclude-type epic` on `list` or `ready` to find or
+  hide spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Never use `done --force` or `cancel --force` on a Parent Task with open
   SubTasks: it cancels every open child. Close or cancel the children first, or
   leave the parent open until the family is finished.
@@ -84,7 +89,7 @@ orbit label list
 
 The canonical triage state labels are `needs-triage`, `needs-info`,
 `ready-for-agent`, `ready-for-human`, and `wontfix`. The category labels are `bug`
-and `enhancement`. `needs-triage`, `needs-info`, and `ready-for-human` are **hold
+and `enhancement`; these stay labels, not Types. `needs-triage`, `needs-info`, and `ready-for-human` are **hold
 labels**: tasks carrying one are not Ready and cannot be claimed until the label is
 removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.
 
@@ -115,8 +120,9 @@ orbit add "<title>" -p <0-3> --body-file - --depends-on <blocker-id>...
 Feed the Markdown body on stdin. Add `--label ready-for-agent` to publish a ticket
 that is ready for an agent, or add it afterward with `orbit label add`. If the
 source is an existing issue or spec, create each ticket as a SubTask with
-`--parent <source-id>`; otherwise create top-level Tasks. Then use the returned
-ID for any dependent ticket. To add a blocking edge later:
+`--parent <source-id>`; otherwise create top-level Tasks. Use `--type epic` when
+publishing a spec or epic parent. Then use the returned ID for any dependent
+ticket. To add a blocking edge later:
 
 ```bash
 orbit depend <dependent-id> <blocker-id>

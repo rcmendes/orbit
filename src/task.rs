@@ -36,6 +36,31 @@ impl Status {
     }
 }
 
+/// Structural shape of a Task. `kind` remains derived (`task` or `subtask`);
+/// `type` is metadata and does not affect readiness or lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskType {
+    #[default]
+    Task,
+    Epic,
+    Spike,
+    Chore,
+    Decision,
+}
+
+impl TaskType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskType::Task => "task",
+            TaskType::Epic => "epic",
+            TaskType::Spike => "spike",
+            TaskType::Chore => "chore",
+            TaskType::Decision => "decision",
+        }
+    }
+}
+
 pub fn default_priority() -> u8 {
     2
 }
@@ -76,6 +101,8 @@ pub struct StrayClaimTimes {
 struct RawFrontmatter {
     title: String,
     status: Status,
+    #[serde(default, rename = "type")]
+    task_type: TaskType,
     #[serde(default = "default_priority")]
     priority: u8,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -115,6 +142,7 @@ impl From<RawFrontmatter> for TaskFrontmatter {
         Self {
             title: raw.title,
             status: raw.status,
+            task_type: raw.task_type,
             priority: raw.priority,
             labels: raw.labels,
             depends_on: raw.depends_on,
@@ -139,6 +167,7 @@ impl From<TaskFrontmatter> for RawFrontmatter {
         Self {
             title: front.title,
             status: front.status,
+            task_type: front.task_type,
             priority: front.priority,
             labels: front.labels,
             depends_on: front.depends_on,
@@ -159,6 +188,7 @@ impl From<TaskFrontmatter> for RawFrontmatter {
 pub struct TaskFrontmatter {
     pub title: String,
     pub status: Status,
+    pub task_type: TaskType,
     pub priority: u8,
     pub labels: Vec<String>,
     pub depends_on: Vec<String>,
@@ -189,6 +219,10 @@ impl Task {
 
     pub fn kind(&self) -> &'static str {
         if self.is_subtask() { "subtask" } else { "task" }
+    }
+
+    pub fn task_type(&self) -> TaskType {
+        self.front.task_type
     }
 
     pub fn has_labels(&self, labels: &[String]) -> bool {
@@ -406,6 +440,7 @@ mod tests {
             front: TaskFrontmatter {
                 title: "Build the CLI router".to_string(),
                 status: Status::Todo,
+                task_type: TaskType::Task,
                 priority: 1,
                 labels: Vec::new(),
                 depends_on: vec!["orb-f14c02".to_string()],
@@ -556,7 +591,7 @@ Body.
 
     #[test]
     fn claim_round_trips_byte_identical_and_keeps_unknown_fields() {
-        let content = "---\ntitle: t\nstatus: in_progress\npriority: 2\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
+        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: 2\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         assert_eq!(task.holder(), Some("alice"));
         assert_eq!(render_task(&task).unwrap(), content);
@@ -572,7 +607,7 @@ Body.
 
     #[test]
     fn stray_claim_times_survive_a_round_trip() {
-        let content = "---\ntitle: t\nstatus: todo\npriority: 2\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+        let content = "---\ntitle: t\nstatus: todo\ntype: task\npriority: 2\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         assert!(task.front.claim.is_none() && task.front.stray_claim_times.is_some());
         assert_eq!(render_task(&task).unwrap(), content);

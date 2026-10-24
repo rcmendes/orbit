@@ -61,6 +61,7 @@ fn export_is_deterministic_and_includes_edges_comments_and_terminal_work() {
 
     let parent_json = exported(&first, &parent);
     assert_eq!(parent_json["kind"], "task");
+    assert_eq!(parent_json["type"], "task");
     assert!(parent_json["parent"].is_null());
     assert_eq!(parent_json["subtasks"][0], child.as_str());
     assert_eq!(parent_json["subtask_count"], 1);

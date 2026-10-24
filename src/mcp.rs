@@ -144,7 +144,9 @@ fn tool_definitions() -> Vec<Value> {
                 "parent": { "type": "string", "description": "Only Ready SubTasks of this Parent Task." },
                 "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
                 "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
-                "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." }
+                "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
+                "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
+                "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." }
             }),
             &[],
         ),
@@ -162,6 +164,8 @@ fn tool_definitions() -> Vec<Value> {
                 "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
                 "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
                 "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
+                "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
+                "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
                 "all": { "type": "boolean", "description": "Include done and cancelled tasks." }
             }),
             &[],
@@ -177,6 +181,7 @@ fn tool_definitions() -> Vec<Value> {
             "Create a task. Returns the new task id.",
             json!({
                 "title": { "type": "string" },
+                "type": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"], "description": "Work shape; defaults to task." },
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
                 "labels": { "type": "array", "items": { "type": "string" } },
                 "depends_on": { "type": "array", "items": { "type": "string" } },
@@ -193,6 +198,7 @@ fn tool_definitions() -> Vec<Value> {
                 "id": { "type": "string" },
                 "title": { "type": "string" },
                 "body": { "type": "string" },
+                "type": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"], "description": "New work shape." },
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
                 "waiting_on": { "type": "string" },
                 "clear_waiting": { "type": "boolean" }
@@ -413,6 +419,11 @@ fn dispatch_tool(
     {
         return tool_invalid("`exclude_labels` must be an array of strings");
     }
+    for key in ["types", "exclude_types"] {
+        if arguments.get(key).is_some_and(|value| !value.is_array()) {
+            return tool_invalid(format!("`{key}` must be an array of strings"));
+        }
+    }
 
     let mut args: Vec<String> = Vec::new();
 
@@ -454,6 +465,24 @@ fn dispatch_tool(
                     };
                     args.push("--exclude-label".to_string());
                     args.push(label.to_string());
+                }
+            }
+            if let Some(types) = arguments.get("types").and_then(Value::as_array) {
+                for task_type in types {
+                    let Some(task_type) = task_type.as_str() else {
+                        return tool_invalid("`types` must be an array of strings");
+                    };
+                    args.push("--type".to_string());
+                    args.push(task_type.to_string());
+                }
+            }
+            if let Some(types) = arguments.get("exclude_types").and_then(Value::as_array) {
+                for task_type in types {
+                    let Some(task_type) = task_type.as_str() else {
+                        return tool_invalid("`exclude_types` must be an array of strings");
+                    };
+                    args.push("--exclude-type".to_string());
+                    args.push(task_type.to_string());
                 }
             }
         }
@@ -504,6 +533,24 @@ fn dispatch_tool(
                     args.push(label.to_string());
                 }
             }
+            if let Some(types) = arguments.get("types").and_then(Value::as_array) {
+                for task_type in types {
+                    let Some(task_type) = task_type.as_str() else {
+                        return tool_invalid("`types` must be an array of strings");
+                    };
+                    args.push("--type".to_string());
+                    args.push(task_type.to_string());
+                }
+            }
+            if let Some(types) = arguments.get("exclude_types").and_then(Value::as_array) {
+                for task_type in types {
+                    let Some(task_type) = task_type.as_str() else {
+                        return tool_invalid("`exclude_types` must be an array of strings");
+                    };
+                    args.push("--exclude-type".to_string());
+                    args.push(task_type.to_string());
+                }
+            }
             if bool_arg(arguments, "waiting") {
                 args.push("--waiting".to_string());
             }
@@ -527,6 +574,10 @@ fn dispatch_tool(
             if let Some(parent) = optional_str(arguments, "parent") {
                 args.push("--parent".to_string());
                 args.push(parent);
+            }
+            if let Some(task_type) = optional_str(arguments, "type") {
+                args.push("--type".to_string());
+                args.push(task_type);
             }
             if let Some(priority) = optional_u64(arguments, "priority") {
                 args.push("-p".to_string());
@@ -572,6 +623,10 @@ fn dispatch_tool(
             if let Some(body) = optional_str(arguments, "body") {
                 args.push("--body".to_string());
                 args.push(body);
+            }
+            if let Some(task_type) = optional_str(arguments, "type") {
+                args.push("--type".to_string());
+                args.push(task_type);
             }
             if let Some(priority) = optional_u64(arguments, "priority") {
                 args.push("--priority".to_string());

@@ -126,18 +126,20 @@ data.id). The body holds Markdown context and acceptance criteria; --body-file -
 reads it from stdin so long bodies never hit shell quoting.
 
 Priority runs from 0 (highest) to 3 (lowest); the default comes from the Board
-config (2 unless changed). --depends-on is repeatable and creates blocking edges
-at creation time. --waiting-on records a blocker that lives outside the Board,
-such as an upstream release.
+config (2 unless changed). --type sets the work shape: task (default), epic,
+spike, chore, or decision. Type is metadata and does not affect readiness.
+--depends-on is repeatable and creates blocking edges at creation time.
+--waiting-on records a blocker that lives outside the Board, such as an upstream
+release.
 
 --parent creates a SubTask under an existing Parent Task. The SubTask ID is the
 parent ID, a dot, and a fresh suffix (for example orb-a7b2c9.d4b3df). SubTasks are
-one level deep. A spec or epic is a top-level Parent Task, conventionally labelled
-`epic`; its tickets are SubTasks. When an external tracker or skill says
-\"sub-issue\", use --parent. Parentage is not a dependency: the Parent Task waits
-for its SubTasks, not the other way around. A SubTask can still have real
---depends-on edges. Closing a Parent Task with open SubTasks is refused; --force
-cancels them.";
+one level deep. A spec or epic is a top-level Parent Task created with --type epic;
+its tickets are SubTasks. Epic is refused on a SubTask. When an external tracker
+or skill says \"sub-issue\", use --parent. Parentage is not a dependency: the
+Parent Task waits for its SubTasks, not the other way around. A SubTask can still
+have real --depends-on edges. Closing a Parent Task with open SubTasks is refused;
+--force cancels them.";
 
 pub const ADD_EXAMPLES: &str = "\
 Examples:
@@ -149,6 +151,9 @@ Examples:
 
   # Record an external blocker while the body comes from stdin
   orbit add \"Upgrade the parser\" --waiting-on \"upstream 2.4\" --body-file -
+
+  # Create a top-level epic or spec
+  orbit add \"Spec: SSO login\" --type epic --body-file spec.md
 
   # Break a feature into a SubTask
   orbit add \"API: add the endpoint\" --parent orb-a7b2c9 --label repo:api
@@ -163,12 +168,13 @@ hidden by default; pass --all to include them, or name a terminal status with
 everything one agent is holding.
 
 --parent lists only the SubTasks of one Parent Task. --tree keeps each Parent
-Task next to its SubTasks and indents the children in human output. --label is
-repeatable and every label must match; --exclude-label is repeatable and hides a
-task carrying any of the named labels. --repo NAME is shorthand for
---label repo:NAME. Use --json when another program consumes the result: it
-returns data.tasks and data.count. For work an agent can start, use `orbit ready`
-instead of filtering this list.";
+Task next to its SubTasks and indents the children in human output. --type is
+repeatable and matches any listed work shape; --exclude-type hides any listed
+shape. --label is repeatable and every label must match; --exclude-label is
+repeatable and hides a task carrying any of the named labels. --repo NAME is
+shorthand for --label repo:NAME. Use --json when another program consumes the
+result: it returns data.tasks and data.count. For work an agent can start, use
+`orbit ready` instead of filtering this list.";
 
 pub const LIST_EXAMPLES: &str = "\
 Examples:
@@ -194,8 +200,11 @@ Examples:
   orbit list --repo api
   orbit list --repo api --label ready-for-agent
 
+  # Only epics and specs
+  orbit list --type epic
+
   # Hide epics and specs from the list
-  orbit list --exclude-label epic";
+  orbit list --exclude-type epic";
 
 pub const READY_LONG: &str = "\
 Shows tasks that can start now: todo, unclaimed, not waiting on an external
@@ -209,10 +218,11 @@ meta.reason NO_READY_TASKS, so a polling loop can wait and retry.
 
 With --parent, only that Parent Task's Ready SubTasks are considered. --repo NAME
 and repeatable --label scope the queue to a repository or a set of labels;
-repeatable --exclude-label hides tasks carrying any of the named labels, which is
-how an agent skips epics, specs, or other containers. Filters combine with
---parent using AND. Use them to scope an agent to one feature or one repository
-instead of the whole Board.";
+repeatable --type keeps only listed work shapes, and --exclude-type hides them,
+which is how an agent skips epics, specs, or other containers. --exclude-label
+remains for legacy label-only boards. Filters combine with --parent using AND.
+Use them to scope an agent to one feature or one repository instead of the whole
+Board.";
 
 pub const READY_EXAMPLES: &str = "\
 Examples:
@@ -232,12 +242,13 @@ Examples:
   orbit ready --repo api --claim --by claude
 
   # Skip epics and specs while claiming normal work
-  orbit ready --exclude-label epic --claim --by claude";
+  orbit ready --exclude-type epic --claim --by claude";
 
 pub const SHOW_LONG: &str = "\
-Prints the full task: frontmatter fields, Markdown body, labels, dependencies,
-dependents, and every comment. `orbit show <id> --json` is the machine-readable
-form and is how an agent should load a ticket before working on it.";
+Prints the full task: frontmatter fields including type, Markdown body, labels,
+dependencies, dependents, and every comment. `orbit show <id> --json` is the
+machine-readable form and is how an agent should load a ticket before working on
+it.";
 
 pub const SHOW_EXAMPLES: &str = "\
 Examples:
@@ -251,7 +262,8 @@ pub const TREE_LONG: &str = "\
 Shows one Parent Task, its direct SubTasks, and the blocking edges around them.
 Unlike `list --tree`, which shows the whole Board, and `list --parent`, which
 shows only the children, `tree` always includes the root and its family. It is
-the scoped view for an epic, spec, or feature.
+the scoped view for an epic, spec, or feature; non-task types appear before the
+title.
 
 SubTasks are one level deep. `--json` returns data.root, data.tasks (root first),
 and data.count; each row has the same shape as `list` and `ready`. The root line
@@ -381,13 +393,17 @@ Examples:
 
 pub const UPDATE_LONG: &str = "\
 Edits a task without changing its lifecycle. Use --title, --body/--body-file,
---priority, or --waiting-on/--clear-waiting. Status, claims, labels, comments, and
-dependencies have their own commands.";
+--priority, --type, or --waiting-on/--clear-waiting. Status, claims, labels,
+comments, and dependencies have their own commands. --type epic is refused on a
+SubTask.";
 
 pub const UPDATE_EXAMPLES: &str = "\
 Examples:
   # Reprioritize work
   orbit update orb-a7b2c9 --priority 0
+
+  # Change the work shape
+  orbit update orb-a7b2c9 --type spike
 
   # Record that an external blocker is gone
   orbit update orb-a7b2c9 --clear-waiting
@@ -551,7 +567,7 @@ Examples:
 
 pub const EXPORT_LONG: &str = "\
 Emits a deterministic JSON snapshot of the whole Board: every Task and SubTask,
-including terminal work, with labels, dependency and parent edges, derived
+including terminal work, with type, labels, dependency and parent edges, derived
 readiness, and comments. The snapshot is ordered by task ID and contains no
 timestamps or machine-local paths, so the same board state always produces the
 same data.

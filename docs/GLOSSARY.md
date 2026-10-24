@@ -14,7 +14,15 @@ _Avoid_: Child task, checklist item, step
 
 **Parent Task**:
 A Task that groups SubTasks and whose completion depends on them.
-_Avoid_: Epic (as a stored type), story
+_Avoid_: Epic (as a synonym for every Parent Task), story
+
+**Kind**:
+The structural position of a Task: `task` or `subtask`. Kind is derived from `parent`; it is not the same as Type.
+_Avoid_: Category, issue type
+
+**Type**:
+The work shape of a Task: `task`, `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness. `epic` is allowed only on a top-level Task.
+_Avoid_: Kind, category, label
 
 **Status**:
 The stored lifecycle position of a Task: `todo`, `in_progress`, `done`, or `cancelled`.
@@ -96,13 +104,18 @@ not stored types:
 
 - **Issue** = Task
 - **Sub-issue** = SubTask, created with `--parent`
-- **Epic** or **spec** = Parent Task, conventionally labelled `epic`
+- **Epic** or **spec** = top-level Task with `type: epic`
+
+The `epic` label is legacy. Orbit does not infer `type: epic` from it, and
+`--exclude-label epic` still works for boards created before the Type field.
 
 See [ADR 0009](./adr/0009-keep-task-vocabulary.md) for why Orbit keeps its own
-vocabulary and translates at the boundary.
+vocabulary and translates at the boundary, and [ADR 0010](./adr/0010-structural-type-field.md)
+for the Type field.
 
 ## See also
 
 - [`SPEC.md`](./SPEC.md) for behavior, commands, and the JSON contract.
 - [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
 - [`docs/adr/0009-keep-task-vocabulary.md`](./adr/0009-keep-task-vocabulary.md) for the Task/Issue naming decision.
+- [`docs/adr/0010-structural-type-field.md`](./adr/0010-structural-type-field.md) for the Type field.

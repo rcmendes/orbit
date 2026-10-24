@@ -1,6 +1,6 @@
 # Orbit: an AI-native issue tracker
 
-**Status:** pre-alpha. v0.4.0 is the latest release. M0 (core CLI), M1 (agent setup), M2 (MCP), M3 (release tooling), M4 (labels, comments, triage), M5 (one-command onboarding), and M6 (workspaces, SubTasks, scoped queues, deterministic export) are implemented. The canonical design is in [SPEC.md](./docs/SPEC.md); vocabulary is in [GLOSSARY.md](./docs/GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
+**Status:** pre-alpha. v0.4.0 is the latest release. M0 (core CLI), M1 (agent setup), M2 (MCP), M3 (release tooling), M4 (labels, comments, triage), M5 (one-command onboarding), and M6 (workspaces, SubTasks, scoped queues, deterministic export) are implemented. The unreleased next slice adds a metadata-only Task Type. The canonical design is in [SPEC.md](./docs/SPEC.md); vocabulary is in [GLOSSARY.md](./docs/GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 ### Brief description
 
@@ -192,10 +192,10 @@ A SubTask ID is the parent ID, a dot, and a fresh suffix (`orb-a7b2c9.b3c4d5`). 
 
 ### Epics, specs, and issues
 
-Orbit has no separate Epic or Issue type. A spec, epic, or feature is a top-level Task, conventionally labelled `epic`; the tickets under it are SubTasks:
+Orbit has no separate Epic entity. A spec or epic is a top-level Task with `type: epic`; the tickets under it are SubTasks:
 
 ```bash
-orbit add "Spec: SSO login" --label epic --body-file spec.md
+orbit add "Spec: SSO login" --type epic --body-file spec.md
 # created orb-a7b2c9
 orbit add "api: OIDC callback" --parent orb-a7b2c9 --label ready-for-agent
 orbit add "web: login redirect" --parent orb-a7b2c9 --label ready-for-agent
@@ -205,13 +205,15 @@ This is the compatibility mapping for Beads and Matt Pocock's skills:
 
 - **Issue** = Task
 - **Sub-issue** = SubTask, created with `--parent`
-- **Epic** or **spec** = Parent Task, conventionally labelled `epic`
+- **Epic** or **spec** = top-level Task with `type: epic`
 
-The parent is held out of the ready queue until every SubTask is resolved, and `orbit ready --parent <id>` is the frontier for the family. `orbit tree <id>` shows the parent, its tickets, and their blocking edges in one scoped view. Use `--exclude-label epic` on `list` or `ready` to keep spec containers out of a board-wide query. SubTasks are one level deep: if a ticket needs its own breakdown, flatten it into sibling tickets with `--depends-on` instead of nesting further. Never use `done --force` or `cancel --force` on a spec parent while tickets are open; unlike Beads' force-close, it cancels every open SubTask. See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md).
+`type` is metadata, not lifecycle: valid values are `task` (default), `epic`, `spike`, `chore`, and `decision`. It does not affect readiness; `bug` and `enhancement` remain triage labels. `epic` is refused on a SubTask.
+
+The parent is held out of the ready queue until every SubTask is resolved, and `orbit ready --parent <id>` is the frontier for the family. `orbit tree <id>` shows the parent, its tickets, and their blocking edges in one scoped view. Use `--type epic` and `--exclude-type epic` on `list` or `ready` to find or hide spec containers. The old `epic` label still works with `--exclude-label epic` on legacy boards, but Orbit does not infer `type: epic` from it. SubTasks are one level deep: if a ticket needs its own breakdown, flatten it into sibling tickets with `--depends-on` instead of nesting further. Never use `done --force` or `cancel --force` on a spec parent while tickets are open; unlike Beads' force-close, it cancels every open SubTask. See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md) and [ADR 0010](./docs/adr/0010-structural-type-field.md).
 
 ### Export the board
 
-`orbit export --json` emits a deterministic snapshot of every Task and SubTask, including terminal work, labels, dependency and parent edges, parent progress fields, comments, and derived readiness. It is ordered by task ID, carries `schema_version`, and contains no timestamp or machine-local paths.
+`orbit export --json` emits a deterministic snapshot of every Task and SubTask, including terminal work, type, labels, dependency and parent edges, parent progress fields, comments, and derived readiness. It is ordered by task ID, carries `schema_version`, and contains no timestamp or machine-local paths.
 
 ```bash
 orbit export --json > board.json
@@ -247,6 +249,6 @@ orbit mcp
 - **Beans** proved that Markdown-as-truth is pleasant for humans, but it has no atomic claims, leases, or dependency-aware ready queue.
 - **Beads** proved that agents need claims, ready-work detection, priorities, and hash IDs, but its source of truth is a Dolt database and its multi-writer mode needs a server.
 
-Orbit is the narrow overlap: Beans' human-readable storage with Beads' queue semantics, in one static Rust binary with no daemon. Coming from Beads, an **issue** is a Task, a **sub-issue** is a SubTask, and an **epic** is a Parent Task labelled `epic`; there is no separate issue type or arbitrary-depth hierarchy.
+Orbit is the narrow overlap: Beans' human-readable storage with Beads' queue semantics, in one static Rust binary with no daemon. Coming from Beads, an **issue** is a Task, a **sub-issue** is a SubTask, and an **epic** is a top-level Task with `type: epic`; there is no separate issue entity or arbitrary-depth hierarchy.
 
 For several related repositories, Orbit links each one to the same Board instead of copying Tasks into a hub, so cross-repository Dependencies share one graph. Beads hydrates copies into a central database; Beans has no multi-repository model. See [ADR 0006](./docs/adr/0006-shared-board-across-repositories.md).

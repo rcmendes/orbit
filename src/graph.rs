@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::board::Board;
 use crate::comment::Comment;
 use crate::error::{OrbitError, Result, code};
-use crate::task::{self, Status, Task};
+use crate::task::{self, Status, Task, TaskType};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Issue {
@@ -162,6 +162,17 @@ impl Graph {
                         format!("{} depends on missing task {dep}", task.id),
                     ));
                 }
+            }
+
+            if task.front.task_type == TaskType::Epic && task.front.parent.is_some() {
+                issues.push(Issue::new(
+                    code::INVALID_TYPE,
+                    Some(&task.id),
+                    format!(
+                        "{} is a SubTask and cannot have type epic; epic is top-level only",
+                        task.id
+                    ),
+                ));
             }
 
             if let Some(parent_id) = &task.front.parent {
@@ -492,6 +503,7 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "id": task.id,
         "title": task.front.title,
         "status": task.front.status,
+        "type": task.front.task_type,
         "priority": task.front.priority,
         "kind": task.kind(),
         "labels": task.front.labels,
@@ -552,6 +564,7 @@ mod tests {
             front: TaskFrontmatter {
                 title: id.to_string(),
                 status,
+                task_type: TaskType::Task,
                 priority: default_priority(),
                 labels: Vec::new(),
                 depends_on: deps.iter().map(|dep| dep.to_string()).collect(),

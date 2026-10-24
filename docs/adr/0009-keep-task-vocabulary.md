@@ -25,7 +25,8 @@ Translate external vocabulary in documentation and at tool boundaries:
 
 - **Issue** = Task
 - **Sub-issue** = SubTask, created with `--parent`
-- **Epic** or **spec** = a top-level Parent Task, conventionally labelled `epic`
+- **Epic** or **spec** = a top-level Parent Task with `type: epic` (see
+  [ADR 0010](./0010-structural-type-field.md))
 
 Add familiar views and boundary adapters when they earn their keep, such as a
 scoped tree view or a Beads-shaped export/import. Do not introduce a separate
@@ -49,10 +50,10 @@ Epic entity.
 ## Consequences
 
 - Every generated tracker guide states the Issue/Sub-issue/Epic mapping.
-- `kind` stays structural (`task` or `subtask`). An epic remains a `task` with
-  `epic` in its labels.
-- If Orbit adds a `type` field, `epic` is a type on a Task, not a second
-  container model.
+- `kind` stays structural (`task` or `subtask`). An epic remains a `task`; its
+  Type is `epic`, not a second container model.
+- The structural Type field is recorded in
+  [ADR 0010](./0010-structural-type-field.md).
 - A future Beads export/import maps `issue_type`, `parent-child`, and `blocks`
   at the boundary rather than in the core schema.
 - If maintainers later choose "Issue" as the canonical noun, it is a v1.0

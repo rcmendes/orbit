@@ -17,7 +17,7 @@ use crate::error::{OrbitError, Result, code};
 use crate::git::CommitOutcome;
 use crate::graph::{self, Graph, Issue, LoadMode};
 use crate::setup::COMPLETION_LINE;
-use crate::task::{self, Status, Task, TaskFrontmatter};
+use crate::task::{self, Status, Task, TaskFrontmatter, TaskType};
 use crate::transition::{ClaimGate, Outcome, TransitionError};
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
@@ -459,6 +459,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
 
     let priority = args.priority.unwrap_or(board.config.board.default_priority);
     validate_priority(priority)?;
+    let task_type = args.task_type.unwrap_or(TaskType::Task);
     let labels = normalize_labels(&args.label)?;
 
     let mut depends_on = Vec::new();
@@ -490,6 +491,13 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
         None => None,
     };
 
+    if parent.is_some() && task_type == TaskType::Epic {
+        return Err(OrbitError::new(
+            code::INVALID_TYPE,
+            "epic type is only allowed on a top-level Task",
+        ));
+    }
+
     if let Some(parent_id) = &parent
         && depends_on.iter().any(|dep| dep == parent_id)
     {
@@ -508,6 +516,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
         front: TaskFrontmatter {
             title: title.clone(),
             status: Status::Todo,
+            task_type,
             priority,
             labels,
             depends_on,
@@ -526,9 +535,16 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
     atomic::write_atomic(&board.task_path(&id), rendered.as_bytes(), false)?;
     graph.tasks.insert(id.clone(), task.clone());
 
+    let type_prefix = if task_type == TaskType::Task {
+        String::new()
+    } else {
+        format!("{}  ", task_type.as_str())
+    };
     let human = match &task.front.parent {
-        Some(parent) => format!("created {id}  P{priority}  {title}  (subtask of {parent})"),
-        None => format!("created {id}  P{priority}  {title}"),
+        Some(parent) => {
+            format!("created {id}  P{priority}  {type_prefix}{title}  (subtask of {parent})")
+        }
+        None => format!("created {id}  P{priority}  {type_prefix}{title}"),
     };
     task_output(board, &graph, &task, human, &format!("orbit: add {id}"))
 }
@@ -569,6 +585,12 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
             if let Some(claimed_by) = &args.claimed_by
                 && task.holder() != Some(claimed_by.as_str())
             {
+                return false;
+            }
+            if !args.task_type.is_empty() && !args.task_type.contains(&task.front.task_type) {
+                return false;
+            }
+            if args.exclude_type.contains(&task.front.task_type) {
                 return false;
             }
             if !task.has_labels(&label_filters) {
@@ -688,6 +710,8 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
             args.parent.as_deref(),
             &label_filters,
             &excluded_labels,
+            &args.task_type,
+            &args.exclude_type,
         );
         if ready.is_empty() {
             return Ok(
@@ -727,6 +751,8 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         args.parent.as_deref(),
         &label_filters,
         &excluded_labels,
+        &args.task_type,
+        &args.exclude_type,
     );
     if let Some(limit) = args.limit {
         ready.truncate(limit);
@@ -1167,16 +1193,25 @@ fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandO
         || args.body.is_some()
         || args.body_file.is_some()
         || args.priority.is_some()
+        || args.task_type.is_some()
         || args.waiting_on.is_some()
         || args.clear_waiting;
     if !has_changes {
         return Err(OrbitError::invalid_argument(
-            "nothing to update; pass --title, --body, --priority, or --waiting-on",
+            "nothing to update; pass --title, --body, --priority, --type, or --waiting-on",
         ));
     }
 
     if let Some(priority) = args.priority {
         validate_priority(priority)?;
+    }
+    let current = graph.get(&args.id)?;
+    let next_type = args.task_type.unwrap_or(current.front.task_type);
+    if next_type == TaskType::Epic && current.front.parent.is_some() {
+        return Err(OrbitError::new(
+            code::INVALID_TYPE,
+            "epic type is only allowed on a top-level Task",
+        ));
     }
     let body = if args.body.is_some() || args.body_file.is_some() {
         Some(resolve_body(args.body, args.body_file)?)
@@ -1199,6 +1234,9 @@ fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandO
         }
         if let Some(priority) = args.priority {
             task.front.priority = priority;
+        }
+        if let Some(task_type) = args.task_type {
+            task.front.task_type = task_type;
         }
         if args.clear_waiting {
             task.front.waiting_on = None;
@@ -2097,6 +2135,8 @@ fn ready_for_filters(
     parent: Option<&str>,
     labels: &[String],
     excluded: &[String],
+    types: &[TaskType],
+    excluded_types: &[TaskType],
 ) -> Vec<Task> {
     if let Some(parent) = parent {
         ready.retain(|task| task.front.parent.as_deref() == Some(parent));
@@ -2106,6 +2146,12 @@ fn ready_for_filters(
     }
     if !excluded.is_empty() {
         ready.retain(|task| !task.has_any_label(excluded));
+    }
+    if !types.is_empty() {
+        ready.retain(|task| types.contains(&task.front.task_type));
+    }
+    if !excluded_types.is_empty() {
+        ready.retain(|task| !excluded_types.contains(&task.front.task_type));
     }
     ready
 }
@@ -2227,6 +2273,11 @@ fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
     } else {
         format!("  [{}]", task.front.labels.join(", "))
     };
+    let type_prefix = if task.front.task_type == TaskType::Task {
+        String::new()
+    } else {
+        format!("{}  ", task.front.task_type.as_str())
+    };
     let parent = if include_parent {
         task.front
             .parent
@@ -2237,10 +2288,11 @@ fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
         String::new()
     };
     format!(
-        "{}  {:<11}  P{}  {}{}{}{}",
+        "{}  {:<11}  P{}  {}{}{}{}{}",
         task.id,
         task.front.status.as_str(),
         task.front.priority,
+        type_prefix,
         task.front.title,
         labels,
         claim,
@@ -2295,7 +2347,13 @@ fn format_summary_value(value: &Value) -> String {
         .and_then(Value::as_str)
         .map(|parent| format!("  (subtask of {parent})"))
         .unwrap_or_default();
-    format!("{id}  {status:<11}  P{priority}  {title}{labels}{claim}{parent}")
+    let type_prefix = value
+        .get("type")
+        .and_then(Value::as_str)
+        .filter(|task_type| *task_type != "task")
+        .map(|task_type| format!("{task_type}  "))
+        .unwrap_or_default();
+    format!("{id}  {status:<11}  P{priority}  {type_prefix}{title}{labels}{claim}{parent}")
 }
 
 fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
@@ -2303,6 +2361,7 @@ fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
     lines.push(format!("{}  {}", task.id, task.front.title));
     lines.push(format!("status: {}", task.front.status.as_str()));
     lines.push(format!("kind: {}", task.kind()));
+    lines.push(format!("type: {}", task.front.task_type.as_str()));
     lines.push(format!("priority: P{}", task.front.priority));
     if let Some(parent) = &task.front.parent {
         lines.push(format!("parent: {parent}"));

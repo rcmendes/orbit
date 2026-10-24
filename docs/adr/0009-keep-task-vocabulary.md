@@ -25,7 +25,7 @@ Translate external vocabulary in documentation and at tool boundaries:
 
 - **Issue** = Task
 - **Sub-issue** = SubTask, created with `--parent`
-- **Epic** or **spec** = a top-level Parent Task with `type: epic` (see
+- **Epic** or **spec** = a top-level Task with `type: epic` (see
   [ADR 0010](./0010-structural-type-field.md))
 
 Add familiar views and boundary adapters when they earn their keep, such as a

@@ -1433,13 +1433,16 @@ fn reject_ephemeral(path: &Path) -> Result<()> {
     let in_npx_cache = path
         .components()
         .any(|component| component.as_os_str() == "_npx");
-    let mut temp_roots = vec![std::env::temp_dir()];
     #[cfg(unix)]
-    {
-        for root in ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"] {
-            temp_roots.push(PathBuf::from(root));
-        }
-    }
+    let temp_roots = [
+        std::env::temp_dir(),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/private/tmp"),
+        PathBuf::from("/var/tmp"),
+        PathBuf::from("/private/var/tmp"),
+    ];
+    #[cfg(not(unix))]
+    let temp_roots = [std::env::temp_dir()];
     let in_temp = temp_roots.iter().any(|root| path.starts_with(root));
     if in_npx_cache || in_temp {
         return Err(OrbitError::new(

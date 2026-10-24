@@ -83,4 +83,4 @@ _Avoid_: Submodule, project, workspace
 ## See also
 
 - [`SPEC.md`](./SPEC.md) for behavior, commands, and the JSON contract.
-- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
+- [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.

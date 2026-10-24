@@ -31,7 +31,7 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
 
 ## Cut a release
 
-1. Update `version` in `Cargo.toml` and add a matching heading to `CHANGELOG.md` (for example `## 0.2.0 - 2026-11-01`).
+1. Update `version` in `Cargo.toml` and add a matching heading to `../CHANGELOG.md` (for example `## 0.2.0 - 2026-11-01`). The changelog must stay at the repository root: cargo-dist only discovers release-note entries there.
 2. Commit the changes.
 3. Tag and push:
 

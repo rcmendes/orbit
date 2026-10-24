@@ -21,8 +21,8 @@ Always update the documentation after committing a change that affects behavior,
 output, configuration, or workflow. A commit is not finished until the docs
 describe what the code now does.
 
-- Review `README.md`, `SPEC.md`, `CHANGELOG.md`, `docs/`, and `AGENTS.md` after
-  every commit and update anything the change made stale.
+- Review `README.md`, `AGENTS.md`, and every document in `docs/` after every
+  commit and update anything the change made stale.
 - Update CLI `--help` text, generated setup templates, and examples when the
   CLI or agent workflow changes.
 - If the code commit is already made, create an immediate follow-up docs commit.

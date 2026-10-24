@@ -527,4 +527,4 @@ orbit sync              # commit anything left uncommitted
 ## See also
 
 - [Architecture](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
-- [Specification](../SPEC.md) for the canonical JSON contract and transition rules.
+- [Specification](./SPEC.md) for the canonical JSON contract and transition rules.

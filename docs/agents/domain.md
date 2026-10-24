@@ -4,8 +4,8 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`GLOSSARY.md`** at the repo root, or
-- **`GLOSSARY-MAP.md`** at the repo root if it exists: it points at one `GLOSSARY.md`
+- **`docs/GLOSSARY.md`**, or
+- **`docs/GLOSSARY-MAP.md`** if it exists: it points at one `GLOSSARY.md`
   per context. Read each one relevant to the topic.
 - **`docs/ARCHITECTURE.md`**: component map, state machine, command flow, and
   sequence diagrams.
@@ -23,26 +23,32 @@ Single-context repo (most repos):
 
 ```
 /
-├── GLOSSARY.md
-├── docs/adr/
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
+├── docs/
+│   ├── GLOSSARY.md
+│   └── adr/
+│       ├── 0001-event-sourced-orders.md
+│       └── 0002-postgres-for-write-model.md
 └── src/
 ```
 
-Multi-context repo (presence of `GLOSSARY-MAP.md` at the root):
+Multi-context repo (presence of `docs/GLOSSARY-MAP.md`):
 
 ```
 /
-├── GLOSSARY-MAP.md
-├── docs/adr/                          ← system-wide decisions
+├── docs/
+│   ├── GLOSSARY-MAP.md
+│   └── adr/                          ← system-wide decisions
 └── src/
     ├── ordering/
-    │   ├── GLOSSARY.md
-    │   └── docs/adr/                  ← context-specific decisions
+    │   ├── docs/
+    │   │   ├── GLOSSARY.md
+    │   │   └── adr/                  ← context-specific decisions
+    │   └── ...
     └── billing/
-        ├── GLOSSARY.md
-        └── docs/adr/
+        ├── docs/
+        │   ├── GLOSSARY.md
+        │   └── adr/
+        └── ...
 ```
 
 ## Use the glossary's vocabulary

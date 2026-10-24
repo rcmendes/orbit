@@ -1,6 +1,6 @@
 # Orbit: an AI-native issue tracker
 
-**Status:** pre-alpha. v0.2.0 is the latest release. M0 (core CLI), M1 (agent setup), M2 (MCP), M3 (release tooling), and M4 (labels, comments, triage) are implemented. The canonical design is in [SPEC.md](./SPEC.md); vocabulary is in [GLOSSARY.md](./GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
+**Status:** pre-alpha. v0.2.0 is the latest release. M0 (core CLI), M1 (agent setup), M2 (MCP), M3 (release tooling), and M4 (labels, comments, triage) are implemented. The canonical design is in [SPEC.md](./docs/SPEC.md); vocabulary is in [GLOSSARY.md](./docs/GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 ### Brief description
 
@@ -117,7 +117,7 @@ From source, with Rust 1.89 or newer:
 cargo install --path .
 ```
 
-See [RELEASING.md](./RELEASING.md) for the release process.
+See [RELEASING.md](./docs/RELEASING.md) for the release process.
 
 ### Agent setup
 
@@ -198,7 +198,7 @@ The default hold labels are `needs-triage`, `needs-info`, and `ready-for-human`:
 orbit mcp
 ```
 
-`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. It also serves `orbit://tasks/{id}` as a Markdown resource. Tool calls reuse the CLI's lock, atomic writes, auto-commit, and error envelope. See [SPEC.md](./SPEC.md) section 9.
+`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `finish`, `link`, `delete`, `label`, `comment`. It also serves `orbit://tasks/{id}` as a Markdown resource. Tool calls reuse the CLI's lock, atomic writes, auto-commit, and error envelope. See [SPEC.md](./docs/SPEC.md) section 9.
 
 ### Why not Beads or Beans?
 

@@ -20,6 +20,24 @@ fn assert_orbit_command(value: &Value) {
     );
 }
 
+fn assert_hook_command(value: &Value) {
+    let command = value.as_str().expect("command is a string");
+    let suffix = " prime --hook-json --by claude";
+    let binary = command
+        .strip_suffix(suffix)
+        .unwrap_or_else(|| panic!("unexpected hook command {command}"));
+    assert!(
+        Path::new(binary).is_absolute(),
+        "{binary} is not an absolute path"
+    );
+    assert!(
+        Path::new(binary)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "orbit" || name == "orbit.exe")
+    );
+}
+
 fn assert_orbit_toml_command(value: &toml::Value) {
     assert_orbit_command(&Value::String(
         value.as_str().expect("command is a string").to_string(),
@@ -45,10 +63,7 @@ fn setup_claude_preserves_settings_and_is_idempotent() {
 
     let settings = repo.read_json(".claude/settings.json");
     assert_eq!(settings["permissions"]["allow"][0], "Bash(git status)");
-    assert_eq!(
-        settings["hooks"]["SessionStart"][0]["hooks"][0]["command"],
-        "orbit prime --hook-json --by claude"
-    );
+    assert_hook_command(&settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]);
 
     repo.ok_json(&["setup", "claude", "--hooks", "--json"]);
     let instructions = repo.read("CLAUDE.md");

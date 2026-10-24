@@ -18,6 +18,17 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
    gh secret set NPM_TOKEN -R rcmendes/orbit
    ```
 
+## Homebrew (gated)
+
+Homebrew support is configured through cargo-dist but stays disabled until a tap exists:
+
+1. Create `rcmendes/homebrew-tap`.
+2. Ensure the release token can write to it.
+3. Add `"homebrew"` to `installers`, add `"homebrew"` to `publish-jobs`, and set `tap = "rcmendes/homebrew-tap"` and `formula = "orbit"` in `dist-workspace.toml`.
+4. Run `dist generate` and commit the regenerated workflow.
+
+Until then, the README leads with the shell, PowerShell, and npm installers.
+
 ## Cut a release
 
 1. Update `version` in `Cargo.toml` and add a matching heading to `CHANGELOG.md` (for example `## 0.2.0 - 2026-11-01`).
@@ -35,6 +46,19 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
    - creates the GitHub Release with changelog notes;
    - publishes `@rcmendes/orbit` to npm using `NPM_TOKEN`.
 
+5. The `Install smoke` workflow runs on the published release. It installs the public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init`, `orbit add`, `orbit ready`, and `orbit setup --print`. A red run means the published artifacts are broken even though the release exists.
+
+## Packaging checks
+
+`scripts/onboarding-smoke.sh` and `scripts/onboarding-smoke.ps1` are the single onboarding sequence used by CI and available locally:
+
+```bash
+cargo build --release
+ORBIT_BIN="$PWD/target/release/orbit" bash scripts/onboarding-smoke.sh
+```
+
+They must stay in sync with the documented quick start; do not add a second smoke sequence.
+
 ## npm notes
 
 - The first publish of a new package can briefly create a `0.0.0-stage` placeholder while npm processes the upload. It is not the `latest` tag; the real version appears after processing.
@@ -44,6 +68,7 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 ## Known issues
 
 - The `v0.1.0` tag's CI check is red on Windows because it predates the Unix-only lock-test import fix. Its Release workflow succeeded and its artifacts are valid; `v0.2.0` has the fix.
+- npm publication is not gated on the install smoke job: cargo-dist owns the generated release workflow, and its `publish-jobs` run in parallel. The smoke workflow runs on `release: published` and reports breakage immediately, but a broken package can be published before the red run appears.
 
 ## Local checks
 

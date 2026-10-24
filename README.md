@@ -19,18 +19,19 @@ Orbit keeps the board as Markdown, but compiles it into an in-process graph on e
 ### Quick start
 
 ```bash
-cargo install --path .
+# Install once (see below), then in your repository:
 orbit init
-orbit setup claude --hooks
 orbit add "Build the CLI router" -p 1
 orbit ready --claim --by claude
 orbit heartbeat orb-a7b2c9 --by claude
 orbit done orb-a7b2c9 --by claude
 ```
 
+`orbit init` creates the Board and wires the coding-agent harnesses it detects. In a terminal it shows what it found and asks which ones to wire; without a terminal it wires the detected ones and never prompts.
+
 ### Install
 
-Prebuilt binaries and installers are produced by the release workflow. v0.2.0 is the latest release; v0.1.0 remains available.
+Prebuilt binaries are the primary path. v0.2.0 is the latest release.
 
 ```bash
 # macOS / Linux
@@ -44,11 +45,29 @@ npx @rcmendes/orbit --version
 npm install -g @rcmendes/orbit
 ```
 
-The npm package is `@rcmendes/orbit`; the shell and PowerShell installers use the Cargo package name in their filenames (`orbit-tracker-installer.*`). Both [v0.1.0](https://github.com/rcmendes/orbit/releases/tag/v0.1.0) and [v0.2.0](https://github.com/rcmendes/orbit/releases/tag/v0.2.0) are published. See [RELEASING.md](./RELEASING.md) for the release process.
+The installer adds its directory to `PATH` unless it is already there, and tells you what to source if a restart is needed. The npm package is scoped because the bare name is taken; the command is always `orbit`.
+
+From source, with Rust 1.89 or newer:
+
+```bash
+cargo install --path .
+```
+
+See [RELEASING.md](./RELEASING.md) for the release process.
 
 ### Agent setup
 
-`orbit setup` writes project-local instruction files with managed markers, so re-running it is safe and `--remove` removes only what Orbit added.
+`orbit init` is the one in-repository command. It creates the Board, detects installed harnesses from their commands and project markers, and writes only the integrations that apply. Every file is written with a managed marker, so re-running is safe and `--remove` deletes only what Orbit added.
+
+```bash
+orbit init                    # Board + detected harnesses (asks in a terminal)
+orbit init --agents all       # wire every supported harness
+orbit init --agents none      # Board only; no agent files
+orbit init --print            # preview without writing
+orbit init --board ~/board    # create a shared Board and link this repository
+```
+
+Use `orbit setup` to repair or adjust one harness later:
 
 ```bash
 orbit setup claude --hooks   # CLAUDE.md + SessionStart hook + MCP
@@ -56,15 +75,37 @@ orbit setup cursor           # .cursor/rules/orbit.mdc + skill + MCP
 orbit setup codex            # AGENTS.md + skill + MCP
 orbit setup opencode         # AGENTS.md + MCP
 orbit setup mattpocock       # docs/agents/issue-tracker.md
-orbit setup all --hooks      # everything, including MCP configs
+orbit setup all --check      # installed / missing / stale
 orbit setup all --no-mcp     # instruction files only
-orbit setup all --print      # preview without writing
 orbit setup all --remove     # remove only Orbit-managed content
 ```
 
-`setup` writes `.mcp.json` (Claude), `.cursor/mcp.json` (Cursor), `.codex/config.toml` (Codex), and `opencode.json` (OpenCode) by default. Each entry records the absolute path of the running Orbit binary so GUI-launched editors do not need shell `PATH` entries; use `--no-mcp` to skip MCP or `--mcp-bin orbit` to write a portable command that relies on the editor's `PATH`. The server entry passes `--dir <board>` when the board is external. The Claude hook runs `orbit prime --hook-json --by claude`, which injects a compact workflow reminder and the current ready queue at session start.
+MCP configuration is written by default for Claude, Cursor, Codex, and OpenCode. Entries record the absolute path of the running binary, so editors launched outside a shell do not need `PATH`. The Claude SessionStart hook records the same absolute binary and runs `orbit prime --hook-json --by claude` at session start. Use `--mcp-bin orbit` if you want a portable command that relies on the editor's `PATH`.
+
+`orbit init` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory. Install globally, or pass `--mcp-bin orbit`.
 
 Because the generated MCP command is machine-specific, keep those config files untracked when possible. If one is committed, regenerate it after installing Orbit elsewhere, or use `--mcp-bin orbit`.
+
+### Several related repositories
+
+A Workspace is one Board plus every repository linked to it. Create the Board once, then link the repositories that share it:
+
+```bash
+# In the first repository: create the product Board and link to it
+orbit init --board ~/src/acme-board
+
+# In each related repository: use the same Board
+orbit link ~/src/acme-board
+```
+
+Commands in a linked repository find the shared Board without an environment variable, including from Git worktrees. `orbit unlink` returns a repository to its own Board. An explicit override wins for one command:
+
+```bash
+orbit --dir ~/src/acme-board list
+ORBIT_DIR=~/src/acme-board orbit ready
+```
+
+Discovery order is `--dir`, then `ORBIT_DIR`, then the repository link, then the repository's own Board.
 
 ### Triage metadata
 

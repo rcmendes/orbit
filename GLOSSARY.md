@@ -69,9 +69,13 @@ A process that reads and mutates Tasks on behalf of a developer.
 _Avoid_: Worker, bot, client
 
 **Workspace**:
-The set of Tasks and metadata belonging to one repository, shared by all of its Git worktrees.
-_Avoid_: Project, board, database
+The scope an Agent sees: one Board and every Repository linked to it.
+_Avoid_: Project, database
 
 **Board**:
 The versioned store of Tasks and configuration for a Workspace.
 _Avoid_: Database, store, project
+
+**Linked Repository**:
+A Repository whose Agents use a Board that does not live inside it.
+_Avoid_: Submodule, project, workspace

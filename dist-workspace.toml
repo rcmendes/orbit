@@ -16,6 +16,11 @@ npm-scope = "@rcmendes"
 npm-package = "orbit"
 # Human-facing name in release notes
 display-name = "orbit"
+# Shown after a successful shell or PowerShell install
+install-success-msg = "Run `orbit init` in your repository to get started."
+# Homebrew is gated on the tap repository and a token with write access.
+# Enable it by adding "homebrew" to installers, adding "homebrew" to
+# publish-jobs, and setting tap = "rcmendes/homebrew-tap" with formula = "orbit".
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in

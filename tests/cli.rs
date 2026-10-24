@@ -41,9 +41,8 @@ fn init_creates_a_shared_board() {
     let log = String::from_utf8_lossy(&log.stdout);
     assert!(log.contains("orbit: initialize board"), "{log}");
 
-    let (status, error) = repo.err_json(&["init", "--json"]);
-    assert_eq!(status, 1);
-    assert_eq!(error["error"]["code"], "ALREADY_INITIALIZED");
+    let second = repo.ok_json(&["init", "--json"]);
+    assert_eq!(second["data"]["created"], false);
 }
 
 #[test]

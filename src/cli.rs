@@ -27,8 +27,14 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Initialize a board in the current repository, or in --dir.
-    Init,
+    /// Initialize a Board and wire coding-agent harnesses.
+    Init(InitArgs),
+
+    /// Point this repository at a shared Board.
+    Link(LinkArgs),
+
+    /// Return this repository to its own Board.
+    Unlink,
 
     /// Create a task.
     Add(AddArgs),
@@ -92,6 +98,48 @@ pub enum Command {
 
     /// Commit pending lease-only changes to the board branch.
     Sync,
+}
+
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Create or link a shared Board at PATH.
+    #[arg(long, value_name = "PATH", conflicts_with = "local")]
+    pub board: Option<PathBuf>,
+
+    /// Which harnesses to wire: auto, all, none, ask, or a comma-separated list.
+    #[arg(long, value_name = "SELECTOR", conflicts_with = "no_agents")]
+    pub agents: Option<String>,
+
+    /// Do not write any harness integration.
+    #[arg(long = "no-agents", conflicts_with = "agents")]
+    pub no_agents: bool,
+
+    /// Install the Claude Code SessionStart hook.
+    #[arg(long)]
+    pub hooks: bool,
+
+    /// Create this repository's own Board even when it is linked.
+    #[arg(long, conflicts_with = "board")]
+    pub local: bool,
+
+    /// Orbit executable to record in agent configs. Defaults to the running binary.
+    #[arg(long = "mcp-bin", value_name = "PATH")]
+    pub mcp_bin: Option<PathBuf>,
+
+    /// Preview the files that would change without writing them.
+    #[arg(long)]
+    pub print: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct LinkArgs {
+    /// Board directory to link this repository to.
+    #[arg(value_name = "PATH")]
+    pub path: PathBuf,
+
+    /// Do not refresh existing agent configuration.
+    #[arg(long = "no-refresh")]
+    pub no_refresh: bool,
 }
 
 #[derive(Debug, Args)]
@@ -413,6 +461,10 @@ pub struct SetupArgs {
     /// Preview the files that would change without writing them.
     #[arg(long)]
     pub print: bool,
+
+    /// Report whether the integration is installed, missing, or stale.
+    #[arg(long, conflicts_with_all = ["print", "remove"])]
+    pub check: bool,
 
     /// Remove Orbit-managed sections, files, and hooks.
     #[arg(long)]

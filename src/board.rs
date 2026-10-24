@@ -182,6 +182,26 @@ impl Board {
         }
 
         let common = git::common_dir()?;
+        let link = common.join("orbit").join("link");
+        if let Some(root) = read_link_file(&link)? {
+            if !Self::is_board(&root) {
+                return Err(OrbitError::new(
+                    code::LINK_NOT_FOUND,
+                    format!(
+                        "the linked Board at {} is missing; run `orbit link <board>` to re-link or restore it",
+                        root.display()
+                    ),
+                ));
+            }
+            let config = Config::load(&root)?;
+            let lock_path = root.join(".lock");
+            return Ok(Self {
+                root,
+                lock_path,
+                config,
+            });
+        }
+
         let root = common.join("orbit").join("board");
         if !root.join("config.toml").exists() {
             return Err(OrbitError::board_not_found());
@@ -193,6 +213,48 @@ impl Board {
             lock_path,
             config,
         })
+    }
+
+    pub fn local_root() -> Result<PathBuf> {
+        Ok(git::common_dir()?.join("orbit").join("board"))
+    }
+
+    pub fn link_path() -> Result<PathBuf> {
+        Ok(git::common_dir()?.join("orbit").join("link"))
+    }
+
+    pub fn read_link() -> Result<Option<PathBuf>> {
+        let path = Self::link_path()?;
+        read_link_file(&path)
+    }
+
+    pub fn write_link(root: &Path) -> Result<()> {
+        let path = Self::link_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| OrbitError::io(format!("create {}", parent.display()), error))?;
+        }
+        crate::atomic::write_atomic(&path, format!("{}\n", root.display()).as_bytes(), true)
+    }
+
+    pub fn clear_link() -> Result<bool> {
+        let path = Self::link_path()?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(OrbitError::io(format!("remove {}", path.display()), error)),
+        }
+    }
+
+    pub fn is_board(root: &Path) -> bool {
+        root.join("config.toml").exists()
+    }
+
+    pub fn expected_root(dir_override: Option<&Path>) -> Result<PathBuf> {
+        match dir_override {
+            Some(dir) => resolve_external(dir),
+            None => Self::local_root(),
+        }
     }
 
     pub fn task_ids(&self) -> Result<Vec<String>> {
@@ -381,13 +443,7 @@ fn init_default() -> Result<InitResult> {
 }
 
 fn init_external(dir: &Path) -> Result<InitResult> {
-    let root = if dir.is_absolute() {
-        dir.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|error| OrbitError::io("resolve current directory", error))?
-            .join(dir)
-    };
+    let root = resolve_external(dir)?;
 
     if root.join("config.toml").exists() {
         return Err(already_initialized(&root));
@@ -458,6 +514,39 @@ fn initialize_board_files(root: &Path, branch: &str, external: bool) -> Result<I
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(path, bytes)
         .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
+}
+
+fn resolve_external(dir: &Path) -> Result<PathBuf> {
+    let root = if dir.is_absolute() {
+        dir.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| OrbitError::io("resolve current directory", error))?
+            .join(dir)
+    };
+    Ok(dunce::canonicalize(&root).unwrap_or(root))
+}
+
+fn read_link_file(path: &Path) -> Result<Option<PathBuf>> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(OrbitError::io(format!("read {}", path.display()), error)),
+    };
+    let value = content.trim();
+    if value.is_empty() {
+        return Err(OrbitError::config(format!(
+            "{} is empty; run `orbit unlink` and link the repository again",
+            path.display()
+        )));
+    }
+    let candidate = PathBuf::from(value);
+    if candidate.is_absolute() {
+        Ok(Some(candidate))
+    } else {
+        let root = git::repo_root()?;
+        Ok(Some(root.join(candidate)))
+    }
 }
 
 fn already_initialized(path: &Path) -> OrbitError {

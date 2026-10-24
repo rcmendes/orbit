@@ -135,13 +135,18 @@ prefix = "orb-"
 
 `orbit init`:
 
-1. Requires a Git repository and a configured `user.name` / `user.email`. The repository does not need an initial commit.
+1. Requires a Git repository unless `--board PATH` is given. A configured `user.name` / `user.email` is required. The repository does not need an initial commit.
 2. Creates the `orbit` orphan branch if needed.
 3. Adds a hidden worktree at `<git-common-dir>/orbit/board`.
 4. Writes `config.toml`, `.gitignore`, `tasks/.gitkeep`, and `comments/.gitkeep`.
 5. Commits `orbit: initialize board`.
+6. Detects coding-agent harnesses and reconciles their integration.
 
-Every command resolves the board through `git rev-parse --path-format=absolute --git-common-dir`, so linked worktrees share it automatically. This requires Git 2.31 or newer. `--dir` / `ORBIT_DIR` points at an external board root; the root must contain `config.toml` and `tasks/`.
+`orbit init` is idempotent: an existing Board is reused, and the agent integration is reconciled rather than rejected. In a repository linked to a shared Board, `init` refuses unless `--local` is passed. Outside a Git repository it refuses with `NOT_A_REPOSITORY` and names `--board` as the alternative.
+
+`--board PATH` creates an external Board at `PATH` when it does not exist, links the repository to it, and wires agents. The link is a pointer at `<git-common-dir>/orbit/link` containing the resolved Board path. `orbit link PATH` writes the same pointer for a repository joining an existing Board; `orbit unlink` removes it. Because the pointer lives in the common directory, every linked worktree resolves the same Board.
+
+Every command resolves the Board in this order: `--dir`, then `ORBIT_DIR`, then the repository link, then the Board in the Git common directory. A pointer whose target no longer contains a Board returns `LINK_NOT_FOUND`. A linked repository keeps its local Board on disk; linking shadows it and does not delete it.
 
 Auto-commit policy: create/update/claim/release/done/cancel/reopen/depend/undepend/delete/comment/label commit immediately as `orbit: <verb> <id>`. Heartbeat and lease-only writes are not committed until the next meaningful mutation or `orbit sync`. A failed commit does not fail the operation: the state is already on disk and the result carries `meta.warnings: ["COMMIT_FAILED: ..."]`. `doctor` reports uncommitted board changes. Nothing is pushed.
 
@@ -152,7 +157,9 @@ Auto-commit policy: create/update/claim/release/done/cancel/reopen/depend/undepe
 ### M0 (walking skeleton)
 
 ```text
-orbit init [--dir PATH]
+orbit init [--board PATH] [--agents SELECTOR] [--no-agents] [--hooks] [--local] [--mcp-bin PATH] [--print]
+orbit link <PATH> [--no-refresh]
+orbit unlink
 orbit add <title> [-p N] [--label LABEL]... [--depends-on ID]... [--waiting-on TEXT] [--body TEXT|--body-file PATH|-]
 orbit list [--status S] [--priority N] [--claimed-by NAME] [--label LABEL|--unlabeled] [--waiting] [--all]
 orbit ready [--limit N] [--claim] [--by NAME]
@@ -172,9 +179,11 @@ orbit doctor [--fix]
 orbit sync
 ```
 
+`--agents` accepts `auto`, `all`, `none`, `ask`, or a comma-separated list of client names. The default is `ask` when stdin is a terminal and `auto` otherwise. `--agents ask` reads from stdin even without a terminal.
+
 ### Later milestones
 
-- M1: `setup <claude|cursor|codex|opencode|mattpocock|all> [--hooks] [--no-mcp] [--mcp-bin PATH] [--print] [--remove]`; `prime --hook-json`; managed instruction files. Implemented.
+- M1: `setup <claude|cursor|codex|opencode|mattpocock|all> [--hooks] [--no-mcp] [--mcp-bin PATH] [--print] [--check] [--remove]`; `prime --hook-json`; managed instruction files. Implemented.
 - M2: `orbit mcp` (stdio MCP server); project-local MCP configs written by default; `--no-mcp` opts out. Implemented.
 - M3: packaging and release automation. Implemented.
 - M4: labels, comments, and triage integration. Implemented.
@@ -283,7 +292,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 `dist-workspace.toml` configures cargo-dist 0.33.1. It builds macOS arm64/x86_64, Linux x86_64/aarch64 (glibc), and Windows x86_64; installers are shell, PowerShell, and npm. The npm package is `@rcmendes/orbit` (`npm-package = "orbit"`, `npm-scope = "@rcmendes"`); the Cargo package remains `orbit-tracker`, so archive and installer filenames use that name while the binary and npm bin are `orbit`.
 
-Tagging `v*` triggers `.github/workflows/release.yml`: it plans, builds, creates the GitHub Release with `CHANGELOG.md` notes, and publishes npm using the `NPM_TOKEN` secret. The token must have read/write access to `@rcmendes` and 2FA bypass enabled. macOS binaries are unsigned in v1; the docs explain Gatekeeper. Homebrew, musl static builds, and code signing are deferred. `RELEASING.md` documents the process.
+Tagging `v*` triggers `.github/workflows/release.yml`: it plans, builds, creates the GitHub Release with `CHANGELOG.md` notes, and publishes npm using the `NPM_TOKEN` secret. The token must have read/write access to `@rcmendes` and 2FA bypass enabled. `.github/workflows/smoke.yml` runs `scripts/onboarding-smoke.sh` and `scripts/onboarding-smoke.ps1` on Linux, macOS, and Windows: on pull requests it builds from source, and on a published release it runs the public installers and the npm package, then exercises `init`, `add`, `ready`, and `setup --print`. macOS binaries are unsigned in v1; musl static builds and code signing are deferred. Homebrew is configured through cargo-dist but gated on a `homebrew-tap` repository and a write token; see `RELEASING.md`.
 
 ## 13. Decisions
 

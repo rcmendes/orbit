@@ -1,0 +1,92 @@
+name: Install smoke
+
+on:
+  release:
+    types: [published]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the published release
+        if: github.event_name != 'pull_request'
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rcmendes/orbit/releases/latest/download/orbit-tracker-installer.sh | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: github.event_name == 'pull_request'
+
+      - name: Build from source
+        if: github.event_name == 'pull_request'
+        run: cargo build --release
+
+      - name: Run onboarding smoke
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            export ORBIT_BIN="$PWD/target/release/orbit"
+          else
+            export ORBIT_BIN="orbit"
+          fi
+          bash scripts/onboarding-smoke.sh
+
+  windows:
+    name: windows-latest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the published release
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          irm https://github.com/rcmendes/orbit/releases/latest/download/orbit-tracker-installer.ps1 | iex
+          "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: github.event_name == 'pull_request'
+
+      - name: Build from source
+        if: github.event_name == 'pull_request'
+        run: cargo build --release
+
+      - name: Run onboarding smoke
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            $env:ORBIT_BIN = "$PWD\target\release\orbit.exe"
+          } else {
+            $env:ORBIT_BIN = "orbit"
+          }
+          ./scripts/onboarding-smoke.ps1
+
+  npm:
+    name: npm public route
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install from npm
+        run: npm install -g @rcmendes/orbit
+
+      - name: Run onboarding smoke
+        env:
+          ORBIT_BIN: orbit
+        run: bash scripts/onboarding-smoke.sh
+
+      - name: Run through npx
+        run: npx --yes @rcmendes/orbit --version

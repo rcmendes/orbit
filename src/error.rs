@@ -26,6 +26,10 @@ pub mod code {
     pub const IO_ERROR: &str = "IO_ERROR";
     pub const CONFIG_ERROR: &str = "CONFIG_ERROR";
     pub const ID_COLLISION: &str = "ID_COLLISION";
+    pub const NOT_A_REPOSITORY: &str = "NOT_A_REPOSITORY";
+    pub const ALREADY_LINKED: &str = "ALREADY_LINKED";
+    pub const LINK_NOT_FOUND: &str = "LINK_NOT_FOUND";
+    pub const EPHEMERAL_BIN: &str = "EPHEMERAL_BIN";
 }
 
 #[derive(Debug, Clone)]

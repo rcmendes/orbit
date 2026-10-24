@@ -15,6 +15,21 @@ Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit t
 Parse the JSON envelope: `ok`, `data`, `error.code`, and `error.retryable`. If a command returns `LOCKED`, retry after a short backoff. Never infer state from prose.
 <!-- END ORBIT INTEGRATION -->
 
+## Documentation
+
+Always update the documentation after committing a change that affects behavior,
+output, configuration, or workflow. A commit is not finished until the docs
+describe what the code now does.
+
+- Review `README.md`, `SPEC.md`, `CHANGELOG.md`, `docs/`, and `AGENTS.md` after
+  every commit and update anything the change made stale.
+- Update CLI `--help` text, generated setup templates, and examples when the
+  CLI or agent workflow changes.
+- If the code commit is already made, create an immediate follow-up docs commit.
+  Do not leave `main` describing the previous behavior.
+- Pure internal refactors with no user-visible effect do not need docs, but say
+  so explicitly when closing the work.
+
 ## Agent skills
 
 ### Issue tracker

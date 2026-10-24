@@ -29,6 +29,51 @@ pub enum InvalidReason {
     ReopenDoneDependents(Vec<String>),
 }
 
+impl InvalidReason {
+    fn into_error(self, id: &str) -> OrbitError {
+        let message = match &self {
+            Self::ReleaseTerminal(status) => {
+                format!(
+                    "{id} is {}; release only applies to active tasks",
+                    status.as_str()
+                )
+            }
+            Self::HeartbeatNotInProgress(status) => {
+                format!(
+                    "{id} is {}; only in_progress tasks can be heartbeated",
+                    status.as_str()
+                )
+            }
+            Self::HeartbeatNoClaim => format!("{id} has no claim"),
+            Self::ClaimTerminal(status) => {
+                format!("{id} is {}; it cannot be claimed", status.as_str())
+            }
+            Self::CompleteCancelled => {
+                format!("{id} is cancelled; reopen it before completing it")
+            }
+            Self::CancelDone => {
+                format!("{id} is done; reopen it before cancelling it")
+            }
+            Self::ReopenActive(status) => {
+                format!(
+                    "{id} is {}; only terminal tasks can be reopened",
+                    status.as_str()
+                )
+            }
+            Self::ReopenDoneDependents(dependents) => {
+                format!("{id} has done dependents: {}", dependents.join(", "))
+            }
+        };
+        let error = OrbitError::new(code::INVALID_TRANSITION, message);
+        match self {
+            Self::ReopenDoneDependents(dependents) => {
+                error.with_details(json!({ "done_dependents": dependents }))
+            }
+            _ => error,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransitionError {
     InvalidTransition {
@@ -132,12 +177,18 @@ impl Task {
         self.front.stray_claim_times = None;
     }
 
-    fn finish(&mut self, status: Status, now: DateTime<Utc>) -> Outcome {
+    /// Every changing transition that ends a Claim goes through here.
+    fn settle(&mut self, status: Status, now: DateTime<Utc>) -> Outcome {
         self.front.status = status;
         self.clear_claim();
-        self.front.waiting_on = None;
         self.touch(now);
         Outcome::Changed
+    }
+
+    /// Terminal transitions and reopen also clear `waiting_on`.
+    fn finish(&mut self, status: Status, now: DateTime<Utc>) -> Outcome {
+        self.front.waiting_on = None;
+        self.settle(status, now)
     }
 
     /// Release keeps `waiting_on`; only terminal transitions clear it.
@@ -158,10 +209,7 @@ impl Task {
         if self.front.claim.is_none() && self.front.status != Status::InProgress {
             return Ok(Outcome::Unchanged);
         }
-        self.front.status = Status::Todo;
-        self.clear_claim();
-        self.touch(now);
-        Ok(Outcome::Changed)
+        Ok(self.settle(Status::Todo, now))
     }
 
     /// Extends the lease and returns the new expiry.
@@ -310,48 +358,7 @@ impl From<TransitionError> for OrbitError {
     fn from(error: TransitionError) -> Self {
         use TransitionError::*;
         match error {
-            InvalidTransition { id, reason } => {
-                let message = match &reason {
-                    InvalidReason::ReleaseTerminal(status) => {
-                        format!(
-                            "{id} is {}; release only applies to active tasks",
-                            status.as_str()
-                        )
-                    }
-                    InvalidReason::HeartbeatNotInProgress(status) => {
-                        format!(
-                            "{id} is {}; only in_progress tasks can be heartbeated",
-                            status.as_str()
-                        )
-                    }
-                    InvalidReason::HeartbeatNoClaim => format!("{id} has no claim"),
-                    InvalidReason::ClaimTerminal(status) => {
-                        format!("{id} is {}; it cannot be claimed", status.as_str())
-                    }
-                    InvalidReason::CompleteCancelled => {
-                        format!("{id} is cancelled; reopen it before completing it")
-                    }
-                    InvalidReason::CancelDone => {
-                        format!("{id} is done; reopen it before cancelling it")
-                    }
-                    InvalidReason::ReopenActive(status) => {
-                        format!(
-                            "{id} is {}; only terminal tasks can be reopened",
-                            status.as_str()
-                        )
-                    }
-                    InvalidReason::ReopenDoneDependents(dependents) => {
-                        format!("{id} has done dependents: {}", dependents.join(", "))
-                    }
-                };
-                let error = OrbitError::new(code::INVALID_TRANSITION, message);
-                match reason {
-                    InvalidReason::ReopenDoneDependents(dependents) => {
-                        error.with_details(json!({ "done_dependents": dependents }))
-                    }
-                    _ => error,
-                }
-            }
+            InvalidTransition { id, reason } => reason.into_error(&id),
             NotClaimHolder { id, holder } => OrbitError::new(
                 code::NOT_CLAIM_HOLDER,
                 format!("{id} is claimed by {holder}"),

@@ -18,7 +18,7 @@ use crate::git::CommitOutcome;
 use crate::graph::{self, Graph, Issue, LoadMode};
 use crate::setup::COMPLETION_LINE;
 use crate::task::{self, Status, Task, TaskFrontmatter};
-use crate::transition::{ClaimGate, Outcome};
+use crate::transition::{ClaimGate, Outcome, TransitionError};
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     let Cli { json, dir, command } = cli;
@@ -592,13 +592,24 @@ fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output::CommandOut
     )
 }
 
+/// Applies one Task transition and returns its result with the updated Task.
+fn transition<T>(
+    graph: &mut Graph,
+    id: &str,
+    apply: impl FnOnce(&mut Task) -> std::result::Result<T, TransitionError>,
+) -> Result<(T, Task)> {
+    let task = graph.get_mut(id)?;
+    let result = apply(task)?;
+    Ok((result, task.clone()))
+}
+
 fn cmd_release(board: &Board, args: ReleaseArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
     let caller = optional_agent(args.by);
 
-    let outcome = graph
-        .get_mut(&args.id)?
-        .release(caller.as_deref(), args.force, Utc::now())?;
+    let (outcome, task) = transition(&mut graph, &args.id, |task| {
+        task.release(caller.as_deref(), args.force, Utc::now())
+    })?;
     if outcome == Outcome::Unchanged {
         return Ok(crate::output::CommandOutput::new(
             json!({ "id": args.id, "changed": false }),
@@ -606,7 +617,6 @@ fn cmd_release(board: &Board, args: ReleaseArgs) -> Result<crate::output::Comman
         ));
     }
 
-    let task = graph.get(&args.id)?.clone();
     write_task(board, &task)?;
 
     task_output(
@@ -622,12 +632,13 @@ fn cmd_heartbeat(board: &Board, args: HeartbeatArgs) -> Result<crate::output::Co
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
     let agent = resolve_agent(args.by)?;
 
-    let lease_until = graph.get_mut(&args.id)?.heartbeat(
-        &agent,
-        ChronoDuration::minutes(board.config.board.lease_minutes),
-        Utc::now(),
-    )?;
-    let task = graph.get(&args.id)?.clone();
+    let (lease_until, task) = transition(&mut graph, &args.id, |task| {
+        task.heartbeat(
+            &agent,
+            ChronoDuration::minutes(board.config.board.lease_minutes),
+            Utc::now(),
+        )
+    })?;
     write_task(board, &task)?;
 
     Ok(crate::output::CommandOutput::new(
@@ -790,10 +801,9 @@ fn cmd_reopen(board: &Board, args: ReopenArgs) -> Result<crate::output::CommandO
         .filter(|dependent| dependent.front.status == Status::Done)
         .map(|dependent| dependent.id.clone())
         .collect();
-    graph
-        .get_mut(&args.id)?
-        .reopen(args.force, &done_dependents, Utc::now())?;
-    let task = graph.get(&args.id)?.clone();
+    let ((), task) = transition(&mut graph, &args.id, |task| {
+        task.reopen(args.force, &done_dependents, Utc::now())
+    })?;
     write_task(board, &task)?;
 
     task_output(

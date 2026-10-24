@@ -86,6 +86,126 @@ fn add_list_show_and_ready_round_trip() {
 }
 
 #[test]
+fn done_with_comment_closes_and_records_the_note_in_one_step() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Close with note", &[]);
+    repo.ok_json(&["claim", id.as_str(), "--by", "agent", "--json"]);
+
+    let done = repo.ok_json(&[
+        "done",
+        id.as_str(),
+        "--by",
+        "agent",
+        "--comment",
+        "Implemented and verified.",
+        "--json",
+    ]);
+    assert_eq!(done["data"]["status"], "done");
+    assert_eq!(done["data"]["claimed_by"], Value::Null);
+    assert_eq!(done["data"]["comment_count"], 1);
+    assert_eq!(done["data"]["comments"][0]["author"], "agent");
+    assert_eq!(
+        done["data"]["comments"][0]["body"],
+        "Implemented and verified."
+    );
+
+    let content = repo.read_task(&id);
+    assert!(content.contains("status: done"), "{content}");
+    assert!(!content.contains("status: in_progress"), "{content}");
+
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["status"], "done");
+    assert_eq!(show["data"]["comment_count"], 1);
+
+    let board = repo.board_path();
+    let log = repo.git(&["-C", board.to_str().unwrap(), "log", "--oneline", "-5"]);
+    let log = String::from_utf8_lossy(&log.stdout);
+    assert!(log.contains("orbit: done"), "{log}");
+    assert!(
+        !log.contains("orbit: comment"),
+        "the status and note must share one commit: {log}"
+    );
+}
+
+#[test]
+fn done_validates_the_comment_before_changing_status() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Reject empty note", &[]);
+    repo.ok_json(&["claim", id.as_str(), "--by", "agent", "--json"]);
+
+    let (_, error) = repo.err_json(&[
+        "done",
+        id.as_str(),
+        "--by",
+        "agent",
+        "--comment",
+        "   ",
+        "--json",
+    ]);
+    assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
+
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["status"], "in_progress");
+    assert_eq!(show["data"]["comment_count"], 0);
+}
+
+#[test]
+fn done_reads_the_completion_note_from_stdin() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Close from stdin", &[]);
+
+    let (status, done) = repo.json_with_stdin(
+        &[
+            "done",
+            id.as_str(),
+            "--by",
+            "agent",
+            "--comment-file",
+            "-",
+            "--json",
+        ],
+        "Closed from a piped note.\n",
+    );
+    assert_eq!(status, 0, "{done}");
+    assert_eq!(done["data"]["status"], "done");
+    assert_eq!(done["data"]["comment_count"], 1);
+    assert_eq!(
+        done["data"]["comments"][0]["body"],
+        "Closed from a piped note."
+    );
+}
+
+#[test]
+fn cancel_with_comment_records_the_reason_with_the_status_change() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Cancel with note", &[]);
+
+    let cancelled = repo.ok_json(&[
+        "cancel",
+        id.as_str(),
+        "--by",
+        "agent",
+        "--comment",
+        "Duplicate of orb-aaaaaa.",
+        "--json",
+    ]);
+    assert_eq!(cancelled["data"]["status"], "cancelled");
+    assert_eq!(cancelled["data"]["comment_count"], 1);
+    assert_eq!(
+        cancelled["data"]["comments"][0]["body"],
+        "Duplicate of orb-aaaaaa."
+    );
+
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["status"], "cancelled");
+    assert_eq!(show["data"]["comment_count"], 1);
+}
+
+#[test]
 fn dependencies_block_completion_and_cycles_are_rejected() {
     let repo = TestRepo::new();
     repo.init();

@@ -114,9 +114,13 @@ label.
 ```bash
 orbit ready --claim --by opencode
 orbit heartbeat <ID> --by opencode
-orbit done <ID> --by opencode
+orbit done <ID> --by opencode --comment "Implemented and verified."
 orbit cancel <ID> --by opencode
 ```
+
+Pass `--comment` (or `--comment-file`) to `done` or `cancel` when the
+terminal note belongs with the transition; it is written and committed with the
+status change. Use `orbit comment add` for notes on an active task.
 
 If a claim is stale, take it over with
 `orbit claim <ID> --by opencode --steal`. If the board returns `LOCKED`, retry

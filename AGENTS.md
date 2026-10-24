@@ -5,7 +5,7 @@ Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit t
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
-- `orbit done <id> --by <agent>` completes it; `orbit cancel <id> --by <agent>` abandons it.
+- `orbit done <id> --by <agent> --comment "..."` completes it and records the note with the status change; `orbit cancel <id> --by <agent>` abandons it.
 - `orbit add "title" -p N --depends-on <id>` creates work.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.

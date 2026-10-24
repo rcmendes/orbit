@@ -167,8 +167,8 @@ orbit show <id>
 orbit claim <id> [--by NAME] [--steal]
 orbit release <id> [--by NAME] [--force]
 orbit heartbeat <id> [--by NAME]
-orbit done <id> [--by NAME] [--force]
-orbit cancel <id> [--by NAME] [--force]
+orbit done <id> [--by NAME] [--force] [--comment TEXT | --comment-file PATH]
+orbit cancel <id> [--by NAME] [--force] [--comment TEXT | --comment-file PATH]
 orbit reopen <id> [--force]
 orbit update <id> [--title TEXT] [--body TEXT|--body-file PATH] [--priority N] [--waiting-on TEXT|--clear-waiting]
 orbit depend <id> <dep-id>
@@ -211,6 +211,7 @@ orbit comment list <id>
 - `cancel` resolves dependents. It requires the claim holder unless `--force`.
 - `label add` and `label remove` are idempotent. Labels are lowercase slugs; invalid labels are rejected with `INVALID_LABEL`.
 - A Task carrying a configured hold label is not Ready; `claim` returns `LABEL_BLOCKED`. `--steal` does not bypass hold labels; remove the label first.
+- `done` and `cancel` accept `--comment TEXT` or `--comment-file PATH`; the note is appended in the same locked operation as the terminal status change, so an agent cannot record a completion note before the task is closed.
 - `comment add` is append-only and immutable. A comment has an author and RFC 3339 timestamp; corrections are new comments. `delete` removes the task's comment file.
 - `doctor` reports malformed comments (`CORRUPT_COMMENT`) and comment files with no task (`ORPHAN_COMMENT`).
 - `doctor --fix` only removes stale temp files; it does not rewrite tasks or comments.
@@ -256,7 +257,7 @@ Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `CYCLE_DETECTED`, `DEP
 - Readers acquire the same lock shared for the duration of the command, so multi-file reads see a consistent snapshot.
 - Each file is written to a temp file in its directory (`tasks/` or `comments/`), fsynced, renamed over the target, and the directory is fsynced on Unix.
 - A crash mid-write leaves the old file intact and a stale temp file; `doctor` reports it and `doctor --fix` removes it.
-- Multi-file mutations (`delete --force`, comment append plus task `updated_at`) are serialized but not transactional across files. A crash can leave a partially cleaned board; `doctor` reports dangling dependencies and a repeated `delete --force` resumes the cleanup.
+- Multi-file mutations (`delete --force`, `done --comment`/`cancel --comment`, comment append plus task `updated_at`) are serialized but not transactional across files. A crash can leave a partially cleaned board; `doctor` reports dangling dependencies and a repeated `delete --force` resumes the cleanup.
 - Network filesystems are unsupported. Locks are advisory; all writes must go through Orbit.
 
 ## 9. Agent integration

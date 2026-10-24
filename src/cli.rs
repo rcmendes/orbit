@@ -269,6 +269,14 @@ pub struct DoneArgs {
     /// Override a competing live claim. Dependencies are still enforced.
     #[arg(long)]
     pub force: bool,
+
+    /// Completion note to record in the same transaction. Use "-" to read stdin.
+    #[arg(long, value_name = "TEXT", conflicts_with = "comment_file")]
+    pub comment: Option<String>,
+
+    /// Read the completion note from a file. Use "-" to read stdin.
+    #[arg(long = "comment-file", value_name = "PATH", conflicts_with = "comment")]
+    pub comment_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -282,6 +290,14 @@ pub struct CancelArgs {
     /// Cancel another agent's live claim.
     #[arg(long)]
     pub force: bool,
+
+    /// Cancellation note to record in the same transaction. Use "-" to read stdin.
+    #[arg(long, value_name = "TEXT", conflicts_with = "comment_file")]
+    pub comment: Option<String>,
+
+    /// Read the cancellation note from a file. Use "-" to read stdin.
+    #[arg(long = "comment-file", value_name = "PATH", conflicts_with = "comment")]
+    pub comment_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

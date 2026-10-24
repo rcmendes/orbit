@@ -226,7 +226,8 @@ fn tool_definitions() -> Vec<Value> {
                 "id": { "type": "string" },
                 "status": { "type": "string", "enum": ["done", "cancelled"] },
                 "by": { "type": "string" },
-                "force": { "type": "boolean", "description": "Override a competing live claim; never bypasses dependencies." }
+                "force": { "type": "boolean", "description": "Override a competing live claim; never bypasses dependencies." },
+                "comment": { "type": "string", "description": "Completion note recorded atomically with the status change." }
             }),
             &["id", "status"],
         ),
@@ -554,6 +555,10 @@ fn dispatch_tool(
             }
             if bool_arg(arguments, "force") {
                 args.push("--force".to_string());
+            }
+            if let Some(comment) = optional_str(arguments, "comment") {
+                args.push("--comment".to_string());
+                args.push(comment);
             }
         }
         "link" => {

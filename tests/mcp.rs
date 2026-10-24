@@ -182,10 +182,15 @@ fn create_claim_heartbeat_and_finish_round_trip() {
     let finished = client.call(
         15,
         "finish",
-        json!({ "id": id, "status": "done", "by": "claude" }),
+        json!({ "id": id, "status": "done", "by": "claude", "comment": "Finished over MCP." }),
     );
     let finished = tool_envelope(&finished);
     assert_eq!(finished["data"]["status"], "done");
+    assert_eq!(finished["data"]["comment_count"], 1);
+    assert_eq!(
+        finished["data"]["comments"][0]["body"],
+        "Finished over MCP."
+    );
 
     let list = client.call(16, "list", json!({ "all": true }));
     let list = tool_envelope(&list);

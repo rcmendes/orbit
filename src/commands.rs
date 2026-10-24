@@ -700,17 +700,48 @@ fn cmd_heartbeat(board: &Board, args: HeartbeatArgs) -> Result<crate::output::Co
 
 fn cmd_done(board: &Board, args: DoneArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let caller = optional_agent(args.by);
+    let caller = optional_agent(args.by.clone());
+    let comment = resolve_optional_comment(args.comment, args.comment_file)?;
+    let author = match &comment {
+        Some(_) => Some(resolve_agent(args.by.clone())?),
+        None => None,
+    };
     let now = Utc::now();
 
     {
         let task = graph.get(&args.id)?;
         if task.front.status == Status::Done {
-            return Ok(crate::output::CommandOutput::new(
-                graph::task_detail(&graph, task),
-                format!("{} is already done", args.id),
-            )
-            .with_meta(json!({ "changed": false })));
+            if comment.is_none() {
+                return Ok(crate::output::CommandOutput::new(
+                    graph::task_detail(&graph, task),
+                    format!("{} is already done", args.id),
+                )
+                .with_meta(json!({ "changed": false })));
+            }
+
+            let author = author.expect("a completion comment has an author");
+            let comments = add_comment(
+                board,
+                &args.id,
+                &author,
+                comment.expect("a completion comment has a body"),
+                now,
+            )?;
+            let task = {
+                let task = graph.get_mut(&args.id)?;
+                task.front.updated_at = now;
+                task.clone()
+            };
+            write_task(board, &task)?;
+
+            return task_output_with_comments(
+                board,
+                &graph,
+                &task,
+                &comments,
+                format!("done {} (comment added)", args.id),
+                &format!("orbit: done {}", args.id),
+            );
         }
         if task.front.status == Status::Cancelled {
             return Err(invalid_transition(format!(
@@ -753,6 +784,32 @@ fn cmd_done(board: &Board, args: DoneArgs) -> Result<crate::output::CommandOutpu
     };
     write_task(board, &task)?;
 
+    if let (Some(author), Some(body)) = (author.as_deref(), comment) {
+        match add_comment(board, &args.id, author, body, now) {
+            Ok(comments) => {
+                return task_output_with_comments(
+                    board,
+                    &graph,
+                    &task,
+                    &comments,
+                    format!("done {} (comment added)", args.id),
+                    &format!("orbit: done {}", args.id),
+                );
+            }
+            Err(error) => {
+                let mut output = task_output(
+                    board,
+                    &graph,
+                    &task,
+                    format!("done {}", args.id),
+                    &format!("orbit: done {}", args.id),
+                )?;
+                output = output.with_warning(format!("COMMENT_FAILED: {}", error.message));
+                return Ok(output.with_exit_code(1));
+            }
+        }
+    }
+
     task_output(
         board,
         &graph,
@@ -764,17 +821,48 @@ fn cmd_done(board: &Board, args: DoneArgs) -> Result<crate::output::CommandOutpu
 
 fn cmd_cancel(board: &Board, args: CancelArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let caller = optional_agent(args.by);
+    let caller = optional_agent(args.by.clone());
+    let comment = resolve_optional_comment(args.comment, args.comment_file)?;
+    let author = match &comment {
+        Some(_) => Some(resolve_agent(args.by.clone())?),
+        None => None,
+    };
     let now = Utc::now();
 
     {
         let task = graph.get(&args.id)?;
         if task.front.status == Status::Cancelled {
-            return Ok(crate::output::CommandOutput::new(
-                graph::task_detail(&graph, task),
-                format!("{} is already cancelled", args.id),
-            )
-            .with_meta(json!({ "changed": false })));
+            if comment.is_none() {
+                return Ok(crate::output::CommandOutput::new(
+                    graph::task_detail(&graph, task),
+                    format!("{} is already cancelled", args.id),
+                )
+                .with_meta(json!({ "changed": false })));
+            }
+
+            let author = author.expect("a cancellation comment has an author");
+            let comments = add_comment(
+                board,
+                &args.id,
+                &author,
+                comment.expect("a cancellation comment has a body"),
+                now,
+            )?;
+            let task = {
+                let task = graph.get_mut(&args.id)?;
+                task.front.updated_at = now;
+                task.clone()
+            };
+            write_task(board, &task)?;
+
+            return task_output_with_comments(
+                board,
+                &graph,
+                &task,
+                &comments,
+                format!("cancelled {} (comment added)", args.id),
+                &format!("orbit: cancel {}", args.id),
+            );
         }
         if task.front.status == Status::Done {
             return Err(invalid_transition(format!(
@@ -811,6 +899,32 @@ fn cmd_cancel(board: &Board, args: CancelArgs) -> Result<crate::output::CommandO
         task.clone()
     };
     write_task(board, &task)?;
+
+    if let (Some(author), Some(body)) = (author.as_deref(), comment) {
+        match add_comment(board, &args.id, author, body, now) {
+            Ok(comments) => {
+                return task_output_with_comments(
+                    board,
+                    &graph,
+                    &task,
+                    &comments,
+                    format!("cancelled {} (comment added)", args.id),
+                    &format!("orbit: cancel {}", args.id),
+                );
+            }
+            Err(error) => {
+                let mut output = task_output(
+                    board,
+                    &graph,
+                    &task,
+                    format!("cancelled {}", args.id),
+                    &format!("orbit: cancel {}", args.id),
+                )?;
+                output = output.with_warning(format!("COMMENT_FAILED: {}", error.message));
+                return Ok(output.with_exit_code(1));
+            }
+        }
+    }
 
     task_output(
         board,
@@ -1046,18 +1160,10 @@ fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output:
     graph.get(&args.id)?;
     let author = resolve_agent(args.by)?;
     let body = resolve_body(args.body, args.body_file)?;
-    comment::validate_body(&body)?;
-
-    let comment = Comment {
-        author: author.clone(),
-        created_at: Utc::now(),
-        body,
-    };
-    let mut comments = board.read_comments(&args.id)?;
-    comments.push(comment.clone());
-    board.write_comments(&args.id, &comments)?;
 
     let now = Utc::now();
+    let comments = add_comment(board, &args.id, &author, body, now)?;
+    let comment = comments.last().expect("a comment was appended").clone();
     let task = {
         let task = graph.get_mut(&args.id)?;
         task.front.updated_at = now;
@@ -1286,7 +1392,7 @@ fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOut
 Use the CLI; never edit task files directly.\n\
 - `orbit ready --claim --by <agent>` takes one ready task.\n\
 - `orbit heartbeat <id> --by <agent>` extends the lease while working.\n\
-- `orbit done <id> --by <agent>` completes it; `orbit cancel <id>` abandons it.\n\
+- `orbit done <id> --by <agent> --comment \"note\"` completes it and records the note with the status change; `orbit cancel <id>` abandons it.\n\
 - `orbit add \"title\" -p N --depends-on <id>` creates work.\n\
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.\n\
 - `orbit show <id>` reads the full body.";
@@ -1637,6 +1743,56 @@ fn task_output(
         output = output.with_warning(format!("COMMIT_FAILED: {message}"));
     }
     Ok(output)
+}
+
+fn task_output_with_comments(
+    board: &Board,
+    graph: &Graph,
+    task: &Task,
+    comments: &[Comment],
+    human: String,
+    message: &str,
+) -> Result<crate::output::CommandOutput> {
+    let outcome = board.commit(message, false)?;
+    let mut output = crate::output::CommandOutput::new(
+        graph::task_detail_with_comments(graph, task, comments),
+        human,
+    );
+    if let CommitOutcome::Failed(message) = outcome {
+        output = output.with_warning(format!("COMMIT_FAILED: {message}"));
+    }
+    Ok(output)
+}
+
+fn add_comment(
+    board: &Board,
+    id: &str,
+    author: &str,
+    body: String,
+    created_at: chrono::DateTime<Utc>,
+) -> Result<Vec<Comment>> {
+    comment::validate_body(&body)?;
+    let comment = Comment {
+        author: author.to_string(),
+        created_at,
+        body: body.trim_end_matches(['\r', '\n']).to_string(),
+    };
+    let mut comments = board.read_comments(id)?;
+    comments.push(comment);
+    board.write_comments(id, &comments)?;
+    Ok(comments)
+}
+
+fn resolve_optional_comment(
+    comment: Option<String>,
+    comment_file: Option<std::path::PathBuf>,
+) -> Result<Option<String>> {
+    if comment.is_none() && comment_file.is_none() {
+        return Ok(None);
+    }
+    let body = resolve_body(comment, comment_file)?;
+    comment::validate_body(&body)?;
+    Ok(Some(body))
 }
 
 fn generate_unique_id(board: &Board) -> Result<String> {

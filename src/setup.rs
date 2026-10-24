@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use clap::ValueEnum;
 use serde::Serialize;
@@ -579,6 +580,8 @@ fn plan_mcp_json(
 
     let mut changed = false;
     let mut warning = None;
+    let absolute_command =
+        entry_command(&entry).is_some_and(|command| Path::new(command).is_absolute());
 
     if remove {
         if let Some(container_value) = object.get_mut(container).and_then(Value::as_object_mut) {
@@ -629,6 +632,11 @@ fn plan_mcp_json(
         }
     }
 
+    if !remove && absolute_command && is_git_tracked(root, relative) {
+        warnings.push(format!(
+            "{relative} is tracked by git and will contain a machine-specific MCP command; keep it untracked or pass `--mcp-bin orbit` for a portable config"
+        ));
+    }
     if let Some(warning) = warning {
         warnings.push(warning);
     }
@@ -744,6 +752,11 @@ fn plan_mcp_toml(
         }
     }
 
+    if !remove && bin.is_absolute() && is_git_tracked(root, relative) {
+        warnings.push(format!(
+            "{relative} is tracked by git and will contain a machine-specific MCP command; keep it untracked or pass `--mcp-bin orbit` for a portable config"
+        ));
+    }
     if let Some(warning) = warning {
         warnings.push(warning);
     }
@@ -791,6 +804,28 @@ fn toml_mcp_entry(bin: &Path, args: &[String]) -> toml::Value {
         toml::Value::Array(args.iter().cloned().map(toml::Value::String).collect()),
     );
     toml::Value::Table(table)
+}
+
+fn entry_command(entry: &Value) -> Option<&str> {
+    entry.get("command").and_then(Value::as_str).or_else(|| {
+        entry
+            .get("command")
+            .and_then(Value::as_array)
+            .and_then(|command| command.first())
+            .and_then(Value::as_str)
+    })
+}
+
+fn is_git_tracked(root: &Path, relative: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--error-unmatch", "--", relative])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn is_orbit_mcp_entry(entry: &Value) -> bool {

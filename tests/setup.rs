@@ -213,7 +213,7 @@ fn setup_mcp_configs_are_merged_and_removed() {
 #[test]
 fn setup_all_writes_mcp_configs_for_every_client() {
     let repo = TestRepo::new();
-    repo.ok_json(&["setup", "all", "--mcp", "--json"]);
+    repo.ok_json(&["setup", "all", "--json"]);
 
     let claude = repo.read_json(".mcp.json");
     assert_orbit_command(&claude["mcpServers"]["orbit"]["command"]);
@@ -291,6 +291,22 @@ fn setup_mcp_bin_can_write_a_portable_command() {
             .unwrap()
             .iter()
             .any(|warning| warning.as_str().unwrap().contains("PATH"))
+    );
+}
+
+#[test]
+fn setup_warns_when_an_mcp_config_is_tracked() {
+    let repo = TestRepo::new();
+    std::fs::write(repo.path().join("opencode.json"), "{}\n").unwrap();
+    repo.git(&["add", "opencode.json"]);
+
+    let value = repo.ok_json(&["setup", "opencode", "--json"]);
+    assert!(
+        value["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("tracked by git"))
     );
 }
 

@@ -1,6 +1,6 @@
 # Orbit: an AI-native issue tracker
 
-**Status:** pre-alpha; M0 (core CLI), M1 (agent setup), M2 (MCP), M3 (release tooling), and M4 (labels, comments, triage) are implemented. No public release has been tagged yet. The canonical design is in [SPEC.md](./SPEC.md); vocabulary is in [GLOSSARY.md](./GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
+**Status:** pre-alpha. v0.2.0 is the latest release. M0 (core CLI), M1 (agent setup), M2 (MCP), M3 (release tooling), and M4 (labels, comments, triage) are implemented. The canonical design is in [SPEC.md](./SPEC.md); vocabulary is in [GLOSSARY.md](./GLOSSARY.md). Requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 ### Brief description
 
@@ -14,7 +14,7 @@ Eliminate context-window bloat and pipeline freezes in multi-agent workflows. Or
 
 When building micro-SaaS products at maximum velocity, your autonomous toolchain — Cursor, Claude Code, Codex, OpenCode, Superpowers — needs a central nervous system. Standard issue trackers force LLMs to burn thousands of tokens parsing flat files or opaque databases, and database-backed trackers put task state in a binary that code review cannot see.
 
-Orbit keeps the board as Markdown, but compiles it into an in-process graph on every command. Agents ask `orbit ready --claim` for exactly one piece of work, hold a time-bounded lease, and get structured errors when a dependency is unfinished or another agent already owns the task. Writes serialize on one repo-wide lock and publish through temp-file plus rename, so a crash cannot truncate a task and two agents cannot corrupt the queue. Installation is a single binary, with shell/PowerShell installers and an npm wrapper once a release is tagged. There is no daemon, no watcher, and no Dolt.
+Orbit keeps the board as Markdown, but compiles it into an in-process graph on every command. Agents ask `orbit ready --claim` for exactly one piece of work, hold a time-bounded lease, and get structured errors when a dependency is unfinished or another agent already owns the task. Writes serialize on one repo-wide lock and publish through temp-file plus rename, so a crash cannot truncate a task and two agents cannot corrupt the queue. Installation is a single binary, with shell/PowerShell installers and an npm wrapper. There is no daemon, no watcher, and no Dolt.
 
 ### Quick start
 
@@ -30,7 +30,7 @@ orbit done orb-a7b2c9 --by claude
 
 ### Install
 
-Prebuilt binaries and installers are produced by the release workflow; these links work once the first `v*` tag is published.
+Prebuilt binaries and installers are produced by the release workflow. v0.2.0 is the latest release; v0.1.0 remains available.
 
 ```bash
 # macOS / Linux
@@ -44,7 +44,7 @@ npx @rcmendes/orbit --version
 npm install -g @rcmendes/orbit
 ```
 
-The npm package is `@rcmendes/orbit`; the shell and PowerShell installers use the Cargo package name in their filenames (`orbit-tracker-installer.*`). See [RELEASING.md](./RELEASING.md) for the release process.
+The npm package is `@rcmendes/orbit`; the shell and PowerShell installers use the Cargo package name in their filenames (`orbit-tracker-installer.*`). Both [v0.1.0](https://github.com/rcmendes/orbit/releases/tag/v0.1.0) and [v0.2.0](https://github.com/rcmendes/orbit/releases/tag/v0.2.0) are published. See [RELEASING.md](./RELEASING.md) for the release process.
 
 ### Agent setup
 

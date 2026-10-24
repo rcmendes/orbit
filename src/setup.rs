@@ -13,6 +13,9 @@ use crate::output::CommandOutput;
 pub const BEGIN_MARKER: &str = "<!-- BEGIN ORBIT INTEGRATION (managed by orbit setup) -->";
 pub const END_MARKER: &str = "<!-- END ORBIT INTEGRATION -->";
 
+/// Completion guidance shared by `orbit prime` and every generated agent file.
+pub const COMPLETION_LINE: &str = "- `orbit done <id> --by <agent> --comment \"...\"` completes it and records the note with the status change; `orbit cancel <id> --by <agent>` abandons it.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SetupClient {
     Claude,
@@ -1655,7 +1658,7 @@ Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit t
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
-- `orbit done <id> --by <agent> --comment TEXT` completes it and records the completion note in the same step; `orbit cancel <id> --by <agent>` abandons it.
+{COMPLETION_LINE}
 - `orbit add \"title\" -p N --depends-on <id>` creates work.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
@@ -1703,7 +1706,7 @@ We use Orbit, a local AI-native issue tracker. Tasks live as Markdown on the boa
 
 - To find actionable work, run `orbit ready --json` and parse `data.tasks`.
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
-- To finish or abandon work, run `orbit done <ID> --by <agent> --comment TEXT` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change.
+- To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change.
 - To create work, run `orbit add \"Title\" -p N --depends-on <ID>`.
 - To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`.
 - To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.

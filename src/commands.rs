@@ -16,6 +16,7 @@ use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::CommitOutcome;
 use crate::graph::{self, Graph, Issue, LoadMode};
+use crate::setup::COMPLETION_LINE;
 use crate::task::{self, Status, Task, TaskFrontmatter};
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
@@ -1388,14 +1389,16 @@ fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOut
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let counts = graph.counts();
     let agent = optional_agent(args.by).unwrap_or_else(|| "unknown (set ORBIT_AGENT)".to_string());
-    let instructions = "Orbit is the task tracker for this repository.\n\
+    let instructions = format!(
+        "Orbit is the task tracker for this repository.\n\
 Use the CLI; never edit task files directly.\n\
 - `orbit ready --claim --by <agent>` takes one ready task.\n\
 - `orbit heartbeat <id> --by <agent>` extends the lease while working.\n\
-- `orbit done <id> --by <agent> --comment \"note\"` completes it and records the note with the status change; `orbit cancel <id>` abandons it.\n\
+{COMPLETION_LINE}\n\
 - `orbit add \"title\" -p N --depends-on <id>` creates work.\n\
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.\n\
-- `orbit show <id>` reads the full body.";
+- `orbit show <id>` reads the full body."
+    );
 
     let ready: Vec<Value> = graph
         .ready_tasks()
@@ -1411,7 +1414,7 @@ Use the CLI; never edit task files directly.\n\
         .collect();
 
     let mut human = String::new();
-    human.push_str(instructions);
+    human.push_str(&instructions);
     human.push_str("\n\n");
     human.push_str(&format!("agent: {agent}\n"));
     human.push_str(&format!(

@@ -115,6 +115,16 @@ fn setup_codex_and_opencode_share_agents_md() {
     repo.ok_json(&["setup", "opencode", "--json"]);
     let agents = repo.read("AGENTS.md");
     assert_eq!(agents.matches("BEGIN ORBIT INTEGRATION").count(), 1);
+    assert!(agents.contains(
+        r#"`orbit done <id> --by <agent> --comment "..."` completes it and records the note with the status change; `orbit cancel <id> --by <agent>` abandons it."#
+    ));
+
+    repo.ok_json(&["setup", "opencode", "--json"]);
+    assert_eq!(repo.read("AGENTS.md"), agents);
+
+    let (status, value) = repo.json(&["setup", "opencode", "--no-mcp", "--check", "--json"]);
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["status"], "installed");
 
     repo.ok_json(&["setup", "codex", "--remove", "--json"]);
     repo.ok_json(&["setup", "opencode", "--remove", "--json"]);
@@ -133,6 +143,9 @@ fn setup_mattpocock_writes_the_issue_tracker_bridge() {
     assert!(tracker.contains("We use Orbit"));
     assert!(tracker.contains("orbit ready --json"));
     assert!(tracker.contains("Never edit task frontmatter directly"));
+    assert!(tracker.contains(
+        r#"`orbit done <ID> --by <agent> --comment "..."` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change."#
+    ));
 
     repo.ok_json(&["setup", "mattpocock", "--json"]);
     let tracker = repo.read("docs/agents/issue-tracker.md");
@@ -437,6 +450,10 @@ fn prime_hook_json_emits_the_session_start_envelope() {
     let value = repo.ok_json(&["prime", "--json", "--by", "claude"]);
     assert_eq!(value["data"]["agent"], "claude");
     assert_eq!(value["data"]["ready"].as_array().unwrap().len(), 1);
+    let instructions = value["data"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains(
+        r#"`orbit done <id> --by <agent> --comment "..."` completes it and records the note with the status change; `orbit cancel <id> --by <agent>` abandons it."#
+    ));
 
     let (_, error) = repo.err_json(&["--json", "prime", "--hook-json", "--by", "claude"]);
     assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");

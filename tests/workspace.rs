@@ -3,7 +3,11 @@ mod common;
 use common::TestRepo;
 
 fn canonical(path: &std::path::Path) -> String {
-    path.canonicalize().unwrap().to_str().unwrap().to_string()
+    dunce::canonicalize(path)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
 }
 
 #[test]

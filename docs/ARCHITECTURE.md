@@ -34,6 +34,7 @@ flowchart LR
         BOARD["Board resolution and config<br/>src/board.rs"]
         GRAPH["Task graph<br/>src/graph.rs"]
         MODEL["Task model<br/>src/task.rs"]
+        TRANSITIONS["Lifecycle transitions<br/>src/transition.rs"]
         COMMENTS["Comment sidecars<br/>src/comment.rs"]
     end
 
@@ -118,8 +119,8 @@ flowchart LR
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, emit exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
-| Application | `src/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, enforce transition rules, call the writer, and shape the result. |
-| Domain | `src/board.rs`, `src/graph.rs`, `src/task.rs`, `src/comment.rs` | Board discovery and config, task parsing and rendering, dependency validation, readiness, counts, and comments. |
+| Application | `src/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. |
+| Domain | `src/board.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One repo-wide advisory lock, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
 | Setup | `src/setup.rs` | Detect harnesses and write managed instruction files, MCP entries, and the Claude SessionStart hook. |
@@ -191,9 +192,11 @@ classDiagram
     }
 
     class Claim {
-        +String claimed_by
+        +String holder
         +DateTime claimed_at
         +DateTime lease_until
+        +is_live(now)
+        +is_stale(now)
     }
 
     class Comment {
@@ -214,7 +217,7 @@ classDiagram
     Board "1" *-- "1" Config : loads
     Board "1" o-- "0..*" Task : stores
     Graph "1" o-- "0..*" Task : indexes
-    Task "1" *-- "0..1" Claim : claim fields
+    Task "1" *-- "0..1" Claim : stored as flat claimed_by, claimed_at, lease_until keys
     Task "1" o-- "0..*" Comment : sidecar
     Task "0..*" --> "0..*" Task : depends_on
 ```
@@ -550,7 +553,7 @@ sequenceDiagram
     CLI->>BRD: discover
     BRD->>LCK: acquire exclusive
     CLI->>FS: read all tasks
-    CLI->>CLI: check dependencies and live claim holder
+    CLI->>CLI: Task.complete checks dependencies and live claim holder
     CLI->>FS: atomic write done, clear claim and waiting
     opt comment supplied
         CLI->>FS: append immutable comment
@@ -650,7 +653,7 @@ sequenceDiagram
 | Change | Start here | Also update |
 | --- | --- | --- |
 | Add a CLI command | `src/cli.rs`, then the dispatch in `src/commands.rs` | `tests/cli.rs`, `SPEC.md`, and this command map |
-| Change a status transition | The handler in `src/commands.rs`, plus `Graph::is_ready` or `blocking_ids` if readiness changes | `tests/properties.rs`, the state machine in this document, and `SPEC.md` |
+| Change a status transition | The Task transition in `src/transition.rs`, plus `Graph::is_ready` or `blocking_ids` if readiness changes | `tests/properties.rs`, the state machine in this document, and `SPEC.md` |
 | Add a task field | `TaskFrontmatter` and parsing in `src/task.rs` | `graph::task_summary` and `task_detail`, plus round-trip tests |
 | Add an MCP tool | `tool_definitions` and `dispatch_tool` in `src/mcp.rs` | `tests/mcp.rs`, the MCP bridge section, and `SPEC.md` |
 | Add a harness | `SetupClient` and the install and remove plans in `src/setup.rs` | Detection tests in `tests/setup.rs`, onboarding tests, and `docs/agents/` |

@@ -18,7 +18,7 @@ pub enum Outcome {
 
 /// Why a transition is not legal from the Task's current state (`INVALID_TRANSITION`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Invalid {
+pub enum InvalidReason {
     ReleaseTerminal(Status),
     HeartbeatNotInProgress(Status),
     HeartbeatNoClaim,
@@ -33,7 +33,7 @@ pub enum Invalid {
 pub enum TransitionError {
     InvalidTransition {
         id: String,
-        reason: Invalid,
+        reason: InvalidReason,
     },
     NotClaimHolder {
         id: String,
@@ -75,6 +75,24 @@ impl Task {
         self.front.claim.as_ref().map(|claim| claim.holder.as_str())
     }
 
+    pub fn claimed_at(&self) -> Option<DateTime<Utc>> {
+        self.front.claim.as_ref().and_then(|claim| claim.claimed_at)
+    }
+
+    pub fn lease_until(&self) -> Option<DateTime<Utc>> {
+        self.front
+            .claim
+            .as_ref()
+            .and_then(|claim| claim.lease_until)
+    }
+
+    pub fn is_stale(&self, now: DateTime<Utc>) -> bool {
+        self.front
+            .claim
+            .as_ref()
+            .is_some_and(|claim| claim.is_stale(now))
+    }
+
     pub fn touch(&mut self, now: DateTime<Utc>) {
         self.front.updated_at = now;
     }
@@ -102,16 +120,21 @@ impl Task {
         })
     }
 
-    fn invalid(&self, reason: Invalid) -> TransitionError {
+    fn invalid(&self, reason: InvalidReason) -> TransitionError {
         TransitionError::InvalidTransition {
             id: self.id.clone(),
             reason,
         }
     }
 
+    fn clear_claim(&mut self) {
+        self.front.claim = None;
+        self.front.stray_claim_times = None;
+    }
+
     fn finish(&mut self, status: Status, now: DateTime<Utc>) -> Outcome {
         self.front.status = status;
-        self.front.claim = None;
+        self.clear_claim();
         self.front.waiting_on = None;
         self.touch(now);
         Outcome::Changed
@@ -125,7 +148,7 @@ impl Task {
         now: DateTime<Utc>,
     ) -> Result<Outcome, TransitionError> {
         if self.front.status.is_terminal() {
-            return Err(self.invalid(Invalid::ReleaseTerminal(self.front.status)));
+            return Err(self.invalid(InvalidReason::ReleaseTerminal(self.front.status)));
         }
         if let Some(claim) = &self.front.claim
             && !force
@@ -136,7 +159,7 @@ impl Task {
             return Ok(Outcome::Unchanged);
         }
         self.front.status = Status::Todo;
-        self.front.claim = None;
+        self.clear_claim();
         self.touch(now);
         Ok(Outcome::Changed)
     }
@@ -149,16 +172,18 @@ impl Task {
         now: DateTime<Utc>,
     ) -> Result<DateTime<Utc>, TransitionError> {
         if self.front.status != Status::InProgress {
-            return Err(self.invalid(Invalid::HeartbeatNotInProgress(self.front.status)));
+            return Err(self.invalid(InvalidReason::HeartbeatNotInProgress(self.front.status)));
         }
         let Some(claim) = &self.front.claim else {
-            return Err(self.invalid(Invalid::HeartbeatNoClaim));
+            return Err(self.invalid(InvalidReason::HeartbeatNoClaim));
         };
         self.require_holder(claim, Some(agent))?;
         let lease_until = now + lease;
-        if let Some(claim) = &mut self.front.claim {
-            claim.lease_until = Some(lease_until);
-        }
+        self.front
+            .claim
+            .as_mut()
+            .expect("checked above")
+            .lease_until = Some(lease_until);
         self.touch(now);
         Ok(lease_until)
     }
@@ -174,7 +199,7 @@ impl Task {
     ) -> Result<(), TransitionError> {
         let id = self.id.clone();
         if self.front.status.is_terminal() {
-            return Err(self.invalid(Invalid::ClaimTerminal(self.front.status)));
+            return Err(self.invalid(InvalidReason::ClaimTerminal(self.front.status)));
         }
         if self.front.waiting_on.is_some() {
             return Err(TransitionError::WaitingExternal {
@@ -213,6 +238,7 @@ impl Task {
             });
         }
         self.front.status = Status::InProgress;
+        self.front.stray_claim_times = None;
         self.front.claim = Some(Claim {
             holder: agent.to_string(),
             claimed_at: Some(now),
@@ -232,7 +258,7 @@ impl Task {
     ) -> Result<Outcome, TransitionError> {
         match self.front.status {
             Status::Done => return Ok(Outcome::Unchanged),
-            Status::Cancelled => return Err(self.invalid(Invalid::CompleteCancelled)),
+            Status::Cancelled => return Err(self.invalid(InvalidReason::CompleteCancelled)),
             _ => {}
         }
         if !blocking.is_empty() {
@@ -254,7 +280,7 @@ impl Task {
     ) -> Result<Outcome, TransitionError> {
         match self.front.status {
             Status::Cancelled => return Ok(Outcome::Unchanged),
-            Status::Done => return Err(self.invalid(Invalid::CancelDone)),
+            Status::Done => return Err(self.invalid(InvalidReason::CancelDone)),
             _ => {}
         }
         self.authorize_live(caller, force, now)?;
@@ -268,10 +294,12 @@ impl Task {
         now: DateTime<Utc>,
     ) -> Result<(), TransitionError> {
         if !self.front.status.is_terminal() {
-            return Err(self.invalid(Invalid::ReopenActive(self.front.status)));
+            return Err(self.invalid(InvalidReason::ReopenActive(self.front.status)));
         }
         if !done_dependents.is_empty() && !force {
-            return Err(self.invalid(Invalid::ReopenDoneDependents(done_dependents.to_vec())));
+            return Err(self.invalid(InvalidReason::ReopenDoneDependents(
+                done_dependents.to_vec(),
+            )));
         }
         self.finish(Status::Todo, now);
         Ok(())
@@ -284,39 +312,41 @@ impl From<TransitionError> for OrbitError {
         match error {
             InvalidTransition { id, reason } => {
                 let message = match &reason {
-                    Invalid::ReleaseTerminal(status) => {
+                    InvalidReason::ReleaseTerminal(status) => {
                         format!(
                             "{id} is {}; release only applies to active tasks",
                             status.as_str()
                         )
                     }
-                    Invalid::HeartbeatNotInProgress(status) => {
+                    InvalidReason::HeartbeatNotInProgress(status) => {
                         format!(
                             "{id} is {}; only in_progress tasks can be heartbeated",
                             status.as_str()
                         )
                     }
-                    Invalid::HeartbeatNoClaim => format!("{id} has no claim"),
-                    Invalid::ClaimTerminal(status) => {
+                    InvalidReason::HeartbeatNoClaim => format!("{id} has no claim"),
+                    InvalidReason::ClaimTerminal(status) => {
                         format!("{id} is {}; it cannot be claimed", status.as_str())
                     }
-                    Invalid::CompleteCancelled => {
+                    InvalidReason::CompleteCancelled => {
                         format!("{id} is cancelled; reopen it before completing it")
                     }
-                    Invalid::CancelDone => format!("{id} is done; reopen it before cancelling it"),
-                    Invalid::ReopenActive(status) => {
+                    InvalidReason::CancelDone => {
+                        format!("{id} is done; reopen it before cancelling it")
+                    }
+                    InvalidReason::ReopenActive(status) => {
                         format!(
                             "{id} is {}; only terminal tasks can be reopened",
                             status.as_str()
                         )
                     }
-                    Invalid::ReopenDoneDependents(dependents) => {
+                    InvalidReason::ReopenDoneDependents(dependents) => {
                         format!("{id} has done dependents: {}", dependents.join(", "))
                     }
                 };
                 let error = OrbitError::new(code::INVALID_TRANSITION, message);
                 match reason {
-                    Invalid::ReopenDoneDependents(dependents) => {
+                    InvalidReason::ReopenDoneDependents(dependents) => {
                         error.with_details(json!({ "done_dependents": dependents }))
                     }
                     _ => error,
@@ -401,6 +431,7 @@ mod tests {
                 labels: Vec::new(),
                 depends_on: Vec::new(),
                 waiting_on: Some("vendor".to_string()),
+                stray_claim_times: None,
                 claim: lease_until.map(|lease_until| Claim {
                     holder: "alice".to_string(),
                     claimed_at: Some(now() - Duration::minutes(20)),
@@ -421,7 +452,7 @@ mod tests {
         }
     }
 
-    fn invalid(reason: Invalid) -> TransitionError {
+    fn invalid(reason: InvalidReason) -> TransitionError {
         TransitionError::InvalidTransition {
             id: ID.to_string(),
             reason,
@@ -464,14 +495,14 @@ mod tests {
                 No,
                 Some("alice"),
                 false,
-                Err(invalid(Invalid::ReleaseTerminal(Done))),
+                Err(invalid(InvalidReason::ReleaseTerminal(Done))),
             ),
             (
                 Cancelled,
                 Live,
                 Some("alice"),
                 true,
-                Err(invalid(Invalid::ReleaseTerminal(Cancelled))),
+                Err(invalid(InvalidReason::ReleaseTerminal(Cancelled))),
             ),
         ];
         for (status, held, caller, force, expected) in rows {
@@ -509,19 +540,19 @@ mod tests {
                 InProgress,
                 No,
                 "alice",
-                Err(invalid(Invalid::HeartbeatNoClaim)),
+                Err(invalid(InvalidReason::HeartbeatNoClaim)),
             ),
             (
                 Todo,
                 No,
                 "alice",
-                Err(invalid(Invalid::HeartbeatNotInProgress(Todo))),
+                Err(invalid(InvalidReason::HeartbeatNotInProgress(Todo))),
             ),
             (
                 Done,
                 No,
                 "alice",
-                Err(invalid(Invalid::HeartbeatNotInProgress(Done))),
+                Err(invalid(InvalidReason::HeartbeatNotInProgress(Done))),
             ),
         ];
         for (status, held, agent, expected) in rows {
@@ -605,7 +636,7 @@ mod tests {
         let mut t = task(Done, No);
         assert_eq!(
             t.claim("bob", false, lease, &open, now()),
-            Err(invalid(Invalid::ClaimTerminal(Done)))
+            Err(invalid(InvalidReason::ClaimTerminal(Done)))
         );
 
         let mut t = task(InProgress, Live);
@@ -686,11 +717,11 @@ mod tests {
         // the other terminal state is rejected
         assert_eq!(
             task(Cancelled, No).complete(None, false, &[], now()),
-            Err(invalid(Invalid::CompleteCancelled))
+            Err(invalid(InvalidReason::CompleteCancelled))
         );
         assert_eq!(
             task(Done, No).cancel(None, false, now()),
-            Err(invalid(Invalid::CancelDone))
+            Err(invalid(InvalidReason::CancelDone))
         );
 
         // unfinished dependencies block done only, even when forced
@@ -717,21 +748,23 @@ mod tests {
             let mut t = task(status, No);
             assert_eq!(
                 t.reopen(false, &dependents, now()),
-                Err(invalid(Invalid::ReopenDoneDependents(dependents.clone())))
+                Err(invalid(InvalidReason::ReopenDoneDependents(
+                    dependents.clone()
+                )))
             );
             assert_eq!(t.reopen(true, &dependents, now()), Ok(()));
         }
         for status in [Todo, InProgress] {
             assert_eq!(
                 task(status, No).reopen(true, &[], now()),
-                Err(invalid(Invalid::ReopenActive(status)))
+                Err(invalid(InvalidReason::ReopenActive(status)))
             );
         }
     }
 
     #[test]
     fn errors_keep_codes_and_details() {
-        let error = OrbitError::from(invalid(Invalid::ReopenDoneDependents(vec![
+        let error = OrbitError::from(invalid(InvalidReason::ReopenDoneDependents(vec![
             "a".into(),
             "b".into(),
         ])));
@@ -748,5 +781,28 @@ mod tests {
             error.details,
             Some(json!({ "task": ID, "holder": "alice" }))
         );
+    }
+
+    #[test]
+    fn transitions_keep_unknown_fields_and_clear_stray_times() {
+        let extra = serde_yaml_ng::Value::String("keep me".into());
+        for run in [
+            |t: &mut Task| t.release(None, true, now()).map(|_| ()),
+            |t: &mut Task| t.cancel(None, true, now()).map(|_| ()),
+            |t: &mut Task| t.complete(None, true, &[], now()).map(|_| ()),
+        ] {
+            let mut t = task(InProgress, Live);
+            t.front.extra.insert("owner_note".into(), extra.clone());
+            run(&mut t).unwrap();
+            assert_eq!(t.front.extra.get("owner_note"), Some(&extra));
+        }
+
+        let mut t = task(Todo, No);
+        t.front.stray_claim_times = Some(crate::task::StrayClaimTimes {
+            claimed_at: None,
+            lease_until: Some(now()),
+        });
+        t.cancel(None, false, now()).unwrap();
+        assert!(t.front.stray_claim_times.is_none());
     }
 }

@@ -58,9 +58,17 @@ impl Claim {
         self.lease_until.is_some_and(|until| until <= now)
     }
 
-    pub fn is_complete(&self) -> bool {
-        self.claimed_at.is_some() && self.lease_until.is_some()
+    pub fn has_times(&self) -> bool {
+        self.claimed_at.is_some() || self.lease_until.is_some()
     }
+}
+
+/// Claim times found in a file without a `claimed_by`. Kept so such hand-edited files
+/// rewrite unchanged and `orbit doctor` can still report them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrayClaimTimes {
+    pub claimed_at: Option<DateTime<Utc>>,
+    pub lease_until: Option<DateTime<Utc>>,
 }
 
 /// On-disk shape: the Claim is stored as three flat keys (see docs/SPEC.md).
@@ -90,10 +98,17 @@ struct RawFrontmatter {
 
 impl From<RawFrontmatter> for TaskFrontmatter {
     fn from(raw: RawFrontmatter) -> Self {
+        let (claimed_at, lease_until) = (raw.claimed_at, raw.lease_until);
         let claim = raw.claimed_by.map(|holder| Claim {
             holder,
-            claimed_at: raw.claimed_at,
-            lease_until: raw.lease_until,
+            claimed_at,
+            lease_until,
+        });
+        let stray_claim_times = (claim.is_none()
+            && (claimed_at.is_some() || lease_until.is_some()))
+        .then_some(StrayClaimTimes {
+            claimed_at,
+            lease_until,
         });
         Self {
             title: raw.title,
@@ -103,6 +118,7 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             depends_on: raw.depends_on,
             waiting_on: raw.waiting_on,
             claim,
+            stray_claim_times,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
             extra: raw.extra,
@@ -112,9 +128,10 @@ impl From<RawFrontmatter> for TaskFrontmatter {
 
 impl From<TaskFrontmatter> for RawFrontmatter {
     fn from(front: TaskFrontmatter) -> Self {
-        let (claimed_by, claimed_at, lease_until) = match front.claim {
-            Some(claim) => (Some(claim.holder), claim.claimed_at, claim.lease_until),
-            None => (None, None, None),
+        let (claimed_by, claimed_at, lease_until) = match (front.claim, front.stray_claim_times) {
+            (Some(claim), _) => (Some(claim.holder), claim.claimed_at, claim.lease_until),
+            (None, Some(stray)) => (None, stray.claimed_at, stray.lease_until),
+            (None, None) => (None, None, None),
         };
         Self {
             title: front.title,
@@ -143,6 +160,7 @@ pub struct TaskFrontmatter {
     pub depends_on: Vec<String>,
     pub waiting_on: Option<String>,
     pub claim: Option<Claim>,
+    pub stray_claim_times: Option<StrayClaimTimes>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub extra: BTreeMap<String, serde_yaml_ng::Value>,
@@ -317,6 +335,7 @@ mod tests {
                 depends_on: vec!["orb-f14c02".to_string()],
                 waiting_on: None,
                 claim: None,
+                stray_claim_times: None,
                 created_at: now(),
                 updated_at: now(),
                 extra: BTreeMap::new(),
@@ -447,6 +466,14 @@ Body.
         let content = "---\ntitle: t\nstatus: in_progress\nclaimed_by: alice\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         let claim = task.front.claim.unwrap();
-        assert!(!claim.is_complete() && !claim.is_live(now()) && !claim.is_stale(now()));
+        assert!(!claim.has_times() && !claim.is_live(now()) && !claim.is_stale(now()));
+    }
+
+    #[test]
+    fn stray_claim_times_survive_a_round_trip() {
+        let content = "---\ntitle: t\nstatus: todo\npriority: 2\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        assert!(task.front.claim.is_none() && task.front.stray_claim_times.is_some());
+        assert_eq!(render_task(&task).unwrap(), content);
     }
 }

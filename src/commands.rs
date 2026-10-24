@@ -389,6 +389,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
             depends_on,
             waiting_on,
             claim: None,
+            stray_claim_times: None,
             created_at: now,
             updated_at: now,
             extra: Default::default(),
@@ -514,10 +515,7 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         write_task(board, &task)?;
 
         let lease = task
-            .front
-            .claim
-            .as_ref()
-            .and_then(|claim| claim.lease_until)
+            .lease_until()
             .map(|until| until.to_rfc3339())
             .unwrap_or_default();
         let mut output = task_output(
@@ -582,10 +580,7 @@ fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output::CommandOut
     write_task(board, &task)?;
 
     let lease = task
-        .front
-        .claim
-        .as_ref()
-        .and_then(|claim| claim.lease_until)
+        .lease_until()
         .map(|until| until.to_rfc3339())
         .unwrap_or_default();
     task_output(
@@ -664,7 +659,13 @@ fn cmd_done(board: &Board, args: DoneArgs) -> Result<crate::output::CommandOutpu
 
     let comment = author.zip(comment);
     settle_terminal(
-        board, &mut graph, &args.id, outcome, comment, now, "done", "done",
+        board,
+        &mut graph,
+        &args.id,
+        outcome,
+        comment,
+        now,
+        TerminalKind::Done,
     )
 }
 
@@ -690,14 +691,35 @@ fn cmd_cancel(board: &Board, args: CancelArgs) -> Result<crate::output::CommandO
         outcome,
         comment,
         now,
-        "cancelled",
-        "cancel",
+        TerminalKind::Cancelled,
     )
 }
 
-/// Persists a done/cancel transition and its optional comment. `past` is the human
-/// verb ("cancelled"), `verb` the commit verb ("cancel").
-#[allow(clippy::too_many_arguments)]
+#[derive(Clone, Copy)]
+enum TerminalKind {
+    Done,
+    Cancelled,
+}
+
+impl TerminalKind {
+    /// Human wording, e.g. "cancelled".
+    fn past(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    /// Commit verb, e.g. "cancel".
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Cancelled => "cancel",
+        }
+    }
+}
+
+/// Persists a done/cancel transition and its optional `(author, body)` comment.
 fn settle_terminal(
     board: &Board,
     graph: &mut Graph,
@@ -705,9 +727,9 @@ fn settle_terminal(
     outcome: Outcome,
     comment: Option<(String, String)>,
     now: chrono::DateTime<Utc>,
-    past: &str,
-    verb: &str,
+    kind: TerminalKind,
 ) -> Result<crate::output::CommandOutput> {
+    let (past, verb) = (kind.past(), kind.verb());
     let message = format!("orbit: {verb} {id}");
     match (outcome, comment) {
         (Outcome::Unchanged, None) => Ok(crate::output::CommandOutput::new(
@@ -1285,12 +1307,12 @@ fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandO
     }
 
     for task in graph.tasks.values() {
-        if task
+        let no_times = task
             .front
             .claim
             .as_ref()
-            .is_some_and(|claim| !claim.is_complete())
-        {
+            .is_some_and(|claim| !claim.has_times());
+        if no_times || task.front.stray_claim_times.is_some() {
             warnings.push(format!("{}: claim metadata is incomplete", task.id));
         }
         if task.front.status == Status::Done {

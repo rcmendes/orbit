@@ -60,6 +60,9 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
   `labels`, `blocking`, and claim fields.
 - `orbit show <ID> --json` returns the full task, including `body`, `labels`,
   `kind`, `type`, `parent`, `subtasks`, `dependents`, and `comments`.
+- `orbit list` prints an aligned table for humans. It truncates long titles and
+  its columns are presentation only; parse `--json` in automation. `orbit ready`
+  and `orbit tree` use compact summary lines for the same reason.
 - Break a feature into SubTasks with `orbit add "<title>" --parent <parent-id>`.
   SubTasks are one level deep. Use `--depends-on` only for real blockers between
   units of work; the Parent Task waits for its SubTasks automatically.

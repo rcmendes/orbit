@@ -35,6 +35,10 @@ Add a first-class **Type** field to every Task:
 - Native export stays at `schema_version` 2 because schema 2 is unreleased;
   `type` is part of that schema.
 
+> **Update (after v0.5.0):** `orbit list` now renders an aligned table with a
+> `TYPE` column, so the non-task prefix described above applies to `ready` and
+> `tree` output rather than the list table.
+
 ## Why
 
 - A field is filterable, serializable, and visible to MCP clients without a

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `orbit list` now renders an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns. Titles are shortened to 60 characters in the table; `--json` remains unchanged and carries the full title and every field. `--tree` keeps a Parent Task next to its SubTasks and indents the child title by two spaces.
+- Updated the README, command guide, architecture, specification, glossary, agent tracker guide, CLI help, generated agent instructions, and this changelog to describe the table view and the current command surface.
+
 ## 0.5.0 - 2026-10-24
 
 - Added a first-class `type` field: `task` (default), `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness; `kind` remains `task`/`subtask`. `epic` is top-level only. Every save writes `type`, including `type: task`; pre-type files read as `task`.

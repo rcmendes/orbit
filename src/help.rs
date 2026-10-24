@@ -167,14 +167,18 @@ hidden by default; pass --all to include them, or name a terminal status with
 --status. Filters combine, so --status in_progress --claimed-by claude shows
 everything one agent is holding.
 
---parent lists only the SubTasks of one Parent Task. --tree keeps each Parent
-Task next to its SubTasks and indents the children in human output. --type is
-repeatable and matches any listed work shape; --exclude-type hides any listed
-shape. --label is repeatable and every label must match; --exclude-label is
-repeatable and hides a task carrying any of the named labels. --repo NAME is
-shorthand for --label repo:NAME. Use --json when another program consumes the
-result: it returns data.tasks and data.count. For work an agent can start, use
-`orbit ready` instead of filtering this list.";
+Human output is an aligned table with ID, STATUS, P, TYPE, TITLE, LABELS, and
+CLAIMED BY columns. Long titles are shortened to 60 characters. --tree keeps
+each Parent Task next to its SubTasks and indents the child title by two spaces.
+The table is for reading; use --json when another program consumes the result,
+because it returns the full task objects in data.tasks plus data.count.
+
+--parent lists only the SubTasks of one Parent Task. --type is repeatable and
+matches any listed work shape; --exclude-type hides any listed shape. --label is
+repeatable and every label must match; --exclude-label is repeatable and hides a
+task carrying any of the named labels. --repo NAME is shorthand for --label
+repo:NAME. For work an agent can start, use `orbit ready` instead of filtering
+this list.";
 
 pub const LIST_EXAMPLES: &str = "\
 Examples:
@@ -613,9 +617,10 @@ Runs the Model Context Protocol server over stdio. Editors start this process fr
 their MCP configuration, so it is rarely run by hand. It exposes 13 tools (ready,
 list, get, create, update, claim, release, heartbeat, finish, link, delete, label,
 comment) and the orbit://tasks/{id} Markdown resource, reusing the CLI's lock,
-atomic writes, and auto-commit. `create` accepts `parent` to make a SubTask;
-`list` and `ready` accept `parent`, `repo`, and `labels` to scope a feature or
-repository.
+atomic writes, and auto-commit. `create` accepts `parent` to make a SubTask and
+`type` to set the work shape; `update` accepts `type`. `list` and `ready` accept
+`parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types` to
+scope a feature, repository, or work shape.
 
 Use `orbit mcp` as the command in a client configuration. Pass --dir globally to
 serve a specific Board.";

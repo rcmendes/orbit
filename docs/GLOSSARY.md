@@ -16,6 +16,11 @@ _Avoid_: Child task, checklist item, step
 A Task that groups SubTasks and whose completion depends on them.
 _Avoid_: Epic (as a synonym for every Parent Task), story
 
+**Close Candidate**:
+A non-terminal Parent Task with at least one SubTask and no open SubTasks.
+`orbit prime` reports Close Candidates; Orbit never closes one automatically.
+_Avoid_: Completed parent, auto-close
+
 **Kind**:
 The structural position of a Task: `task` or `subtask`. Kind is derived from `parent`; it is not the same as Type.
 _Avoid_: Category, issue type

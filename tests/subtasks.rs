@@ -566,16 +566,18 @@ fn list_parent_filters_and_tree_indents() {
 
     let output = repo.orbit(&["list", "--tree"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.lines().next().unwrap().contains("TITLE"), "{stdout}");
     let child_line = stdout
         .lines()
         .find(|line| line.contains(&child))
         .unwrap_or_else(|| panic!("no child line in {stdout}"));
-    assert!(child_line.starts_with("  "), "{stdout}");
     let parent_line = stdout
         .lines()
         .find(|line| line.contains(&parent))
         .unwrap_or_else(|| panic!("no parent line in {stdout}"));
-    assert!(!parent_line.starts_with("  "), "{stdout}");
+    // The table indents the title cell, not the whole row.
+    assert!(child_line.contains("task    Part"), "{stdout}");
+    assert!(parent_line.contains("task  Feature"), "{stdout}");
 }
 
 #[test]

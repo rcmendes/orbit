@@ -1,6 +1,6 @@
 # Orbit Specification
 
-Status: pre-alpha; v0.5.0 is the latest release. This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
+Status: pre-alpha; v0.5.0 is the latest release, and `main` adds the aligned `orbit list` table. This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
 
 ## 1. What Orbit is
 
@@ -287,57 +287,61 @@ description and copy-pasteable examples for every command and subcommand.
 The command map and the `init` and task-lifecycle sequences are in
 [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md).
 
-### M0 (walking skeleton)
+### Command surface
 
 ```text
-orbit init [--board PATH] [--agents SELECTOR] [--no-agents] [--hooks] [--local] [--mcp-bin PATH] [--print]
+orbit init [--board PATH] [--agents SELECTOR | --no-agents] [--hooks] [--local] [--mcp-bin PATH] [--print]
 orbit workspace <FOLDER>
 orbit link <PATH> [--no-refresh]
 orbit unlink
-orbit add <title> [-p N] [--label LABEL]... [--depends-on ID]... [--parent ID] [--waiting-on TEXT] [--body TEXT|--body-file PATH|-]
-orbit list [--status S] [--priority N] [--claimed-by NAME] [--label LABEL]... [--repo NAME|--unlabeled] [--parent ID] [--tree] [--waiting] [--all]
-orbit ready [--limit N] [--parent ID] [--repo NAME] [--label LABEL]... [--claim] [--by NAME]
+orbit add <TITLE> [-p N] [--type TYPE] [--depends-on ID]... [--parent ID] [--waiting-on TEXT] [--label LABEL]... [--body TEXT|--body-file PATH|-]
+orbit list [--status S] [--priority N] [--claimed-by NAME] [--waiting] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--repo NAME|--unlabeled] [--parent ID] [--tree] [--all]
+orbit ready [--limit N] [--parent ID] [--repo NAME] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--claim] [--by NAME]
 orbit show <id>
+orbit tree <id>
 orbit claim <id> [--by NAME] [--steal]
 orbit release <id> [--by NAME] [--force]
 orbit heartbeat <id> [--by NAME]
 orbit done <id> [--by NAME] [--force] [--comment TEXT | --comment-file PATH]
 orbit cancel <id> [--by NAME] [--force] [--comment TEXT | --comment-file PATH]
 orbit reopen <id> [--force]
-orbit update <id> [--title TEXT] [--body TEXT|--body-file PATH] [--priority N] [--waiting-on TEXT|--clear-waiting]
+orbit update <id> [--title TEXT] [--body TEXT|--body-file PATH] [--priority N] [--type TYPE] [--waiting-on TEXT|--clear-waiting]
+orbit label add <id> <label>...
+orbit label remove <id> <label>...
+orbit label list
+orbit comment add <id> [--body TEXT|--body-file PATH|-] [--by NAME]
+orbit comment list <id>
 orbit depend <id> <dep-id>
 orbit undepend <id> <dep-id>
 orbit delete <id> [--by NAME] [--force]
 orbit prime [--hook-json] [--repo NAME] [--label LABEL]... [--by NAME]
 orbit export
+orbit setup <claude|cursor|codex|opencode|mattpocock|all> [--hooks] [--no-mcp] [--mcp-bin PATH] [--print] [--check] [--remove]
+orbit mcp
 orbit doctor [--fix]
 orbit sync
 ```
 
 `--agents` accepts `auto`, `all`, `none`, `ask`, or a comma-separated list of client names. The default is `ask` when stdin is a terminal and `auto` otherwise. `--agents ask` reads from stdin even without a terminal.
 
-### Later milestones
+`TYPE` is one of `task`, `epic`, `spike`, `chore`, or `decision`. `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` is shorthand for `--label repo:NAME`.
 
-- M1: `setup <claude|cursor|codex|opencode|mattpocock|all> [--hooks] [--no-mcp] [--mcp-bin PATH] [--print] [--check] [--remove]`; `prime --hook-json`; managed instruction files. Implemented.
-- M2: `orbit mcp` (stdio MCP server); project-local MCP configs written by default; `--no-mcp` opts out. Implemented.
+### Milestones
+
+- M0: core CLI, JSON contract, global lock, atomic writes, auto-commit, and tests. Implemented.
+- M1: `setup` recipes, `prime --hook-json`, Claude hooks, skill files, and the mattpocock bridge. Implemented.
+- M2: `orbit mcp` over stdio, `orbit://tasks/{id}` resources, and project-local MCP configs. Implemented.
 - M3: packaging and release automation. Implemented.
-- M4: labels, comments, and triage integration. Implemented.
+- M4: labels, comments, hold labels, and triage integration. Implemented.
 - M5: one-command onboarding. `init` creates the Board and reconciles detected harnesses idempotently; `link` and `unlink` share one Board across repositories; hooks record the absolute binary; `setup --check` reports drift. Implemented.
-- M6: workspaces, SubTasks, dot-hierarchical IDs, repo/label-scoped queues, and deterministic export. `orbit workspace`, `add --parent`, `list/ready/prime --repo/--label`, and `export --json` are implemented.
-
-### M4 commands
-
-```text
-orbit label add <id> <label>...
-orbit label remove <id> <label>...
-orbit label list
-orbit comment add <id> --body TEXT|--body-file PATH|- [--by NAME]
-orbit comment list <id>
-```
+- M6: workspaces, SubTasks, dot-hierarchical IDs, repo/label-scoped queues, and deterministic export. Implemented.
+- v0.5.0: metadata-only `type`, `tree`, close candidates, parent progress fields, and label/type exclusions. Implemented.
+- `main`: aligned human `list` table. Presentation only; the JSON contract is unchanged.
 
 ### Command rules
 
 - `list` hides `done` and `cancelled` unless `--all`. `--type` is repeatable and matches any listed Type; `--exclude-type` hides any listed Type. `--label` is repeatable and every label must match; `--exclude-label` is repeatable and hides a Task carrying any named label. `--repo NAME` is shorthand for `--label repo:NAME`. `--unlabeled` conflicts with `--label` and `--repo`.
+- Human `list` output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns. The table sorts by priority, then creation time, then ID; `--tree` keeps each Parent Task adjacent to its SubTasks, indents the child title by two spaces, and orders by the root's priority. Titles longer than 60 characters are truncated with an ellipsis. The table is presentation only; `--json` carries the full title and every field and is the contract for scripts and agents.
 - `ready` and `prime` accept the same `--repo` and repeatable `--label` filters. `ready` also accepts `--parent`, `--type`, `--exclude-type`, and `--exclude-label`; `prime` reports `close_candidates` for non-terminal Parent Tasks with at least one SubTask and no open SubTasks. All filters combine with AND.
 - `add --type epic` and `update --type epic` are refused when the Task has a `parent`; epic is top-level only. `type` defaults to `task` and is written explicitly on every save.
 - `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `2`.
@@ -469,9 +473,17 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **M2 — MCP.** `orbit mcp` over stdio with the 13 tools, `orbit://tasks/{id}` resources, project-local MCP configs generated by `setup` (opt out with `--no-mcp`), and protocol-level tests against the CLI. Implemented.
 
-**M3 — distribution.** cargo-dist configuration in `dist-workspace.toml`, shell/PowerShell installers, the `@rcmendes/orbit` npm package, the generated release workflow, and `docs/RELEASING.md`. Implemented and released as v0.1.0 and v0.2.0.
+**M3 — distribution.** cargo-dist configuration in `dist-workspace.toml`, shell/PowerShell installers, the `@rcmendes/orbit` npm package, the generated release workflow, and `docs/RELEASING.md`. Implemented and released through v0.5.0.
 
 **M4 — triage metadata.** Labels, comments, hold-label readiness, label/comment CLI and MCP tools, and the triage integration docs. Implemented.
+
+**M5 — one-command onboarding.** Idempotent `init`, harness detection and selection, shared-Board `link`/`unlink`, absolute-binary hooks, and `setup --check`. Implemented.
+
+**M6 — workspaces, SubTasks, and export.** `orbit workspace`, dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and the one-level hierarchy rules. Implemented.
+
+**v0.5.0 — structural Type.** Metadata-only `type`, `tree` family view, close candidates, parent progress fields, and label/type exclusions. Implemented.
+
+**After v0.5.0 — table view.** Aligned human `orbit list` output on `main`; the JSON contract is unchanged.
 
 ## 11. Testing
 
@@ -484,6 +496,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, and `--remove` preserving user content.
 - Onboarding tests: idempotent `init`, harness detection and selection, link precedence over a local Board, `--dir`/`ORBIT_DIR` overrides, linked-worktree resolution, vanished links, and ephemeral binary rejection.
 - Workspace, SubTask, ID, filter, and export integration tests: `tests/workspace.rs`, `tests/subtasks.rs`, and `tests/export.rs`.
+- Human-output tests cover the aligned `list` table, including the header and non-task Type rendering, alongside the JSON shapes in `tests/types.rs`.
 - MCP tests: initialize, tools/list, label/comment round-trips, SubTask/parent filtering, resources, and error envelopes over a real stdio child process.
 - Golden JSON and error-envelope tests.
 - CI on macOS, Linux, and Windows: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`.
@@ -499,8 +512,13 @@ Tagging `v*` triggers `.github/workflows/release.yml`: it plans, builds, creates
 
 ## 13. Decisions
 
-- `docs/adr/0001-markdown-board-on-orphan-branch.md`
-- `docs/adr/0002-single-writer-lock-and-atomic-rename.md`
-- `docs/adr/0003-hand-rolled-mcp-jsonrpc.md`
-- `docs/adr/0004-mcp-tool-calls-spawn-the-cli.md`
-- `docs/adr/0005-comments-sidecar-files.md`
+- [0001. Markdown board on an orphan branch](./adr/0001-markdown-board-on-orphan-branch.md)
+- [0002. Single-writer lock and atomic rename](./adr/0002-single-writer-lock-and-atomic-rename.md)
+- [0003. Hand-rolled MCP JSON-RPC](./adr/0003-hand-rolled-mcp-jsonrpc.md)
+- [0004. MCP tool calls spawn the CLI](./adr/0004-mcp-tool-calls-spawn-the-cli.md)
+- [0005. Comments sidecar files](./adr/0005-comments-sidecar-files.md)
+- [0006. Shared board across repositories](./adr/0006-shared-board-across-repositories.md)
+- [0007. Hierarchical Task and SubTask IDs](./adr/0007-hierarchical-task-and-subtask-ids.md)
+- [0008. Workspace root directory](./adr/0008-workspace-root-directory.md)
+- [0009. Keep Task vocabulary](./adr/0009-keep-task-vocabulary.md)
+- [0010. Add a structural Type field](./adr/0010-structural-type-field.md)

@@ -8,8 +8,11 @@ orbit <command> -h        # compact summary
 ```
 
 This guide adds the part help cannot: **when** each command is the right tool.
-Commands print human-readable text by default; add `--json` to get exactly one
-JSON object on stdout.
+Board commands print human-readable text by default; add `--json` to get exactly
+one JSON object on stdout. Human output is for terminals, not parsers: `orbit
+list` renders an aligned table, while `ready`, `tree`, and `prime` use compact
+summary lines. The table's columns, ordering, and title truncation are
+presentation only; `--json` is the stable contract.
 
 ## Global options
 
@@ -278,7 +281,10 @@ orbit comment list orb-a7b2c9
 
 Lists tasks with combinable filters. Done and cancelled tasks are hidden by
 default; pass `--all`, or name a terminal status with `--status`, to include
-them.
+them. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`,
+`TITLE`, `LABELS`, and `CLAIMED BY` columns; titles longer than 60 characters
+are shortened with an ellipsis. Use `--json` when a script or agent consumes the
+result.
 
 **Good fit:** a human or agent wants an overview, a triage queue, one agent's
 in-progress work, or the full history.
@@ -298,14 +304,27 @@ orbit list --exclude-type epic      # hide spec/epic containers
 orbit list --all --json
 ```
 
+Human output looks like this:
+
+```text
+ID                 STATUS  P   TYPE  TITLE                                   LABELS                       CLAIMED BY
+orb-a7b2c9         todo    P1  epic  Spec: SSO login across api, web, infra  ready-for-agent
+orb-a7b2c9.z21c2w  todo    P0  task    infra: register OIDC client           ready-for-agent, repo:infra
+orb-a7b2c9.hxdmqt  todo    P1  task    api: OIDC callback                    ready-for-agent, repo:api
+```
+
+The table is intentionally not a machine interface. Column widths grow with the
+data, labels are joined with commas, a claim holder appears in the last column,
+and long titles are truncated. Parse `--json` instead.
+
 `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
 any listed shape. `--label` is repeatable and every label must match;
 `--exclude-label` is repeatable and hides a task carrying any of the named labels.
 `--repo NAME` is shorthand for `--label repo:NAME`. `--tree` keeps each Parent
-Task next to its SubTasks and indents the children in human output; JSON always
-carries `kind`, `type`, `parent`, `subtasks`, and `open_subtasks`. A Parent Task
-with open SubTasks is not Ready, so `list` may show it even though `ready` does
-not.
+Task next to its SubTasks and indents the child title by two spaces in the human
+table; JSON always carries `kind`, `type`, `parent`, `subtasks`, and
+`open_subtasks` with the full title. A Parent Task with open SubTasks is not
+Ready, so `list` may show it even though `ready` does not.
 
 For work that can start now, use `orbit ready` instead: `list` shows all open
 work, including blocked tasks.
@@ -701,5 +720,7 @@ orbit sync              # commit anything left uncommitted
 
 ## See also
 
+- [README](../README.md) for the overview, quick start, and workspace models.
 - [Architecture](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
 - [Specification](./SPEC.md) for the canonical JSON contract and transition rules.
+- [Glossary](./GLOSSARY.md) for the canonical vocabulary.

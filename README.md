@@ -360,7 +360,7 @@ Task churn does not belong in your feature PRs. The `orbit` branch is separate f
 
 ### Safety without a server
 
-- **One writer at a time.** Mutations take a repo-wide exclusive lock; readers take it shared for a consistent snapshot.
+- **One writer at a time.** Mutations take a Board-wide exclusive lock; readers take it shared for a consistent snapshot.
 - **Atomic publishes.** Each file is written to a temp file, fsynced, renamed, and the directory is fsynced on Unix. A crash cannot leave a half-written task.
 - **No persistent index.** Every command rebuilds the graph from Markdown. There is no cache to corrupt and no watcher to miss an event.
 - **Auto-commit with an escape hatch.** Meaningful mutations commit to the `orbit` branch. Heartbeats are lease-only and wait for the next mutation or `orbit sync`. Nothing is pushed.

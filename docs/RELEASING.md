@@ -57,7 +57,7 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
    gh workflow run "Install smoke" --ref v0.7.0
    ```
 
-   A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init --agents <client>` to wire a detected harness, `orbit add`, `orbit ready`, and a real MCP initialize/tools-list handshake through the generated agent command. A red run means the published artifacts are broken even though the release exists.
+   A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init --agents auto` to wire the detected harnesses, `orbit add`, `orbit ready`, and a real MCP initialize/tools-list handshake through the generated agent command. The `--agents` selector becomes a client list or `none` when the Orbit folder lands; update this smoke step with that change. A red run means the published artifacts are broken even though the release exists.
 
 ## Packaging checks
 

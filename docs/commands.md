@@ -1,9 +1,9 @@
 # Command guide
 
 Status: this guide describes the next release after v0.7.0, including the Orbit
-folder ([ADR 0012](./adr/0012-orbit-folder.md)). The v0.7.0 binary still uses
-`orbit workspace`, `init --board`, and the hidden `.git/orbit/board` layout; the
-new surface lands in follow-up implementation changes.
+folder ([ADR 0012](./adr/0012-orbit-folder.md)). The unified `init [DIR]`
+surface and resolver are implemented; user-scoped setup and the `doctor`
+migration remain the final follow-ups.
 
 Orbit has one command per operation. Every command explains itself:
 
@@ -97,18 +97,21 @@ name; `--global` uses `orb` with a warning. Pass `--slug` to choose it
 explicitly. Re-running `init` preserves the stored prefix; an empty Board can
 change it, while a populated Board returns `SLUG_LOCKED` and points at
 `orbit slug migrate <slug>`. `--print` reports the same result without writing.
-The JSON and human output carry `prefix` and `storage`; the JSON also reports
-`portable_mcp`, the MCP command mode chosen for generated configs.
+The JSON and human output carry `prefix`, `storage`, and the worktree `exclude`
+entry; the JSON also reports `global`, `created`, `preview`, `portable_mcp`, and
+the managed files.
 
 `init` takes `DIR` from the positional argument, then `--dir`/`ORBIT_DIR`, then
-`./.orbit`. `--global` is exclusive with those and means `~/.orbit`. `link`
-uses only its positional `DIR`; `--dir`/`ORBIT_DIR` never retarget the pointer. A
-nested `.orbit` below `DIR` is a separate scope: it does not block `init` at
-`DIR`, and commands inside that subtree resolve the nested Board first.
+`./.orbit`; in a linked worktree the default is the main checkout's `.orbit`.
+`--global` is exclusive with those and means `~/.orbit`. `link` uses only its
+positional `DIR`; `--dir`/`ORBIT_DIR` never retarget the pointer. A repository
+can own one local Board; a second `.orbit` in the same working tree is refused.
+A nested repository maintains its own resolution scope.
 
 Without `--agents`, a terminal asks whether to wire detected harnesses; without
-a terminal, `init` only prints `orbit setup` as the next step. `--agents` accepts
-`none`, `all`, or a comma-separated client list. `init` refuses to create a
+a terminal, `init` prints the link hint for a standalone Board and the
+`orbit setup` hint. `--agents` accepts `none`, `all`, or a comma-separated client
+list. `init` refuses to create a
 Board that would compete with an existing repository-local resolution for `DIR`:
 a link, an ancestor `.orbit`, the main checkout's `.orbit`, or a legacy Board is
 reported as `ALREADY_INITIALIZED` before anything is written. `--global` and the

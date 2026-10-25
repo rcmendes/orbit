@@ -187,9 +187,18 @@ pub fn worktree_prune(repo: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Adds an untracked exclusion for `dir` to the repository's local exclude file.
-/// The path never enters a tracked `.gitignore`.
-pub fn ensure_exclude_entry(repo: &Path, dir: &Path) -> Result<()> {
+pub fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>> {
+    let output = run_git(Some(repo), &["worktree", "list", "--porcelain"], None)?;
+    let mut paths = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            paths.push(PathBuf::from(path));
+        }
+    }
+    Ok(paths)
+}
+
+pub fn exclude_entry_for(repo: &Path, dir: &Path) -> Result<String> {
     let relative = dir.strip_prefix(repo).map_err(|_| {
         OrbitError::config(format!(
             "{} is not inside the repository at {}",
@@ -204,7 +213,13 @@ pub fn ensure_exclude_entry(repo: &Path, dir: &Path) -> Result<()> {
             "the Board directory cannot be the repository root",
         ));
     }
-    let pattern = format!("/{relative}/");
+    Ok(format!("/{relative}/"))
+}
+
+/// Adds an untracked exclusion for `dir` to the repository's local exclude file.
+/// The path never enters a tracked `.gitignore`.
+pub fn ensure_exclude_entry(repo: &Path, dir: &Path) -> Result<()> {
+    let pattern = exclude_entry_for(repo, dir)?;
 
     let info = common_dir_at(repo)?.join("info");
     std::fs::create_dir_all(&info)

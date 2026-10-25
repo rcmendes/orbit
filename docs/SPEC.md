@@ -280,7 +280,7 @@ prefix = "orb-"
 
 ## 5. Board lifecycle
 
-A Board lives in the Orbit folder, `DIR`. The default is `./.orbit` in the current directory. Every command takes `DIR` as the folder delegated to Orbit: the positional argument of `init`, the argument of `link`, and `--dir`/`ORBIT_DIR`.
+A Board lives in the Orbit folder, `DIR`. The default is `./.orbit` in the current directory; in a linked worktree it is the main checkout's `.orbit`. Every command takes `DIR` as the folder delegated to Orbit: the positional argument of `init`, the argument of `link`, and `--dir`/`ORBIT_DIR`.
 
 `orbit init [DIR] [--slug SLUG] [--global] [--agents LIST|none|all] [--print]`:
 
@@ -290,13 +290,13 @@ A Board lives in the Orbit folder, `DIR`. The default is `./.orbit` in the curre
    - Outside every Git working tree, it makes `DIR` an independent Git repository with `HEAD` on the `orbit` branch.
 3. Writes `config.toml` with the resolved `id.prefix` and `board.storage`, plus `.gitignore`, `tasks/.gitkeep`, and `comments/.gitkeep`.
 4. Commits `orbit: initialize board`.
-5. Prints the next step. In a TTY it asks whether to wire the detected coding-agent harnesses; without a TTY it only prints the hint. `--agents` skips the prompt.
+5. Prints the next step: `orbit link DIR` for a standalone Board plus the `orbit setup` hint. In a TTY it asks whether to wire the detected coding-agent harnesses; without a TTY it only prints the hint. `--agents` skips the prompt.
 
 `orbit init` is idempotent when `DIR` already holds a Board: the Board is reused and nothing is rewritten. If a different repository-local Board already resolves for `DIR`, `init` returns `ALREADY_INITIALIZED` naming that Board and creates nothing. The `~/.orbit` fallback does not block creating a local Board. Run `orbit unlink` before creating a local Board in a linked repository. A linked repository keeps its Board until `unlink`. `--print` computes the same result without writing.
 
 `init` takes `DIR` from the positional argument; when it is absent, from `--dir` or `ORBIT_DIR`; otherwise it uses `./.orbit`. `--global` is exclusive with a positional `DIR` and with `--dir`/`ORBIT_DIR` and means `~/.orbit`. `link` uses only its positional `DIR`; `--dir`/`ORBIT_DIR` never retarget the pointer written by `link`.
 
-A nested `.orbit` below `DIR` is a separate scope: it does not block `init` at `DIR`, and commands run inside that subtree resolve the nested Board first through discovery. The second-Board rule protects one resolution scope, not every descendant.
+A repository owns one local Board. A nested repository (for example a submodule) has its own resolution scope and may resolve its own nested Board, but a second `.orbit` in the same working tree is refused because the `orbit` branch can be checked out by only one worktree.
 
 `orbit init --global` targets `~/.orbit` and creates a `repository`-mode Board unless it already exists. The global Board is the last discovery fallback and is never created while resolving a command.
 
@@ -312,7 +312,7 @@ A Board has one slug. It is resolved from `DIR` when the Board is created; an em
 | `init DIR` | `DIR` basename, or its parent's basename when `DIR` is named `.orbit` | explicit |
 | `init --global` | `orb`, with a warning | explicit |
 
-The default `./.orbit` therefore uses the project folder name: `~/src/acme/.orbit` becomes `acme-`. An explicit `DIR` such as `~/src/acme` also becomes `acme-`. The main checkout is the parent of the Git common directory when that directory is literally named `.git`; otherwise it is the repository root. That keeps linked worktrees, submodules, and `--separate-git-dir` on one slug.
+The default `./.orbit` therefore uses the project folder name: `~/src/acme/.orbit` becomes `acme-`. An explicit `DIR` such as `~/src/acme` also becomes `acme-`. A linked worktree defaults to the main checkout's `.orbit`, so it keeps the same Board and slug.
 
 Auto-derived names are normalized: lowercase; every run outside `[a-z0-9]` becomes one `-`; collapse and trim `-`; fall back to `orb`; cap at 20 characters at the last dash, or hard-cut. Auto names never fail. A warning on stderr is emitted when the anchor is the home directory or `/`.
 
@@ -633,7 +633,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Multi-process tests: concurrent claims, dependencies, and deletes against one board; assert serializability and distinct claims.
 - Crash test: abort a writer between temp write and rename; the old file survives and `doctor --fix` removes the temp.
 - Worktree integration: initialize in the main worktree, claim from a linked worktree, assert one board.
-- Orbit folder tests: a secondary worktree resolves the main checkout's `.orbit`; `init` there returns `ALREADY_INITIALIZED`; commands run from `src/` resolve the root Board and `init` there refuses while that Board exists; `git clean -xdff` removes `DIR` and `doctor --fix` re-attaches it with every Task intact; `init` outside a repository creates a `repository`-mode Board; `~/.orbit` resolves only when it exists and `init --global` creates it.
+- Orbit folder tests: a secondary worktree resolves the main checkout's `.orbit`; `init` there reuses it; commands run from `src/` resolve the root Board and `init` there refuses while that Board exists; `git clean -xdff` removes `DIR` and `doctor --fix` re-attaches it with every Task intact; `init` outside a repository creates a `repository`-mode Board; `~/.orbit` resolves only when it exists and `init --global` creates it.
 - Legacy layout tests: old `<git-common-dir>/orbit/board` and `<workspace>/board` targets resolve with `LEGACY_LAYOUT`; `doctor --migrate` is resumable and preserves Tasks; an interrupted migration reports `AMBIGUOUS_BOARD`; an orphan worktree reports `ORPHAN_WORKTREE`; a wrong `board.storage` reports `STORAGE_MISMATCH`.
 - Link tests: `link DIR` between repositories shares one graph, legacy workspace-root targets still resolve with a warning, `unlink` returns to the main checkout's Board, and `setup --scope user` writes no Board path.
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, `--remove` preserving user content, project versus user scope, and TTY versus non-TTY `init` behavior.

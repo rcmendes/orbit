@@ -22,12 +22,12 @@ fn make_stale(repo: &TestRepo, id: &str) {
 }
 
 #[test]
-fn init_creates_a_shared_board() {
+fn init_creates_the_local_orbit_folder() {
     let repo = TestRepo::new();
     let value = repo.ok_json(&["init", "--json"]);
 
     assert_eq!(value["data"]["branch"], "orbit");
-    assert_eq!(value["data"]["external"], false);
+    assert_eq!(value["data"]["storage"], "worktree");
 
     let board = repo.board_path();
     assert!(board.join("config.toml").is_file());
@@ -514,7 +514,8 @@ fn external_boards_work_outside_a_repository() {
     let output = repo.orbit(&["--dir", board_arg, "init", "--json"]);
     assert!(output.status.success());
     let init: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(init["data"]["external"], true);
+    assert_eq!(init["data"]["storage"], "repository");
+    assert_eq!(init["data"]["global"], false);
     assert!(board.join("config.toml").is_file());
 
     let output = repo.orbit(&["--dir", board_arg, "add", "External task", "--json"]);

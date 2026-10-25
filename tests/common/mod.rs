@@ -99,6 +99,14 @@ impl TestRepo {
         self.ok_json(&["init", "--agents", "none", "--slug", "orb", "--json"]);
     }
 
+    pub fn init_at(&self, dir: &Path) -> serde_json::Value {
+        self.ok_json(&["init", dir.to_str().unwrap(), "--agents", "none", "--json"])
+    }
+
+    pub fn link_at(&self, dir: &Path) -> serde_json::Value {
+        self.ok_json(&["link", dir.to_str().unwrap(), "--json"])
+    }
+
     /// Creates a Git repository in a named subdirectory, so auto-adoption can
     /// derive a stable slug from the folder name.
     pub fn named_repo(&self, name: &str) -> PathBuf {

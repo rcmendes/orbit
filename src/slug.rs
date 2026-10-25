@@ -120,19 +120,31 @@ pub fn main_checkout_anchor() -> Result<PathBuf> {
     crate::git::repo_root()
 }
 
-/// Auto slug and optional warning for `orbit init`.
-pub fn auto_slug_for_main_checkout() -> Result<(String, Option<String>)> {
-    let anchor = main_checkout_anchor()?;
-    let slug = from_folder_name(&anchor_name(&anchor));
-    let warning = home_or_root_warning(&anchor);
-    Ok((slug, warning))
-}
+/// Auto slug and optional warning for `init DIR`.
+pub fn auto_slug_for_dir(dir: &Path) -> (String, Option<String>) {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .and_then(|home| dunce::canonicalize(home).ok());
+    if home
+        .as_deref()
+        .is_some_and(|home| dir == home.join(".orbit"))
+    {
+        return (
+            FALLBACK.to_string(),
+            Some("global Board uses the orb prefix; pass --slug to choose another".to_string()),
+        );
+    }
 
-/// Auto slug and optional warning for `orbit workspace`.
-pub fn auto_slug_for_workspace(root: &Path) -> (String, Option<String>) {
-    let slug = from_folder_name(&anchor_name(root));
-    let warning = home_or_root_warning(root);
-    (slug, warning)
+    let anchor = if dir.file_name().and_then(|name| name.to_str()) == Some(".orbit") {
+        dir.parent().unwrap_or(dir)
+    } else {
+        dir
+    };
+    (
+        from_folder_name(&anchor_name(anchor)),
+        home_or_root_warning(anchor),
+    )
 }
 
 fn anchor_name(path: &Path) -> String {
@@ -229,12 +241,16 @@ mod tests {
     }
 
     #[test]
-    fn workspace_autoslug_uses_the_anchor_folder() {
-        let (slug, warning) = auto_slug_for_workspace(Path::new("/tmp/Teramigo_API"));
+    fn init_autoslug_uses_the_dir_or_its_orbit_folder_parent() {
+        let (slug, warning) = auto_slug_for_dir(Path::new("/tmp/Teramigo_API"));
         assert_eq!(slug, "teramigo-api");
         assert!(warning.is_none());
 
-        let (slug, warning) = auto_slug_for_workspace(Path::new("/"));
+        let (slug, warning) = auto_slug_for_dir(Path::new("/tmp/Teramigo_API/.orbit"));
+        assert_eq!(slug, "teramigo-api");
+        assert!(warning.is_none());
+
+        let (slug, warning) = auto_slug_for_dir(Path::new("/"));
         assert_eq!(slug, "orb");
         assert!(warning.is_some());
     }

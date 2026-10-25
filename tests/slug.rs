@@ -98,26 +98,25 @@ fn init_slug_overrides_and_rejects_invalid_input() {
 }
 
 #[test]
-fn init_board_defaults_to_orb_and_accepts_a_slug() {
+fn init_dir_derives_its_slug_and_accepts_an_override() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let board = parent.path().join("board");
     let board_str = board.to_str().unwrap();
 
-    let value = repo.ok_json(&["init", "--board", board_str, "--agents", "none", "--json"]);
-    assert_eq!(value["data"]["prefix"], "orb-");
-    assert_eq!(prefix_of(&repo, &board), "orb-");
+    let value = repo.ok_json(&["init", board_str, "--agents", "none", "--json"]);
+    assert_eq!(value["data"]["prefix"], "board-");
+    assert_eq!(prefix_of(&repo, &board), "board-");
 
     let id = repo.ok_json(&["--dir", board_str, "add", "Task", "--json"])["data"]["id"]
         .as_str()
         .unwrap()
         .to_string();
-    assert!(id.starts_with("orb-"), "{id}");
+    assert!(id.starts_with("board-"), "{id}");
 
     let other = parent.path().join("other-board");
     let value = repo.ok_json(&[
         "init",
-        "--board",
         other.to_str().unwrap(),
         "--agents",
         "none",
@@ -129,22 +128,30 @@ fn init_board_defaults_to_orb_and_accepts_a_slug() {
 }
 
 #[test]
-fn workspace_defaults_to_its_folder_and_empty_boards_can_change_slug() {
+fn init_dir_uses_its_folder_name_and_empty_boards_can_change_slug() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
 
-    let first = repo.ok_json_in(parent.path(), &["workspace", "Acme_API", "--json"]);
+    let first = repo.ok_json_in(
+        parent.path(),
+        &["init", "Acme_API", "--agents", "none", "--json"],
+    );
     assert_eq!(first["data"]["prefix"], "acme-api-");
-    let board = parent.path().join("Acme_API/board");
+    let board = parent.path().join("Acme_API");
     assert_eq!(prefix_of(&repo, &board), "acme-api-");
 
-    let second = repo.ok_json_in(parent.path(), &["workspace", "Acme_API", "--json"]);
+    let second = repo.ok_json_in(
+        parent.path(),
+        &["init", "Acme_API", "--agents", "none", "--json"],
+    );
     assert_eq!(second["data"]["prefix"], "acme-api-");
     assert_eq!(second["data"]["created"], false);
 
     let changed = repo.ok_json_in(
         parent.path(),
-        &["workspace", "Acme_API", "--slug", "acme", "--json"],
+        &[
+            "init", "Acme_API", "--agents", "none", "--slug", "acme", "--json",
+        ],
     );
     assert_eq!(changed["data"]["prefix"], "acme-");
     assert_eq!(prefix_of(&repo, &board), "acme-");
@@ -158,19 +165,23 @@ fn workspace_defaults_to_its_folder_and_empty_boards_can_change_slug() {
 
     let (status, value) = repo.json_in(
         parent.path(),
-        &["workspace", "Acme_API", "--slug", "other", "--json"],
+        &[
+            "init", "Acme_API", "--agents", "none", "--slug", "other", "--json",
+        ],
     );
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "SLUG_LOCKED");
 }
 
 #[test]
-fn workspace_rejects_an_invalid_slug_with_a_suggestion() {
+fn init_dir_rejects_an_invalid_slug_with_a_suggestion() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let (status, value) = repo.json_in(
         parent.path(),
-        &["workspace", "bad", "--slug", "Bad Slug", "--json"],
+        &[
+            "init", "bad", "--agents", "none", "--slug", "Bad Slug", "--json",
+        ],
     );
 
     assert_eq!(status, 1);
@@ -240,33 +251,24 @@ fn a_legacy_no_dash_prefix_treats_the_same_slug_as_a_no_op() {
 }
 
 #[test]
-fn init_local_uses_the_main_checkout_slug_and_accepts_an_override() {
+fn init_after_unlink_uses_the_current_directory_slug() {
     let repo = TestRepo::new();
     let named = repo.named_repo("teramigo");
     let shared = tempfile::tempdir().unwrap();
     let shared_board = shared.path().join("board");
 
-    repo.ok_json_in(
-        &named,
-        &[
-            "init",
-            "--board",
-            shared_board.to_str().unwrap(),
-            "--agents",
-            "none",
-            "--json",
-        ],
-    );
+    let other = TestRepo::new();
+    other.init_at(&shared_board);
+    repo.ok_json_in(&named, &["link", shared_board.to_str().unwrap(), "--json"]);
+    repo.ok_json_in(&named, &["unlink", "--json"]);
 
-    let local = repo.ok_json_in(&named, &["init", "--local", "--agents", "none", "--json"]);
+    let local = repo.ok_json_in(&named, &["init", "--agents", "none", "--json"]);
     assert_eq!(local["data"]["prefix"], "teramigo-");
-    assert_eq!(local["data"]["external"], false);
+    assert_eq!(local["data"]["storage"], "worktree");
 
     let changed = repo.ok_json_in(
         &named,
-        &[
-            "init", "--local", "--agents", "none", "--slug", "other", "--json",
-        ],
+        &["init", "--agents", "none", "--slug", "other", "--json"],
     );
     assert_eq!(changed["data"]["prefix"], "other-");
 }
@@ -380,7 +382,7 @@ fn export_carries_the_prefix_and_prime_does_not() {
 }
 
 #[test]
-fn a_secondary_worktree_uses_the_main_checkout_slug() {
+fn init_in_a_secondary_worktree_targets_the_main_checkout_orbit_folder() {
     let repo = TestRepo::new();
     let worktree_dir = tempfile::tempdir().unwrap();
     let worktree = worktree_dir.path().join("wt");
@@ -392,17 +394,18 @@ fn a_secondary_worktree_uses_the_main_checkout_slug() {
     let expected = format!("{}-", orbit_tracker::slug::from_folder_name(main_name));
     assert_eq!(value["data"]["prefix"], expected);
     assert!(repo.board_path().join("config.toml").exists());
+    assert!(!worktree.join(".orbit").exists());
     assert!(worktree.join(".git").is_file());
 }
 
 #[test]
-fn workspace_warns_on_stderr_when_the_anchor_is_home() {
+fn init_global_warns_on_stderr_when_the_anchor_is_home() {
     let repo = TestRepo::new();
     let home = tempfile::tempdir().unwrap();
     let home_str = home.path().to_str().unwrap();
 
     let output = repo.orbit_with_env(
-        &["workspace", home_str, "--json"],
+        &["init", "--global", "--agents", "none", "--json"],
         &[("HOME", home_str), ("USERPROFILE", home_str)],
     );
 
@@ -412,40 +415,35 @@ fn workspace_warns_on_stderr_when_the_anchor_is_home() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("anchor is the home directory"), "{stderr}");
+    assert!(
+        stderr.contains("global Board uses the orb prefix"),
+        "{stderr}"
+    );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["data"]["prefix"], "orb-");
+    assert_eq!(value["data"]["storage"], "repository");
     assert!(
         value["meta"]["warnings"][0]
             .as_str()
             .unwrap()
-            .contains("anchor is the home directory")
+            .contains("global Board uses the orb prefix")
     );
 }
 
 #[test]
-fn init_warns_on_stderr_when_the_main_checkout_is_home() {
+fn init_in_a_named_orbit_folder_uses_the_parent_slug() {
     let repo = TestRepo::new();
-    let home = repo.path().to_str().unwrap();
+    let named = repo.named_repo("teramigo");
+    let dir = named.join("work/.orbit");
 
-    let output = repo.orbit_with_env(
-        &["init", "--agents", "none", "--json"],
-        &[("HOME", home), ("USERPROFILE", home)],
+    let value = repo.ok_json_in(
+        &named,
+        &["init", dir.to_str().unwrap(), "--agents", "none", "--json"],
     );
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("anchor is the home directory"), "{stderr}");
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        value["meta"]["warnings"][0]
-            .as_str()
-            .unwrap()
-            .contains("anchor is the home directory")
-    );
+    assert_eq!(value["data"]["prefix"], "work-");
+    assert_eq!(value["data"]["storage"], "worktree");
+    assert!(dir.join("config.toml").is_file());
 }
 
 #[test]

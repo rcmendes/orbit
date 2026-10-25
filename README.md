@@ -146,6 +146,7 @@ orbit init --agents all       # wire every supported harness
 orbit init --agents none      # Board only, no agent files
 orbit init --print            # preview without writing
 orbit init ~/src/acme-board   # create a Board at ~/src/acme-board
+orbit init --global           # create the global Board at ~/.orbit
 ```
 
 ### 3. Put real work on the board
@@ -356,7 +357,7 @@ The filename is the ID. There is no `id` field in frontmatter. A SubTask ID is t
 
 ### Why an orphan branch?
 
-Task churn does not belong in your feature PRs. The `orbit` branch is separate from `main`, so an agent can update a ticket while a human reviews code without either change polluting the other. Because every worktree resolves the main checkout's `.orbit`, a claim made from a linked worktree and a claim made from the main checkout serialize on the same lock and see the same tasks.
+Task churn does not belong in your feature PRs. The `orbit` branch is separate from `main`, so an agent can update a ticket while a human reviews code without either change polluting the other. A Board created at the main checkout's `.orbit` is resolved by every linked worktree, so a claim made from a worktree and a claim made from the main checkout serialize on the same lock and see the same tasks.
 
 ### Safety without a server
 
@@ -705,6 +706,7 @@ orbit init --agents none      # Board only; no agent files
 orbit init --print            # preview without writing
 orbit init --portable-mcp     # MCP command `orbit`; editor PATH must find it
 orbit init ~/src/acme-board   # create a Board
+orbit init --global           # global Board at ~/.orbit
 ```
 
 Use `orbit setup` to wire, repair, or adjust a harness later. `--scope project` (the default) writes repository-level files; `--scope user` writes the harness's user-level locations:

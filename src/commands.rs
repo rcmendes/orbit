@@ -11,7 +11,7 @@ use crate::cli::{
     CommentListArgs, DeleteArgs, DependArgs, DoctorArgs, DoneArgs, HeartbeatArgs, InitArgs,
     LabelArgs, LabelCommand, LabelMutationArgs, LinkArgs, ListArgs, PrimeArgs, ReadyArgs,
     ReleaseArgs, ReopenArgs, ShowArgs, SlugArgs, SlugCommand, SlugMigrateArgs, TreeArgs,
-    UndependArgs, UpdateArgs, WorkspaceArgs,
+    UndependArgs, UpdateArgs,
 };
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
@@ -34,7 +34,6 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
 
     match command {
         Command::Init(args) => cmd_init(args, dir.as_deref()),
-        Command::Workspace(args) => cmd_workspace(args),
         Command::Link(args) => cmd_link(args),
         Command::Unlink => cmd_unlink(),
         Command::Slug(args) => {
@@ -106,43 +105,51 @@ struct InitTarget {
     created: bool,
     prefix: String,
     storage: crate::board::StorageMode,
-    warning: Option<String>,
+    branch: String,
+    exclude: Option<String>,
+    warnings: Vec<String>,
 }
 
 fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::CommandOutput> {
     let cwd = std::env::current_dir()
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
+    let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
     let in_repo = crate::git::is_git_repo(&cwd);
-    if !in_repo && args.board.is_none() && dir.is_none() {
-        return Err(OrbitError::new(
-            code::NOT_A_REPOSITORY,
-            "`orbit init` must run inside a Git repository; use `orbit init --board <dir>` to create a shared Board elsewhere",
-        ));
-    }
-    let root = if in_repo {
+    let setup_root = if in_repo {
         crate::git::repo_root()?
     } else {
         cwd.clone()
     };
 
-    let existing_link = if in_repo { Board::read_link()? } else { None };
-
-    if let Some(linked) = &existing_link
-        && args.board.is_none()
-        && dir.is_none()
-        && !args.local
-    {
-        return Err(OrbitError::new(
-            code::ALREADY_LINKED,
-            format!(
-                "this repository is linked to the shared Board at {}; run `orbit init --local` to create its own Board",
-                linked.display()
-            ),
+    if args.global && dir.is_some() {
+        return Err(OrbitError::invalid_argument(
+            "--global cannot be combined with --dir or ORBIT_DIR",
         ));
     }
 
-    let clients = crate::setup::selected_agents(&args, &root)?;
-    let selected_portable_mcp = crate::setup::selected_portable_mcp(&args, &clients, &root)?;
+    let home = home_dir().ok();
+    if args.global && home.is_none() {
+        return Err(OrbitError::config(
+            "HOME or USERPROFILE must be set for `orbit init --global`",
+        ));
+    }
+    let global_dir = home.as_ref().map(|home| home.join(".orbit"));
+    let (board_root, explicit_global) = if args.global {
+        (global_dir.clone().expect("global home was checked"), true)
+    } else if let Some(target) = args.target.as_deref() {
+        (crate::board::resolve_external(target)?, false)
+    } else if let Some(dir) = dir {
+        (crate::board::resolve_external(dir)?, false)
+    } else {
+        (default_init_dir(&cwd)?, false)
+    };
+    let global = explicit_global
+        || global_dir
+            .as_ref()
+            .is_some_and(|global| global == &board_root);
+
+    let clients = crate::setup::selected_agents(&args, &setup_root)?;
+    let selected_portable_mcp = crate::setup::selected_portable_mcp(&args, &clients, &setup_root)?;
     let ignored_portable_mcp = args.portable_mcp && !clients.iter().any(|client| client.uses_mcp());
 
     let InitTarget {
@@ -150,35 +157,17 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         created,
         prefix,
         storage,
-        warning,
-    } = if let Some(board) = args.board.as_deref() {
-        init_board_at(Some(board), args.print, args.slug.as_deref())?
-    } else if let Some(dir) = dir {
-        init_board_at(Some(dir), args.print, args.slug.as_deref())?
-    } else {
-        init_local_target(args.slug.as_deref(), args.print, existing_link.is_some())?
-    };
+        branch,
+        mut exclude,
+        mut warnings,
+    } = run_init(&board_root, args.slug.as_deref(), args.print, global)?;
     let external = storage == crate::board::StorageMode::Repository;
 
-    let explicit_board = args.board.is_some();
-    if explicit_board && !args.print && in_repo {
-        Board::write_link(&board_root)?;
+    if !args.print && storage == crate::board::StorageMode::Worktree {
+        exclude = Board::ensure_excluded(&board_root)?;
     }
-    let linked = explicit_board && in_repo;
-    let branch = crate::board::Config::load(&board_root)
-        .map(|config| config.board.branch)
-        .unwrap_or_else(|_| "orbit".to_string());
 
     let mut files = json!([]);
-    let mut warnings = Vec::new();
-    if let Some(warning) = warning {
-        warnings.push(warning);
-    }
-    if !args.print
-        && let Ok(board) = Board::discover(Some(&board_root))
-    {
-        warnings.extend(board.warnings);
-    }
     let mut setup_human = String::new();
     let mut reported_portable_mcp = false;
     if !clients.is_empty() {
@@ -191,7 +180,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
             None
         };
         let output = crate::setup::install(
-            &root,
+            &setup_root,
             crate::setup::InstallOptions {
                 clients: clients.clone(),
                 hooks: args.hooks,
@@ -216,15 +205,15 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
 
     let mut human = if args.print {
         format!(
-            "would initialize Board at {} (branch {branch}{})\n",
+            "would initialize Board at {} (branch {branch}, storage {})\n",
             board_root.display(),
-            if external { ", external" } else { "" }
+            storage.as_str()
         )
     } else if created {
         format!(
-            "initialized Board at {} (branch {branch}{})\n",
+            "initialized Board at {} (branch {branch}, storage {})\n",
             board_root.display(),
-            if external { ", external" } else { "" }
+            storage.as_str()
         )
     } else {
         format!(
@@ -234,7 +223,16 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     };
     human.push_str(&format!("prefix {prefix}\n"));
     human.push_str(&format!("storage {}\n", storage.as_str()));
+    if let Some(exclude) = &exclude {
+        human.push_str(&format!("exclude {exclude}\n"));
+    }
     human.push_str(&setup_human);
+    if clients.is_empty() && !args.print {
+        if external && !global {
+            human.push_str(&format!("next: orbit link {}\n", board_root.display()));
+        }
+        human.push_str("next: orbit setup <client>   # wire an agent\n");
+    }
 
     let mut output = crate::output::CommandOutput::new(
         json!({
@@ -242,10 +240,10 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
             "branch": branch,
             "prefix": prefix,
             "storage": storage.as_str(),
-            "external": external,
+            "global": global,
+            "exclude": exclude,
             "created": created,
             "preview": args.print,
-            "linked": linked,
             "agents": clients.iter().map(|client| client.name()).collect::<Vec<_>>(),
             "portable_mcp": reported_portable_mcp,
             "files": files,
@@ -256,83 +254,104 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     Ok(output)
 }
 
-fn init_board_at(dir: Option<&Path>, print: bool, slug: Option<&str>) -> Result<InitTarget> {
-    let board_root = Board::resolve_root(dir)?;
-    let created = !Board::is_board(&board_root);
-
-    if created {
-        let prefix = match slug {
-            Some(slug) => slug::explicit_prefix(slug)?,
-            None => task::DEFAULT_PREFIX.to_string(),
-        };
-        let storage = crate::board::StorageMode::for_new_dir(&board_root);
-        let prefix = if print {
-            prefix
-        } else {
-            Board::init(dir, slug)?.prefix
-        };
-        Ok(InitTarget {
-            board_root,
-            created,
-            prefix,
-            storage,
-            warning: None,
-        })
-    } else {
-        let board = Board::discover(Some(&board_root))?;
-        let prefix = reconcile_prefix(&board, slug, print)?;
-        let storage = board.storage_mode();
-        Ok(InitTarget {
-            board_root,
-            created,
-            prefix,
-            storage,
-            warning: None,
-        })
-    }
-}
-
-fn init_local_target(
-    slug: Option<&str>,
+fn run_init(
+    board_root: &Path,
+    slug_arg: Option<&str>,
     print: bool,
-    has_existing_link: bool,
+    global: bool,
 ) -> Result<InitTarget> {
-    let local = Board::local_root()?;
-    let created = !Board::is_board(&local);
-
-    let (prefix, storage, warning) = if created {
-        let (slug, warning) = match slug {
-            Some(slug) => {
-                slug::explicit_prefix(slug)?;
-                (slug.to_string(), None)
-            }
-            None => slug::auto_slug_for_main_checkout()?,
-        };
-        let prefix = slug::prefix(&slug);
-        let prefix = if print {
-            prefix
-        } else {
-            Board::init(None, Some(&slug))?.prefix
-        };
-        (prefix, crate::board::StorageMode::Worktree, warning)
-    } else {
-        let board = Board::discover(Some(&local))?;
-        let prefix = reconcile_prefix(&board, slug, print)?;
+    if Board::is_board(board_root) {
+        let board = Board::discover(Some(board_root))?;
+        let prefix = reconcile_prefix(&board, slug_arg, print)?;
         let storage = board.storage_mode();
-        (prefix, storage, None)
+        let exclude = if storage == crate::board::StorageMode::Worktree {
+            Board::exclude_entry(board_root)?
+        } else {
+            None
+        };
+        return Ok(InitTarget {
+            board_root: board_root.to_path_buf(),
+            created: false,
+            prefix,
+            storage,
+            branch: board.config.board.branch,
+            exclude,
+            warnings: board.warnings,
+        });
+    }
+
+    if print && let Some(existing) = Board::conflicting_board_for(board_root, global)? {
+        return Err(crate::board::already_initialized(&existing));
+    }
+
+    let (slug, warning) = match slug_arg {
+        Some(slug) => {
+            slug::explicit_prefix(slug)?;
+            (slug.to_string(), None)
+        }
+        None => slug::auto_slug_for_dir(board_root),
+    };
+    let prefix = slug::prefix(&slug);
+    let storage = if global {
+        crate::board::StorageMode::Repository
+    } else {
+        crate::board::StorageMode::for_new_dir(board_root)
+    };
+    let exclude = if storage == crate::board::StorageMode::Worktree {
+        Board::exclude_entry(board_root)?
+    } else {
+        None
     };
 
-    if !print && has_existing_link {
-        Board::clear_link()?;
+    if print {
+        return Ok(InitTarget {
+            board_root: board_root.to_path_buf(),
+            created: true,
+            prefix,
+            storage,
+            branch: "orbit".to_string(),
+            exclude,
+            warnings: warning.into_iter().collect(),
+        });
     }
 
+    let result = if global {
+        Board::init_repository(board_root, Some(&slug))?
+    } else {
+        Board::init_dir(board_root, Some(&slug))?
+    };
     Ok(InitTarget {
-        board_root: local,
-        created,
-        prefix,
-        storage,
-        warning,
+        board_root: result.board,
+        created: true,
+        prefix: result.prefix,
+        storage: result.storage,
+        branch: result.branch,
+        exclude,
+        warnings: warning.into_iter().collect(),
     })
+}
+
+fn default_init_dir(cwd: &Path) -> Result<std::path::PathBuf> {
+    let Ok(repo_root) = crate::git::repo_root() else {
+        return Ok(cwd.join(".orbit"));
+    };
+    let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
+    let main = slug::main_checkout_anchor().unwrap_or_else(|_| repo_root.clone());
+    if repo_root != main {
+        return Ok(main.join(".orbit"));
+    }
+    Ok(cwd.join(".orbit"))
+}
+
+fn home_dir() -> Result<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| OrbitError::config("HOME or USERPROFILE is not set"))
+        .and_then(|home| {
+            dunce::canonicalize(&home)
+                .map_err(|error| OrbitError::io(format!("resolve {}", home.display()), error))
+        })
 }
 
 fn reconcile_prefix(board: &Board, slug: Option<&str>, print: bool) -> Result<String> {
@@ -360,102 +379,6 @@ fn reconcile_prefix(board: &Board, slug: Option<&str>, print: bool) -> Result<St
     Ok(requested)
 }
 
-fn cmd_workspace(args: WorkspaceArgs) -> Result<crate::output::CommandOutput> {
-    let requested = crate::board::resolve_external(&args.folder)?;
-
-    if requested.exists() && !requested.is_dir() {
-        return Err(OrbitError::config(format!(
-            "workspace path {} exists and is not a directory",
-            requested.display()
-        )));
-    }
-
-    if requested
-        .components()
-        .any(|component| component.as_os_str() == ".git")
-    {
-        return Err(OrbitError::new(
-            code::WORKSPACE_INSIDE_REPO,
-            format!(
-                "a workspace must live outside every Git working tree; {} is inside a Git directory",
-                requested.display()
-            ),
-        ));
-    }
-
-    if let Some(repository) = crate::git::toplevel_containing(&requested) {
-        return Err(OrbitError::new(
-            code::WORKSPACE_INSIDE_REPO,
-            format!(
-                "a workspace must live outside every Git working tree; {} is inside {}",
-                requested.display(),
-                repository.display()
-            ),
-        )
-        .with_details(json!({
-            "workspace": requested,
-            "repository": repository,
-        })));
-    }
-
-    std::fs::create_dir_all(&requested)
-        .map_err(|error| OrbitError::io(format!("create {}", requested.display()), error))?;
-    let workspace = dunce::canonicalize(&requested)
-        .map_err(|error| OrbitError::io(format!("resolve {}", requested.display()), error))?;
-    let board_root = workspace.join("board");
-
-    let created = !Board::is_board(&board_root);
-    let (branch, prefix, warning) = if created {
-        if board_root.exists() && !board_root.is_dir() {
-            return Err(OrbitError::config(format!(
-                "board path {} exists and is not a directory",
-                board_root.display()
-            )));
-        }
-        let (slug, warning) = match args.slug.as_deref() {
-            Some(slug) => {
-                slug::explicit_prefix(slug)?;
-                (slug.to_string(), None)
-            }
-            None => slug::auto_slug_for_workspace(&workspace),
-        };
-        let result = Board::init(Some(&board_root), Some(&slug))?;
-        (result.branch, result.prefix, warning)
-    } else {
-        let board = Board::discover(Some(&board_root))?;
-        let prefix = reconcile_prefix(&board, args.slug.as_deref(), false)?;
-        (board.config.board.branch, prefix, None)
-    };
-
-    let mut human = if created {
-        format!("created workspace at {}\n", workspace.display())
-    } else {
-        format!("workspace already initialized at {}\n", workspace.display())
-    };
-    human.push_str(&format!(
-        "board: {} (branch {branch})\n",
-        board_root.display()
-    ));
-    human.push_str(&format!("prefix {prefix}\n\n"));
-    human.push_str("link each repository from its root:\n");
-    human.push_str(&format!("  orbit link {}\n", workspace.display()));
-
-    let mut output = crate::output::CommandOutput::new(
-        json!({
-            "workspace": workspace,
-            "board": board_root,
-            "branch": branch,
-            "prefix": prefix,
-            "created": created,
-        }),
-        human,
-    );
-    if let Some(warning) = warning {
-        output.warnings.push(warning);
-    }
-    Ok(output)
-}
-
 fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
     let cwd = std::env::current_dir()
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
@@ -475,6 +398,13 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
 
     let root = crate::git::repo_root()?;
     let mut warnings = board.warnings.clone();
+    if board.config.board.storage.is_none() {
+        warnings.push(format!(
+            "{}: linked Board at {} predates board.storage",
+            crate::board::LEGACY_LAYOUT,
+            board.root.display()
+        ));
+    }
     if legacy_nested {
         warnings.push(format!(
             "{}: linked workspace resolves the nested Board at {}",

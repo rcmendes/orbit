@@ -279,6 +279,21 @@ impl Board {
             .unwrap_or_else(|| StorageMode::detect(&self.root))
     }
 
+    pub fn exclude_entry(root: &Path) -> Result<Option<String>> {
+        let Some((_, entry)) = worktree_exclusion(root)? else {
+            return Ok(None);
+        };
+        Ok(Some(entry))
+    }
+
+    pub fn ensure_excluded(root: &Path) -> Result<Option<String>> {
+        let Some((repo, entry)) = worktree_exclusion(root)? else {
+            return Ok(None);
+        };
+        git::ensure_exclude_entry(&repo, root)?;
+        Ok(Some(entry))
+    }
+
     pub fn resolve_target(path: &Path) -> Result<(PathBuf, bool)> {
         let root = resolve_external(path)?;
         if Self::is_board(&root) {
@@ -320,13 +335,6 @@ impl Board {
 
     pub fn is_board(root: &Path) -> bool {
         root.join("config.toml").exists()
-    }
-
-    pub fn resolve_root(dir_override: Option<&Path>) -> Result<PathBuf> {
-        match dir_override {
-            Some(dir) => resolve_external(dir),
-            None => Self::local_root(),
-        }
     }
 
     pub fn task_ids(&self) -> Result<Vec<String>> {
@@ -450,21 +458,71 @@ impl Board {
         }
     }
 
-    pub fn init(dir_override: Option<&Path>, slug: Option<&str>) -> Result<InitResult> {
-        match dir_override {
-            Some(dir) => {
-                let root = resolve_external(dir)?;
-                if git::toplevel_containing(&root).is_some() {
-                    init_worktree_at(&root, slug)
-                } else {
-                    init_external(&root, slug)
-                }
-            }
-            None => {
-                let root = slug::main_checkout_anchor()?.join(".orbit");
-                init_worktree_at(&root, slug)
+    pub fn init_dir(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
+        let root = resolve_external(dir)?;
+        if let Some(existing) = Self::conflicting_board_for(&root, false)? {
+            return Err(already_initialized(&existing));
+        }
+        if git::toplevel_containing(&root).is_some() {
+            init_worktree_at(&root, slug)
+        } else {
+            init_external(&root, slug)
+        }
+    }
+
+    pub fn init_repository(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
+        let root = resolve_external(dir)?;
+        init_external(&root, slug)
+    }
+
+    /// Returns the repository-local Board that would compete with `dir`.
+    /// A global Board is exempt: it is only an opt-in discovery fallback.
+    pub fn conflicting_board_for(dir: &Path, global: bool) -> Result<Option<PathBuf>> {
+        if global || Self::is_board(dir) {
+            return Ok(None);
+        }
+        let Some(repo_root) = git::toplevel_containing(dir) else {
+            return Ok(None);
+        };
+        let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
+        let common = git::common_dir_at(&repo_root)?;
+
+        if let Some(target) = read_link_file(&common.join("orbit").join("link"))? {
+            let (linked, _) = classify_link_target(&target)?;
+            if linked != dir {
+                return Ok(Some(linked));
             }
         }
+
+        let main = main_checkout_for(&repo_root, &common).join(".orbit");
+        if main != dir && Self::is_board(&main) && !is_global_board(&main) {
+            return Ok(Some(main));
+        }
+
+        let legacy = legacy_local_path(&common);
+        if legacy != dir && Self::is_board(&legacy) {
+            return Ok(Some(legacy));
+        }
+
+        let mut current = dir.parent();
+        while let Some(parent) = current {
+            let candidate = parent.join(".orbit");
+            if candidate != dir && Self::is_board(&candidate) && !is_global_board(&candidate) {
+                return Ok(Some(candidate));
+            }
+            if parent == repo_root {
+                break;
+            }
+            current = parent.parent();
+        }
+
+        for path in git::worktree_paths(&repo_root)? {
+            let path = dunce::canonicalize(&path).unwrap_or(path);
+            if path != dir && Self::is_board(&path) && !is_global_board(&path) {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
     }
 
     /// Changes the Task-ID prefix on an empty Board. The caller must have
@@ -529,14 +587,6 @@ fn init_worktree_at(board_root: &Path, slug: Option<&str>) -> Result<InitResult>
     }
 
     let common = git::common_dir_at(&repo)?;
-    let main = main_checkout_for(&repo, &common).join(".orbit");
-    let legacy = legacy_local_path(&common);
-    for existing in [main.as_path(), legacy.as_path()] {
-        if existing != board_root && Board::is_board(existing) {
-            return Err(already_initialized(existing));
-        }
-    }
-
     let bootstrap = common.join("orbit");
     std::fs::create_dir_all(&bootstrap)
         .map_err(|error| OrbitError::io(format!("create {}", bootstrap.display()), error))?;
@@ -609,7 +659,7 @@ fn init_external(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
 
     let _init_lock = BoardLock::acquire(&root.join(".init.lock"), 2000, true)?;
 
-    if !git::is_git_repo(&root) {
+    if !root.join(".git").exists() {
         git::init_repo(&root)?;
     }
     if git::has_head(&root)? {
@@ -758,13 +808,26 @@ pub(crate) fn resolve_external(dir: &Path) -> Result<PathBuf> {
     if let Ok(canonical) = dunce::canonicalize(&root) {
         return Ok(canonical);
     }
-    if let Some(parent) = root.parent()
-        && let Ok(canonical) = dunce::canonicalize(parent)
-        && let Some(name) = root.file_name()
-    {
-        return Ok(canonical.join(name));
+
+    let mut missing = Vec::new();
+    let mut existing = root.as_path();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            return Ok(root);
+        };
+        missing.push(name.to_os_string());
+        let Some(parent) = existing.parent() else {
+            return Ok(root);
+        };
+        existing = parent;
     }
-    Ok(root)
+    let Ok(mut canonical) = dunce::canonicalize(existing) else {
+        return Ok(root);
+    };
+    for component in missing.iter().rev() {
+        canonical.push(component);
+    }
+    Ok(canonical)
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -777,6 +840,10 @@ fn home_dir() -> Option<PathBuf> {
 fn global_board(home: &Path) -> Option<PathBuf> {
     let root = home.join(".orbit");
     Board::is_board(&root).then_some(root)
+}
+
+fn is_global_board(path: &Path) -> bool {
+    home_dir().is_some_and(|home| path == home.join(".orbit"))
 }
 
 fn nearest_orbit(start: &Path, stop: &Path, skip: Option<&Path>) -> Option<PathBuf> {
@@ -803,6 +870,26 @@ fn main_checkout_for(repo_root: &Path, common: &Path) -> PathBuf {
         return parent.to_path_buf();
     }
     repo_root.to_path_buf()
+}
+
+fn worktree_exclusion(root: &Path) -> Result<Option<(PathBuf, String)>> {
+    let mut anchor = root;
+    if let Some(repo_root) = git::toplevel_containing(root) {
+        let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
+        if repo_root != root {
+            let entry = git::exclude_entry_for(&repo_root, root)?;
+            return Ok(Some((repo_root, entry)));
+        }
+        if let Some(parent) = root.parent() {
+            anchor = parent;
+        }
+    }
+    let Some(repo_root) = git::toplevel_containing(anchor) else {
+        return Ok(None);
+    };
+    let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
+    let entry = git::exclude_entry_for(&repo_root, root)?;
+    Ok(Some((repo_root, entry)))
 }
 
 fn legacy_local_path(common: &Path) -> PathBuf {
@@ -912,7 +999,7 @@ fn read_link_file(path: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(candidate))
 }
 
-fn already_initialized(path: &Path) -> OrbitError {
+pub(crate) fn already_initialized(path: &Path) -> OrbitError {
     OrbitError::new(
         code::ALREADY_INITIALIZED,
         format!("an Orbit board already exists at {}", path.display()),

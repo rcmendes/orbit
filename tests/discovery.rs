@@ -173,7 +173,6 @@ fn init_refuses_a_second_repository_board() {
 
     let (status, value) = repo.json(&[
         "init",
-        "--dir",
         other.to_str().unwrap(),
         "--agents",
         "none",
@@ -185,6 +184,18 @@ fn init_refuses_a_second_repository_board() {
 }
 
 #[test]
+fn init_refuses_when_only_a_legacy_board_exists() {
+    let repo = TestRepo::new();
+    write_legacy_board(&repo);
+
+    let (status, value) = repo.json(&["init", "--agents", "none", "--json"]);
+
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "ALREADY_INITIALIZED");
+    assert!(!repo.path().join(".orbit").exists());
+}
+
+#[test]
 fn a_repository_mode_board_records_its_storage() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
@@ -192,7 +203,6 @@ fn a_repository_mode_board_records_its_storage() {
 
     let value = repo.ok_json(&[
         "init",
-        "--board",
         board.to_str().unwrap(),
         "--agents",
         "none",
@@ -227,23 +237,17 @@ fn the_global_orbit_folder_is_a_last_resort() {
     let global = home.path().join(".orbit");
     let env = [("HOME", home_str), ("USERPROFILE", home_str)];
 
-    let output = repo.orbit_with_env(
-        &[
-            "init",
-            "--board",
-            global.to_str().unwrap(),
-            "--agents",
-            "none",
-            "--json",
-        ],
-        &env,
-    );
+    let output = repo.orbit_with_env(&["init", "--global", "--agents", "none", "--json"], &env);
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    std::fs::remove_file(repo.path().join(".git/orbit/link")).unwrap();
+    let init: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(init["data"]["storage"], "repository");
+    assert_eq!(init["data"]["global"], true);
+    assert_eq!(init["data"]["prefix"], "orb-");
+    assert!(global.join("config.toml").is_file());
 
     let (status, value) = repo.json_with_env(&["list", "--json"], &env);
 
@@ -281,7 +285,10 @@ fn a_legacy_workspace_root_link_resolves_the_nested_board_with_a_warning() {
     let creator = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let workspace = parent.path().join("acme");
-    creator.ok_json_in(parent.path(), &["workspace", "acme", "--json"]);
+    creator.ok_json_in(
+        parent.path(),
+        &["init", "acme/board", "--agents", "none", "--json"],
+    );
 
     let joiner = TestRepo::new();
     let linked = joiner.ok_json(&["link", workspace.to_str().unwrap(), "--json"]);
@@ -306,7 +313,6 @@ fn a_new_board_whose_path_ends_in_orbit_board_uses_its_own_lock() {
 
     repo.ok_json(&[
         "init",
-        "--board",
         board.to_str().unwrap(),
         "--agents",
         "none",

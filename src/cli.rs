@@ -33,10 +33,6 @@ pub enum Command {
     #[command(long_about = help::INIT_LONG, after_long_help = help::INIT_EXAMPLES)]
     Init(InitArgs),
 
-    /// Create a workspace with a shared Board at <folder>/board.
-    #[command(long_about = help::WORKSPACE_LONG, after_long_help = help::WORKSPACE_EXAMPLES)]
-    Workspace(WorkspaceArgs),
-
     /// Point this repository at a shared Board.
     #[command(long_about = help::LINK_LONG, after_long_help = help::LINK_EXAMPLES)]
     Link(LinkArgs),
@@ -144,9 +140,13 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct InitArgs {
-    /// Create or link a shared Board at PATH.
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["local", "dir"])]
-    pub board: Option<PathBuf>,
+    /// Orbit folder (DIR) to create or reuse. Defaults to ./.orbit.
+    #[arg(value_name = "DIR")]
+    pub target: Option<PathBuf>,
+
+    /// Create or reuse the global Board at ~/.orbit.
+    #[arg(long, conflicts_with = "target")]
+    pub global: bool,
 
     /// Which harnesses to wire: auto, all, none, ask, or a comma-separated list.
     #[arg(long, value_name = "SELECTOR", conflicts_with = "no_agents")]
@@ -159,10 +159,6 @@ pub struct InitArgs {
     /// Install the Claude Code SessionStart hook.
     #[arg(long)]
     pub hooks: bool,
-
-    /// Create this repository's own Board even when it is linked.
-    #[arg(long, conflicts_with = "board")]
-    pub local: bool,
 
     /// Orbit executable to record in agent configs. Defaults to the running binary.
     ///
@@ -185,17 +181,6 @@ pub struct InitArgs {
     /// selection does not prompt unless --agents ask is given.
     #[arg(long)]
     pub print: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct WorkspaceArgs {
-    /// Workspace directory to create or reuse. Its Board lives at <folder>/board.
-    #[arg(value_name = "FOLDER")]
-    pub folder: PathBuf,
-
-    /// Board slug used to prefix Task IDs. Bare word: teramigo, not teramigo-.
-    #[arg(long, value_name = "SLUG")]
-    pub slug: Option<String>,
 }
 
 #[derive(Debug, Args)]

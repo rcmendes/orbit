@@ -49,9 +49,10 @@ orbit init [DIR] [--slug SLUG] [--global]
 - `init` takes DIR from the positional argument, then `--dir`/`ORBIT_DIR`, then
   `./.orbit`. `link` uses only its positional DIR; the global overrides never
   retarget the pointer.
-- A nested `.orbit` below DIR is a separate scope: it does not block `init` at
-  DIR, and commands in that subtree resolve the nested Board first. The
-  second-Board rule protects one resolution scope, not every descendant.
+- A repository owns one local Board. A nested repository (for example a
+  submodule) has its own resolution scope and may resolve its own nested Board,
+  but a second `.orbit` in the same working tree is refused because the `orbit`
+  branch can be checked out by only one worktree.
 - `init` does not wire agents by default: it creates DIR, the Board, the slug,
   and the exclusion entry when DIR is inside a working tree, then prints the next
   step. It writes agent files only when the user confirms the prompt in a
@@ -225,6 +226,14 @@ together with the old pointer shapes and the extra discovery step.
   `link DIR`. This is an intentional pre-alpha break.
 - Legacy boards keep working with a warning until the following release, when
   the compatibility path is removed.
+
+## Implementation note
+
+The first implementation of unified `init` tightened the nested-scope wording:
+one repository owns one local Board, because the `orbit` branch can be checked
+out by only one worktree. A nested repository (such as a submodule) retains its
+own resolution scope; a second `.orbit` in the same working tree returns
+`ALREADY_INITIALIZED`.
 
 ## Amendments
 

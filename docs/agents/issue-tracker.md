@@ -1,12 +1,13 @@
 # Issue tracker: Orbit
 
-Issues and specs for this repo live in the Orbit board. A Board is a hidden Git
-worktree on the orphan `orbit` branch. In the default layout it lives at
-`.git/orbit/board` and every worktree of this repository shares it; a repository
-linked to a shared Board uses that Board instead. Tasks are Markdown files with
-YAML frontmatter and are served by the `orbit` CLI. For a workspace that spans
-repositories, `orbit workspace <folder>` creates `<folder>/board` and each
-repository joins with `orbit link <folder>`.
+Issues and specs for this repo live in the Orbit board. A Board is Markdown on the
+orphan `orbit` branch, checked out in the Orbit folder. In the default layout
+that folder is `.orbit`, and every worktree of this repository shares the main
+checkout's `.orbit`; a repository linked to a shared Board uses that Board
+instead. Tasks are Markdown files with YAML frontmatter and are served by the
+`orbit` CLI. For a workspace that spans repositories, run `orbit init` once in
+the workspace folder and join each repository with
+`orbit link <workspace>/.orbit`.
 
 For the full command reference, examples, and usage scenarios, see
 [../commands.md](../commands.md).
@@ -16,20 +17,25 @@ diagrams, see [../ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Board discovery
 
-Every command resolves the Board in this order: `--dir`, then `ORBIT_DIR`, then the
-repository link stored in the Git common directory, then the repository's own Board.
-In practice:
+Every command resolves the Board in this order: `--dir`/`ORBIT_DIR`, then the
+repository link, then the nearest `.orbit` walking up to the repository root (or
+to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`,
+then the legacy hidden layout with a warning, then `~/.orbit` if it exists. In
+practice:
 
 ```bash
-orbit workspace <FOLDER>   # create <FOLDER>/board for a multi-repository workspace
-orbit link <PATH>          # use a shared Board or workspace from this repository
-orbit unlink               # return to this repository's own Board
-orbit --dir <PATH> list    # override the link for one command
+mkdir -p <WORKSPACE> && cd <WORKSPACE>
+orbit init                       # create <WORKSPACE>/.orbit for a multi-repository workspace
+orbit link <WORKSPACE>/.orbit    # join it from a repository
+orbit unlink                     # return to this repository's own Board
+orbit --dir <DIR> list           # override the link for one command
 ```
 
 A `link` warning about a shadowed Board means the repository still has its own
 Board on disk; linking did not delete it. A missing linked Board fails with
-`LINK_NOT_FOUND`; re-link or restore the Board.
+`LINK_NOT_FOUND`; re-link or restore the Board. A legacy `.git/orbit/board` or
+`<workspace>/board` still resolves with a warning; run `orbit doctor --migrate`
+to move it to `.orbit`.
 
 ## Vocabulary
 

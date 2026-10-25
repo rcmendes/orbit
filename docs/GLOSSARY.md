@@ -102,8 +102,24 @@ The scope an Agent sees: one Board and every Repository linked to it.
 _Avoid_: Project, database
 
 **Board**:
-The versioned store of Tasks and configuration for a Workspace.
+The versioned store of Tasks and configuration for a Workspace. A Board lives in one Orbit folder and has one `orbit` branch.
 _Avoid_: Database, store, project
+
+**Orbit folder** (DIR):
+The single directory delegated to Orbit that holds `config.toml`, `tasks/`, and `comments/`. The default is `<project>/.orbit`. Inside a Git working tree the folder is a worktree of that repository on the `orbit` branch; outside one it is a standalone Git repository. All commands take DIR the same way.
+_Avoid_: Board root, workspace, data directory, hidden worktree
+
+**Storage mode**:
+How an Orbit folder is backed by Git: `worktree` when DIR is inside a working tree and shared by every worktree of the repository, or `repository` when DIR is its own Git repository. The mode is recorded in `config.toml` and changes only Git plumbing, never the Board contract.
+_Avoid_: Layout, backend, external board
+
+**Global Board**:
+The opt-in Board at `~/.orbit`, created only by `orbit init --global`. It is the last discovery fallback and is never created implicitly by a command.
+_Avoid_: Default board, user board, central board
+
+**Legacy layout**:
+A Board from before the Orbit folder: the hidden worktree at `<git-common-dir>/orbit/board`, a shared `<workspace>/board`, or an old `--board` path. It keeps resolving with a `LEGACY_LAYOUT` warning until `orbit doctor --migrate` moves it.
+_Avoid_: Old mode, compatibility board
 
 **Linked Repository**:
 A Repository whose Agents use a Board that does not live inside it.
@@ -132,3 +148,4 @@ for the Type field.
 - [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
 - [`docs/adr/0009-keep-task-vocabulary.md`](./adr/0009-keep-task-vocabulary.md) for the Task/Issue naming decision.
 - [`docs/adr/0010-structural-type-field.md`](./adr/0010-structural-type-field.md) for the Type field.
+- [`docs/adr/0012-orbit-folder.md`](./adr/0012-orbit-folder.md) for the Orbit folder, storage modes, discovery, and legacy migration.

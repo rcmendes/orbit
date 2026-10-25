@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.7.0`](https://github.com/rcmendes/orbit/releases/tag/v0.7.0) is the latest release. It adds `orbit slug show` and `orbit slug migrate`, the aligned `orbit list` table with `--group`, and per-board Task-ID slugs. The canonical design is [SPEC.md](./docs/SPEC.md); vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.7.0`](https://github.com/rcmendes/orbit/releases/tag/v0.7.0) is the latest release. The next release introduces the **Orbit folder**: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, path-free agent setup, and a resumable legacy migration. This document describes that target; the canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -131,20 +131,21 @@ orbit --version
 
 If the command is not found, add the install directory to `PATH` and restart your shell. Cargo installs binaries under `$CARGO_HOME/bin` (`%USERPROFILE%\.cargo\bin` by default on Windows). The shell installer prints the directory it added; for global npm, use `npm prefix -g` plus `bin` on macOS/Linux, or the reported prefix itself on Windows.
 
-### 2. Create the Board and wire your agents
+### 2. Create the Board
 
 ```bash
 cd your-repository
 orbit init
 ```
 
-`orbit init` creates the Board, detects the coding-agent harnesses installed on your machine, and writes only the integrations that apply. In a terminal it asks which harnesses to wire; without a terminal it wires the detected ones and never prompts.
+`orbit init` creates the Board in `./.orbit`, derives the Task-ID slug from the folder, and prints the next step. In a terminal it asks whether to wire the coding-agent harnesses it detects; without a terminal it writes no agent files. Pass `--agents` to decide up front.
 
 ```bash
-orbit init --agents all     # wire every supported harness
-orbit init --agents none    # Board only, no agent files
-orbit init --print          # preview every file that would change
-orbit init --board ~/src/acme/board   # join a shared Board
+orbit init                    # Board in ./.orbit; asks about agents in a TTY
+orbit init --agents all       # wire every supported harness
+orbit init --agents none      # Board only, no agent files
+orbit init --print            # preview without writing
+orbit init ~/src/acme-board   # create a Board at ~/src/acme-board
 ```
 
 ### 3. Put real work on the board
@@ -266,7 +267,7 @@ flowchart LR
     end
 
     subgraph Storage["Durable state"]
-        BOARD["Board<br/>hidden worktree or shared path"]
+        BOARD["Board<br/>Orbit folder or shared DIR"]
         TASKS["tasks/ID.md"]
         COMMENTS["comments/ID.md"]
         CONFIG["config.toml"]
@@ -318,17 +319,19 @@ The full component map, board-resolution flow, domain model, state machine, read
 
 ### Board anatomy
 
-The board is a real Git repository on an orphan branch, checked out in a hidden worktree:
+The board is real Git history on an orphan branch, checked out in the Orbit folder:
 
 ```text
-<repository>/.git/orbit/board/          # shared by every worktree
-├── config.toml                         # branch, lease, priorities, hold labels
+<project>/.orbit/                       # DIR: shared by every worktree
+├── config.toml                         # branch, storage mode, lease, priorities, hold labels
 ├── tasks/
 │   ├── orb-a7b2c9.md                   # a top-level Task
 │   └── orb-a7b2c9.d4b3df.md            # a SubTask
 └── comments/
     └── orb-a7b2c9.md                   # append-only thread
 ```
+
+Inside a Git working tree, `.orbit` is a worktree of the project repository on the `orbit` branch; the path is written to `.git/info/exclude`, so it never appears in code diffs. Outside every working tree, `DIR` is its own Git repository on the same branch. Both modes expose the same files and CLI contract. A shared workspace runs `orbit init` once in its folder and each repository joins with `orbit link <DIR>`.
 
 Tasks are Markdown with YAML frontmatter:
 
@@ -353,7 +356,7 @@ The filename is the ID. There is no `id` field in frontmatter. A SubTask ID is t
 
 ### Why an orphan branch?
 
-Task churn does not belong in your feature PRs. The `orbit` branch is separate from `main`, so an agent can update a ticket while a human reviews code without either change polluting the other. Because every worktree resolves the same board, a claim made from a linked worktree and a claim made from the main checkout serialize on the same lock and see the same tasks.
+Task churn does not belong in your feature PRs. The `orbit` branch is separate from `main`, so an agent can update a ticket while a human reviews code without either change polluting the other. Because every worktree resolves the main checkout's `.orbit`, a claim made from a linked worktree and a claim made from the main checkout serialize on the same lock and see the same tasks.
 
 ### Safety without a server
 
@@ -522,7 +525,7 @@ SubTasks are one level deep. If a ticket needs its own breakdown, flatten it int
 
 ## Task-ID slugs
 
-A Board has one slug that prefixes its Task IDs. `orbit init` adopts the main checkout folder name; `orbit workspace` adopts the workspace folder name; `orbit init --board` defaults to `orb`. Pass `--slug` to choose it explicitly:
+A Board has one slug that prefixes its Task IDs. `orbit init` derives it from the Orbit folder: a folder named `.orbit` uses its parent's name, any other folder uses its own name, and `orbit init --global` uses `orb` with a warning. Pass `--slug` to choose it explicitly:
 
 ```bash
 orbit init --slug teramigo
@@ -530,7 +533,7 @@ orbit add "First task" --json
 # teramigo-32fdfd
 ```
 
-Re-running `init` or `workspace` preserves the stored prefix. An empty Board can change it with `--slug`; a populated Board returns `SLUG_LOCKED`. Existing `orb-` Boards keep working unchanged; migration is optional.
+Re-running `init` preserves the stored prefix. An empty Board can change it with `--slug`; a populated Board returns `SLUG_LOCKED`. Existing `orb-` Boards keep working unchanged; migration is optional.
 
 To change the identity of an existing Board, use the explicit migration path instead of hand-editing `config.toml`:
 
@@ -544,12 +547,12 @@ Migration keeps each random suffix (`orb-32fdfd` → `atlas-32fdfd`, `orb-32fdfd
 
 ## Multi-repository workspaces
 
-A **Workspace** is one Board plus every repository linked to it. Create it once, then join each repository. Cross-repository dependencies share one graph, and every Git worktree resolves the same Board.
+A **Workspace** is one Board plus every repository linked to it. Create the Board once in a dedicated folder, then join each repository. Cross-repository dependencies share one graph, and every Git worktree resolves the same Board.
 
 ```mermaid
 flowchart LR
     subgraph Workspace["Shared workspace · ~/src/acme"]
-        BOARD[("shared Board<br/>~/src/acme/board")]
+        BOARD[("shared Board<br/>~/src/acme/.orbit")]
         API["api repository"]
         WEB["web repository"]
         INFRA["infra repository"]
@@ -557,12 +560,12 @@ flowchart LR
 
     subgraph Standalone["Standalone repository"]
         SOLO["solo repository"]
-        LOCAL[("local Board<br/>.git/orbit/board")]
+        LOCAL[("local Board<br/>.orbit")]
     end
 
-    API -.->|orbit link ~/src/acme| BOARD
-    WEB -.->|orbit link ~/src/acme| BOARD
-    INFRA -.->|orbit link ~/src/acme| BOARD
+    API -.->|orbit link ~/src/acme/.orbit| BOARD
+    WEB -.->|orbit link ~/src/acme/.orbit| BOARD
+    INFRA -.->|orbit link ~/src/acme/.orbit| BOARD
     SOLO --> LOCAL
 
     classDef board fill:#f0fdf4,stroke:#15803d,color:#052e16
@@ -572,25 +575,26 @@ flowchart LR
 ```
 
 ```bash
-# Create the workspace and its independent Board.
-orbit workspace ~/src/acme
+# Create the shared workspace and its independent Board.
+mkdir -p ~/src/acme && cd ~/src/acme
+orbit init                     # Board at ~/src/acme/.orbit
 
 # In each related repository: join the same Board.
-orbit link ~/src/acme
+orbit link ~/src/acme/.orbit
 
 # One-off command against the shared Board from anywhere.
-orbit --dir ~/src/acme/board list
+orbit --dir ~/src/acme/.orbit list
 
 # Return this repository to its own Board.
 orbit unlink
 ```
 
-`orbit workspace` only creates the workspace and Board; it does not clone or link repositories. The workspace must live outside every Git working tree. Linking does not delete a repository's own Board; it shadows it and prints a warning.
+`orbit init` only creates the Board; it does not clone or link repositories. Linking does not delete a repository's own Board; it shadows it and prints a warning.
 
-Board discovery order is `--dir`, then `ORBIT_DIR`, then the repository link, then the repository's own Board. An explicit override wins for one command:
+Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link, then the nearest `.orbit` walking up to the repository root (or to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`, then the legacy hidden layout with a warning, then `~/.orbit` if it exists. An explicit override wins for one command:
 
 ```bash
-ORBIT_DIR=~/src/acme/board orbit ready --json
+ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 ```
 
 ## Triage, labels, and comments
@@ -672,12 +676,12 @@ Exit codes are `0` for success, `1` for a domain failure, and `2` for a usage er
 
 ```bash
 orbit mcp
-orbit --dir ~/src/acme/board mcp   # serve a shared Board
+orbit --dir ~/src/acme/.orbit mcp   # serve a shared Board
 ```
 
 MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent` and `type`; `update` accepts `type`; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`.
 
-Editors launch the server from their MCP configuration. `orbit setup` writes project-local configs for Claude, Cursor, Codex, and OpenCode by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. Use `--no-mcp` for instructions only or `--mcp-bin orbit` for a portable command.
+Editors launch the server from their MCP configuration. `orbit setup` writes project-level configs for Claude, Cursor, Codex, and OpenCode by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. `--scope user` writes the harness's user-level locations instead. Generated configs record no Board path; discovery starts from the project directory, and `--dir`/`ORBIT_DIR` covers an editor that launches elsewhere. Use `--no-mcp` for instructions only or `--mcp-bin orbit` for a portable command.
 
 ## Export the board
 
@@ -692,17 +696,17 @@ The snapshot is ordered by task ID, carries `schema_version` (currently `2`), an
 
 ## Agent setup
 
-`orbit init` is the one-command setup path in a repository. It creates the Board, detects installed harnesses from their commands and project markers, and writes only the integrations that apply. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
+`orbit init` creates the Board in `./.orbit`. It asks once, in a terminal, whether to wire the harnesses it detects; without a terminal it writes no agent files and prints the next step. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
 
 ```bash
-orbit init                    # Board + detected harnesses (asks in a terminal)
+orbit init                    # Board; asks about agents in a terminal
 orbit init --agents all       # wire every supported harness
 orbit init --agents none      # Board only; no agent files
 orbit init --print            # preview without writing
-orbit init --board ~/board    # create a shared Board and link this repository
+orbit init ~/src/acme-board   # create a Board
 ```
 
-Use `orbit setup` to repair or adjust one harness later:
+Use `orbit setup` to wire, repair, or adjust a harness later. `--scope project` (the default) writes repository-level files; `--scope user` writes the harness's user-level locations:
 
 ```bash
 orbit setup claude --hooks   # CLAUDE.md + SessionStart hook + MCP
@@ -710,10 +714,13 @@ orbit setup cursor           # .cursor/rules/orbit.mdc + skill + MCP
 orbit setup codex            # AGENTS.md + skill + MCP
 orbit setup opencode         # AGENTS.md + MCP
 orbit setup mattpocock       # docs/agents/issue-tracker.md
+orbit setup all --scope user # machine-wide instruction and MCP files
 orbit setup all --check      # installed / missing / stale
 orbit setup all --no-mcp     # instruction files only
 orbit setup all --remove     # remove only Orbit-managed content
 ```
+
+Generated configs record the Orbit binary but not the Board path, so moving the Orbit folder does not leave them stale. `doctor` reports an older config that still contains an absolute Board path.
 
 A hand-written tracker guide is respected. If `docs/agents/issue-tracker.md` exists without Orbit's managed marker, `orbit setup mattpocock` reports it as `skipped` and leaves it untouched; `--check` treats the custom doc as installed, and `--remove` does not delete it. Tracker files Orbit wrote continue to update and remove normally.
 
@@ -735,7 +742,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 
 | Stage | Commands |
 | --- | --- |
-| **Set up** | `init` · `workspace` · `link` · `unlink` · `setup` |
+| **Set up** | `init` · `link` · `unlink` · `setup` |
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
 | **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` |
 | **Execute** | `claim` · `heartbeat` · `release` · `done` · `cancel` · `reopen` |
@@ -759,13 +766,14 @@ The full guide — when to use each command, end-to-end scenarios, and a common-
 | A lease expired | `orbit claim <id> --by you --steal`, or `orbit release <id> --force` to requeue it. |
 | Dependencies are unfinished | Read `error.details.blocking`, then finish or cancel those IDs. |
 | A parent has open children | Finish the children, or pass `--force` to `done`/`cancel` to cancel them. |
-| A test failed after a crash | `orbit doctor` reports integrity issues; `doctor --fix` removes stale temp files. |
+| A test failed after a crash | `orbit doctor` reports integrity issues; `doctor --fix` removes stale temp files and re-attaches a deleted `.orbit` worktree. |
 | Heartbeats are uncommitted | `orbit sync` commits lease-only changes. |
 | The Task-ID prefix must change | Preview with `orbit slug migrate <slug> --dry-run`, then apply. Live claims require `--force`; external old-ID links still break. |
 | The Board is missing | `orbit init` creates one; a missing linked Board returns `LINK_NOT_FOUND`. |
+| The Board is in the old hidden layout | It keeps working with a `LEGACY_LAYOUT` warning. Run `orbit doctor --migrate` to move it to `.orbit`; the migration is resumable. |
 | A writer is busy | `LOCKED` is retryable. Retry after a short backoff. |
 
-`doctor` never rewrites tasks or comments, so it is always safe to run. It checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, the checked-out branch, and a Claude hook that cannot find the Orbit binary.
+`doctor` never rewrites tasks or comments, so it is always safe to run. It works without a Board: it reports the discovery trace, legacy layout, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and agent configs that still record an absolute Board path, then checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, the checked-out branch, and a Claude hook that cannot find the Orbit binary.
 
 ## Why not Beads or Beans?
 
@@ -820,7 +828,7 @@ orbit --version
 
 The installer adds its directory to `PATH` unless it is already there, and tells you what to source if a restart is needed. The npm package is scoped because the bare name is taken; the command is always `orbit`.
 
-npx is only for a temporary trial. `orbit init` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory. Install globally, or pass `--mcp-bin orbit`, before wiring agents.
+npx is only for a temporary trial. `orbit init --agents all` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory. Install globally, or run `orbit setup --mcp-bin orbit` before wiring agents.
 
 See [RELEASING.md](./docs/RELEASING.md) for the release process, supported targets, and packaging checks.
 
@@ -835,7 +843,7 @@ See [RELEASING.md](./docs/RELEASING.md) for the release process, supported targe
 | [Issue tracker guide](./docs/agents/issue-tracker.md) | How agents should use the board in this repository |
 | [Triage labels](./docs/agents/triage-labels.md) | The five canonical triage roles and category labels |
 | [Domain docs](./docs/agents/domain.md) | How engineering skills consume this repo's domain documentation |
-| [ADRs](./docs/adr/) | Durable design decisions, from the orphan branch to the Type field |
+| [ADRs](./docs/adr/) | Durable design decisions, from the orphan branch to the Orbit folder and Type field |
 | [Releasing](./docs/RELEASING.md) | cargo-dist, npm, smoke checks, and release operations |
 | [Changelog](./CHANGELOG.md) | What changed in each release |
 
@@ -847,7 +855,7 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
-The test suite covers frontmatter round-trips, label normalization, comment parsing, ID generation, graph validation, readiness, lifecycle transitions, property-based DAG checks, multi-process claims and deletes, crash recovery, worktree sharing, setup recipes, onboarding, SubTasks, export determinism, MCP over a real stdio child, golden JSON, and error envelopes. CI runs on macOS, Linux, and Windows.
+The test suite covers frontmatter round-trips, label normalization, comment parsing, ID generation, graph validation, readiness, lifecycle transitions, property-based DAG checks, multi-process claims and deletes, crash recovery, worktree sharing, Orbit folder discovery and migration, setup recipes and scopes, onboarding, SubTasks, export determinism, MCP over a real stdio child, golden JSON, and error envelopes. CI runs on macOS, Linux, and Windows.
 
 Useful local checks:
 

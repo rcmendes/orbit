@@ -1,5 +1,9 @@
 # Workspace root and `orbit workspace`
 
+> **Replaced by [ADR 0012](./0012-orbit-folder.md).** `orbit workspace` and the
+> `<workspace>/board` layout no longer exist; a workspace is an Orbit folder
+> (`DIR`) plus the repositories linked to it. This document is kept for history.
+
 A Workspace is anchored to a directory that contains its Board at `board/`; member repositories may live inside that directory or elsewhere. `orbit workspace <folder>` creates `<folder>/board` as an external Board (its own Git repository on the `orbit` branch) and does nothing else: it does not clone or link repositories. Each repository joins with `orbit link <folder>`, which resolves the workspace root to its `board/` and writes the pointer in the repository's Git common directory. A workspace root inside a Git working tree is rejected. There is no registry and no manifest; the directory convention and the per-repository pointer are the only state.
 
 ## Considered options

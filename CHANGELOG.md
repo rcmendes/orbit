@@ -2,8 +2,9 @@
 
 ## Unreleased
 
+- Documented the Orbit folder design in [ADR 0012](./docs/adr/0012-orbit-folder.md) and updated the README, command guide, specification, architecture, glossary, tracker guide, releasing guide, and the amended ADRs 0001/0002/0006 and replaced ADR 0008. A Board lives in one delegated `DIR` (default `.orbit`); `orbit init [DIR]` becomes the only creation command; `orbit workspace`, `--board`, and `--local` are removed; discovery, path-free agent setup, and legacy migration are specified. Implementation lands in follow-up changes.
 - The packaged-install smoke now runs in an isolated project and home directory, wires harnesses detected by `orbit init --agents auto`, verifies the generated MCP command matches the Orbit binary under test, and completes an MCP initialize/tools-list handshake through that command.
-- `orbit init --print` no longer prompts for harness selection in a terminal; previews use detection and return without waiting for input. Pass `--agents ask` to open the prompt explicitly during a preview.
+- `orbit init --print` previews without writing or prompting. `--agents` selects integrations for automation; without a flag, a TTY asks and a non-TTY run only prints the next step.
 
 ## 0.7.0 - 2026-10-25
 

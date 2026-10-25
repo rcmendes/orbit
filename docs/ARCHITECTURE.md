@@ -1,6 +1,6 @@
 # Orbit Architecture
 
-Status: describes v0.7.0, including `orbit slug show`/`migrate`, the aligned and grouped `orbit list` views, and per-board Task-ID slugs. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
+Status: describes the next release after v0.7.0, including the Orbit folder (`DIR`, default `.orbit`), user-scoped agent setup, and legacy layout migration. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
 
 The short version: Orbit is one binary, two front doors (the JSON CLI and the MCP stdio server), and no daemon. A board command resolves a Board, takes a lock, rebuilds the task graph from Markdown, applies one transition, publishes files atomically, and optionally commits to an orphan Git branch.
 
@@ -49,10 +49,10 @@ flowchart LR
 
     subgraph Storage["Durable state"]
         BRANCH["orphan branch<br/>orbit"]
-        WORKTREE["hidden worktree<br/>.git/orbit/board"]
-        EXTERNAL["shared Board<br/>--board or ORBIT_DIR"]
+        ORBITFOLDER["Orbit folder<br/>DIR · default .orbit"]
+        STANDALONE["standalone Board<br/>outside a working tree"]
         LINKPTR["link pointer<br/>.git/orbit/link"]
-        LOCKFILE["lock file<br/>.git/orbit/lock"]
+        LOCKFILE["lock file<br/>DIR/.lock"]
         TASKFILES["tasks/ID.md"]
         COMMENTFILES["comments/ID.md"]
         CONFIGFILE["config.toml"]
@@ -89,20 +89,21 @@ flowchart LR
     SETUP --> HARNESSFILES
     SETUP --> HOOK
     WORKTREES -.->|all resolve one Board| BOARD
-    LINKPTR -.->|selects| EXTERNAL
-    BOARD --> WORKTREE
-    BOARD --> EXTERNAL
+    LINKPTR -.->|selects| STANDALONE
+    WORKTREES -.->|resolve| ORBITFOLDER
+    BOARD --> ORBITFOLDER
+    BOARD --> STANDALONE
     GRAPH --> MODEL
     TRANSITIONS --> MODEL
     CMD --> TRANSITIONS
     GRAPH --> TASKFILES
     GIT --> BRANCH
-    WORKTREE --> TASKFILES
-    WORKTREE --> COMMENTFILES
-    WORKTREE --> CONFIGFILE
-    EXTERNAL --> TASKFILES
-    EXTERNAL --> COMMENTFILES
-    EXTERNAL --> CONFIGFILE
+    ORBITFOLDER --> TASKFILES
+    ORBITFOLDER --> COMMENTFILES
+    ORBITFOLDER --> CONFIGFILE
+    STANDALONE --> TASKFILES
+    STANDALONE --> COMMENTFILES
+    STANDALONE --> CONFIGFILE
     LOCK --> LOCKFILE
     ATOMIC --> TASKFILES
     ATOMIC --> COMMENTFILES
@@ -121,7 +122,7 @@ flowchart LR
     class CMD,PRIME,DOCTOR,SETUP app
     class BOARD,SLUG,GRAPH,MODEL,TRANSITIONS,COMMENTS domain
     class LOCK,ATOMIC,GIT,ERRORS durable
-    class BRANCH,WORKTREE,EXTERNAL,LINKPTR,LOCKFILE,TASKFILES,COMMENTFILES,CONFIGFILE store
+    class BRANCH,ORBITFOLDER,STANDALONE,LINKPTR,LOCKFILE,TASKFILES,COMMENTFILES,CONFIGFILE store
     class WORKTREES,HARNESSFILES repo
 ```
 
@@ -149,26 +150,37 @@ Every command resolves the Board before it does any work. The first match wins.
 ```mermaid
 flowchart TD
     START(["orbit command"]) --> OVERRIDE{"--dir or ORBIT_DIR set?"}
-    OVERRIDE -->|yes| LOAD["Board::discover(path)<br/>load config.toml"]
-    LOAD --> EXISTS{"config.toml exists?"}
+    OVERRIDE -->|yes| EXPLICIT["resolve DIR<br/>new or legacy shape"]
+    EXPLICIT --> EXISTS{"Board found?"}
     EXISTS -->|no| NOBOARD["BOARD_NOT_FOUND"]
-    EXISTS -->|yes| LOCK["acquire shared or exclusive lock"]
+    EXISTS -->|yes| LOCK["acquire DIR/.lock"]
 
     OVERRIDE -->|no| REPO{"inside a Git repository?"}
-    REPO -->|no| NOREPO["GIT_ERROR<br/>init and link also return NOT_A_REPOSITORY"]
     REPO -->|yes| LINKED{"link pointer exists?<br/>.git/orbit/link"}
-    LINKED -->|yes| TARGET{"target has config.toml?"}
+    LINKED -->|yes| TARGET{"target has a Board?"}
     TARGET -->|no| LINKERR["LINK_NOT_FOUND"]
-    TARGET -->|yes| SHARED["use linked Board<br/>lock at board/.lock"]
-    LINKED -->|no| LOCAL{"local Board has config.toml?<br/>.git/orbit/board"}
-    LOCAL -->|no| NOBOARD2["BOARD_NOT_FOUND<br/>run orbit init"]
-    LOCAL -->|yes| OWN["use local Board<br/>lock at .git/orbit/lock"]
+    TARGET -->|yes| SHARED["use linked DIR"]
+    LINKED -->|no| NEAREST{"nearest .orbit<br/>skipping ~/.orbit?"}
+    NEAREST -->|yes| OWN["use nearest .orbit"]
+    NEAREST -->|no| MAIN{"main checkout<br/>.orbit exists?"}
+    MAIN -->|yes| OWN
+    MAIN -->|no| LEGACY{"legacy local Board?<br/>.git/orbit/board"}
+    LEGACY -->|yes| LEGACYUSE["use legacy Board<br/>LEGACY_LAYOUT warning"]
+    LEGACY -->|no| GLOBAL{"~/.orbit exists?"}
+    GLOBAL -->|yes| GLOBALUSE["use global Board"]
+    GLOBAL -->|no| NOBOARD2["BOARD_NOT_FOUND<br/>run orbit init"]
+
+    REPO -->|no| OUTSIDE{".orbit ancestor<br/>skipping ~/.orbit?"}
+    OUTSIDE -->|yes| OWN
+    OUTSIDE -->|no| GLOBAL
 
     SHARED --> LOCK
     OWN --> LOCK
+    LEGACYUSE --> LOCK
+    GLOBALUSE --> LOCK
 ```
 
-The pointer lives in the Git common directory, not in a worktree. That is why a claim made from a linked worktree and a claim made from the main worktree serialize on the same lock and see the same tasks. A linked Board keeps its own lock at `<board>/.lock`; the local Board keeps its lock at `<git-common-dir>/orbit/lock`.
+The pointer lives in the Git common directory, not in a worktree. That is why a claim made from a linked worktree and a claim made from the main worktree serialize on the same `<DIR>/.lock` and see the same tasks. A linked Board is a `DIR` outside the member repository; the global Board at `~/.orbit` is the last fallback and is never created by discovery. A legacy Board keeps its old hidden worktree and lock until `doctor --migrate` moves it. When both a new `.orbit` and a legacy local Board exist, the new one wins and the command warns with `AMBIGUOUS_BOARD`; `doctor` reports the duplicate.
 
 ### Domain relationships
 
@@ -359,8 +371,8 @@ The command map shows which command feeds the next stage. The state machine abov
 ```mermaid
 flowchart TB
     subgraph Bootstrap["1. Bootstrap"]
-        INIT["init"]
-        LINK["link PATH"]
+        INIT["init [DIR]"]
+        LINK["link DIR"]
         UNLINK["unlink"]
         SETUP["setup CLIENT"]
     end
@@ -400,9 +412,10 @@ flowchart TB
         MCP["mcp"]
     end
 
-    INIT -->|creates or reuses| SETUP
-    LINK -->|selects shared Board| SETUP
-    UNLINK -->|restores local Board| SETUP
+    INIT -->|creates or reuses| ADD
+    INIT -.->|optional agent wiring| SETUP
+    LINK -->|selects shared Board| ADD
+    UNLINK -->|restores local Board| ADD
     SETUP -->|wires harnesses| ADD
     ADD -->|creates todo| READY
     UPDATE -->|changes metadata| READY
@@ -431,41 +444,46 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 
 | Family | Commands | Effect |
 | --- | --- | --- |
-| Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board, then reconcile harness files, MCP entries, and hooks. |
+| Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
 | Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen` | Change Status or the claim. Writes take the exclusive lock. |
 | Maintenance | `doctor`, `sync`, `slug`, `mcp` | Check integrity, commit heartbeat-only changes, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
-## 4. Workspace initialization
+## 4. Board layouts and initialization
 
-### Workspace topology
+### Topology
 
-A Workspace is one Board plus every Repository linked to it. `orbit workspace <folder>` creates the Board at `<folder>/board`; linking writes a pointer in each Repository's Git common directory, so cross-repository Dependencies share one graph. `unlink` removes the pointer and returns the Repository to its local Board, if one exists.
+A Workspace is one Board plus every Repository linked to it. The Board lives in the Orbit folder (`DIR`): inside a Git working tree, `DIR` is a worktree of that repository on the `orbit` branch; outside one, it is a standalone Git repository. Linking writes a pointer in each Repository's Git common directory, so cross-repository Dependencies share one graph. `unlink` removes the pointer and returns the Repository to the main checkout's `.orbit`, if one exists. The global Board at `~/.orbit` is the last discovery fallback.
 
 ```mermaid
 flowchart LR
-    subgraph Shared["Shared Workspace"]
-        BOARD["shared Board<br/><workspace>/board"]
+    subgraph Local["Repository-local Board"]
+        MAIN["main checkout<br/>.orbit"]
+        WT["linked worktree"]
+    end
+
+    subgraph Shared["Shared Board"]
+        SHARED["shared DIR<br/>standalone repository"]
         R1["repository A<br/>.git/orbit/link"]
         R2["repository B<br/>.git/orbit/link"]
     end
 
-    subgraph Own["Repository with its own Board"]
-        R3["repository C"]
-        LOCAL["local Board<br/>.git/orbit/board"]
+    subgraph Global["Global fallback"]
+        GLOBAL[("~/.orbit")]
     end
 
-    R1 -.->|links to| BOARD
-    R2 -.->|links to| BOARD
-    R3 -->|resolves| LOCAL
-    BOARD --> SHAREDGRAPH["one task graph<br/>tasks and comments"]
-    LOCAL --> LOCALGRAPH["local task graph<br/>tasks and comments"]
+    WT -.->|resolves| MAIN
+    R1 -.->|links to| SHARED
+    R2 -.->|links to| SHARED
+    MAIN --> LOCALGRAPH["one task graph<br/>tasks and comments"]
+    SHARED --> SHAREDGRAPH["one task graph<br/>tasks and comments"]
+    GLOBAL --> GLOBALGRAPH["only when no other<br/>Board resolves"]
 ```
 
 ### Resolving the Task-ID slug
 
-`orbit init` and `orbit workspace` resolve the literal `id.prefix` before creating a Board. A repository `init` uses the main checkout folder name; `init --board` uses `orb`; `workspace` uses the canonical workspace basename; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the main-checkout anchor.
+`orbit init` resolves the literal `id.prefix` from `DIR` before creating a Board. A `DIR` named `.orbit` uses its parent folder name; any other `DIR` uses its own name; `--global` and `~/.orbit` use `orb` with a warning; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the anchor rule.
 
 `orbit slug show` reads the stored prefix, task/SubTask counts, and comment-file count without loading the graph. `orbit slug migrate <slug>` is the explicit rewrite path for a populated Board. It keeps each random suffix, rewrites `parent`, `depends_on`, comment filenames and Orbit headers, updates `id.prefix`, and records one commit. It refuses an unhealthy Board, a target collision, and live claims unless `--force`; a dry run reports the plan and claims without writing.
 
@@ -489,90 +507,103 @@ flowchart TD
 
 The temporary worktree is the transaction boundary: the real Board is not touched until the migrated tree has passed strict loading and the doctor-equivalent integrity checks. A failure after the reset can leave the migrated commit and a removable temporary worktree, but not a half-renamed Board. `src/migrate.rs` owns the plan, safety checks, rewrite, and commit.
 
-### Creating the workspace folder
+### Creating a Board
 
-`orbit workspace <folder>` creates `<folder>/board` and nothing else. It rejects a workspace root inside a Git working tree, reuses the external-Board initialization, and leaves joining to `orbit link <folder>`.
+`orbit init [DIR]` chooses the storage mode from where `DIR` lives. It refuses to create a Board that would compete with an existing repository-local resolution for `DIR`: if a link, an ancestor `.orbit`, the main checkout's `.orbit`, or a legacy Board already resolves, the command returns `ALREADY_INITIALIZED` before writing. `--global` and the `~/.orbit` fallback are exempt. Re-running on the same `DIR` is idempotent.
 
 ```mermaid
 flowchart TD
-    W["orbit workspace <folder>"] --> R["resolve folder"]
-    R --> INSIDE{"inside a Git working tree?"}
-    INSIDE -->|yes| ERR["WORKSPACE_INSIDE_REPO"]
-    INSIDE -->|no| EXISTS{"<folder>/board/config.toml exists?"}
-    EXISTS -->|yes| REUSE["report existing workspace"]
-    EXISTS -->|no| INIT["init external Board<br/>own Git repo, HEAD orbit"]
-    INIT --> DONE["print orbit link <folder>"]
-    REUSE --> DONE
+    I["orbit init [DIR]"] --> R["resolve DIR<br/>default ./.orbit"]
+    R --> EXISTS{"DIR is a Board?"}
+    EXISTS -->|yes| REUSE["reuse it<br/>idempotent"]
+    EXISTS -->|no| SECOND{"another Board resolves<br/>for DIR?"}
+    SECOND -->|yes| ERR["ALREADY_INITIALIZED<br/>name existing Board"]
+    SECOND -->|no| INSIDE{"inside a Git working tree?"}
+    INSIDE -->|yes| WT["worktree mode<br/>ensure orbit branch<br/>worktree add DIR<br/>.git/info/exclude"]
+    INSIDE -->|no| REPO["repository mode<br/>git init DIR<br/>HEAD orbit"]
+    WT --> FILES["config.toml, .gitignore<br/>tasks/, comments/"]
+    REPO --> FILES
+    FILES --> COMMIT["commit orbit: initialize board"]
+    COMMIT --> NEXT["print next step"]
+    NEXT --> PROMPT{"TTY or --agents?"}
+    PROMPT -->|TTY accepts| SETUP["write selected harnesses"]
+    PROMPT -->|no / non-TTY| HINT["print orbit setup hint"]
+    PROMPT -->|--agents list| SETUP
+    PROMPT -->|--agents none| HINT
 ```
 
-### Initializing a repository Board
+A standalone `DIR` must be empty apart from `.git`, so the first commit contains only Board files; otherwise `init` returns `CONFIG_ERROR`. A worktree-mode `init` writes the `DIR` path to `.git/info/exclude`; it never edits a tracked `.gitignore`. `--print` returns the same plan without writing.
 
-`orbit init` is idempotent. It creates or reuses the Board, links an explicit target, and reconciles the selected harnesses instead of rejecting an existing installation.
+### Initializing a Board and wiring agents
+
+`init` is pure until the user asks for agent wiring. It creates the Board, commits, and then either prompts in a TTY, respects `--agents`, or prints the `orbit setup` hint.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Dev as Developer or agent
     participant CLI as orbit init
-    participant SET as setup
     participant BRD as Board
     participant GIT as Git
     participant FS as Files
+    participant SET as setup
 
-    Dev->>CLI: orbit init --agents auto
-    CLI->>GIT: is_git_repo and repo_root
-    alt repository is linked and no --local, --board, or --dir
-        CLI-->>Dev: ALREADY_LINKED
-    else repository is allowed
-        CLI->>SET: selected_agents(args, root)
-        SET-->>CLI: detected or selected clients
-        opt not --print
-            alt --board PATH or --dir PATH
-                alt external Board already exists
-                    CLI->>BRD: reuse it
-                else new external Board
-                    CLI->>BRD: init external Board
-                    BRD->>GIT: init repo, ensure identity, HEAD orbit
-                    BRD->>FS: config.toml, .gitignore, tasks, comments
-                    BRD->>GIT: commit orbit: initialize board
-                end
-            else default local Board
-                CLI->>BRD: init local Board
-                alt Board already exists
-                    BRD-->>CLI: reuse it
-                else new Board
-                    BRD->>GIT: common dir, identity, orphan branch
-                    BRD->>GIT: worktree add .git/orbit/board orbit
-                    BRD->>FS: config.toml, .gitignore, tasks, comments
-                    BRD->>GIT: commit orbit: initialize board
-                end
-            end
-            opt explicit target in a Git repository
-                CLI->>BRD: write link pointer
-            end
-        end
-        opt at least one client
-            CLI->>SET: install clients, hooks, MCP config, print flag
-            SET->>FS: harness files, MCP entries, hook when not --print
-            SET-->>CLI: created, updated, or planned files
-        end
-        CLI-->>Dev: Board, branch, created, linked, agents, files
+    Dev->>CLI: orbit init [DIR]
+    CLI->>CLI: resolve DIR and discover existing Boards
+    alt DIR already holds a Board
+        CLI->>BRD: reuse it
+    else another Board resolves for DIR
+        CLI-->>Dev: ALREADY_INITIALIZED
+    else new worktree-mode Board
+        CLI->>GIT: ensure identity and orbit branch
+        CLI->>GIT: worktree add DIR orbit
+        CLI->>FS: write DIR path to .git/info/exclude
+        CLI->>BRD: write config.toml, .gitignore, tasks, comments
+        BRD->>GIT: commit orbit: initialize board
+    else new standalone Board
+        CLI->>GIT: init DIR, ensure identity, HEAD orbit
+        CLI->>BRD: write config.toml, .gitignore, tasks, comments
+        BRD->>GIT: commit orbit: initialize board
     end
+    opt TTY prompt accepted or --agents names clients
+        CLI->>SET: install selected clients, hooks, MCP config
+        SET->>FS: managed harness files
+    end
+    CLI-->>Dev: Board, storage mode, prefix, next step
 ```
 
-With `--print`, the same plan is returned without writing the Board, the link pointer, or harness files. Re-running `init` reuses an existing Board and reports `unchanged` files where the managed content already matches.
+With `--print`, the Board, exclusion entry, and harness files are planned but not written. Re-running `init` reuses the Board and reports unchanged managed files when wiring is requested.
+
+### Legacy migration
+
+Legacy Boards keep resolving with a `LEGACY_LAYOUT` warning. `doctor --migrate` performs the explicit, resumable move.
+
+```mermaid
+flowchart TD
+    D["orbit doctor --migrate"] --> L{"legacy shape"}
+    L -->|local hidden worktree| W["add main-checkout .orbit worktree<br/>from the existing orbit branch"]
+    L -->|shared root/board| M["move Board root to root/.orbit"]
+    L -->|arbitrary --board path outside a working tree| K["keep the path<br/>record storage = repository"]
+    W --> V["verify config and every Task"]
+    M --> V
+    K --> V
+    V -->|failure| X["stop; old layout still readable"]
+    V -->|success| C["remove old worktree or directory<br/>update exclusion and current pointer"]
+    C --> R["report migrated"]
+    X --> A["doctor reports AMBIGUOUS_BOARD<br/>rerun --migrate to resume"]
+```
+
+A forced `git clean -xdff` that removes `DIR` leaves the `orbit` branch and a stale worktree record. `doctor` reports `ORPHAN_WORKTREE`; `doctor --fix` or `init` prunes the record and re-attaches `DIR` without task loss.
 
 ### Linking and unlinking
 
 | Command | Pointer | Board | Harness config |
 | --- | --- | --- | --- |
-| `init` | unchanged | Creates or reuses the local Board. | Reconciles detected or selected clients. |
-| `init --local` | removed | Creates or reuses the local Board even when linked. | Reconciles. |
-| `init --board PATH` | written | Creates or reuses the external Board. | Reconciles; MCP entries record the shared Board path. |
-| `link PATH` | written | Must already be a Board. | Refreshes existing client config unless `--no-refresh`. |
-| `unlink` | removed | Local Board is kept and becomes active again. | Refreshes if a local Board exists. |
+| `init` | unchanged | Creates or reuses `DIR`. | Writes only when the prompt is accepted or `--agents` names clients. |
+| `link DIR` | written | Must already be a Board; a legacy target resolves with a warning. | Refreshes existing managed client files unless `--no-refresh`; no Board path is stored. |
+| `unlink` | removed | The main checkout's `.orbit` becomes active again, if it exists. | Refreshes existing managed client files; no Board path is stored. |
 
-A link warning about a shadowed Board means the repository still has its own Board on disk. Linking did not delete it. A missing target returns `LINK_NOT_FOUND`; the pointer is not repaired automatically.
+A link warning about a shadowed Board means the repository still has its own Board on disk. Linking did not delete it. A missing target returns `LINK_NOT_FOUND`; the pointer is not repaired automatically. Generated configs record the Orbit binary but no Board path, so moving `DIR` does not stale them; `doctor` reports an older absolute path as `ABSOLUTE_BOARD_PATH`.
 
 ## 5. Task lifecycle
 
@@ -719,7 +750,10 @@ sequenceDiagram
 | Slug migration fails | No files are changed if validation fails; fix the issues from `orbit doctor`. If the reset fails after a commit, inspect the temporary worktree named in the error and run `git worktree prune` after recovery. |
 | Missing linked Board | `LINK_NOT_FOUND`; re-link or restore the Board. |
 | Missing local Board | `BOARD_NOT_FOUND`; run `orbit init`. |
-| Corrupt task, comment, or graph | `doctor` reports `CORRUPT_TASK`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, or `CYCLE_DETECTED`. `doctor --fix` only removes stale temp files; it does not rewrite tasks or comments. |
+| Removed `DIR` | The `orbit` branch still holds every Task. `doctor` reports `ORPHAN_WORKTREE`; `doctor --fix` or `orbit init` re-attaches it. |
+| Half-moved or duplicated layout | `doctor` reports `AMBIGUOUS_BOARD`; `doctor --migrate` resolves the pair. |
+| Storage mode mismatch | `doctor` reports `STORAGE_MISMATCH`; repair the worktree or standalone repository before writing. |
+| Corrupt task, comment, or graph | `doctor` reports `CORRUPT_TASK`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, or `CYCLE_DETECTED`. `doctor --fix` removes stale temp files and re-attaches an orphan worktree; it does not rewrite tasks or comments. |
 | Forced reopen of a done dependency | A done dependent can keep an unfinished dependency as a historical fact. `doctor` warns; the next `done` of that dependent still enforces its dependencies. |
 
 ## 8. Where to change what
@@ -732,11 +766,13 @@ sequenceDiagram
 | Add an MCP tool | `tool_definitions` and `dispatch_tool` in `src/mcp.rs` | `tests/mcp.rs`, the MCP bridge section, and `SPEC.md` |
 | Change human `list` output | `format_table` and `truncate` in `src/commands.rs` | The human-output note here, `docs/commands.md`, and the README example |
 | Add a harness | `SetupClient` and the install and remove plans in `src/setup.rs` | Detection tests in `tests/setup.rs`, onboarding tests, and `docs/agents/` |
-| Change board storage | `src/board.rs` and the init path | [ADR 0001](adr/0001-markdown-board-on-orphan-branch.md), [ADR 0002](adr/0002-single-writer-lock-and-atomic-rename.md), and the component map here |
+| Change board storage | `src/board.rs` and the init path | [ADR 0001](adr/0001-markdown-board-on-orphan-branch.md), [ADR 0002](adr/0002-single-writer-lock-and-atomic-rename.md), [ADR 0012](adr/0012-orbit-folder.md), and the component map here |
 
 ## 9. Invariants
 
 - The board is the only source of truth. There is no persistent index, cache, or watcher; every command rehydrates from Markdown.
+- A Board is one Orbit folder `DIR`; the storage mode (`worktree` or `repository`) changes Git plumbing, not the files, lock, command behavior, or JSON contract.
+- Discovery never creates a Board. `init` refuses when a repository-local Board already resolves for the target `DIR` (except `--global`), and `~/.orbit` is used only when it already exists.
 - Readers take the shared lock for a consistent snapshot. Writers take the exclusive lock for the read-modify-write.
 - Each file is published with a temp file, `fsync`, and rename. A crash cannot truncate a task.
 - Ready and blocked are derived on every command. They are never stored in frontmatter.
@@ -747,4 +783,4 @@ sequenceDiagram
 - `export` takes the shared lock and writes nothing. Its snapshot is sorted by task ID and contains no timestamps or machine-local paths.
 - Human output is presentation only. `list` tables may truncate titles or change column widths; `--json` carries the complete, stable shape.
 - MCP does not bypass the CLI. Every tool call reuses the same lock, atomic-write, auto-commit, and error envelope.
-- Agent configuration is written with managed markers or key-level merges so `setup --remove` deletes only Orbit-managed content.
+- Agent configuration is written with managed markers or key-level merges so `setup --remove` deletes only Orbit-managed content. Generated configs record the Orbit binary but not the Board path.

@@ -1,6 +1,6 @@
 # Orbit Architecture
 
-Status: describes v0.6.0, including the aligned and grouped `orbit list` views and per-board Task-ID slugs. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
+Status: describes v0.6.0 plus the unreleased `orbit slug` command, including the aligned and grouped `orbit list` views and per-board Task-ID slugs. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
 
 The short version: Orbit is one binary, two front doors (the JSON CLI and the MCP stdio server), and no daemon. A board command resolves a Board, takes a lock, rebuilds the task graph from Markdown, applies one transition, publishes files atomically, and optionally commits to an orphan Git branch.
 
@@ -27,6 +27,7 @@ flowchart LR
         CMD["Command handlers<br/>src/commands.rs"]
         PRIME["prime context"]
         DOCTOR["doctor and sync"]
+        MIGRATE["Slug migration<br/>src/migrate.rs"]
         SETUP["Harness setup<br/>src/setup.rs"]
     end
 
@@ -72,9 +73,13 @@ flowchart LR
     CLI --> ENVELOPE
     CMD --> PRIME
     CMD --> DOCTOR
+    CMD --> MIGRATE
     CMD --> SETUP
     CMD --> Domain
     CMD --> SLUG
+    MIGRATE --> SLUG
+    MIGRATE --> GRAPH
+    MIGRATE --> GIT
     BOARD --> SLUG
     SLUG --> GIT
     CMD --> Durability
@@ -125,7 +130,7 @@ flowchart LR
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
-| Application | `src/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. |
+| Application | `src/commands.rs`, `src/migrate.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. Prefix migration plans, validates, and applies the one-commit rewrite. |
 | Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One repo-wide advisory lock, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
@@ -391,6 +396,7 @@ flowchart TB
     subgraph Maintain["5. Maintain"]
         DOCTOR["doctor"]
         SYNC["sync"]
+        SLUG["slug show / migrate"]
         MCP["mcp"]
     end
 
@@ -417,10 +423,11 @@ flowchart TB
     DONE -->|terminal| REOPEN
     CANCEL -->|terminal| REOPEN
     DOCTOR -.->|inspects| READY
+    SLUG -.->|rewrites IDs| READY
     MCP -.->|delegates each call| CLAIM
 ```
 
-This map shows forward flow; solid arrows are the primary path, while dotted arrows are inspection or maintenance relationships. The state machine above holds the back edges where `release`, `done`, `cancel`, or `reopen` return a task to an earlier state. `delete` removes a task and its comments without a Status transition. `sync` commits pending heartbeat-only changes independently of the forward path.
+This map shows forward flow; solid arrows are the primary path, while dotted arrows are inspection or maintenance relationships. The state machine above holds the back edges where `release`, `done`, `cancel`, or `reopen` return a task to an earlier state. `delete` removes a task and its comments without a Status transition. `sync` commits pending heartbeat-only changes independently of the forward path. `slug` changes the Board's identity by rewriting every ID and then returning to the one-prefix model.
 
 | Family | Commands | Effect |
 | --- | --- | --- |
@@ -428,7 +435,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
 | Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen` | Change Status or the claim. Writes take the exclusive lock. |
-| Maintenance | `doctor`, `sync`, `mcp` | Check integrity, commit heartbeat-only changes, and serve MCP over stdio. |
+| Maintenance | `doctor`, `sync`, `slug`, `mcp` | Check integrity, commit heartbeat-only changes, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Workspace initialization
 
@@ -459,6 +466,28 @@ flowchart LR
 ### Resolving the Task-ID slug
 
 `orbit init` and `orbit workspace` resolve the literal `id.prefix` before creating a Board. A repository `init` uses the main checkout folder name; `init --board` uses `orb`; `workspace` uses the canonical workspace basename; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the main-checkout anchor.
+
+`orbit slug show` reads the stored prefix, task/SubTask counts, and comment-file count without loading the graph. `orbit slug migrate <slug>` is the explicit rewrite path for a populated Board. It keeps each random suffix, rewrites `parent`, `depends_on`, comment filenames and Orbit headers, updates `id.prefix`, and records one commit. It refuses an unhealthy Board, a target collision, and live claims unless `--force`; a dry run reports the plan and claims without writing.
+
+```mermaid
+flowchart TD
+    M["orbit slug migrate atlas"] --> L["strict load + health checks"]
+    L -->|issues| B["MIGRATION_BLOCKED"]
+    L -->|healthy| P["map IDs, references, and comments"]
+    P -->|collision| C1["PREFIX_COLLISION"]
+    P -->|clean| D{"--dry-run?"}
+    D -->|yes| OUT["return plan and claims<br/>no writes or commit"]
+    D -->|no| C{"live claims?"}
+    C -->|yes, no --force| B
+    C -->|no, or --force| S["commit pending heartbeat writes"]
+    S --> T["temporary detached worktree"]
+    T --> R["rewrite + strict validation"]
+    R -->|invalid| X["discard temporary worktree<br/>original Board untouched"]
+    R -->|valid| K["one migration commit"]
+    K --> H["verify Board HEAD, reset, remove worktree"]
+```
+
+The temporary worktree is the transaction boundary: the real Board is not touched until the migrated tree has passed strict loading and the doctor-equivalent integrity checks. A failure after the reset can leave the migrated commit and a removable temporary worktree, but not a half-renamed Board. `src/migrate.rs` owns the plan, safety checks, rewrite, and commit.
 
 ### Creating the workspace folder
 
@@ -687,6 +716,7 @@ sequenceDiagram
 | Multi-file mutation crash | Files are serialized but not transactional across files. `doctor` reports dangling dependencies and a repeated `delete --force` resumes cleanup. |
 | Auto-commit failure | The state is already on disk. The command succeeds with `meta.warnings: ["COMMIT_FAILED: ..."]`; `orbit sync` retries the commit. |
 | Heartbeat-only changes | Not committed immediately. The next meaningful mutation or `orbit sync` commits them. |
+| Slug migration fails | No files are changed if validation fails; fix the issues from `orbit doctor`. If the reset fails after a commit, inspect the temporary worktree named in the error and run `git worktree prune` after recovery. |
 | Missing linked Board | `LINK_NOT_FOUND`; re-link or restore the Board. |
 | Missing local Board | `BOARD_NOT_FOUND`; run `orbit init`. |
 | Corrupt task, comment, or graph | `doctor` reports `CORRUPT_TASK`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, or `CYCLE_DETECTED`. `doctor --fix` only removes stale temp files; it does not rewrite tasks or comments. |

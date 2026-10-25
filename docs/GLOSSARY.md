@@ -9,8 +9,12 @@ A single unit of work that one agent can claim and complete. A Task may stand al
 _Avoid_: Issue, ticket, bead, bean
 
 **Slug**:
-The Board's short name that prefixes every Task ID, such as `teramigo` in `teramigo-32fdfd`. A Board has exactly one Slug.
+The Board's short name that prefixes every Task ID, such as `teramigo` in `teramigo-32fdfd`. A Board has exactly one Slug at a time; `orbit slug show` reports it and `orbit slug migrate` rewrites every ID when the Board's identity changes.
 _Avoid_: Project name, namespace
+
+**Slug migration**:
+An explicit, one-commit rewrite of every Task and SubTask ID from the Board's current prefix to a new Slug. It preserves random suffixes and rewrites structured `parent` and `depends_on` references, comment filenames, and Orbit comment headers. It never rewrites task bodies, comment text, Git history, or external links.
+_Avoid_: Multi-prefix mode, alias table
 
 **SubTask**:
 A Task that belongs to exactly one Parent Task. A SubTask is claimable and completable in its own right; it is not a checklist item.

@@ -75,8 +75,8 @@ Task IDs use the Board's slug as their prefix. In a repository, `init` adopts
 the main checkout folder name (`teramigo` → `teramigo-`); `--board` defaults to
 `orb`. Pass `--slug` to choose it explicitly. Re-running `init` preserves the
 stored prefix; an empty Board can change it, while a populated Board returns
-`SLUG_LOCKED`. `--print` reports the same prefix without writing. The JSON and
-human output carry `prefix`.
+`SLUG_LOCKED` and points at `orbit slug migrate <slug>`. `--print` reports the
+same prefix without writing. The JSON and human output carry `prefix`.
 
 ### `orbit workspace` — create a shared workspace
 
@@ -95,8 +95,8 @@ orbit link ~/src/acme        # from each repository root
 
 The Task-ID prefix defaults to the workspace folder name (`acme` → `acme-`).
 Pass `--slug` to choose it explicitly. Re-running preserves the prefix; an empty
-Board can change it, while a populated Board returns `SLUG_LOCKED`. The JSON and
-human output carry `prefix`.
+Board can change it, while a populated Board returns `SLUG_LOCKED` and points at
+`orbit slug migrate <slug>`. The JSON and human output carry `prefix`.
 
 The command only creates. It does not clone or link repositories, and it does
 not write agent configuration. A workspace must live outside every Git working
@@ -134,6 +134,47 @@ against an isolated Board.
 orbit unlink
 orbit init        # create the local Board if it does not exist yet
 ```
+
+### `orbit slug` — inspect or migrate the Task-ID identity
+
+`slug show` reports the bare slug, the literal `id.prefix`, and the number of
+Tasks, SubTasks, and comment files. It is read-only. `slug migrate <SLUG>`
+rewrites every Task and SubTask ID from the current prefix to `<SLUG>-`.
+
+**Good fit:** an early Board was created under a repository or workspace name
+that no longer fits. Migration is the explicit escape hatch from the one-prefix
+rule; `init --slug` remains the creation and empty-Board path.
+
+```bash
+orbit slug show                        # orb, orb-, 42 tasks, 17 SubTasks
+orbit slug migrate atlas --dry-run     # print the plan; write nothing
+orbit slug migrate atlas               # rewrite, validate, and commit once
+orbit slug migrate atlas --force       # proceed despite live claims
+```
+
+The random suffix is preserved: `orb-a7b2c9` becomes `atlas-a7b2c9`, and
+`orb-a7b2c9.d4b3df` becomes `atlas-a7b2c9.d4b3df`. Migration also rewrites
+`parent` and `depends_on`, renames comment files, updates the Orbit-generated
+`# Comments: <id>` header, and changes `id.prefix`. It validates the result in a
+temporary Git worktree, commits once as
+`orbit: migrate task prefix from orb- to atlas-`, then fast-forwards the Board.
+Pending heartbeat writes are committed first, so the migration commit is the
+single rollback point.
+
+`--dry-run` reports counts, the reference count, and any live claims, but never
+writes. The JSON plan also includes every `from`/`to` mapping and any collisions.
+Applying with live claims requires `--force`; the affected task IDs and holders
+are listed so they can re-read the Board. An unhealthy Board returns
+`MIGRATION_BLOCKED` (run `orbit doctor` first), and a target that would collapse
+two IDs returns `PREFIX_COLLISION`. On an empty Board migration is equivalent to
+setting the prefix.
+
+Task bodies, comment text, Git history, pull requests, and external links are
+**not** rewritten. A body that mentions `orb-a7b2c9` keeps that text; old links
+and cached agent IDs stop resolving. `--json` reports `current`, `target`,
+`changed`, `tasks`, `subtasks`, `comment_files`, `references`, `mappings`,
+`claims`, `collisions`, `dry_run`, `applied`, and `commit`. `slug show` reports
+`slug`, `prefix`, `tasks`, `subtasks`, and `comment_files`.
 
 ### `orbit setup` — adjust one harness
 
@@ -683,9 +724,11 @@ orbit add "First task" --json
 # teramigo-32fdfd
 ```
 
-The slug is adopted once at creation. Existing `orb-` Boards keep working without
-migration. To change the prefix, the Board must have no tasks; otherwise Orbit
-returns `SLUG_LOCKED`.
+The slug is adopted once at creation. Existing `orb-` Boards keep working
+unchanged; migration is optional. To change a populated Board, preview
+`orbit slug migrate <slug> --dry-run`, then apply it. `init --slug` still only
+changes an empty Board; a populated Board returns `SLUG_LOCKED` and points at the
+migration command.
 
 ### A workspace of several repositories
 
@@ -748,9 +791,11 @@ orbit sync              # commit anything left uncommitted
 | `SUBTASKS_OPEN` | Finish or cancel the IDs in `error.details.subtasks`, or pass `--force` to `done` or `cancel`. |
 | `SUBTASKS_EXIST` | The Parent Task still has SubTasks. Use `delete --force` to remove the whole subtree, or delete the SubTasks first. |
 | `PARENT_MISMATCH` | The SubTask ID and its `parent` field disagree. Rename the file or fix the frontmatter so the ID encodes the same parent. |
-| `INVALID_SLUG` | `--slug` must be a bare 1–20 character lowercase word with alphanumeric ends and no `--`; use the normalized suggestion in the error. |
-| `SLUG_LOCKED` | The Board has tasks. Create a new Board or keep the current prefix. |
-| `PREFIX_MISMATCH` | `id.prefix` and the task filenames disagree. Restore the configured prefix or create a new Board. |
+| `INVALID_SLUG` | `--slug` and `slug migrate` take a bare 1–20 character lowercase word with alphanumeric ends and no `--`; use the normalized suggestion in the error. |
+| `SLUG_LOCKED` | The Board has tasks. Run `orbit slug migrate <slug>` to rewrite every ID, or keep the current prefix. |
+| `MIGRATION_BLOCKED` | Migration refused because of live claims, an unhealthy Board, a dirty Board, or a concurrent Board move. Read `error.details.reason`; run `orbit doctor`, then retry with `--force` only for live claims. |
+| `PREFIX_COLLISION` | Two old IDs would become the same new ID. No files were changed; choose another slug. |
+| `PREFIX_MISMATCH` | `id.prefix` and the task filenames disagree. Restore the configured prefix first; migration refuses an inconsistent Board. |
 | `DANGLING_PARENT` | Run `doctor`; the parent ID is missing. Recreate the parent or fix the SubTask's frontmatter. |
 | `NESTED_SUBTASK` | A SubTask points to itself or to another SubTask. SubTasks are one level deep. |
 | `INVALID_TYPE` | `epic` was used on a SubTask. Epic is top-level only; use `task`, `spike`, `chore`, or `decision` for a child. |

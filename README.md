@@ -498,7 +498,17 @@ orbit add "First task" --json
 # teramigo-32fdfd
 ```
 
-Re-running `init` or `workspace` preserves the stored prefix. An empty Board can change it with `--slug`; a populated Board returns `SLUG_LOCKED`. Existing `orb-` Boards keep working without migration.
+Re-running `init` or `workspace` preserves the stored prefix. An empty Board can change it with `--slug`; a populated Board returns `SLUG_LOCKED`. Existing `orb-` Boards keep working unchanged; migration is optional.
+
+To change the identity of an existing Board, use the explicit migration path instead of hand-editing `config.toml`:
+
+```bash
+orbit slug show                       # current slug, prefix, and counts
+orbit slug migrate atlas --dry-run    # counts, references, and affected claims
+orbit slug migrate atlas              # rewrite, validate, and commit once
+```
+
+Migration keeps each random suffix (`orb-32fdfd` → `atlas-32fdfd`, `orb-32fdfd.7fk2m9` → `atlas-32fdfd.7fk2m9`), rewrites `parent` and `depends_on`, renames comment files and their Orbit header, and updates `id.prefix`. It refuses an unhealthy Board or a prefix collision, and live claims require `--force` so the affected agents know to re-read. Task bodies, comment text, Git history, and external links are not rewritten.
 
 ## Multi-repository workspaces
 
@@ -650,7 +660,7 @@ The snapshot is ordered by task ID, carries `schema_version` (currently `2`), an
 
 ## Agent setup
 
-`orbit init` is the one in-repository command. It creates the Board, detects installed harnesses from their commands and project markers, and writes only the integrations that apply. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
+`orbit init` is the one-command setup path in a repository. It creates the Board, detects installed harnesses from their commands and project markers, and writes only the integrations that apply. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
 
 ```bash
 orbit init                    # Board + detected harnesses (asks in a terminal)
@@ -697,7 +707,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
 | **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` |
 | **Execute** | `claim` · `heartbeat` · `release` · `done` · `cancel` · `reopen` |
-| **Maintain** | `doctor` · `sync` · `mcp` |
+| **Maintain** | `doctor` · `sync` · `slug` · `mcp` |
 
 Every command explains its own semantics:
 
@@ -719,6 +729,7 @@ The full guide — when to use each command, end-to-end scenarios, and a common-
 | A parent has open children | Finish the children, or pass `--force` to `done`/`cancel` to cancel them. |
 | A test failed after a crash | `orbit doctor` reports integrity issues; `doctor --fix` removes stale temp files. |
 | Heartbeats are uncommitted | `orbit sync` commits lease-only changes. |
+| The Task-ID prefix must change | Preview with `orbit slug migrate <slug> --dry-run`, then apply. Live claims require `--force`; external old-ID links still break. |
 | The Board is missing | `orbit init` creates one; a missing linked Board returns `LINK_NOT_FOUND`. |
 | A writer is busy | `LOCKED` is retryable. Retry after a short backoff. |
 

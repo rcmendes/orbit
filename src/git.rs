@@ -146,6 +146,24 @@ pub fn worktree_add(repo: &Path, path: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Adds a detached worktree at `path` using the commit currently checked out by
+/// `repo`. Detaching avoids competing with the Board branch while the migration
+/// is built and committed.
+pub fn worktree_add_detached(repo: &Path, path: &Path) -> Result<()> {
+    run_git(
+        Some(repo),
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            path.to_string_lossy().as_ref(),
+            "HEAD",
+        ],
+        None,
+    )?;
+    Ok(())
+}
+
 pub fn worktree_remove(repo: &Path, path: &Path) -> Result<()> {
     run_git(
         Some(repo),
@@ -157,6 +175,20 @@ pub fn worktree_remove(repo: &Path, path: &Path) -> Result<()> {
         ],
         None,
     )?;
+    Ok(())
+}
+
+pub fn head_commit(repo: &Path) -> Result<String> {
+    let output = run_git(Some(repo), &["rev-parse", "HEAD"], None)?;
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if commit.is_empty() {
+        return Err(OrbitError::git("git did not report a HEAD commit"));
+    }
+    Ok(commit)
+}
+
+pub fn reset_hard(repo: &Path, commit: &str) -> Result<()> {
+    run_git(Some(repo), &["reset", "--hard", commit], None)?;
     Ok(())
 }
 

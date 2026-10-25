@@ -9,6 +9,7 @@ pub mod graph;
 pub mod help;
 pub mod lock;
 pub mod mcp;
+pub mod migrate;
 pub mod output;
 pub mod setup;
 pub mod slug;

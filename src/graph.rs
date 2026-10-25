@@ -78,7 +78,7 @@ impl Graph {
         let prefix_mismatch = detect_prefix_mismatch(&ids, &board.config.id.prefix);
         let accept_observed_prefix = if let Some(mismatch) = prefix_mismatch {
             let message = format!(
-                "board prefix is `{}` but {} task files use `{}`; restore `id.prefix` or create a new board",
+                "board prefix is `{}` but {} task files use `{}`; restore `id.prefix` before running other commands",
                 mismatch.configured, mismatch.tasks, mismatch.observed
             );
             if mode == LoadMode::Strict {

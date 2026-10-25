@@ -32,7 +32,11 @@ Typical agent loop:
 Inspect work without changing it:
   orbit ready --limit 5
   orbit show orb-a7b2c9 --json
-  orbit list --status in_progress --claimed-by claude";
+  orbit list --status in_progress --claimed-by claude
+
+Change a Board's Task-ID prefix:
+  orbit slug show
+  orbit slug migrate atlas --dry-run";
 
 pub const INIT_LONG: &str = "\
 Creates the Board as a hidden Git worktree on the orbit branch, then detects
@@ -49,7 +53,9 @@ it, or --local to create a repository Board even when a shared one is linked.
 Task IDs use the Board's slug as their prefix. In a repository, init adopts the
 main checkout folder name (for example teramigo-); --board defaults to orb. Pass
 --slug to choose it explicitly. Re-running preserves the stored prefix. An empty
-Board can change its prefix with --slug; a populated Board returns SLUG_LOCKED.";
+Board can change its prefix with --slug; a populated Board returns SLUG_LOCKED.
+Use `orbit slug migrate <slug>` to rewrite an existing Board, and `orbit slug
+show` to inspect its current identity.";
 
 pub const INIT_EXAMPLES: &str = "\
 Examples:
@@ -85,7 +91,7 @@ existing Board is reported, not overwritten.
 The Board's Task-ID prefix defaults to the workspace folder name (for example
 acme-). Pass --slug to choose it explicitly. An existing workspace keeps its
 prefix unless --slug changes an empty Board; a populated Board returns
-SLUG_LOCKED.";
+SLUG_LOCKED. Use `orbit slug migrate <slug>` to rewrite an existing Board.";
 
 pub const WORKSPACE_EXAMPLES: &str = "\
 Examples:
@@ -138,6 +144,81 @@ Examples:
 
   # Create a local Board afterwards
   orbit init";
+
+pub const SLUG_LONG: &str = "\
+A Board stores one slug as the literal `id.prefix` with a trailing dash, and every
+Task ID starts with it. This command inspects that identity or migrates it.
+
+`slug show` is read-only. `slug migrate` is the explicit escape hatch for a
+populated Board: it keeps every random suffix, rewrites Task and SubTask IDs plus
+`parent` and `depends_on`, renames comment files and their Orbit header, updates
+`id.prefix`, and records one Board commit. The Board then returns to the simple
+one-prefix invariant.
+
+Migration refuses an inconsistent Board, prefix collisions, and live claims
+unless --force. It never rewrites free-form task bodies, comment text, Git
+history, or external references. Use --dry-run first.";
+
+pub const SLUG_EXAMPLES: &str = "\
+Examples:
+  # Inspect the current slug and prefix
+  orbit slug show
+
+  # Preview every ID that would change
+  orbit slug migrate atlas --dry-run
+
+  # Rewrite the whole Board to atlas-…
+  orbit slug migrate atlas
+
+  # Proceed while agents hold live claims, then tell them to re-read
+  orbit slug migrate atlas --force";
+
+pub const SLUG_SHOW_LONG: &str = "\
+Prints the bare slug, the literal `id.prefix`, the number of Tasks and SubTasks,
+and how many comment files the Board has. It does not validate or rewrite
+anything, so it still reports the stored identity when the Board needs repair.
+
+Use `orbit doctor` for health and `orbit slug migrate` to change the prefix.";
+
+pub const SLUG_SHOW_EXAMPLES: &str = "\
+Examples:
+  orbit slug show
+  orbit slug show --json
+  orbit --dir ~/src/acme/board slug show";
+
+pub const SLUG_MIGRATE_LONG: &str = "\
+Rewrites every ID from the Board's current prefix to <SLUG>-. The random suffix is
+preserved: orb-a7b2c9 becomes atlas-a7b2c9, and orb-a7b2c9.d4b3df becomes
+atlas-a7b2c9.d4b3df. Parent and dependency references, comment filenames, the
+Orbit-generated comment header, and id.prefix move with the IDs.
+
+The operation is all-or-nothing: Orbit builds and validates the migrated Board in
+a temporary Git worktree, commits once, then fast-forwards the real Board. It
+refuses a Board that is not healthy and a target that would collide. Pending
+heartbeat-only changes are committed first, so the migration commit is the single
+rollback point. Live claims require --force because the holder still has the old
+ID cached; affected holders are listed in the result.
+
+Task bodies, comment text, Git history, pull requests, and external links are not
+rewritten. Existing links to old IDs break; agents must re-read the Board. On an
+empty Board this is equivalent to setting the prefix.";
+
+pub const SLUG_MIGRATE_EXAMPLES: &str = "\
+Examples:
+  # See the counts, references, and affected claims
+  orbit slug migrate atlas --dry-run
+
+  # Get every ID mapping as JSON without writing
+  orbit slug migrate atlas --dry-run --json
+
+  # Apply once the plan looks right
+  orbit slug migrate atlas
+
+  # Migrate a Board whose tasks are currently claimed
+  orbit slug migrate atlas --force
+
+  # Inspect the applied result without the human summary
+  orbit slug migrate atlas --json";
 
 pub const ADD_LONG: &str = "\
 Creates a task in the todo state and prints its ID (use --json to capture

@@ -45,6 +45,10 @@ pub enum Command {
     #[command(long_about = help::UNLINK_LONG, after_long_help = help::UNLINK_EXAMPLES)]
     Unlink,
 
+    /// Show or migrate the Board's Task-ID slug.
+    #[command(long_about = help::SLUG_LONG, after_long_help = help::SLUG_EXAMPLES)]
+    Slug(SlugArgs),
+
     /// Create a task.
     #[command(long_about = help::ADD_LONG, after_long_help = help::ADD_EXAMPLES)]
     Add(AddArgs),
@@ -193,6 +197,43 @@ pub struct LinkArgs {
     /// Do not refresh existing agent configuration.
     #[arg(long = "no-refresh")]
     pub no_refresh: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SlugArgs {
+    #[command(subcommand)]
+    pub command: SlugCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SlugCommand {
+    /// Show the Board's slug, literal prefix, and task counts.
+    #[command(
+        long_about = help::SLUG_SHOW_LONG,
+        after_long_help = help::SLUG_SHOW_EXAMPLES
+    )]
+    Show,
+
+    /// Rewrite every Task and SubTask ID to a new slug.
+    #[command(
+        long_about = help::SLUG_MIGRATE_LONG,
+        after_long_help = help::SLUG_MIGRATE_EXAMPLES
+    )]
+    Migrate(SlugMigrateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SlugMigrateArgs {
+    /// New slug. Bare word: atlas, not atlas-.
+    pub slug: String,
+
+    /// Print the migration plan without writing any files.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Migrate even while tasks have live claims, then list the affected holders.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]

@@ -307,7 +307,7 @@ fn populated_boards_refuse_a_slug_change() {
     assert_eq!(value["error"]["details"]["tasks"], 1);
     let message = value["error"]["message"].as_str().unwrap();
     assert!(message.contains("1 task"), "{message}");
-    assert!(message.contains("create a new board"), "{message}");
+    assert!(message.contains("orbit slug migrate other"), "{message}");
 }
 
 #[test]

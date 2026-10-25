@@ -438,10 +438,11 @@ impl Board {
 }
 
 pub(crate) fn slug_locked_error(current: &str, requested: &str, tasks: usize) -> OrbitError {
+    let requested_slug = slug::slug_of_prefix(requested);
     OrbitError::new(
         code::SLUG_LOCKED,
         format!(
-            "board prefix is `{current}`; cannot change it to `{requested}` because {tasks} task(s) exist; create a new board or keep the current prefix"
+            "board prefix is `{current}`; cannot change it to `{requested}` because {tasks} task(s) exist; run `orbit slug migrate {requested_slug}` to rewrite all IDs, or keep the current prefix"
         ),
     )
     .with_details(serde_json::json!({

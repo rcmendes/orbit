@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.5.0`](https://github.com/rcmendes/orbit/releases/tag/v0.5.0) is the latest release. `main` adds the aligned `orbit list` table shown below. The canonical design is [SPEC.md](./docs/SPEC.md); vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.5.0`](https://github.com/rcmendes/orbit/releases/tag/v0.5.0) is the latest release. `main` adds the aligned `orbit list` table shown below and per-board Task-ID slugs. The canonical design is [SPEC.md](./docs/SPEC.md); vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -41,6 +41,7 @@ claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 - [How it works](#how-it-works)
 - [The agent loop](#the-agent-loop)
 - [Features and SubTasks](#features-and-subtasks)
+- [Task-ID slugs](#task-id-slugs)
 - [Multi-repository workspaces](#multi-repository-workspaces)
 - [Triage, labels, and comments](#triage-labels-and-comments)
 - [Two front doors: JSON CLI and MCP](#two-front-doors-json-cli-and-mcp)
@@ -482,6 +483,18 @@ SubTasks are one level deep. If a ticket needs its own breakdown, flatten it int
 > **Warning:** `orbit done --force` or `orbit cancel --force` on a parent with open SubTasks cancels every open child. Use it when the remaining pieces are genuinely abandoned, not as a shortcut.
 
 `orbit prime` surfaces **close candidates**: non-terminal Parent Tasks with at least one SubTask and no open children. Orbit never closes them automatically, so a coordinator decides when the feature is actually done.
+
+## Task-ID slugs
+
+A Board has one slug that prefixes its Task IDs. `orbit init` adopts the main checkout folder name; `orbit workspace` adopts the workspace folder name; `orbit init --board` defaults to `orb`. Pass `--slug` to choose it explicitly:
+
+```bash
+orbit init --slug teramigo
+orbit add "First task" --json
+# teramigo-32fdfd
+```
+
+Re-running `init` or `workspace` preserves the stored prefix. An empty Board can change it with `--slug`; a populated Board returns `SLUG_LOCKED`. Existing `orb-` Boards keep working without migration.
 
 ## Multi-repository workspaces
 

@@ -12,7 +12,7 @@ git config user.email smoke@orbit.invalid
 git config user.name "Orbit Smoke"
 
 "$ORBIT" --version
-"$ORBIT" init --agents none --json
+"$ORBIT" init --agents none --slug orb --json
 "$ORBIT" add "Smoke task" --json > /dev/null
 "$ORBIT" ready --json > /dev/null
 "$ORBIT" setup claude --print --json > /dev/null

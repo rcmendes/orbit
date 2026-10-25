@@ -19,6 +19,9 @@ pub mod code {
     pub const WAITING_EXTERNAL: &str = "WAITING_EXTERNAL";
     pub const INVALID_TRANSITION: &str = "INVALID_TRANSITION";
     pub const INVALID_ARGUMENT: &str = "INVALID_ARGUMENT";
+    pub const INVALID_SLUG: &str = "INVALID_SLUG";
+    pub const SLUG_LOCKED: &str = "SLUG_LOCKED";
+    pub const PREFIX_MISMATCH: &str = "PREFIX_MISMATCH";
     pub const INVALID_TYPE: &str = "INVALID_TYPE";
     pub const INVALID_LABEL: &str = "INVALID_LABEL";
     pub const LABEL_BLOCKED: &str = "LABEL_BLOCKED";

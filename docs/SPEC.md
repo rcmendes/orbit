@@ -1,6 +1,6 @@
 # Orbit Specification
 
-Status: pre-alpha; v0.5.0 is the latest release, and `main` adds the aligned `orbit list` table. This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
+Status: pre-alpha; v0.5.0 is the latest release, and `main` adds the aligned `orbit list` table and per-board Task-ID slugs. This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
 
 ## 1. What Orbit is
 
@@ -170,9 +170,9 @@ stateDiagram-v2
 
 ### ID
 
-A Task ID is the configured `id.prefix` (default `orb-`) followed by 6–8 random Crockford base32 characters: `0123456789abcdefghjkmnpqrstvwxyz`. A SubTask ID is `<parent-id>.<random>`: the parent ID, a dot, and a fresh 6–8 character suffix.
+A Board has one **Slug**, stored as the literal `id.prefix` with a trailing dash (`teramigo-`). A Task ID is that prefix followed by 6–8 random Crockford base32 characters: `0123456789abcdefghjkmnpqrstvwxyz`. A SubTask ID is `<parent-id>.<random>`: the parent ID, a dot, and a fresh 6–8 character suffix. SubTasks inherit the prefix automatically.
 
-Examples: `orb-a7b2c9` (Task), `orb-a7b2c9.d4b3df` (SubTask), and `orb-f14c02` (a legacy Task, still valid). Legacy IDs are ordinary Task IDs; a legacy Task can parent `orb-f14c02.d4b3df` without migration. One level only: a second dot is invalid. `id.prefix` accepts lowercase letters, digits, and dashes, and must not contain a dot, so the dot always marks the parent boundary. The filename stem is the single source of truth; there is no `id` field in frontmatter.
+Examples: `teramigo-32fdfd` (Task), `teramigo-32fdfd.7fk2m9` (SubTask), and `orb-a7b2c9` (the legacy default). A legacy prefix without a trailing dash remains valid and keeps generating IDs; no migration is required. One level only: a second dot is invalid. `id.prefix` accepts lowercase letters, digits, and dashes, and must not contain a dot, so the dot always marks the parent boundary. The filename stem is the single source of truth; there is no `id` field in frontmatter.
 
 ### Layout
 
@@ -256,7 +256,7 @@ length = 6
 prefix = "orb-"
 ```
 
-`id.prefix` must contain only lowercase letters, digits, and dashes; a dot is reserved for the SubTask boundary.
+`id.prefix` must contain only lowercase letters, digits, and dashes; a dot is reserved for the SubTask boundary. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`.
 
 ## 5. Board lifecycle
 
@@ -265,13 +265,34 @@ prefix = "orb-"
 1. Requires a Git repository unless `--board PATH` is given. A configured `user.name` / `user.email` is required. The repository does not need an initial commit.
 2. Creates the `orbit` orphan branch if needed.
 3. Adds a hidden worktree at `<git-common-dir>/orbit/board`.
-4. Writes `config.toml`, `.gitignore`, `tasks/.gitkeep`, and `comments/.gitkeep`.
+4. Writes `config.toml` with the resolved `id.prefix`, plus `.gitignore`, `tasks/.gitkeep`, and `comments/.gitkeep`.
 5. Commits `orbit: initialize board`.
 6. Detects coding-agent harnesses and reconciles their integration.
 
 `orbit init` is idempotent: an existing Board is reused, and the agent integration is reconciled rather than rejected. In a repository linked to a shared Board, `init` refuses unless `--local` is passed. Outside a Git repository it refuses with `NOT_A_REPOSITORY` and names `--board` as the alternative.
 
 `orbit workspace <FOLDER>` creates the workspace directory if needed and an external Board at `<FOLDER>/board`. It does not clone repositories, link them, or write agent configuration; each repository joins with `orbit link <FOLDER>`. A workspace root inside a Git working tree is rejected with `WORKSPACE_INSIDE_REPO`. The command is idempotent: an existing Board is reported, not overwritten.
+
+### Slugs
+
+A Board has one slug. It is resolved when the Board is created; an empty Board can change it with `--slug`:
+
+| Command | No `--slug` | With `--slug` |
+| --- | --- | --- |
+| `init` in a repository | main checkout folder name, normalized | explicit |
+| `init --local` | main checkout folder name, normalized | explicit |
+| `init --board <path>` | `orb` | explicit |
+| `workspace <path>` | canonical workspace basename, normalized | explicit |
+
+The main checkout is the parent of the Git common directory when that directory is literally named `.git`; otherwise it is the repository root. That keeps linked worktrees, submodules, and `--separate-git-dir` on one slug. A workspace anchor is the canonical workspace root.
+
+Auto-derived names are normalized: lowercase; every run outside `[a-z0-9]` becomes one `-`; collapse and trim `-`; fall back to `orb`; cap at 20 characters at the last dash, or hard-cut. Auto names never fail. A warning on stderr is emitted when the anchor is the home directory or `/`.
+
+Explicit `--slug` is a bare word and is strict: 1–20 characters, `[a-z0-9-]`, alphanumeric first and last, no `--`. A violation returns `INVALID_SLUG` with a normalized suggestion. A trailing dash, uppercase, dot, underscore, space, or non-ASCII character is rejected.
+
+Auto-adoption applies only when the Board is created. Re-running `init` or `workspace` without `--slug` preserves the stored prefix. An empty Board can change its prefix with `--slug`; a populated Board returns `SLUG_LOCKED` naming the current prefix, the requested prefix, and the task count. Passing the current slug is a no-op with no commit. `--print` computes the same prefix without writing.
+
+Editing `id.prefix` by hand on a populated Board produces one `PREFIX_MISMATCH` from strict commands and in `doctor`, naming the configured prefix, the observed prefix, and the file count, instead of one `CORRUPT_TASK` per file. If some IDs match the configured prefix, the remaining files keep the per-file behavior. A legacy no-dash prefix cannot be inferred safely, so those boards also keep the per-file `CORRUPT_TASK` behavior.
 
 `--board PATH` creates an external Board at `PATH` when it does not exist, links the repository to it, and wires agents. The link is a pointer at `<git-common-dir>/orbit/link` containing the resolved Board path. `orbit link PATH` writes the same pointer for a repository joining an existing Board; `PATH` may be a Board root or a workspace root containing `board/`, and a workspace root resolves to that Board. `orbit unlink` removes it. Because the pointer lives in the common directory, every linked worktree resolves the same Board.
 
@@ -290,8 +311,8 @@ The command map and the `init` and task-lifecycle sequences are in
 ### Command surface
 
 ```text
-orbit init [--board PATH] [--agents SELECTOR | --no-agents] [--hooks] [--local] [--mcp-bin PATH] [--print]
-orbit workspace <FOLDER>
+orbit init [--board PATH] [--agents SELECTOR | --no-agents] [--hooks] [--local] [--mcp-bin PATH] [--slug SLUG] [--print]
+orbit workspace <FOLDER> [--slug SLUG]
 orbit link <PATH> [--no-refresh]
 orbit unlink
 orbit add <TITLE> [-p N] [--type TYPE] [--depends-on ID]... [--parent ID] [--waiting-on TEXT] [--label LABEL]... [--body TEXT|--body-file PATH|-]
@@ -337,6 +358,7 @@ orbit sync
 - M6: workspaces, SubTasks, dot-hierarchical IDs, repo/label-scoped queues, and deterministic export. Implemented.
 - v0.5.0: metadata-only `type`, `tree`, close candidates, parent progress fields, and label/type exclusions. Implemented.
 - `main`: aligned human `list` table. Presentation only; the JSON contract is unchanged.
+- `main`: per-board Task-ID slugs via `init`/`workspace --slug`, auto-adoption from the main checkout or workspace folder, and `PREFIX_MISMATCH` diagnostics. Implemented.
 
 ### Command rules
 
@@ -344,7 +366,9 @@ orbit sync
 - Human `list` output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns. The table sorts by priority, then creation time, then ID; `--tree` keeps each Parent Task adjacent to its SubTasks, indents the child title by two spaces, and orders by the root's priority. Titles longer than 60 characters are truncated with an ellipsis. The table is presentation only; `--json` carries the full title and every field and is the contract for scripts and agents.
 - `ready` and `prime` accept the same `--repo` and repeatable `--label` filters. `ready` also accepts `--parent`, `--type`, `--exclude-type`, and `--exclude-label`; `prime` reports `close_candidates` for non-terminal Parent Tasks with at least one SubTask and no open SubTasks. All filters combine with AND.
 - `add --type epic` and `update --type epic` are refused when the Task has a `parent`; epic is top-level only. `type` defaults to `task` and is written explicitly on every save.
-- `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `2`.
+- `init` and `workspace` accept `--slug` as a bare word. Explicit invalid input returns `INVALID_SLUG` with a normalized suggestion. Re-runs preserve the stored prefix; an empty Board can change it, a populated Board returns `SLUG_LOCKED`; `--print` previews the same prefix without writing.
+- A hand-edited `id.prefix` that matches no task file returns one `PREFIX_MISMATCH` from strict loads and `doctor`.
+- `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `2`; `data.board.prefix` is the literal Task-ID prefix.
 - `done` never bypasses unfinished dependencies. `--force` overrides a competing live claim and, on a Parent Task, cancels open SubTasks before closing it.
 - A forced `reopen` can leave an already-done dependent with an unfinished dependency. That is a historical fact, not corruption: `doctor` reports it as a warning, and the next `done` of that dependent still enforces its dependencies.
 - `reopen` refuses when a done dependent exists unless `--force`. Reopening a SubTask of a done parent reopens the parent too.
@@ -404,7 +428,7 @@ Error:
 ```json
 {
   "schema_version": 2,
-  "board": {"branch": "orbit", "task_count": 1, "comment_count": 0},
+  "board": {"branch": "orbit", "prefix": "orb-", "task_count": 1, "comment_count": 0},
   "tasks": [
     {
       "id": "orb-a7b2c9",
@@ -444,7 +468,7 @@ Error:
 - The snapshot is a pure function of board state: no export timestamp and no machine-local paths. Comments keep their file order.
 - Consumers should pin `schema_version` and ignore unknown fields.
 
-Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `SUBTASKS_OPEN`, `SUBTASKS_EXIST`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_TYPE`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`, `NOT_A_REPOSITORY`, `ALREADY_LINKED`, `LINK_NOT_FOUND`, `WORKSPACE_INSIDE_REPO`, `EPHEMERAL_BIN`.
+Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, `PREFIX_MISMATCH`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `SUBTASKS_OPEN`, `SUBTASKS_EXIST`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_SLUG`, `SLUG_LOCKED`, `INVALID_TYPE`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`, `NOT_A_REPOSITORY`, `ALREADY_LINKED`, `LINK_NOT_FOUND`, `WORKSPACE_INSIDE_REPO`, `EPHEMERAL_BIN`.
 
 `LOCKED` is retryable. Everything else is not unless `details` says otherwise.
 
@@ -496,6 +520,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, and `--remove` preserving user content.
 - Onboarding tests: idempotent `init`, harness detection and selection, link precedence over a local Board, `--dir`/`ORBIT_DIR` overrides, linked-worktree resolution, vanished links, and ephemeral binary rejection.
 - Workspace, SubTask, ID, filter, and export integration tests: `tests/workspace.rs`, `tests/subtasks.rs`, and `tests/export.rs`.
+- Slug tests: normalization and validation tables, auto-adoption from named folders and secondary worktrees, explicit overrides, empty/populated Board changes, `PREFIX_MISMATCH`, and the export/prime prefix fields.
 - Human-output tests cover the aligned `list` table, including the header and non-task Type rendering, alongside the JSON shapes in `tests/types.rs`.
 - MCP tests: initialize, tools/list, label/comment round-trips, SubTask/parent filtering, resources, and error envelopes over a real stdio child process.
 - Golden JSON and error-envelope tests.

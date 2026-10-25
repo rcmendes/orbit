@@ -11,5 +11,6 @@ pub mod lock;
 pub mod mcp;
 pub mod output;
 pub mod setup;
+pub mod slug;
 pub mod task;
 pub mod transition;

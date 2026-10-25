@@ -6,6 +6,7 @@ use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
 use crate::lock::{self, BoardLock};
+use crate::slug;
 use crate::task;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -54,15 +55,7 @@ impl Config {
         if !(6..=8).contains(&self.id.length) {
             return Err(OrbitError::config("id.length must be between 6 and 8"));
         }
-        if self.id.prefix.is_empty()
-            || !self.id.prefix.chars().all(|character| {
-                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-            })
-        {
-            return Err(OrbitError::config(
-                "id.prefix must contain only lowercase letters, digits, and dashes (no dots)",
-            ));
-        }
+        self.id.validate()?;
         if self.board.branch.trim().is_empty() {
             return Err(OrbitError::config("board.branch must be non-empty"));
         }
@@ -121,6 +114,38 @@ impl Default for IdConfig {
     }
 }
 
+impl IdConfig {
+    pub fn validate(&self) -> Result<()> {
+        let prefix = &self.prefix;
+        if prefix.is_empty() {
+            return Err(OrbitError::config("id.prefix must be non-empty"));
+        }
+        if prefix.contains('.')
+            || !prefix.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+            })
+        {
+            return Err(OrbitError::config(
+                "id.prefix must contain only lowercase letters, digits, and dashes (no dots)",
+            ));
+        }
+
+        if let Some(slug) = prefix.strip_suffix('-') {
+            if !slug::is_valid(slug) {
+                return Err(OrbitError::config(
+                    "a trailing-dash id.prefix requires a 1-20 character slug with alphanumeric ends and no `--`",
+                ));
+            }
+        } else if prefix.len() > slug::MAX_LEN {
+            return Err(OrbitError::config(
+                "a legacy id.prefix without a trailing dash must be at most 20 characters",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 fn default_branch() -> String {
     "orbit".to_string()
 }
@@ -158,6 +183,7 @@ pub struct InitResult {
     pub board: PathBuf,
     pub branch: String,
     pub external: bool,
+    pub prefix: String,
 }
 
 pub struct Board {
@@ -382,17 +408,60 @@ impl Board {
         }
     }
 
-    pub fn init(dir_override: Option<&Path>) -> Result<InitResult> {
+    pub fn init(dir_override: Option<&Path>, slug: Option<&str>) -> Result<InitResult> {
         match dir_override {
-            Some(dir) => init_external(dir),
-            None => init_default(),
+            Some(dir) => init_external(dir, slug),
+            None => init_default(slug),
         }
+    }
+
+    /// Changes the Task-ID prefix on an empty Board. The caller must have
+    /// decided that the change is wanted; this method re-checks and locks.
+    pub fn set_prefix(&self, prefix: &str) -> Result<CommitOutcome> {
+        let _lock = self.lock_exclusive()?;
+        let mut config = Config::load(&self.root)?;
+        if slug::slug_of_prefix(&config.id.prefix) == slug::slug_of_prefix(prefix) {
+            return Ok(CommitOutcome::NoChanges);
+        }
+
+        let tasks = self.task_ids()?.len();
+        if tasks > 0 {
+            return Err(slug_locked_error(&config.id.prefix, prefix, tasks));
+        }
+
+        config.id.prefix = prefix.to_string();
+        config.validate()?;
+        let toml = config.to_toml()?;
+        crate::atomic::write_atomic(&self.root.join("config.toml"), toml.as_bytes(), true)?;
+        self.commit(&format!("orbit: set task prefix to {prefix}"), false)
     }
 }
 
-fn init_default() -> Result<InitResult> {
+pub(crate) fn slug_locked_error(current: &str, requested: &str, tasks: usize) -> OrbitError {
+    OrbitError::new(
+        code::SLUG_LOCKED,
+        format!(
+            "board prefix is `{current}`; cannot change it to `{requested}` because {tasks} task(s) exist; create a new board or keep the current prefix"
+        ),
+    )
+    .with_details(serde_json::json!({
+        "current": current,
+        "requested": requested,
+        "tasks": tasks,
+    }))
+}
+
+fn resolve_prefix(slug: Option<&str>) -> Result<String> {
+    match slug {
+        Some(slug) => slug::explicit_prefix(slug),
+        None => Ok(task::DEFAULT_PREFIX.to_string()),
+    }
+}
+
+fn init_default(slug: Option<&str>) -> Result<InitResult> {
     let common = git::common_dir()?;
     let repo = git::repo_root()?;
+    let prefix = resolve_prefix(slug)?;
     let orbit_dir = common.join("orbit");
     std::fs::create_dir_all(&orbit_dir)
         .map_err(|error| OrbitError::io(format!("create {}", orbit_dir.display()), error))?;
@@ -429,14 +498,16 @@ fn init_default() -> Result<InitResult> {
     }
 
     if board_root.join("config.toml").exists() {
+        let prefix = Config::load(&board_root)?.id.prefix;
         return Ok(InitResult {
             board: board_root,
             branch: branch.to_string(),
             external: false,
+            prefix,
         });
     }
 
-    let result = initialize_board_files(&board_root, branch, false);
+    let result = initialize_board_files(&board_root, branch, false, &prefix);
     if result.is_err() {
         let _ = git::worktree_remove(&repo, &board_root);
         if created_branch {
@@ -446,8 +517,9 @@ fn init_default() -> Result<InitResult> {
     result
 }
 
-fn init_external(dir: &Path) -> Result<InitResult> {
+fn init_external(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
     let root = resolve_external(dir)?;
+    let prefix = resolve_prefix(slug)?;
 
     if root.join("config.toml").exists() {
         return Err(already_initialized(&root));
@@ -485,11 +557,18 @@ fn init_external(dir: &Path) -> Result<InitResult> {
 
     git::ensure_identity(&root)?;
     git::set_head(&root, "orbit")?;
-    initialize_board_files(&root, "orbit", true)
+    initialize_board_files(&root, "orbit", true, &prefix)
 }
 
-fn initialize_board_files(root: &Path, branch: &str, external: bool) -> Result<InitResult> {
-    let config = Config::default();
+fn initialize_board_files(
+    root: &Path,
+    branch: &str,
+    external: bool,
+    prefix: &str,
+) -> Result<InitResult> {
+    let mut config = Config::default();
+    config.id.prefix = prefix.to_string();
+    config.validate()?;
     let config_toml = config.to_toml()?;
 
     write_file(&root.join("config.toml"), config_toml.as_bytes())?;
@@ -512,6 +591,7 @@ fn initialize_board_files(root: &Path, branch: &str, external: bool) -> Result<I
         board: root.to_path_buf(),
         branch: branch.to_string(),
         external,
+        prefix: prefix.to_string(),
     })
 }
 

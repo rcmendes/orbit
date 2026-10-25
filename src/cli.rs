@@ -164,6 +164,10 @@ pub struct InitArgs {
     #[arg(long = "mcp-bin", value_name = "PATH")]
     pub mcp_bin: Option<PathBuf>,
 
+    /// Board slug used to prefix Task IDs. Bare word: teramigo, not teramigo-.
+    #[arg(long, value_name = "SLUG")]
+    pub slug: Option<String>,
+
     /// Preview the files that would change without writing them.
     #[arg(long)]
     pub print: bool,
@@ -174,6 +178,10 @@ pub struct WorkspaceArgs {
     /// Workspace directory to create or reuse. Its Board lives at <folder>/board.
     #[arg(value_name = "FOLDER")]
     pub folder: PathBuf,
+
+    /// Board slug used to prefix Task IDs. Bare word: teramigo, not teramigo-.
+    #[arg(long, value_name = "SLUG")]
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Args)]

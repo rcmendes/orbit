@@ -92,7 +92,32 @@ impl TestRepo {
     }
 
     pub fn init(&self) {
-        self.ok_json(&["init", "--agents", "none", "--json"]);
+        self.ok_json(&["init", "--agents", "none", "--slug", "orb", "--json"]);
+    }
+
+    /// Creates a Git repository in a named subdirectory, so auto-adoption can
+    /// derive a stable slug from the folder name.
+    pub fn named_repo(&self, name: &str) -> PathBuf {
+        let path = self.path().join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.name", "Test"][..],
+            &["config", "user.email", "test@example.com"][..],
+            &["commit", "--allow-empty", "-q", "-m", "init"][..],
+        ] {
+            let output = self.command("git", &path, args).output().unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        path
+    }
+
+    pub fn git_in(&self, cwd: &Path, args: &[&str]) -> Output {
+        self.command("git", cwd, args).output().unwrap()
     }
 
     pub fn git(&self, args: &[&str]) -> Output {

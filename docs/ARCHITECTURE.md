@@ -1,6 +1,6 @@
 # Orbit Architecture
 
-Status: describes v0.5.0 and the aligned `orbit list` table on `main`. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
+Status: describes v0.5.0, the aligned `orbit list` table, and per-board Task-ID slugs on `main`. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
 
 The short version: Orbit is one binary, two front doors (the JSON CLI and the MCP stdio server), and no daemon. A board command resolves a Board, takes a lock, rebuilds the task graph from Markdown, applies one transition, publishes files atomically, and optionally commits to an orphan Git branch.
 
@@ -32,6 +32,7 @@ flowchart LR
 
     subgraph Domain["Domain"]
         BOARD["Board resolution and config<br/>src/board.rs"]
+        SLUG["Slug resolution<br/>src/slug.rs"]
         GRAPH["Task graph<br/>src/graph.rs"]
         MODEL["Task model<br/>src/task.rs"]
         TRANSITIONS["Lifecycle transitions<br/>src/transition.rs"]
@@ -73,6 +74,9 @@ flowchart LR
     CMD --> DOCTOR
     CMD --> SETUP
     CMD --> Domain
+    CMD --> SLUG
+    BOARD --> SLUG
+    SLUG --> GIT
     CMD --> Durability
     CMD --> ERRORS
     Domain --> Storage
@@ -110,7 +114,7 @@ flowchart LR
     class DEV,AGENT,MCPC,HOOK actor
     class CLI,MCP,ENVELOPE iface
     class CMD,PRIME,DOCTOR,SETUP app
-    class BOARD,GRAPH,MODEL,TRANSITIONS,COMMENTS domain
+    class BOARD,SLUG,GRAPH,MODEL,TRANSITIONS,COMMENTS domain
     class LOCK,ATOMIC,GIT,ERRORS durable
     class BRANCH,WORKTREE,EXTERNAL,LINKPTR,LOCKFILE,TASKFILES,COMMENTFILES,CONFIGFILE store
     class WORKTREES,HARNESSFILES repo
@@ -122,7 +126,7 @@ flowchart LR
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
 | Application | `src/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. |
-| Domain | `src/board.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
+| Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One repo-wide advisory lock, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
 | Setup | `src/setup.rs` | Detect harnesses and write managed instruction files, MCP entries, and the Claude SessionStart hook. |
@@ -451,6 +455,10 @@ flowchart LR
     BOARD --> SHAREDGRAPH["one task graph<br/>tasks and comments"]
     LOCAL --> LOCALGRAPH["local task graph<br/>tasks and comments"]
 ```
+
+### Resolving the Task-ID slug
+
+`orbit init` and `orbit workspace` resolve the literal `id.prefix` before creating a Board. A repository `init` uses the main checkout folder name; `init --board` uses `orb`; `workspace` uses the canonical workspace basename; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the main-checkout anchor.
 
 ### Creating the workspace folder
 

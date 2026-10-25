@@ -67,7 +67,15 @@ orbit init                    # detect harnesses and ask which to wire
 orbit init --agents none      # Board only
 orbit init --print            # preview every file that would change
 orbit init --board ~/src/acme-board   # create and link a shared Board
+orbit init --slug teramigo    # Task IDs become teramigo-…
 ```
+
+Task IDs use the Board's slug as their prefix. In a repository, `init` adopts
+the main checkout folder name (`teramigo` → `teramigo-`); `--board` defaults to
+`orb`. Pass `--slug` to choose it explicitly. Re-running `init` preserves the
+stored prefix; an empty Board can change it, while a populated Board returns
+`SLUG_LOCKED`. `--print` reports the same prefix without writing. The JSON and
+human output carry `prefix`.
 
 ### `orbit workspace` — create a shared workspace
 
@@ -80,8 +88,14 @@ once, then join each repository with `orbit link`.
 
 ```bash
 orbit workspace ~/src/acme
+orbit workspace ~/src/acme --slug acme   # explicit Task-ID prefix
 orbit link ~/src/acme        # from each repository root
 ```
+
+The Task-ID prefix defaults to the workspace folder name (`acme` → `acme-`).
+Pass `--slug` to choose it explicitly. Re-running preserves the prefix; an empty
+Board can change it, while a populated Board returns `SLUG_LOCKED`. The JSON and
+human output carry `prefix`.
 
 The command only creates. It does not clone or link repositories, and it does
 not write agent configuration. A workspace must live outside every Git working
@@ -651,6 +665,18 @@ Each SubTask is claimed and completed independently. The Parent Task only become
 Ready when the last one is done or cancelled. `orbit done --force` on the parent
 cancels the remaining SubTasks instead of leaving them open.
 
+### A Board with its own Task-ID prefix
+
+```bash
+orbit init --slug teramigo
+orbit add "First task" --json
+# teramigo-32fdfd
+```
+
+The slug is adopted once at creation. Existing `orb-` Boards keep working without
+migration. To change the prefix, the Board must have no tasks; otherwise Orbit
+returns `SLUG_LOCKED`.
+
 ### A workspace of several repositories
 
 ```bash
@@ -712,6 +738,9 @@ orbit sync              # commit anything left uncommitted
 | `SUBTASKS_OPEN` | Finish or cancel the IDs in `error.details.subtasks`, or pass `--force` to `done` or `cancel`. |
 | `SUBTASKS_EXIST` | The Parent Task still has SubTasks. Use `delete --force` to remove the whole subtree, or delete the SubTasks first. |
 | `PARENT_MISMATCH` | The SubTask ID and its `parent` field disagree. Rename the file or fix the frontmatter so the ID encodes the same parent. |
+| `INVALID_SLUG` | `--slug` must be a bare 1–20 character lowercase word with alphanumeric ends and no `--`; use the normalized suggestion in the error. |
+| `SLUG_LOCKED` | The Board has tasks. Create a new Board or keep the current prefix. |
+| `PREFIX_MISMATCH` | `id.prefix` and the task filenames disagree. Restore the configured prefix or create a new Board. |
 | `DANGLING_PARENT` | Run `doctor`; the parent ID is missing. Recreate the parent or fix the SubTask's frontmatter. |
 | `NESTED_SUBTASK` | A SubTask points to itself or to another SubTask. SubTasks are one level deep. |
 | `INVALID_TYPE` | `epic` was used on a SubTask. Epic is top-level only; use `task`, `spike`, `chore`, or `decision` for a child. |

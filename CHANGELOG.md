@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added per-board Task-ID slugs. `orbit init` adopts the main checkout folder name, `orbit workspace` adopts the workspace folder name, and `init --board` defaults to `orb`; `--slug` overrides on both commands. Re-runs preserve the prefix; empty Boards can change it, while populated Boards return `SLUG_LOCKED`. A hand-edited new-style prefix returns one `PREFIX_MISMATCH` instead of one error per file, and `export` carries `data.board.prefix` (schema 2).
 - `orbit list` now renders an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns. Titles are shortened to 60 characters in the table; `--json` remains unchanged and carries the full title and every field. `--tree` keeps a Parent Task next to its SubTasks and indents the child title by two spaces.
 - Updated the README, command guide, architecture, specification, glossary, agent tracker guide, CLI help, generated agent instructions, and this changelog to describe the table view and the current command surface.
 

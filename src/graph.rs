@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::Utc;
 use serde::Serialize;
@@ -74,9 +74,35 @@ impl Graph {
     pub fn load(board: &Board, mode: LoadMode) -> Result<(Self, Vec<Issue>)> {
         let mut tasks = HashMap::new();
         let mut issues = Vec::new();
+        let ids = board.task_ids()?;
+        let prefix_mismatch = detect_prefix_mismatch(&ids, &board.config.id.prefix);
+        let accept_observed_prefix = if let Some(mismatch) = prefix_mismatch {
+            let message = format!(
+                "board prefix is `{}` but {} task files use `{}`; restore `id.prefix` or create a new board",
+                mismatch.configured, mismatch.tasks, mismatch.observed
+            );
+            if mode == LoadMode::Strict {
+                return Err(
+                    OrbitError::new(code::PREFIX_MISMATCH, message).with_details(
+                        serde_json::json!({
+                            "configured": mismatch.configured,
+                            "observed": mismatch.observed,
+                            "tasks": mismatch.tasks,
+                        }),
+                    ),
+                );
+            }
+            issues.push(Issue::new(code::PREFIX_MISMATCH, None, message));
+            true
+        } else {
+            false
+        };
 
-        for id in board.task_ids()? {
-            if !task::is_valid_id(&id, &board.config.id.prefix) {
+        for id in ids {
+            // With one PREFIX_MISMATCH reported, the files are known to use the
+            // observed prefix, so accept their IDs instead of one CORRUPT_TASK
+            // per file. Structural validation still runs below.
+            if !accept_observed_prefix && !task::is_valid_id(&id, &board.config.id.prefix) {
                 let issue = Issue::new(
                     code::CORRUPT_TASK,
                     Some(&id),
@@ -484,6 +510,47 @@ impl Graph {
         state.insert(id.to_string(), 2);
         None
     }
+}
+
+#[derive(Debug)]
+struct PrefixMismatch {
+    configured: String,
+    observed: String,
+    tasks: usize,
+}
+
+fn detect_prefix_mismatch(ids: &[String], configured: &str) -> Option<PrefixMismatch> {
+    if ids.is_empty() || ids.iter().any(|id| task::is_valid_id(id, configured)) {
+        return None;
+    }
+
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for id in ids {
+        if let Some(prefix) = inferred_prefix(id) {
+            *counts.entry(prefix).or_default() += 1;
+        }
+    }
+
+    let (observed, tasks) = counts
+        .into_iter()
+        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))?;
+    Some(PrefixMismatch {
+        configured: configured.to_string(),
+        observed,
+        tasks,
+    })
+}
+
+fn inferred_prefix(id: &str) -> Option<String> {
+    let parent = id.split('.').next()?;
+    let (prefix, suffix) = parent.rsplit_once('-')?;
+    if prefix.is_empty() || !(6..=8).contains(&suffix.len()) {
+        return None;
+    }
+    if !suffix.bytes().all(|byte| task::ID_ALPHABET.contains(&byte)) {
+        return None;
+    }
+    Some(format!("{prefix}-"))
 }
 
 pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {

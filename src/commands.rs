@@ -17,6 +17,7 @@ use crate::error::{OrbitError, Result, code};
 use crate::git::CommitOutcome;
 use crate::graph::{self, Graph, Issue, LoadMode};
 use crate::setup::COMPLETION_LINE;
+use crate::slug;
 use crate::task::{self, Status, Task, TaskFrontmatter, TaskType};
 use crate::transition::{ClaimGate, Outcome, TransitionError};
 
@@ -92,6 +93,14 @@ where
     f(&board)
 }
 
+struct InitTarget {
+    board_root: std::path::PathBuf,
+    created: bool,
+    external: bool,
+    prefix: String,
+    warning: Option<String>,
+}
+
 fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::CommandOutput> {
     let cwd = std::env::current_dir()
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
@@ -126,24 +135,18 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
 
     let clients = crate::setup::selected_agents(&args, &root)?;
 
-    let (board_root, created, external) = if let Some(board) = args.board.as_deref() {
-        init_board_at(Some(board), args.print)?
+    let InitTarget {
+        board_root,
+        created,
+        external,
+        prefix,
+        warning,
+    } = if let Some(board) = args.board.as_deref() {
+        init_board_at(Some(board), args.print, args.slug.as_deref())?
     } else if let Some(dir) = dir {
-        init_board_at(Some(dir), args.print)?
+        init_board_at(Some(dir), args.print, args.slug.as_deref())?
     } else {
-        let local = Board::local_root()?;
-        let created = !Board::is_board(&local);
-        if !args.print {
-            if created {
-                Board::init(None)?;
-            } else {
-                Board::discover(Some(&local))?;
-            }
-            if existing_link.is_some() {
-                Board::clear_link()?;
-            }
-        }
-        (local, created, false)
+        init_local_target(args.slug.as_deref(), args.print, existing_link.is_some())?
     };
 
     let target_given = args.board.is_some() || dir.is_some();
@@ -180,6 +183,9 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         warnings = output.warnings;
         setup_human = output.human;
     }
+    if let Some(warning) = warning {
+        warnings.push(warning);
+    }
 
     let mut human = if args.print {
         format!(
@@ -199,12 +205,14 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
             board_root.display()
         )
     };
+    human.push_str(&format!("prefix {prefix}\n"));
     human.push_str(&setup_human);
 
     let mut output = crate::output::CommandOutput::new(
         json!({
             "board": board_root,
             "branch": branch,
+            "prefix": prefix,
             "external": external,
             "created": created,
             "preview": args.print,
@@ -218,17 +226,105 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     Ok(output)
 }
 
-fn init_board_at(dir: Option<&Path>, print: bool) -> Result<(std::path::PathBuf, bool, bool)> {
+fn init_board_at(dir: Option<&Path>, print: bool, slug: Option<&str>) -> Result<InitTarget> {
     let board_root = Board::resolve_root(dir)?;
     let created = !Board::is_board(&board_root);
-    if !print {
-        if created {
-            Board::init(dir)?;
+
+    if created {
+        let prefix = match slug {
+            Some(slug) => slug::explicit_prefix(slug)?,
+            None => task::DEFAULT_PREFIX.to_string(),
+        };
+        let prefix = if print {
+            prefix
         } else {
-            Board::discover(Some(&board_root))?;
-        }
+            Board::init(dir, slug)?.prefix
+        };
+        Ok(InitTarget {
+            board_root,
+            created,
+            external: true,
+            prefix,
+            warning: None,
+        })
+    } else {
+        let board = Board::discover(Some(&board_root))?;
+        let prefix = reconcile_prefix(&board, slug, print)?;
+        Ok(InitTarget {
+            board_root,
+            created,
+            external: true,
+            prefix,
+            warning: None,
+        })
     }
-    Ok((board_root, created, true))
+}
+
+fn init_local_target(
+    slug: Option<&str>,
+    print: bool,
+    has_existing_link: bool,
+) -> Result<InitTarget> {
+    let local = Board::local_root()?;
+    let created = !Board::is_board(&local);
+
+    let (prefix, warning) = if created {
+        let (slug, warning) = match slug {
+            Some(slug) => {
+                slug::explicit_prefix(slug)?;
+                (slug.to_string(), None)
+            }
+            None => slug::auto_slug_for_main_checkout()?,
+        };
+        let prefix = slug::prefix(&slug);
+        let prefix = if print {
+            prefix
+        } else {
+            Board::init(None, Some(&slug))?.prefix
+        };
+        (prefix, warning)
+    } else {
+        let board = Board::discover(Some(&local))?;
+        let prefix = reconcile_prefix(&board, slug, print)?;
+        (prefix, None)
+    };
+
+    if !print && has_existing_link {
+        Board::clear_link()?;
+    }
+
+    Ok(InitTarget {
+        board_root: local,
+        created,
+        external: false,
+        prefix,
+        warning,
+    })
+}
+
+fn reconcile_prefix(board: &Board, slug: Option<&str>, print: bool) -> Result<String> {
+    let Some(slug) = slug else {
+        return Ok(board.config.id.prefix.clone());
+    };
+
+    let requested = slug::explicit_prefix(slug)?;
+    if slug::slug_of_prefix(&board.config.id.prefix) == slug {
+        return Ok(board.config.id.prefix.clone());
+    }
+
+    let tasks = board.task_ids()?.len();
+    if tasks > 0 {
+        return Err(crate::board::slug_locked_error(
+            &board.config.id.prefix,
+            &requested,
+            tasks,
+        ));
+    }
+
+    if !print {
+        board.set_prefix(&requested)?;
+    }
+    Ok(requested)
 }
 
 fn cmd_workspace(args: WorkspaceArgs) -> Result<crate::output::CommandOutput> {
@@ -276,16 +372,26 @@ fn cmd_workspace(args: WorkspaceArgs) -> Result<crate::output::CommandOutput> {
     let board_root = workspace.join("board");
 
     let created = !Board::is_board(&board_root);
-    let branch = if created {
+    let (branch, prefix, warning) = if created {
         if board_root.exists() && !board_root.is_dir() {
             return Err(OrbitError::config(format!(
                 "board path {} exists and is not a directory",
                 board_root.display()
             )));
         }
-        Board::init(Some(&board_root))?.branch
+        let (slug, warning) = match args.slug.as_deref() {
+            Some(slug) => {
+                slug::explicit_prefix(slug)?;
+                (slug.to_string(), None)
+            }
+            None => slug::auto_slug_for_workspace(&workspace),
+        };
+        let result = Board::init(Some(&board_root), Some(&slug))?;
+        (result.branch, result.prefix, warning)
     } else {
-        Board::discover(Some(&board_root))?.config.board.branch
+        let board = Board::discover(Some(&board_root))?;
+        let prefix = reconcile_prefix(&board, args.slug.as_deref(), false)?;
+        (board.config.board.branch, prefix, None)
     };
 
     let mut human = if created {
@@ -294,21 +400,27 @@ fn cmd_workspace(args: WorkspaceArgs) -> Result<crate::output::CommandOutput> {
         format!("workspace already initialized at {}\n", workspace.display())
     };
     human.push_str(&format!(
-        "board: {} (branch {branch})\n\n",
+        "board: {} (branch {branch})\n",
         board_root.display()
     ));
+    human.push_str(&format!("prefix {prefix}\n\n"));
     human.push_str("link each repository from its root:\n");
     human.push_str(&format!("  orbit link {}\n", workspace.display()));
 
-    Ok(crate::output::CommandOutput::new(
+    let mut output = crate::output::CommandOutput::new(
         json!({
             "workspace": workspace,
             "board": board_root,
             "branch": branch,
+            "prefix": prefix,
             "created": created,
         }),
         human,
-    ))
+    );
+    if let Some(warning) = warning {
+        output.warnings.push(warning);
+    }
+    Ok(output)
 }
 
 fn resolve_link_target(path: &Path) -> Result<std::path::PathBuf> {
@@ -1765,6 +1877,7 @@ fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {
         "schema_version": 2,
         "board": {
             "branch": board.config.board.branch,
+            "prefix": board.config.id.prefix,
             "task_count": task_count,
             "comment_count": comment_count,
         },
@@ -1778,6 +1891,9 @@ fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {
 
 fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandOutput> {
     let (graph, mut issues) = Graph::load(board, LoadMode::Lenient)?;
+    let prefix_mismatch = issues
+        .iter()
+        .any(|issue| issue.code == code::PREFIX_MISMATCH);
     let mut warnings = Vec::new();
 
     match board.comment_ids() {
@@ -1819,39 +1935,43 @@ fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandO
             warnings.push(format!("{}: claim metadata is incomplete", task.id));
         }
 
-        let encoded_parent = task::parent_id_from_id(&task.id, &board.config.id.prefix);
-        match (&task.front.parent, encoded_parent) {
-            (Some(parent), Some(encoded)) if parent != &encoded => {
-                issues.push(Issue::new(
-                    code::PARENT_MISMATCH,
-                    Some(&task.id),
-                    format!(
-                        "{} has parent {parent} but its ID encodes {encoded}",
-                        task.id
-                    ),
-                ));
+        // A prefix mismatch means the IDs use the observed prefix; comparing
+        // them with the configured prefix would flag every SubTask.
+        if !prefix_mismatch {
+            let encoded_parent = task::parent_id_from_id(&task.id, &board.config.id.prefix);
+            match (&task.front.parent, encoded_parent) {
+                (Some(parent), Some(encoded)) if parent != &encoded => {
+                    issues.push(Issue::new(
+                        code::PARENT_MISMATCH,
+                        Some(&task.id),
+                        format!(
+                            "{} has parent {parent} but its ID encodes {encoded}",
+                            task.id
+                        ),
+                    ));
+                }
+                (None, Some(encoded)) => {
+                    issues.push(Issue::new(
+                        code::PARENT_MISMATCH,
+                        Some(&task.id),
+                        format!(
+                            "{} is a SubTask ID but has no parent; expected {encoded}",
+                            task.id
+                        ),
+                    ));
+                }
+                (Some(parent), None) => {
+                    issues.push(Issue::new(
+                        code::PARENT_MISMATCH,
+                        Some(&task.id),
+                        format!(
+                            "{} has parent {parent} but its ID is not a SubTask ID",
+                            task.id
+                        ),
+                    ));
+                }
+                _ => {}
             }
-            (None, Some(encoded)) => {
-                issues.push(Issue::new(
-                    code::PARENT_MISMATCH,
-                    Some(&task.id),
-                    format!(
-                        "{} is a SubTask ID but has no parent; expected {encoded}",
-                        task.id
-                    ),
-                ));
-            }
-            (Some(parent), None) => {
-                issues.push(Issue::new(
-                    code::PARENT_MISMATCH,
-                    Some(&task.id),
-                    format!(
-                        "{} has parent {parent} but its ID is not a SubTask ID",
-                        task.id
-                    ),
-                ));
-            }
-            _ => {}
         }
 
         if task.front.status == Status::Done {

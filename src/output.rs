@@ -59,6 +59,9 @@ pub fn print_success(output: CommandOutput, json_mode: bool) {
     }
 
     if json_mode {
+        for warning in &output.warnings {
+            eprintln!("warning: {warning}");
+        }
         let mut body = Map::new();
         body.insert("ok".to_string(), Value::Bool(true));
         body.insert("data".to_string(), output.data);

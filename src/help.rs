@@ -44,7 +44,12 @@ skipped and left alone.
 
 In a terminal, init asks which harnesses to wire. Without a terminal it wires the
 ones it detects. Use --board to create a shared Board and link this repository to
-it, or --local to create a repository Board even when a shared one is linked.";
+it, or --local to create a repository Board even when a shared one is linked.
+
+Task IDs use the Board's slug as their prefix. In a repository, init adopts the
+main checkout folder name (for example teramigo-); --board defaults to orb. Pass
+--slug to choose it explicitly. Re-running preserves the stored prefix. An empty
+Board can change its prefix with --slug; a populated Board returns SLUG_LOCKED.";
 
 pub const INIT_EXAMPLES: &str = "\
 Examples:
@@ -56,6 +61,12 @@ Examples:
 
   # Create a shared Board for a multi-repository workspace
   orbit init --board ~/src/acme-board
+
+  # Choose the Task-ID prefix explicitly
+  orbit init --slug teramigo
+
+  # Create a shared Board with a custom prefix
+  orbit init --board ~/src/acme-board --slug acme
 
   # Create the Board only; skip agent integration
   orbit init --agents none";
@@ -69,12 +80,20 @@ The command only creates. It does not clone repositories, link them, or write
 agent configuration. Each repository joins explicitly with
 `orbit link <folder>`. A workspace must live outside every Git working tree, so
 the Board is never tied to one repository's lifecycle. Re-running is safe: an
-existing Board is reported, not overwritten.";
+existing Board is reported, not overwritten.
+
+The Board's Task-ID prefix defaults to the workspace folder name (for example
+acme-). Pass --slug to choose it explicitly. An existing workspace keeps its
+prefix unless --slug changes an empty Board; a populated Board returns
+SLUG_LOCKED.";
 
 pub const WORKSPACE_EXAMPLES: &str = "\
 Examples:
   # Create a workspace next to the repositories
   orbit workspace acme
+
+  # Choose the Task-ID prefix explicitly
+  orbit workspace acme --slug acme
 
   # Join from each repository root
   orbit link ~/src/acme

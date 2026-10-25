@@ -8,6 +8,10 @@ Orbit is a local work queue for coding agents. Its unit of work is a Task stored
 A single unit of work that one agent can claim and complete. A Task may stand alone or group SubTasks as a Parent Task.
 _Avoid_: Issue, ticket, bead, bean
 
+**Slug**:
+The Board's short name that prefixes every Task ID, such as `teramigo` in `teramigo-32fdfd`. A Board has exactly one Slug.
+_Avoid_: Project name, namespace
+
 **SubTask**:
 A Task that belongs to exactly one Parent Task. A SubTask is claimable and completable in its own right; it is not a checklist item.
 _Avoid_: Child task, checklist item, step

@@ -26,6 +26,12 @@ fn git_stdout(repo: &TestRepo, board: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
+/// Git may check text files out with CRLF on Windows. Raw-file assertions care
+/// about content, not the platform's line ending.
+fn normalize_newlines(content: String) -> String {
+    content.replace("\r\n", "\n")
+}
+
 fn mapped_to(value: &serde_json::Value, from: &str) -> String {
     value["data"]["mappings"]
         .as_array()
@@ -175,17 +181,17 @@ fn migrate_rewrites_ids_references_comments_and_commits_once() {
     assert!(repo.task_path(&new_child).exists());
     assert!(repo.task_path(&new_dependent).exists());
 
-    let parent_body = repo.read_task(&new_parent);
+    let parent_body = normalize_newlines(repo.read_task(&new_parent));
     assert!(parent_body.contains("The body keeps the old ID in prose."));
-    let child_body = repo.read_task(&new_child);
+    let child_body = normalize_newlines(repo.read_task(&new_child));
     assert!(child_body.contains(&format!("parent: {new_parent}")));
-    let dependent_body = repo.read_task(&new_dependent);
+    let dependent_body = normalize_newlines(repo.read_task(&new_dependent));
     assert!(dependent_body.contains(&format!("depends_on:\n- {new_parent}")));
 
     assert!(!board.join(format!("comments/{parent}.md")).exists());
     let comments_path = board.join(format!("comments/{new_parent}.md"));
     assert!(comments_path.exists());
-    let comments = std::fs::read_to_string(&comments_path).unwrap();
+    let comments = normalize_newlines(std::fs::read_to_string(&comments_path).unwrap());
     assert!(comments.starts_with(&format!("# Comments: {new_parent}\n")));
     assert!(comments.contains(&format!("Comment prose keeps {parent} too.")));
 

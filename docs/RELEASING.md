@@ -78,6 +78,7 @@ They must stay in sync with the documented quick start; do not add a second smok
 
 ## Known issues
 
+- The `v0.7.0` tag's CI check is red on Windows because `tests/slug_migrate.rs` asserted an LF-only YAML dependency line; Git checked the migrated file out with CRLF. The Release workflow and its Windows artifact smoke passed, and npm published successfully. The test-only fix is on `main` after the tag.
 - The `v0.1.0` tag's CI check is red on Windows because it predates the Unix-only lock-test import fix. Its Release workflow succeeded and its artifacts are valid; `v0.2.0` has the fix.
 - The `v0.4.0` tag's CI check is red on Windows because the new workspace tests compared `std::fs::canonicalize` verbatim paths with the CLI's `dunce` paths. The Release workflow and the Windows artifact smoke passed; the test-only fix is on `main` after the tag.
 - The generated release workflow creates the GitHub Release in the `host` phase and then runs the artifact smoke before publishing npm. A broken binary therefore blocks npm publication, but the GitHub Release can already exist; the post-publication `Install smoke` workflow is what verifies the public installer URLs.

@@ -32,6 +32,20 @@ fn every_subcommand_documents_examples() {
 }
 
 #[test]
+fn init_help_describes_the_non_interactive_preview() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"))
+        .args(["init", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(help.contains("--print"), "{help}");
+    assert!(help.contains("does not prompt by default"), "{help}");
+    assert!(help.contains("--agents ask"), "{help}");
+}
+
+#[test]
 fn root_help_mentions_the_agent_loop() {
     let help = Cli::command().render_long_help().to_string();
     assert!(help.contains("orbit ready --claim --by"));

@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::{IsTerminal, Write};
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -519,12 +519,24 @@ pub fn detect(root: &Path) -> Vec<SetupClient> {
 }
 
 pub fn parse_agents(selector: &str, root: &Path) -> Result<Vec<SetupClient>> {
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let mut prompt = std::io::stderr();
+    parse_agents_with(selector, root, &mut input, &mut prompt)
+}
+
+fn parse_agents_with(
+    selector: &str,
+    root: &Path,
+    input: &mut impl BufRead,
+    prompt: &mut impl Write,
+) -> Result<Vec<SetupClient>> {
     let selector = selector.trim();
     match selector {
         "auto" => Ok(detect(root)),
         "all" => Ok(SetupClient::all()),
         "none" => Ok(Vec::new()),
-        "ask" => prompt_agents(&detect(root)),
+        "ask" => prompt_agents(&detect(root), input, prompt),
         "" => Err(OrbitError::invalid_argument(
             "`--agents` must be auto, all, none, ask, or a comma-separated list",
         )),
@@ -554,39 +566,64 @@ pub fn parse_agents(selector: &str, root: &Path) -> Result<Vec<SetupClient>> {
 }
 
 pub fn selected_agents(args: &crate::cli::InitArgs, root: &Path) -> Result<Vec<SetupClient>> {
+    let stdin = std::io::stdin();
+    let interactive = stdin.is_terminal();
+    let mut input = stdin.lock();
+    let mut prompt = std::io::stderr();
+    select_agents(args, root, interactive, &mut input, &mut prompt)
+}
+
+/// Preview runs must never block on input, so they use detection even in a
+/// terminal. Interactive `init` keeps its prompt.
+fn select_agents(
+    args: &crate::cli::InitArgs,
+    root: &Path,
+    interactive: bool,
+    input: &mut impl BufRead,
+    prompt: &mut impl Write,
+) -> Result<Vec<SetupClient>> {
     if args.no_agents {
         return Ok(Vec::new());
     }
     if let Some(selector) = &args.agents {
-        return parse_agents(selector, root);
+        return parse_agents_with(selector, root, input, prompt);
     }
-    if std::io::stdin().is_terminal() {
-        prompt_agents(&detect(root))
-    } else {
-        Ok(detect(root))
+    if !args.print && interactive {
+        return prompt_agents(&detect(root), input, prompt);
     }
+    Ok(detect(root))
 }
 
-fn prompt_agents(detected: &[SetupClient]) -> Result<Vec<SetupClient>> {
+fn prompt_agents(
+    detected: &[SetupClient],
+    input: &mut impl BufRead,
+    prompt: &mut impl Write,
+) -> Result<Vec<SetupClient>> {
     let all = SetupClient::all();
-    eprintln!("Orbit supports:");
+    writeln!(prompt, "Orbit supports:")
+        .map_err(|error| OrbitError::io("write the harness prompt", error))?;
     for (index, client) in all.iter().enumerate() {
         let mark = if detected.contains(client) {
             " (detected)"
         } else {
             ""
         };
-        eprintln!("  {}. {}{mark}", index + 1, client.name());
+        writeln!(prompt, "  {}. {}{mark}", index + 1, client.name())
+            .map_err(|error| OrbitError::io("write the harness prompt", error))?;
     }
-    eprintln!("Wire which harnesses? [Enter = detected, a = all, none = none]");
+    writeln!(
+        prompt,
+        "Wire which harnesses? [Enter = detected, a = all, none = none]"
+    )
+    .map_err(|error| OrbitError::io("write the harness prompt", error))?;
 
     loop {
-        eprint!("> ");
-        std::io::stderr()
+        write!(prompt, "> ").map_err(|error| OrbitError::io("write the harness prompt", error))?;
+        prompt
             .flush()
             .map_err(|error| OrbitError::io("flush the prompt", error))?;
         let mut line = String::new();
-        if std::io::stdin()
+        if input
             .read_line(&mut line)
             .map_err(|error| OrbitError::io("read the harness selection", error))?
             == 0
@@ -631,7 +668,11 @@ fn prompt_agents(detected: &[SetupClient]) -> Result<Vec<SetupClient>> {
         }
 
         if let Some(token) = unknown {
-            eprintln!("unknown harness `{token}`; enter a number or a name");
+            writeln!(
+                prompt,
+                "unknown harness `{token}`; enter a number or a name"
+            )
+            .map_err(|error| OrbitError::io("write the harness prompt", error))?;
             continue;
         }
         return Ok(selected);
@@ -1931,6 +1972,99 @@ mod tests {
     fn incomplete_markers_are_rejected() {
         let error = upsert_section(BEGIN_MARKER, "section", "CLAUDE.md").unwrap_err();
         assert_eq!(error.code, crate::error::code::CONFIG_ERROR);
+    }
+
+    fn init_args(print: bool, agents: Option<&str>) -> crate::cli::InitArgs {
+        crate::cli::InitArgs {
+            board: None,
+            agents: agents.map(str::to_string),
+            no_agents: false,
+            hooks: false,
+            local: false,
+            mcp_bin: None,
+            slug: None,
+            print,
+        }
+    }
+
+    #[test]
+    fn preview_selects_agents_without_reading_input() {
+        let root = tempfile::tempdir().unwrap();
+        let mut input = std::io::Cursor::new(b"1\n");
+        let mut prompt = Vec::new();
+
+        let selected = select_agents(
+            &init_args(true, None),
+            root.path(),
+            true,
+            &mut input,
+            &mut prompt,
+        )
+        .unwrap();
+
+        assert_eq!(selected, detect(root.path()));
+        assert_eq!(input.position(), 0, "preview consumed stdin");
+        assert!(prompt.is_empty(), "preview wrote a prompt");
+    }
+
+    #[test]
+    fn explicit_ask_prompts_even_in_a_preview() {
+        let root = tempfile::tempdir().unwrap();
+        let mut input = std::io::Cursor::new(b"1\n");
+        let mut prompt = Vec::new();
+
+        let selected = select_agents(
+            &init_args(true, Some("ask")),
+            root.path(),
+            false,
+            &mut input,
+            &mut prompt,
+        )
+        .unwrap();
+
+        assert_eq!(selected, vec![SetupClient::Claude]);
+        assert!(input.position() > 0);
+        assert!(!prompt.is_empty());
+    }
+
+    #[test]
+    fn interactive_init_prompts_with_a_terminal() {
+        let root = tempfile::tempdir().unwrap();
+        let mut input = std::io::Cursor::new(b"\n");
+        let mut prompt = Vec::new();
+
+        let selected = select_agents(
+            &init_args(false, None),
+            root.path(),
+            true,
+            &mut input,
+            &mut prompt,
+        )
+        .unwrap();
+
+        assert_eq!(selected, detect(root.path()));
+        assert!(input.position() > 0);
+        assert!(!prompt.is_empty());
+    }
+
+    #[test]
+    fn non_interactive_init_uses_detection() {
+        let root = tempfile::tempdir().unwrap();
+        let mut input = std::io::Cursor::new(b"1\n");
+        let mut prompt = Vec::new();
+
+        let selected = select_agents(
+            &init_args(false, None),
+            root.path(),
+            false,
+            &mut input,
+            &mut prompt,
+        )
+        .unwrap();
+
+        assert_eq!(selected, detect(root.path()));
+        assert_eq!(input.position(), 0);
+        assert!(prompt.is_empty());
     }
 
     #[test]

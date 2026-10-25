@@ -47,8 +47,10 @@ hand-written docs/agents/issue-tracker.md without the marker is reported as
 skipped and left alone.
 
 In a terminal, init asks which harnesses to wire. Without a terminal it wires the
-ones it detects. Use --board to create a shared Board and link this repository to
-it, or --local to create a repository Board even when a shared one is linked.
+ones it detects. A preview (`--print`) uses detection and does not prompt by
+default; pass `--agents ask` to choose harnesses interactively in a preview. Use
+--board to create a shared Board and link this repository to it, or --local to
+create a repository Board even when a shared one is linked.
 
 Task IDs use the Board's slug as their prefix. In a repository, init adopts the
 main checkout folder name (for example teramigo-); --board defaults to orb. Pass

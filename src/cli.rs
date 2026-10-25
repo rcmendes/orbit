@@ -172,7 +172,8 @@ pub struct InitArgs {
     #[arg(long, value_name = "SLUG")]
     pub slug: Option<String>,
 
-    /// Preview the files that would change without writing them.
+    /// Preview the files that would change without writing them; harness
+    /// selection does not prompt unless --agents ask is given.
     #[arg(long)]
     pub print: bool,
 }

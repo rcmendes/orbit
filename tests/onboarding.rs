@@ -82,6 +82,45 @@ fn init_print_writes_nothing() {
 }
 
 #[test]
+fn init_print_defaults_to_detection_without_prompting() {
+    let repo = TestRepo::new();
+    std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
+    std::fs::create_dir_all(repo.path().join(".cursor")).unwrap();
+
+    // A prompt answer is present, but --print must select by detection.
+    let (status, value) = repo.json_with_stdin(&["init", "--print", "--json"], "1\n");
+
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(
+        value["data"]["agents"],
+        serde_json::json!(["claude", "cursor"])
+    );
+    assert_eq!(value["data"]["preview"], true);
+    assert!(!repo.board_path().join("config.toml").exists());
+    assert!(!repo.exists("CLAUDE.md"));
+    assert!(!repo.exists(".mcp.json"));
+    assert!(!repo.exists(".cursor/rules/orbit.mdc"));
+    assert!(!repo.exists(".cursor/mcp.json"));
+}
+
+#[test]
+fn init_print_with_agents_ask_still_prompts() {
+    let repo = TestRepo::new();
+    std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
+    std::fs::create_dir_all(repo.path().join(".cursor")).unwrap();
+
+    let (status, value) =
+        repo.json_with_stdin(&["init", "--print", "--agents", "ask", "--json"], "1\n");
+
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["agents"], serde_json::json!(["claude"]));
+    assert_eq!(value["data"]["preview"], true);
+    assert!(!repo.board_path().join("config.toml").exists());
+    assert!(!repo.exists("CLAUDE.md"));
+    assert!(!repo.exists(".mcp.json"));
+}
+
+#[test]
 fn init_outside_a_git_repository_is_rejected_with_the_alternative() {
     let repo = TestRepo::new();
     let outside = tempfile::tempdir().unwrap();

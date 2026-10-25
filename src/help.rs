@@ -15,8 +15,9 @@ Run `orbit init` once per repository, then let agents take work with
 `orbit done`. Every command accepts --json and then prints exactly one JSON
 object on stdout.
 
-Board discovery order: --dir, then ORBIT_DIR, then the repository link, then the
-repository's own Board.
+Board discovery order: --dir or ORBIT_DIR, then the repository link, then the
+nearest .orbit, then the main checkout's .orbit, then a legacy Board, then
+~/.orbit when it already exists.
 
 For work that spans repositories, create a shared workspace with
 `orbit workspace <folder>` and link each repository with `orbit link <folder>`.";
@@ -39,12 +40,15 @@ Change a Board's Task-ID prefix:
   orbit slug migrate atlas --dry-run";
 
 pub const INIT_LONG: &str = "\
-Creates the Board as a hidden Git worktree on the orbit branch, then detects
-installed coding-agent harnesses (Claude Code, Cursor, Codex, OpenCode, and the
-mattpocock bridge) and writes only the integrations that apply. Files carry a
-managed marker, so re-running reconciles integration instead of failing. A
-hand-written docs/agents/issue-tracker.md without the marker is reported as
-skipped and left alone.
+Creates the Board in the Orbit folder. A local Board defaults to the main
+checkout's .orbit and is a Git worktree on the orbit branch; a Board outside every
+working tree is its own Git repository on that branch. The storage mode and data
+lock live inside the Board folder. Init then detects installed coding-agent
+harnesses (Claude Code, Cursor, Codex, OpenCode, and the mattpocock bridge) and
+writes only the integrations that apply. Files carry a managed marker, so
+re-running reconciles integration instead of failing. A hand-written
+docs/agents/issue-tracker.md without the marker is reported as skipped and left
+alone.
 
 In a terminal, init asks which harnesses to wire. Without a terminal it wires the
 ones it detects. A preview (`--print`) uses detection and does not prompt by

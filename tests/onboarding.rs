@@ -986,7 +986,7 @@ fn init_detects_a_harness_from_path() {
 }
 
 #[test]
-fn init_dir_links_like_board() {
+fn init_dir_creates_an_external_board_without_relinking() {
     let repo = TestRepo::new();
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
@@ -999,8 +999,8 @@ fn init_dir_links_like_board() {
         "none",
         "--json",
     ]);
-    assert_eq!(value["data"]["linked"], true);
+    assert_eq!(value["data"]["linked"], false);
 
-    let listed = repo.ok_json(&["list", "--json"]);
+    let listed = repo.ok_json(&["--dir", board.to_str().unwrap(), "list", "--json"]);
     assert_eq!(listed["data"]["count"], 0);
 }

@@ -9,6 +9,9 @@ use crate::lock::{self, BoardLock};
 use crate::slug;
 use crate::task;
 
+pub const LEGACY_LAYOUT: &str = "LEGACY_LAYOUT";
+pub const AMBIGUOUS_BOARD: &str = "AMBIGUOUS_BOARD";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
@@ -68,10 +71,45 @@ impl Config {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageMode {
+    Worktree,
+    Repository,
+}
+
+impl StorageMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Worktree => "worktree",
+            Self::Repository => "repository",
+        }
+    }
+
+    /// Infers the mode from a Board root that predates the `storage` field.
+    pub fn detect(root: &Path) -> Self {
+        if root.join(".git").is_file() {
+            Self::Worktree
+        } else {
+            Self::Repository
+        }
+    }
+
+    pub fn for_new_dir(root: &Path) -> Self {
+        if git::toplevel_containing(root).is_some() {
+            Self::Worktree
+        } else {
+            Self::Repository
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardConfig {
     #[serde(default = "default_branch")]
     pub branch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<StorageMode>,
     #[serde(default = "default_lease")]
     pub lease_minutes: i64,
     #[serde(default = "task::default_priority")]
@@ -88,6 +126,7 @@ impl Default for BoardConfig {
     fn default() -> Self {
         Self {
             branch: default_branch(),
+            storage: None,
             lease_minutes: default_lease(),
             default_priority: task::default_priority(),
             non_ready_labels: default_non_ready_labels(),
@@ -184,69 +223,72 @@ pub struct InitResult {
     pub branch: String,
     pub external: bool,
     pub prefix: String,
+    pub storage: StorageMode,
 }
 
 pub struct Board {
     pub root: PathBuf,
     pub lock_path: PathBuf,
     pub config: Config,
+    pub warnings: Vec<String>,
 }
 
 impl Board {
     pub fn discover(dir_override: Option<&Path>) -> Result<Self> {
-        if let Some(dir) = dir_override {
-            let root = dunce::canonicalize(dir).map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    OrbitError::board_not_found()
-                } else {
-                    OrbitError::io(format!("resolve {}", dir.display()), error)
-                }
-            })?;
-            let config = Config::load(&root)?;
-            let lock_path = root.join(".lock");
-            return Ok(Self {
-                root,
-                lock_path,
-                config,
-            });
-        }
-
-        let common = git::common_dir()?;
-        let link = common.join("orbit").join("link");
-        if let Some(root) = read_link_file(&link)? {
+        let mut warnings = Vec::new();
+        let root = if let Some(dir) = dir_override {
+            let root = resolve_external(dir)?;
             if !Self::is_board(&root) {
-                return Err(OrbitError::new(
-                    code::LINK_NOT_FOUND,
-                    format!(
-                        "the linked Board at {} is missing; run `orbit link <board>` to re-link or restore it",
-                        root.display()
-                    ),
-                ));
+                return Err(OrbitError::board_not_found());
             }
-            let config = Config::load(&root)?;
-            let lock_path = root.join(".lock");
-            return Ok(Self {
-                root,
-                lock_path,
-                config,
-            });
-        }
+            match legacy_local_board_for(&root) {
+                Some(legacy) if legacy == root => push_warning(
+                    &mut warnings,
+                    format!("{LEGACY_LAYOUT}: using legacy Board at {}", root.display()),
+                ),
+                Some(legacy) => warn_if_ambiguous(&mut warnings, &root, &legacy),
+                None => {}
+            }
+            root
+        } else {
+            discover_from_cwd(&mut warnings)?
+        };
 
-        let root = common.join("orbit").join("board");
-        if !root.join("config.toml").exists() {
-            return Err(OrbitError::board_not_found());
-        }
         let config = Config::load(&root)?;
-        let lock_path = common.join("orbit").join("lock");
+        let lock_path = if config.board.storage.is_none() {
+            legacy_local_lock_for(&root).unwrap_or_else(|| root.join(".lock"))
+        } else {
+            root.join(".lock")
+        };
         Ok(Self {
             root,
             lock_path,
             config,
+            warnings,
         })
     }
 
     pub fn local_root() -> Result<PathBuf> {
-        Ok(git::common_dir()?.join("orbit").join("board"))
+        Ok(slug::main_checkout_anchor()?.join(".orbit"))
+    }
+
+    pub fn storage_mode(&self) -> StorageMode {
+        self.config
+            .board
+            .storage
+            .unwrap_or_else(|| StorageMode::detect(&self.root))
+    }
+
+    pub fn resolve_target(path: &Path) -> Result<(PathBuf, bool)> {
+        let root = resolve_external(path)?;
+        if Self::is_board(&root) {
+            return Ok((root, false));
+        }
+        let nested = root.join("board");
+        if Self::is_board(&nested) {
+            return Ok((nested, true));
+        }
+        Err(OrbitError::board_not_found())
     }
 
     pub fn link_path() -> Result<PathBuf> {
@@ -410,8 +452,18 @@ impl Board {
 
     pub fn init(dir_override: Option<&Path>, slug: Option<&str>) -> Result<InitResult> {
         match dir_override {
-            Some(dir) => init_external(dir, slug),
-            None => init_default(slug),
+            Some(dir) => {
+                let root = resolve_external(dir)?;
+                if git::toplevel_containing(&root).is_some() {
+                    init_worktree_at(&root, slug)
+                } else {
+                    init_external(&root, slug)
+                }
+            }
+            None => {
+                let root = slug::main_checkout_anchor()?.join(".orbit");
+                init_worktree_at(&root, slug)
+            }
         }
     }
 
@@ -459,20 +511,36 @@ fn resolve_prefix(slug: Option<&str>) -> Result<String> {
     }
 }
 
-fn init_default(slug: Option<&str>) -> Result<InitResult> {
-    let common = git::common_dir()?;
-    let repo = git::repo_root()?;
+fn init_worktree_at(board_root: &Path, slug: Option<&str>) -> Result<InitResult> {
+    let repo = git::toplevel_containing(board_root).ok_or_else(|| {
+        OrbitError::new(
+            code::NOT_A_REPOSITORY,
+            format!(
+                "{} is not inside a Git working tree; use a standalone Board directory",
+                board_root.display()
+            ),
+        )
+    })?;
+    let repo = dunce::canonicalize(&repo).unwrap_or(repo);
     let prefix = resolve_prefix(slug)?;
-    let orbit_dir = common.join("orbit");
-    std::fs::create_dir_all(&orbit_dir)
-        .map_err(|error| OrbitError::io(format!("create {}", orbit_dir.display()), error))?;
 
-    let _init_lock = BoardLock::acquire(&orbit_dir.join("init.lock"), 2000, true)?;
-
-    let board_root = orbit_dir.join("board");
     if board_root.join("config.toml").exists() {
-        return Err(already_initialized(&board_root));
+        return Err(already_initialized(board_root));
     }
+
+    let common = git::common_dir_at(&repo)?;
+    let main = main_checkout_for(&repo, &common).join(".orbit");
+    let legacy = legacy_local_path(&common);
+    for existing in [main.as_path(), legacy.as_path()] {
+        if existing != board_root && Board::is_board(existing) {
+            return Err(already_initialized(existing));
+        }
+    }
+
+    let bootstrap = common.join("orbit");
+    std::fs::create_dir_all(&bootstrap)
+        .map_err(|error| OrbitError::io(format!("create {}", bootstrap.display()), error))?;
+    let _init_lock = BoardLock::acquire(&bootstrap.join("init.lock"), 2000, true)?;
 
     git::ensure_identity(&repo)?;
 
@@ -491,7 +559,16 @@ fn init_default(slug: Option<&str>) -> Result<InitResult> {
         git::create_branch(&repo, branch, &commit)?;
     }
 
-    if let Err(error) = git::worktree_add(&repo, &board_root, branch) {
+    git::worktree_prune(&repo)?;
+    if let Err(error) = git::worktree_add(&repo, board_root, branch) {
+        if created_branch {
+            let _ = git::delete_branch(&repo, branch);
+        }
+        return Err(error);
+    }
+
+    if let Err(error) = git::ensure_exclude_entry(&repo, board_root) {
+        let _ = git::worktree_remove(&repo, board_root);
         if created_branch {
             let _ = git::delete_branch(&repo, branch);
         }
@@ -499,18 +576,19 @@ fn init_default(slug: Option<&str>) -> Result<InitResult> {
     }
 
     if board_root.join("config.toml").exists() {
-        let prefix = Config::load(&board_root)?.id.prefix;
+        let config = Config::load(board_root)?;
         return Ok(InitResult {
-            board: board_root,
+            board: board_root.to_path_buf(),
             branch: branch.to_string(),
             external: false,
-            prefix,
+            prefix: config.id.prefix,
+            storage: config.board.storage.unwrap_or(StorageMode::Worktree),
         });
     }
 
-    let result = initialize_board_files(&board_root, branch, false, &prefix);
+    let result = initialize_board_files(board_root, branch, false, &prefix, StorageMode::Worktree);
     if result.is_err() {
-        let _ = git::worktree_remove(&repo, &board_root);
+        let _ = git::worktree_remove(&repo, board_root);
         if created_branch {
             let _ = git::delete_branch(&repo, branch);
         }
@@ -558,7 +636,7 @@ fn init_external(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
 
     git::ensure_identity(&root)?;
     git::set_head(&root, "orbit")?;
-    initialize_board_files(&root, "orbit", true, &prefix)
+    initialize_board_files(&root, "orbit", true, &prefix, StorageMode::Repository)
 }
 
 fn initialize_board_files(
@@ -566,9 +644,11 @@ fn initialize_board_files(
     branch: &str,
     external: bool,
     prefix: &str,
+    storage: StorageMode,
 ) -> Result<InitResult> {
     let mut config = Config::default();
     config.id.prefix = prefix.to_string();
+    config.board.storage = Some(storage);
     config.validate()?;
     let config_toml = config.to_toml()?;
 
@@ -593,12 +673,78 @@ fn initialize_board_files(
         branch: branch.to_string(),
         external,
         prefix: prefix.to_string(),
+        storage,
     })
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(path, bytes)
         .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
+}
+
+fn discover_from_cwd(warnings: &mut Vec<String>) -> Result<PathBuf> {
+    let cwd = std::env::current_dir()
+        .map_err(|error| OrbitError::io("resolve current directory", error))?;
+    let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
+    let home = home_dir();
+
+    if let Some(repo_root) = git::toplevel_containing(&cwd) {
+        let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
+        let common = git::common_dir_at(&repo_root)?;
+        let link = common.join("orbit").join("link");
+        let legacy_local = legacy_local_path(&common);
+
+        if let Some(target) = read_link_file(&link)? {
+            let (root, nested) = classify_link_target(&target)?;
+            if nested {
+                push_warning(
+                    warnings,
+                    format!(
+                        "{LEGACY_LAYOUT}: linked Board is nested at {}",
+                        root.display()
+                    ),
+                );
+            }
+            return Ok(root);
+        }
+
+        if let Some(root) = nearest_orbit(&cwd, &repo_root, home.as_deref()) {
+            warn_if_ambiguous(warnings, &root, &legacy_local);
+            return Ok(root);
+        }
+
+        let main = main_checkout_for(&repo_root, &common).join(".orbit");
+        if Board::is_board(&main) {
+            warn_if_ambiguous(warnings, &main, &legacy_local);
+            return Ok(main);
+        }
+        if Board::is_board(&legacy_local) {
+            push_warning(
+                warnings,
+                format!(
+                    "{LEGACY_LAYOUT}: using legacy Board at {}",
+                    legacy_local.display()
+                ),
+            );
+            return Ok(legacy_local);
+        }
+        if let Some(global) = home.as_deref().and_then(global_board) {
+            return Ok(global);
+        }
+        return Err(OrbitError::board_not_found());
+    }
+
+    let stop = home
+        .as_deref()
+        .filter(|home| cwd.starts_with(home))
+        .unwrap_or_else(|| Path::new("/"));
+    if let Some(root) = nearest_orbit(&cwd, stop, home.as_deref()) {
+        return Ok(root);
+    }
+    if let Some(global) = home.as_deref().and_then(global_board) {
+        return Ok(global);
+    }
+    Err(OrbitError::board_not_found())
 }
 
 pub(crate) fn resolve_external(dir: &Path) -> Result<PathBuf> {
@@ -609,7 +755,138 @@ pub(crate) fn resolve_external(dir: &Path) -> Result<PathBuf> {
             .map_err(|error| OrbitError::io("resolve current directory", error))?
             .join(dir)
     };
-    Ok(dunce::canonicalize(&root).unwrap_or(root))
+    if let Ok(canonical) = dunce::canonicalize(&root) {
+        return Ok(canonical);
+    }
+    if let Some(parent) = root.parent()
+        && let Ok(canonical) = dunce::canonicalize(parent)
+        && let Some(name) = root.file_name()
+    {
+        return Ok(canonical.join(name));
+    }
+    Ok(root)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .and_then(|home| dunce::canonicalize(home).ok())
+}
+
+fn global_board(home: &Path) -> Option<PathBuf> {
+    let root = home.join(".orbit");
+    Board::is_board(&root).then_some(root)
+}
+
+fn nearest_orbit(start: &Path, stop: &Path, skip: Option<&Path>) -> Option<PathBuf> {
+    let mut current = Some(start);
+    while let Some(dir) = current {
+        if skip != Some(dir) {
+            let candidate = dir.join(".orbit");
+            if Board::is_board(&candidate) {
+                return Some(candidate);
+            }
+        }
+        if dir == stop {
+            break;
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn main_checkout_for(repo_root: &Path, common: &Path) -> PathBuf {
+    if common.file_name().and_then(|name| name.to_str()) == Some(".git")
+        && let Some(parent) = common.parent()
+    {
+        return parent.to_path_buf();
+    }
+    repo_root.to_path_buf()
+}
+
+fn legacy_local_path(common: &Path) -> PathBuf {
+    common.join("orbit").join("board")
+}
+
+fn legacy_local_board_for(root: &Path) -> Option<PathBuf> {
+    if let Some(repo) = git::toplevel_containing(root)
+        && let Ok(common) = git::common_dir_at(&repo)
+    {
+        let legacy = legacy_local_path(&common);
+        if Board::is_board(&legacy) {
+            return Some(legacy);
+        }
+    }
+
+    if root.file_name().and_then(|name| name.to_str()) == Some("board") {
+        let orbit = root.parent()?;
+        let common = orbit.parent()?;
+        if orbit.file_name().and_then(|name| name.to_str()) == Some("orbit")
+            && common.join("HEAD").is_file()
+            && Board::is_board(root)
+        {
+            return Some(root.to_path_buf());
+        }
+    }
+    None
+}
+
+fn legacy_local_lock_for(root: &Path) -> Option<PathBuf> {
+    if let Some(repo) = git::toplevel_containing(root)
+        && let Ok(common) = git::common_dir_at(&repo)
+    {
+        let legacy = legacy_local_path(&common);
+        if root == legacy {
+            return Some(common.join("orbit").join("lock"));
+        }
+    }
+
+    if root.file_name().and_then(|name| name.to_str()) == Some("board") {
+        let orbit = root.parent()?;
+        let common = orbit.parent()?;
+        if orbit.file_name().and_then(|name| name.to_str()) == Some("orbit")
+            && common.join("HEAD").is_file()
+        {
+            return Some(orbit.join("lock"));
+        }
+    }
+    None
+}
+
+fn classify_link_target(path: &Path) -> Result<(PathBuf, bool)> {
+    Board::resolve_target(path).map_err(|_| {
+        OrbitError::new(
+            code::LINK_NOT_FOUND,
+            format!(
+                "the linked Board at {} is missing; run `orbit link <board>` to re-link or restore it",
+                path.display()
+            ),
+        )
+    })
+}
+
+fn warn_if_ambiguous(warnings: &mut Vec<String>, root: &Path, legacy: &Path) {
+    if root != legacy
+        && root.file_name().and_then(|name| name.to_str()) == Some(".orbit")
+        && Board::is_board(legacy)
+    {
+        push_warning(
+            warnings,
+            format!(
+                "{AMBIGUOUS_BOARD}: both {} and legacy Board {} exist; using {}",
+                root.display(),
+                legacy.display(),
+                root.display()
+            ),
+        );
+    }
+}
+
+fn push_warning(warnings: &mut Vec<String>, warning: String) {
+    if !warnings.iter().any(|existing| existing == &warning) {
+        warnings.push(warning);
+    }
 }
 
 fn read_link_file(path: &Path) -> Result<Option<PathBuf>> {

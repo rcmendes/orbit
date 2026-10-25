@@ -71,6 +71,10 @@ impl TestRepo {
     }
 
     pub fn board_path(&self) -> PathBuf {
+        self.path().join(".orbit")
+    }
+
+    pub fn legacy_board_path(&self) -> PathBuf {
         self.path().join(".git/orbit/board")
     }
 

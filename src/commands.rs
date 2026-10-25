@@ -96,14 +96,16 @@ where
     } else {
         board.lock_shared()?
     };
-    f(&board)
+    let mut output = f(&board)?;
+    output.warnings.extend(board.warnings.iter().cloned());
+    Ok(output)
 }
 
 struct InitTarget {
     board_root: std::path::PathBuf,
     created: bool,
-    external: bool,
     prefix: String,
+    storage: crate::board::StorageMode,
     warning: Option<String>,
 }
 
@@ -146,8 +148,8 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     let InitTarget {
         board_root,
         created,
-        external,
         prefix,
+        storage,
         warning,
     } = if let Some(board) = args.board.as_deref() {
         init_board_at(Some(board), args.print, args.slug.as_deref())?
@@ -156,18 +158,27 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     } else {
         init_local_target(args.slug.as_deref(), args.print, existing_link.is_some())?
     };
+    let external = storage == crate::board::StorageMode::Repository;
 
-    let target_given = args.board.is_some() || dir.is_some();
-    if target_given && !args.print && in_repo {
+    let explicit_board = args.board.is_some();
+    if explicit_board && !args.print && in_repo {
         Board::write_link(&board_root)?;
     }
-    let linked = target_given && in_repo;
+    let linked = explicit_board && in_repo;
     let branch = crate::board::Config::load(&board_root)
         .map(|config| config.board.branch)
         .unwrap_or_else(|_| "orbit".to_string());
 
     let mut files = json!([]);
     let mut warnings = Vec::new();
+    if let Some(warning) = warning {
+        warnings.push(warning);
+    }
+    if !args.print
+        && let Ok(board) = Board::discover(Some(&board_root))
+    {
+        warnings.extend(board.warnings);
+    }
     let mut setup_human = String::new();
     let mut reported_portable_mcp = false;
     if !clients.is_empty() {
@@ -196,11 +207,8 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
             },
         )?;
         files = output.data["files"].clone();
-        warnings = output.warnings;
+        warnings.extend(output.warnings);
         setup_human = output.human;
-    }
-    if let Some(warning) = warning {
-        warnings.push(warning);
     }
     if ignored_portable_mcp {
         warnings.push("no selected harness uses MCP; ignoring --portable-mcp".to_string());
@@ -225,6 +233,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         )
     };
     human.push_str(&format!("prefix {prefix}\n"));
+    human.push_str(&format!("storage {}\n", storage.as_str()));
     human.push_str(&setup_human);
 
     let mut output = crate::output::CommandOutput::new(
@@ -232,6 +241,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
             "board": board_root,
             "branch": branch,
             "prefix": prefix,
+            "storage": storage.as_str(),
             "external": external,
             "created": created,
             "preview": args.print,
@@ -255,6 +265,7 @@ fn init_board_at(dir: Option<&Path>, print: bool, slug: Option<&str>) -> Result<
             Some(slug) => slug::explicit_prefix(slug)?,
             None => task::DEFAULT_PREFIX.to_string(),
         };
+        let storage = crate::board::StorageMode::for_new_dir(&board_root);
         let prefix = if print {
             prefix
         } else {
@@ -263,18 +274,19 @@ fn init_board_at(dir: Option<&Path>, print: bool, slug: Option<&str>) -> Result<
         Ok(InitTarget {
             board_root,
             created,
-            external: true,
             prefix,
+            storage,
             warning: None,
         })
     } else {
         let board = Board::discover(Some(&board_root))?;
         let prefix = reconcile_prefix(&board, slug, print)?;
+        let storage = board.storage_mode();
         Ok(InitTarget {
             board_root,
             created,
-            external: true,
             prefix,
+            storage,
             warning: None,
         })
     }
@@ -288,7 +300,7 @@ fn init_local_target(
     let local = Board::local_root()?;
     let created = !Board::is_board(&local);
 
-    let (prefix, warning) = if created {
+    let (prefix, storage, warning) = if created {
         let (slug, warning) = match slug {
             Some(slug) => {
                 slug::explicit_prefix(slug)?;
@@ -302,11 +314,12 @@ fn init_local_target(
         } else {
             Board::init(None, Some(&slug))?.prefix
         };
-        (prefix, warning)
+        (prefix, crate::board::StorageMode::Worktree, warning)
     } else {
         let board = Board::discover(Some(&local))?;
         let prefix = reconcile_prefix(&board, slug, print)?;
-        (prefix, None)
+        let storage = board.storage_mode();
+        (prefix, storage, None)
     };
 
     if !print && has_existing_link {
@@ -316,8 +329,8 @@ fn init_local_target(
     Ok(InitTarget {
         board_root: local,
         created,
-        external: false,
         prefix,
+        storage,
         warning,
     })
 }
@@ -443,20 +456,6 @@ fn cmd_workspace(args: WorkspaceArgs) -> Result<crate::output::CommandOutput> {
     Ok(output)
 }
 
-fn resolve_link_target(path: &Path) -> Result<std::path::PathBuf> {
-    let root = crate::board::resolve_external(path)?;
-    if root.join("config.toml").exists() {
-        return Ok(root);
-    }
-
-    let nested = root.join("board");
-    if nested.join("config.toml").exists() {
-        return Ok(nested);
-    }
-
-    Ok(root)
-}
-
 fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
     let cwd = std::env::current_dir()
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
@@ -467,7 +466,7 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
         ));
     }
 
-    let target = resolve_link_target(&args.path)?;
+    let (target, legacy_nested) = Board::resolve_target(&args.path)?;
     let board = Board::discover(Some(&target))?;
     let local = Board::local_root()?;
     let shadowed = Board::is_board(&local) && local != board.root;
@@ -475,7 +474,14 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
     Board::write_link(&board.root)?;
 
     let root = crate::git::repo_root()?;
-    let mut warnings = Vec::new();
+    let mut warnings = board.warnings.clone();
+    if legacy_nested {
+        warnings.push(format!(
+            "{}: linked workspace resolves the nested Board at {}",
+            crate::board::LEGACY_LAYOUT,
+            board.root.display()
+        ));
+    }
     if shadowed {
         warnings.push(format!(
             "the local Board at {} is now shadowed but was not deleted",

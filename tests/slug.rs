@@ -54,7 +54,7 @@ fn init_auto_adopts_the_repository_folder_name() {
     let value = repo.ok_json_in(&named, &["init", "--agents", "none", "--json"]);
 
     assert_eq!(value["data"]["prefix"], "teramigo-");
-    let board = named.join(".git/orbit/board");
+    let board = named.join(".orbit");
     assert_eq!(prefix_of(&repo, &board), "teramigo-");
 
     let id = repo.ok_json_in(&named, &["add", "Task", "--json"])["data"]["id"]
@@ -94,7 +94,7 @@ fn init_slug_overrides_and_rejects_invalid_input() {
             .unwrap()
             .contains("use `teramigo-api`")
     );
-    assert!(!other.join(".git/orbit/board/config.toml").exists());
+    assert!(!other.join(".orbit/config.toml").exists());
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn workspace_rejects_an_invalid_slug_with_a_suggestion() {
 fn reruns_preserve_the_prefix_and_same_slug_does_not_commit() {
     let repo = TestRepo::new();
     let named = repo.named_repo("teramigo");
-    let board = named.join(".git/orbit/board");
+    let board = named.join(".orbit");
 
     let first = repo.ok_json_in(&named, &["init", "--agents", "none", "--json"]);
     assert_eq!(first["data"]["prefix"], "teramigo-");
@@ -457,10 +457,10 @@ fn init_print_computes_the_prefix_without_writing() {
 
     assert_eq!(value["data"]["prefix"], "teramigo-");
     assert_eq!(value["data"]["created"], true);
-    assert!(!named.join(".git/orbit/board/config.toml").exists());
+    assert!(!named.join(".orbit/config.toml").exists());
 
     repo.ok_json_in(&named, &["init", "--agents", "none", "--json"]);
-    let board = named.join(".git/orbit/board");
+    let board = named.join(".orbit");
     let value = repo.ok_json_in(
         &named,
         &[

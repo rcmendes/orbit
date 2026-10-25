@@ -13,8 +13,14 @@ pub enum CommitOutcome {
 }
 
 pub fn common_dir() -> Result<PathBuf> {
+    let cwd = std::env::current_dir()
+        .map_err(|error| OrbitError::io("resolve current directory", error))?;
+    common_dir_at(&cwd)
+}
+
+pub fn common_dir_at(cwd: &Path) -> Result<PathBuf> {
     let output = run_git(
-        None,
+        Some(cwd),
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         None,
     )?;
@@ -27,9 +33,7 @@ pub fn common_dir() -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path
     } else {
-        std::env::current_dir()
-            .map_err(|error| OrbitError::io("resolve current directory", error))?
-            .join(path)
+        cwd.join(path)
     };
     dunce::canonicalize(&absolute)
         .map_err(|error| OrbitError::io(format!("resolve {}", absolute.display()), error))
@@ -176,6 +180,53 @@ pub fn worktree_remove(repo: &Path, path: &Path) -> Result<()> {
         None,
     )?;
     Ok(())
+}
+
+pub fn worktree_prune(repo: &Path) -> Result<()> {
+    run_git(Some(repo), &["worktree", "prune"], None)?;
+    Ok(())
+}
+
+/// Adds an untracked exclusion for `dir` to the repository's local exclude file.
+/// The path never enters a tracked `.gitignore`.
+pub fn ensure_exclude_entry(repo: &Path, dir: &Path) -> Result<()> {
+    let relative = dir.strip_prefix(repo).map_err(|_| {
+        OrbitError::config(format!(
+            "{} is not inside the repository at {}",
+            dir.display(),
+            repo.display()
+        ))
+    })?;
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    let relative = relative.trim_matches('/');
+    if relative.is_empty() {
+        return Err(OrbitError::config(
+            "the Board directory cannot be the repository root",
+        ));
+    }
+    let pattern = format!("/{relative}/");
+
+    let info = common_dir_at(repo)?.join("info");
+    std::fs::create_dir_all(&info)
+        .map_err(|error| OrbitError::io(format!("create {}", info.display()), error))?;
+    let path = info.join("exclude");
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(OrbitError::io(format!("read {}", path.display()), error)),
+    };
+    if existing.lines().any(|line| line.trim() == pattern) {
+        return Ok(());
+    }
+
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&pattern);
+    content.push('\n');
+    std::fs::write(&path, content)
+        .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
 }
 
 pub fn head_commit(repo: &Path) -> Result<String> {
@@ -336,4 +387,24 @@ fn git_failure(args: &[&str], output: &Output) -> OrbitError {
             details
         }
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exclude_entry_is_added_once() {
+        let repo = tempfile::tempdir().unwrap();
+        run_git(Some(repo.path()), &["init", "-q"], None).unwrap();
+        let dir = repo.path().join(".orbit");
+
+        ensure_exclude_entry(repo.path(), &dir).unwrap();
+        ensure_exclude_entry(repo.path(), &dir).unwrap();
+
+        let exclude =
+            std::fs::read_to_string(common_dir_at(repo.path()).unwrap().join("info/exclude"))
+                .unwrap();
+        assert_eq!(exclude.matches("/.orbit/").count(), 1, "{exclude}");
+    }
 }

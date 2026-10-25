@@ -19,7 +19,7 @@ pub struct Cli {
     #[arg(global = true, long)]
     pub json: bool,
 
-    /// Board root override. Also read from ORBIT_DIR.
+    /// Orbit folder (DIR) override. Also read from ORBIT_DIR.
     #[arg(global = true, long, env = "ORBIT_DIR", value_name = "PATH")]
     pub dir: Option<PathBuf>,
 
@@ -200,7 +200,7 @@ pub struct WorkspaceArgs {
 
 #[derive(Debug, Args)]
 pub struct LinkArgs {
-    /// Board or workspace directory to link this repository to.
+    /// Orbit folder (DIR), or a legacy Board or workspace directory.
     #[arg(value_name = "PATH")]
     pub path: PathBuf,
 

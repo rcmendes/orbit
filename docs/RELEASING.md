@@ -4,8 +4,9 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.6.0` — latest
-- `v0.5.0` — previous release
+- `v0.7.0` — latest
+- `v0.6.0` — previous release
+- `v0.5.0`
 - `v0.4.0`
 - `v0.3.0`
 - `v0.2.0`
@@ -35,13 +36,13 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
 
 ## Cut a release
 
-1. Update `version` in `Cargo.toml` and add a matching heading to `../CHANGELOG.md` (for example `## 0.6.0 - 2026-10-25`). The changelog must stay at the repository root: cargo-dist only discovers release-note entries there.
+1. Update `version` in `Cargo.toml` and add a matching heading to `../CHANGELOG.md` (for example `## 0.7.0 - 2026-10-25`). The changelog must stay at the repository root: cargo-dist only discovers release-note entries there.
 2. Commit the changes.
 3. Tag and push:
 
    ```bash
-   git tag v0.6.0
-   git push origin v0.6.0
+   git tag v0.7.0
+   git push origin v0.7.0
    ```
 
 4. The `Release` workflow:
@@ -53,7 +54,7 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
 5. Trigger the post-release smoke check immediately after the Release workflow finishes:
 
    ```bash
-   gh workflow run "Install smoke" --ref v0.6.0
+   gh workflow run "Install smoke" --ref v0.7.0
    ```
 
    A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init`, `orbit add`, `orbit ready`, and `orbit setup --print`. A red run means the published artifacts are broken even though the release exists.

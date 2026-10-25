@@ -78,10 +78,18 @@ orbit init                       # Board in ./.orbit; asks about agents in a TTY
 orbit init --agents none         # Board only; no agent files
 orbit init --agents all          # wire every supported harness
 orbit init --print               # preview every file that would change
+orbit init --portable-mcp        # MCP command `orbit`; editor PATH must find it
 orbit init ~/src/acme-board      # Board at ~/src/acme-board
 orbit init --global              # Board at ~/.orbit
 orbit init --slug teramigo       # Task IDs become teramigo-…
 ```
+
+On the first run that wires an MCP client, a terminal also asks whether MCP
+configs should record an absolute binary path (the default) or the portable
+`orbit` command. The absolute path works for GUI-launched editors without any
+shell setup; the portable command only works when the editor's `PATH` resolves
+`orbit`. Use `--portable-mcp` to choose it without a prompt. Once a selected
+harness has an MCP config, later runs do not ask.
 
 Task IDs use the Board's slug as their prefix. A `DIR` named `.orbit` uses its
 parent folder name (`~/src/acme/.orbit` → `acme-`); any other `DIR` uses its own
@@ -89,7 +97,8 @@ name; `--global` uses `orb` with a warning. Pass `--slug` to choose it
 explicitly. Re-running `init` preserves the stored prefix; an empty Board can
 change it, while a populated Board returns `SLUG_LOCKED` and points at
 `orbit slug migrate <slug>`. `--print` reports the same result without writing.
-The JSON and human output carry `prefix` and `storage`.
+The JSON and human output carry `prefix` and `storage`; the JSON also reports
+`portable_mcp`, the MCP command mode chosen for generated configs.
 
 `init` takes `DIR` from the positional argument, then `--dir`/`ORBIT_DIR`, then
 `./.orbit`. `--global` is exclusive with those and means `~/.orbit`. `link`
@@ -126,8 +135,10 @@ orbit link ~/src/acme/.orbit
 Points this repository at an existing Orbit folder, including from all of its
 worktrees. The pointer is absolute and lives in the Git common directory. It
 also refreshes any existing managed client files; generated configs contain no
-Board path, so this is a version reconciliation, not a path rewrite. Pass the
-Orbit folder itself (`.../.orbit`); `link` does not append `.orbit`.
+Board path, so this is a version reconciliation, not a path rewrite. The refresh
+keeps the configured MCP command mode, so a portable `orbit` entry stays
+portable. Pass the Orbit folder itself (`.../.orbit`); `link` does not append
+`.orbit`.
 
 **Good fit:** a workspace with several related repositories (API, web app,
 agents) where one product Board should hold all of the work. Create the Board in
@@ -205,6 +216,12 @@ writes the harness's user-level locations. `--print`, `--check`, and `--remove`
 operate on the selected scope. Generated configs record the Orbit binary but not
 the Board path, so moving the Orbit folder does not stale them.
 
+MCP entries record the absolute path of the running binary by default, which
+keeps GUI-launched editors working without `PATH` setup. Pass `--portable-mcp`
+to write the bare `orbit` command instead; every editor or agent that launches
+the MCP server must then resolve Orbit on its `PATH`. A repair without
+`--portable-mcp` returns entries to the absolute-path default.
+
 **Good fit:** repairing one editor after an upgrade, checking in CI that
 integration files are current, setting up a machine-wide integration, or
 removing Orbit's content before uninstalling.
@@ -213,6 +230,7 @@ removing Orbit's content before uninstalling.
 orbit setup claude --hooks     # instructions + MCP + SessionStart hook
 orbit setup all --scope user   # machine-wide instruction and MCP files
 orbit setup all --check        # installed / missing / stale
+orbit setup all --portable-mcp # MCP command `orbit`; editor PATH must find it
 orbit setup cursor --print     # preview
 orbit setup all --remove       # remove only Orbit-managed content
 ```

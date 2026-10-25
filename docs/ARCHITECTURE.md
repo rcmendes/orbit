@@ -536,7 +536,7 @@ A standalone `DIR` must be empty apart from `.git`, so the first commit contains
 
 ### Initializing a Board and wiring agents
 
-`init` is pure until the user asks for agent wiring. It creates the Board, commits, and then either prompts in a TTY, respects `--agents`, or prints the `orbit setup` hint.
+`init` is pure until the user asks for agent wiring. It creates the Board, commits, and then either prompts in a TTY, respects `--agents`, or prints the `orbit setup` hint. The first MCP wiring also chooses between the absolute Orbit binary path, which needs no editor `PATH`, and the portable `orbit` command, which does.
 
 ```mermaid
 sequenceDiagram
@@ -566,6 +566,9 @@ sequenceDiagram
         BRD->>GIT: commit orbit: initialize board
     end
     opt TTY prompt accepted or --agents names clients
+        opt first MCP configuration
+            CLI->>Dev: choose absolute binary path or portable orbit
+        end
         CLI->>SET: install selected clients, hooks, MCP config
         SET->>FS: managed harness files
     end

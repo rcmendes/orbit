@@ -52,6 +52,12 @@ default; pass `--agents ask` to choose harnesses interactively in a preview. Use
 --board to create a shared Board and link this repository to it, or --local to
 create a repository Board even when a shared one is linked.
 
+MCP configurations record the absolute path of the running binary by default, so
+GUI-launched editors do not need Orbit on PATH. Pass --portable-mcp to write the
+bare `orbit` command instead; every editor or agent that launches the MCP server
+must then find Orbit on its PATH. In a terminal, the first init asks for this
+choice and defaults to the absolute path.
+
 Task IDs use the Board's slug as their prefix. In a repository, init adopts the
 main checkout folder name (for example teramigo-); --board defaults to orb. Pass
 --slug to choose it explicitly. Re-running preserves the stored prefix. An empty
@@ -77,7 +83,13 @@ Examples:
   orbit init --board ~/src/acme-board --slug acme
 
   # Create the Board only; skip agent integration
-  orbit init --agents none";
+  orbit init --agents none
+
+  # Write the portable `orbit` command and rely on the editor's PATH
+  orbit init --portable-mcp
+
+  # Record an explicit absolute binary for GUI-launched editors
+  orbit init --mcp-bin /usr/local/bin/orbit";
 
 pub const WORKSPACE_LONG: &str = "\
 Creates a workspace directory and a shared Board at <folder>/board. The Board is
@@ -701,12 +713,20 @@ reported as skipped and left alone.
 
 Use init for first-time setup. setup is for adjusting one harness later, checking
 drift in CI with --check (non-zero when missing or stale), or removing Orbit's
-content with --remove.";
+content with --remove.
+
+By default MCP configs record the absolute path of the running binary, which
+works for editors launched outside a shell. Pass --portable-mcp to write the
+bare `orbit` command instead; the editor or agent that launches the MCP server
+must then find Orbit on PATH.";
 
 pub const SETUP_EXAMPLES: &str = "\
 Examples:
   # Add the Claude hook and MCP entry
   orbit setup claude --hooks
+
+  # Write the portable `orbit` command and rely on the editor's PATH
+  orbit setup claude --portable-mcp
 
   # Check that every integration is installed and current
   orbit setup all --check

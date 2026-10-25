@@ -681,7 +681,7 @@ orbit --dir ~/src/acme/.orbit mcp   # serve a shared Board
 
 MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent` and `type`; `update` accepts `type`; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`.
 
-Editors launch the server from their MCP configuration. `orbit setup` writes project-level configs for Claude, Cursor, Codex, and OpenCode by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. `--scope user` writes the harness's user-level locations instead. Generated configs record no Board path; discovery starts from the project directory, and `--dir`/`ORBIT_DIR` covers an editor that launches elsewhere. Use `--no-mcp` for instructions only or `--mcp-bin orbit` for a portable command.
+Editors launch the server from their MCP configuration. `orbit setup` writes project-level configs for Claude, Cursor, Codex, and OpenCode by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. `--scope user` writes the harness's user-level locations instead. Generated configs record no Board path; discovery starts from the project directory, and `--dir`/`ORBIT_DIR` covers an editor that launches elsewhere. Use `--no-mcp` for instructions only, or `--portable-mcp` to write the bare `orbit` command instead; the editor or agent that launches the MCP server must then find Orbit on its `PATH`. A repair without `--portable-mcp` returns MCP entries to the absolute-path default.
 
 ## Export the board
 
@@ -696,13 +696,14 @@ The snapshot is ordered by task ID, carries `schema_version` (currently `2`), an
 
 ## Agent setup
 
-`orbit init` creates the Board in `./.orbit`. It asks once, in a terminal, whether to wire the harnesses it detects; without a terminal it writes no agent files and prints the next step. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
+`orbit init` creates the Board in `./.orbit`. It asks once, in a terminal, whether to wire the harnesses it detects; without a terminal it writes no agent files and prints the next step. On the first MCP setup it also asks whether generated configs should use an absolute path (the default) or the portable `orbit` command, which requires Orbit on the editor's `PATH`. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
 
 ```bash
 orbit init                    # Board; asks about agents in a terminal
 orbit init --agents all       # wire every supported harness
 orbit init --agents none      # Board only; no agent files
 orbit init --print            # preview without writing
+orbit init --portable-mcp     # MCP command `orbit`; editor PATH must find it
 orbit init ~/src/acme-board   # create a Board
 ```
 
@@ -717,10 +718,11 @@ orbit setup mattpocock       # docs/agents/issue-tracker.md
 orbit setup all --scope user # machine-wide instruction and MCP files
 orbit setup all --check      # installed / missing / stale
 orbit setup all --no-mcp     # instruction files only
+orbit setup all --portable-mcp # MCP command `orbit`; editor PATH must find it
 orbit setup all --remove     # remove only Orbit-managed content
 ```
 
-Generated configs record the Orbit binary but not the Board path, so moving the Orbit folder does not leave them stale. `doctor` reports an older config that still contains an absolute Board path.
+Generated configs record the Orbit binary but not the Board path, so moving the Orbit folder does not leave them stale. MCP entries use an absolute binary path by default; `--portable-mcp` writes `orbit` instead, which only works when the editor's `PATH` resolves it. `doctor` reports an older config that still contains an absolute Board path.
 
 A hand-written tracker guide is respected. If `docs/agents/issue-tracker.md` exists without Orbit's managed marker, `orbit setup mattpocock` reports it as `skipped` and leaves it untouched; `--check` treats the custom doc as installed, and `--remove` does not delete it. Tracker files Orbit wrote continue to update and remove normally.
 
@@ -736,7 +738,7 @@ orbit prime --hook-json --by claude
 
 `prime` prints the agent workflow, board counts, top ready tasks, close candidates, and stale claims — about 1k tokens of starting context. `--hook-json` wraps the same text in Claude Code's SessionStart envelope.
 
-Because generated MCP commands are machine-specific, keep those config files untracked when possible. If one is committed, regenerate it after installing Orbit elsewhere, or use `--mcp-bin orbit`.
+Because generated MCP commands are machine-specific, keep those config files untracked when possible. If one is committed, regenerate it after installing Orbit elsewhere, or use `--portable-mcp` so the committed command stays `orbit`.
 
 ## Command map
 
@@ -828,7 +830,7 @@ orbit --version
 
 The installer adds its directory to `PATH` unless it is already there, and tells you what to source if a restart is needed. The npm package is scoped because the bare name is taken; the command is always `orbit`.
 
-npx is only for a temporary trial. `orbit init --agents all` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory. Install globally, or run `orbit setup --mcp-bin orbit` before wiring agents.
+npx is only for a temporary trial. `orbit init --agents all` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory. Install globally, or run `orbit setup --portable-mcp` before wiring agents.
 
 See [RELEASING.md](./docs/RELEASING.md) for the release process, supported targets, and packaging checks.
 

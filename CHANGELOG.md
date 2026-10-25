@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `orbit init` now offers the first-run MCP choice between the absolute Orbit binary path (default, for GUI-launched editors) and the portable `orbit` command, which requires Orbit on the editor's `PATH`. Both `init` and `setup` accept `--portable-mcp` for non-interactive and repair use; re-running with the flag is idempotent, an unflagged repair returns to the absolute-path default, and `link`/`unlink` refresh preserves the configured mode. Help text and docs explain the trade-off.
 - Documented the Orbit folder design in [ADR 0012](./docs/adr/0012-orbit-folder.md) and updated the README, command guide, specification, architecture, glossary, tracker guide, releasing guide, and the amended ADRs 0001/0002/0006 and replaced ADR 0008. A Board lives in one delegated `DIR` (default `.orbit`); `orbit init [DIR]` becomes the only creation command; `orbit workspace`, `--board`, and `--local` are removed; discovery, path-free agent setup, and legacy migration are specified. Implementation lands in follow-up changes.
 - The packaged-install smoke now runs in an isolated project and home directory, wires harnesses detected by `orbit init --agents auto`, verifies the generated MCP command matches the Orbit binary under test, and completes an MCP initialize/tools-list handshake through that command.
 - `orbit init --print` previews without writing or prompting. `--agents` selects integrations for automation; without a flag, a TTY asks and a non-TTY run only prints the next step.

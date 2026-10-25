@@ -59,6 +59,10 @@ impl SetupClient {
             SetupClient::Mattpocock,
         ]
     }
+
+    pub fn uses_mcp(self) -> bool {
+        !matches!(self, SetupClient::Mattpocock | SetupClient::All)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -198,7 +202,9 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
         .or_else(|| linked.map(|path| dunce::canonicalize(&path).unwrap_or(path)));
     let mut warnings = Vec::new();
 
-    if matches!(args.client, SetupClient::Mattpocock) && (args.mcp || args.mcp_bin.is_some()) {
+    if matches!(args.client, SetupClient::Mattpocock)
+        && (args.mcp || args.mcp_bin.is_some() || args.portable_mcp)
+    {
         warnings.push("mattpocock is not an MCP client; ignoring MCP options".to_string());
     }
 
@@ -209,30 +215,20 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
     }
 
     let mcp = !args.no_mcp;
-    let needs_bin = (mcp || hooks) && !args.remove;
-    let bin = if needs_bin {
-        Some(resolve_mcp_bin(args.mcp_bin.as_deref())?)
+    let clients = expand(args.client);
+    let mcp_bin = if mcp && !args.remove {
+        Some(configured_mcp_bin(
+            args.portable_mcp,
+            args.mcp_bin.as_deref(),
+        )?)
     } else {
         None
     };
-
-    if let Some(bin) = &bin
-        && bin.components().count() == 1
-    {
-        warnings.push(
-            "MCP config uses the bare `orbit` command; the editor's PATH must contain Orbit"
-                .to_string(),
-        );
-    } else if let Some(bin) = &bin
-        && is_build_artifact(bin)
-    {
-        warnings.push(format!(
-            "agent config points at a build artifact ({}); install Orbit to a stable location or re-run setup after rebuilding",
-            bin.display()
-        ));
-    }
-
-    let clients = expand(args.client);
+    let hook_bin = if hooks {
+        Some(configured_hook_bin(args.mcp_bin.as_deref())?)
+    } else {
+        None
+    };
 
     if args.check {
         let preview = install(
@@ -240,8 +236,8 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
             InstallOptions {
                 clients,
                 hooks,
-                hook_bin: bin.clone(),
-                mcp_bin: if mcp { bin } else { None },
+                hook_bin: hook_bin.clone(),
+                mcp_bin: mcp_bin.clone(),
                 mcp_dir,
                 print: true,
                 remove: false,
@@ -257,8 +253,8 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
         InstallOptions {
             clients,
             hooks,
-            hook_bin: bin.clone(),
-            mcp_bin: if mcp { bin } else { None },
+            hook_bin,
+            mcp_bin,
             mcp_dir,
             print: args.print,
             remove: args.remove,
@@ -271,6 +267,20 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
 pub fn install(root: &Path, options: InstallOptions) -> Result<CommandOutput> {
     let mut plan = BTreeMap::new();
     let mut warnings = Vec::new();
+    let has_mcp_client = options.clients.iter().any(|client| client.uses_mcp());
+    if has_mcp_client && let Some(bin) = options.mcp_bin.as_deref() {
+        if bin.components().count() == 1 {
+            warnings.push(
+                "MCP config uses the portable `orbit` command; install Orbit and make sure the editor or agent that launches it can find `orbit` on PATH"
+                    .to_string(),
+            );
+        } else if is_build_artifact(bin) {
+            warnings.push(format!(
+                "agent config points at a build artifact ({}); install Orbit to a stable location or re-run setup after rebuilding",
+                bin.display()
+            ));
+        }
+    }
 
     for client in options.clients {
         if options.remove {
@@ -351,19 +361,58 @@ pub fn refresh(root: &Path, mcp_dir: Option<&Path>) -> Result<CommandOutput> {
         ));
     }
 
-    let bin = resolve_mcp_bin(None)?;
-    install(
-        root,
-        InstallOptions {
-            clients,
-            hooks: false,
-            hook_bin: None,
-            mcp_bin: Some(bin),
-            mcp_dir: mcp_dir.map(Path::to_path_buf),
-            print: false,
-            remove: false,
-        },
-    )
+    let mut files = BTreeMap::new();
+    let mut warnings = Vec::new();
+    for client in clients {
+        let portable = configured_portable_mcp(root, client).unwrap_or(false);
+        let bin = configured_mcp_bin(portable, None)?;
+        let output = install(
+            root,
+            InstallOptions {
+                clients: vec![client],
+                hooks: false,
+                hook_bin: None,
+                mcp_bin: Some(bin),
+                mcp_dir: mcp_dir.map(Path::to_path_buf),
+                print: false,
+                remove: false,
+            },
+        )?;
+        if let Some(installed) = output.data["files"].as_array() {
+            for file in installed {
+                let Some(path) = file["path"].as_str().map(str::to_string) else {
+                    continue;
+                };
+                let entry = files.entry(path).or_insert_with(|| file.clone());
+                if entry["action"] == "unchanged" && file["action"] != "unchanged" {
+                    *entry = file.clone();
+                }
+            }
+        }
+        warnings.extend(output.warnings);
+    }
+
+    let files: Vec<Value> = files.into_values().collect();
+    let mut human = String::new();
+    for file in &files {
+        human.push_str(&format!(
+            "{} {}\n",
+            file["action"].as_str().unwrap_or("unknown"),
+            file["path"].as_str().unwrap_or("")
+        ));
+    }
+    warnings.sort();
+    warnings.dedup();
+    let mut output = CommandOutput::new(
+        json!({
+            "root": root.to_string_lossy(),
+            "preview": false,
+            "files": files,
+        }),
+        human,
+    );
+    output.warnings = warnings;
+    Ok(output)
 }
 
 pub(crate) fn has_orbit_hook(root: &Path) -> bool {
@@ -417,6 +466,53 @@ fn configured_clients(root: &Path) -> Vec<SetupClient> {
     }
 
     clients
+}
+
+/// Report whether the selected harnesses already have an Orbit MCP entry.
+fn has_configured_mcp(root: &Path, clients: &[SetupClient]) -> bool {
+    clients
+        .iter()
+        .any(|client| configured_mcp_command(root, *client).is_some())
+}
+
+fn configured_portable_mcp(root: &Path, client: SetupClient) -> Option<bool> {
+    configured_mcp_command(root, client).map(|command| is_portable_mcp_bin(Path::new(&command)))
+}
+
+fn configured_mcp_command(root: &Path, client: SetupClient) -> Option<String> {
+    match client {
+        SetupClient::Claude => read_json_orbit_command(root, ".mcp.json", &["mcpServers", "orbit"]),
+        SetupClient::Cursor => {
+            read_json_orbit_command(root, ".cursor/mcp.json", &["mcpServers", "orbit"])
+        }
+        SetupClient::Codex => read_toml_orbit_command(root, ".codex/config.toml"),
+        SetupClient::Opencode => {
+            read_json_orbit_command(root, "opencode.json", &["mcp", "servers", "orbit"])
+                .or_else(|| read_json_orbit_command(root, "opencode.json", &["mcp", "orbit"]))
+        }
+        SetupClient::Mattpocock | SetupClient::All => None,
+    }
+}
+
+fn read_json_orbit_command(root: &Path, relative: &str, path: &[&str]) -> Option<String> {
+    let content = std::fs::read_to_string(root.join(relative)).ok()?;
+    let value: Value = serde_json::from_str(&content).ok()?;
+    let mut current = &value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    entry_command(current).map(str::to_string)
+}
+
+fn read_toml_orbit_command(root: &Path, relative: &str) -> Option<String> {
+    let content = std::fs::read_to_string(root.join(relative)).ok()?;
+    let value: toml::Value = toml::from_str(&content).ok()?;
+    value
+        .get("mcp_servers")?
+        .get("orbit")?
+        .get("command")?
+        .as_str()
+        .map(str::to_string)
 }
 
 fn check_output(root: &Path, preview: CommandOutput) -> CommandOutput {
@@ -571,6 +667,99 @@ pub fn selected_agents(args: &crate::cli::InitArgs, root: &Path) -> Result<Vec<S
     let mut input = stdin.lock();
     let mut prompt = std::io::stderr();
     select_agents(args, root, interactive, &mut input, &mut prompt)
+}
+
+/// Choose the MCP command for first-run setup. An explicit flag wins, an
+/// existing managed configuration skips the prompt, and a terminal gets the
+/// choice with the absolute path as the default.
+pub fn selected_portable_mcp(
+    args: &crate::cli::InitArgs,
+    clients: &[SetupClient],
+    root: &Path,
+) -> Result<bool> {
+    let stdin = std::io::stdin();
+    let interactive = stdin.is_terminal();
+    let mut input = stdin.lock();
+    let mut prompt = std::io::stderr();
+    select_portable_mcp(args, clients, root, interactive, &mut input, &mut prompt)
+}
+
+fn select_portable_mcp(
+    args: &crate::cli::InitArgs,
+    clients: &[SetupClient],
+    root: &Path,
+    interactive: bool,
+    input: &mut impl BufRead,
+    prompt: &mut impl Write,
+) -> Result<bool> {
+    if !clients.iter().any(|client| client.uses_mcp()) {
+        return Ok(false);
+    }
+    if args.portable_mcp {
+        return Ok(true);
+    }
+    if args.mcp_bin.is_some() {
+        return Ok(false);
+    }
+    if args.print || !interactive || has_configured_mcp(root, clients) {
+        return Ok(false);
+    }
+    prompt_portable_mcp(input, prompt)
+}
+
+fn prompt_portable_mcp(input: &mut impl BufRead, prompt: &mut impl Write) -> Result<bool> {
+    writeln!(prompt, "MCP configuration:")
+        .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
+    writeln!(
+        prompt,
+        "  1. absolute path (default): records this Orbit binary; GUI-launched editors need no PATH setup"
+    )
+    .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
+    writeln!(
+        prompt,
+        "  2. portable: writes `orbit`; every editor that launches it must find Orbit on PATH"
+    )
+    .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
+    writeln!(
+        prompt,
+        "Use which MCP command? [Enter = absolute, p = portable]"
+    )
+    .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
+
+    loop {
+        write!(prompt, "> ").map_err(|error| OrbitError::io("write the MCP prompt", error))?;
+        prompt
+            .flush()
+            .map_err(|error| OrbitError::io("flush the MCP prompt", error))?;
+        let mut line = String::new();
+        if input
+            .read_line(&mut line)
+            .map_err(|error| OrbitError::io("read the MCP choice", error))?
+            == 0
+        {
+            return Ok(false);
+        }
+
+        let answer = line.trim();
+        if answer.is_empty()
+            || answer == "1"
+            || answer.eq_ignore_ascii_case("absolute")
+            || answer.eq_ignore_ascii_case("a")
+        {
+            return Ok(false);
+        }
+        if answer == "2"
+            || answer.eq_ignore_ascii_case("portable")
+            || answer.eq_ignore_ascii_case("p")
+        {
+            return Ok(true);
+        }
+        writeln!(
+            prompt,
+            "unknown MCP choice `{answer}`; enter 1 for absolute or 2 for portable"
+        )
+        .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
+    }
 }
 
 /// Preview runs must never block on input, so they use detection even in a
@@ -1432,6 +1621,27 @@ fn is_orbit_command(command: &str) -> bool {
     }
 }
 
+pub(crate) fn is_portable_mcp_bin(path: &Path) -> bool {
+    path.components().count() == 1 && is_orbit_command(&path.to_string_lossy())
+}
+
+pub(crate) fn configured_mcp_bin(portable: bool, explicit: Option<&Path>) -> Result<PathBuf> {
+    if portable {
+        Ok(PathBuf::from("orbit"))
+    } else {
+        resolve_mcp_bin(explicit)
+    }
+}
+
+pub(crate) fn configured_hook_bin(explicit: Option<&Path>) -> Result<PathBuf> {
+    let resolved = resolve_mcp_bin(explicit)?;
+    if is_portable_mcp_bin(&resolved) {
+        resolve_mcp_bin(None)
+    } else {
+        Ok(resolved)
+    }
+}
+
 pub(crate) fn resolve_mcp_bin(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         if path.components().count() == 1 {
@@ -1982,6 +2192,7 @@ mod tests {
             hooks: false,
             local: false,
             mcp_bin: None,
+            portable_mcp: false,
             slug: None,
             print,
         }
@@ -2063,6 +2274,99 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected, detect(root.path()));
+        assert_eq!(input.position(), 0);
+        assert!(prompt.is_empty());
+    }
+
+    #[test]
+    fn interactive_init_defaults_the_mcp_choice_to_an_absolute_path() {
+        let root = tempfile::tempdir().unwrap();
+        let mut input = std::io::Cursor::new(b"\n");
+        let mut prompt = Vec::new();
+
+        let portable = select_portable_mcp(
+            &init_args(false, None),
+            &[SetupClient::Claude],
+            root.path(),
+            true,
+            &mut input,
+            &mut prompt,
+        )
+        .unwrap();
+
+        assert!(!portable);
+        assert!(input.position() > 0);
+        let prompt = String::from_utf8(prompt).unwrap();
+        assert!(prompt.contains("absolute path"), "{prompt}");
+        assert!(prompt.contains("PATH"), "{prompt}");
+    }
+
+    #[test]
+    fn interactive_init_accepts_the_portable_mcp_choice() {
+        let root = tempfile::tempdir().unwrap();
+        let mut input = std::io::Cursor::new(b"p\n");
+        let mut prompt = Vec::new();
+
+        let portable = select_portable_mcp(
+            &init_args(false, None),
+            &[SetupClient::Opencode],
+            root.path(),
+            true,
+            &mut input,
+            &mut prompt,
+        )
+        .unwrap();
+
+        assert!(portable);
+        assert!(input.position() > 0);
+        assert!(!prompt.is_empty());
+    }
+
+    #[test]
+    fn an_explicit_portable_flag_skips_the_mcp_prompt() {
+        let root = tempfile::tempdir().unwrap();
+        let mut args = init_args(false, None);
+        args.portable_mcp = true;
+        let mut input = std::io::Cursor::new(b"1\n");
+        let mut prompt = Vec::new();
+
+        let portable = select_portable_mcp(
+            &args,
+            &[SetupClient::Claude],
+            root.path(),
+            true,
+            &mut input,
+            &mut prompt,
+        )
+        .unwrap();
+
+        assert!(portable);
+        assert_eq!(input.position(), 0);
+        assert!(prompt.is_empty());
+    }
+
+    #[test]
+    fn an_existing_mcp_config_skips_the_first_run_choice() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(".mcp.json"),
+            r#"{"mcpServers":{"orbit":{"command":"orbit","args":["mcp"]}}}"#,
+        )
+        .unwrap();
+        let mut input = std::io::Cursor::new(b"p\n");
+        let mut prompt = Vec::new();
+
+        let portable = select_portable_mcp(
+            &init_args(false, None),
+            &[SetupClient::Claude],
+            root.path(),
+            true,
+            &mut input,
+            &mut prompt,
+        )
+        .unwrap();
+
+        assert!(!portable);
         assert_eq!(input.position(), 0);
         assert!(prompt.is_empty());
     }

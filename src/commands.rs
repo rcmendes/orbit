@@ -140,6 +140,8 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     }
 
     let clients = crate::setup::selected_agents(&args, &root)?;
+    let selected_portable_mcp = crate::setup::selected_portable_mcp(&args, &clients, &root)?;
+    let ignored_portable_mcp = args.portable_mcp && !clients.iter().any(|client| client.uses_mcp());
 
     let InitTarget {
         board_root,
@@ -167,15 +169,23 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     let mut files = json!([]);
     let mut warnings = Vec::new();
     let mut setup_human = String::new();
+    let mut reported_portable_mcp = false;
     if !clients.is_empty() {
-        let bin = crate::setup::resolve_mcp_bin(args.mcp_bin.as_deref())?;
+        let mcp_bin =
+            crate::setup::configured_mcp_bin(selected_portable_mcp, args.mcp_bin.as_deref())?;
+        reported_portable_mcp = crate::setup::is_portable_mcp_bin(&mcp_bin);
+        let hook_bin = if args.hooks {
+            Some(crate::setup::configured_hook_bin(args.mcp_bin.as_deref())?)
+        } else {
+            None
+        };
         let output = crate::setup::install(
             &root,
             crate::setup::InstallOptions {
                 clients: clients.clone(),
                 hooks: args.hooks,
-                hook_bin: if args.hooks { Some(bin.clone()) } else { None },
-                mcp_bin: Some(bin),
+                hook_bin,
+                mcp_bin: Some(mcp_bin),
                 mcp_dir: if external {
                     Some(board_root.clone())
                 } else {
@@ -191,6 +201,9 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     }
     if let Some(warning) = warning {
         warnings.push(warning);
+    }
+    if ignored_portable_mcp {
+        warnings.push("no selected harness uses MCP; ignoring --portable-mcp".to_string());
     }
 
     let mut human = if args.print {
@@ -224,6 +237,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
             "preview": args.print,
             "linked": linked,
             "agents": clients.iter().map(|client| client.name()).collect::<Vec<_>>(),
+            "portable_mcp": reported_portable_mcp,
             "files": files,
         }),
         human,

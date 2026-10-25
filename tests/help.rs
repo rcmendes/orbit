@@ -52,3 +52,24 @@ fn root_help_mentions_the_agent_loop() {
     assert!(help.contains("orbit heartbeat"));
     assert!(help.contains("orbit done"));
 }
+
+#[test]
+fn init_and_setup_explain_the_portable_mcp_choice() {
+    let mut command = Cli::command();
+    command.build();
+    for (name, example) in [
+        ("init", "orbit init --portable-mcp"),
+        ("setup", "orbit setup claude --portable-mcp"),
+    ] {
+        let mut subcommand = command
+            .find_subcommand(name)
+            .unwrap_or_else(|| panic!("missing subcommand {name}"))
+            .clone();
+        let help = subcommand.render_long_help().to_string();
+
+        assert!(help.contains("--portable-mcp"), "{name}: {help}");
+        assert!(help.contains("absolute path"), "{name}: {help}");
+        assert!(help.contains("PATH"), "{name}: {help}");
+        assert!(help.contains(example), "{name}: {help}");
+    }
+}

@@ -57,6 +57,184 @@ fn init_wires_an_explicit_list() {
 }
 
 #[test]
+fn init_writes_absolute_mcp_paths_by_default() {
+    let repo = TestRepo::new();
+
+    repo.ok_json(&["init", "--agents", "claude", "--json"]);
+
+    let claude = repo.read_json(".mcp.json");
+    let command = claude["mcpServers"]["orbit"]["command"]
+        .as_str()
+        .expect("command is a string");
+    assert!(std::path::Path::new(command).is_absolute(), "{command}");
+}
+
+#[test]
+fn init_portable_mcp_writes_bare_commands_and_explains_the_path_requirement() {
+    let repo = TestRepo::new();
+
+    let value = repo.ok_json(&[
+        "init",
+        "--agents",
+        "claude,opencode",
+        "--portable-mcp",
+        "--json",
+    ]);
+
+    let claude = repo.read_json(".mcp.json");
+    assert_eq!(claude["mcpServers"]["orbit"]["command"], "orbit");
+    let opencode = repo.read_json("opencode.json");
+    assert_eq!(opencode["mcp"]["servers"]["orbit"]["command"][0], "orbit");
+
+    let warnings = value["meta"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|warning| {
+            let warning = warning.as_str().unwrap();
+            warning.contains("portable") && warning.contains("PATH")
+        }),
+        "{value}"
+    );
+
+    let unchanged = repo.ok_json(&[
+        "init",
+        "--agents",
+        "claude,opencode",
+        "--portable-mcp",
+        "--json",
+    ]);
+    assert!(
+        unchanged["data"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|file| file["action"] == "unchanged"),
+        "{unchanged}"
+    );
+}
+
+#[test]
+fn init_repair_without_the_flag_restores_the_absolute_default() {
+    let repo = TestRepo::new();
+    let first = repo.ok_json(&["init", "--agents", "opencode", "--portable-mcp", "--json"]);
+    assert_eq!(first["data"]["portable_mcp"], true);
+
+    let second = repo.ok_json(&["init", "--agents", "opencode", "--json"]);
+    assert_eq!(second["data"]["portable_mcp"], false);
+    let opencode = repo.read_json("opencode.json");
+    let command = opencode["mcp"]["servers"]["orbit"]["command"][0]
+        .as_str()
+        .expect("command is a string");
+    assert!(std::path::Path::new(command).is_absolute(), "{command}");
+}
+
+#[test]
+fn init_reports_the_actual_mcp_mode_for_mcp_bin_orbit() {
+    let repo = TestRepo::new();
+
+    let value = repo.ok_json(&[
+        "init",
+        "--agents",
+        "opencode",
+        "--mcp-bin",
+        "orbit",
+        "--json",
+    ]);
+
+    assert_eq!(value["data"]["portable_mcp"], true);
+    let opencode = repo.read_json("opencode.json");
+    assert_eq!(opencode["mcp"]["servers"]["orbit"]["command"][0], "orbit");
+}
+
+#[test]
+fn init_without_agents_does_not_report_portable_mcp() {
+    let repo = TestRepo::new();
+
+    let value = repo.ok_json(&["init", "--agents", "none", "--portable-mcp", "--json"]);
+
+    assert_eq!(value["data"]["portable_mcp"], false);
+}
+
+#[test]
+fn init_warns_when_no_selected_harness_uses_mcp() {
+    let repo = TestRepo::new();
+
+    let value = repo.ok_json(&["init", "--agents", "mattpocock", "--portable-mcp", "--json"]);
+
+    assert_eq!(value["data"]["portable_mcp"], false);
+    assert!(
+        value["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("no selected harness uses MCP")),
+        "{value}"
+    );
+}
+
+#[test]
+fn link_preserves_a_portable_mcp_configuration() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["init", "--agents", "opencode", "--portable-mcp", "--json"]);
+
+    let shared = tempfile::tempdir().unwrap();
+    let board = shared.path().join("board");
+    let other = TestRepo::new();
+    other.ok_json(&[
+        "init",
+        "--board",
+        board.to_str().unwrap(),
+        "--agents",
+        "none",
+        "--json",
+    ]);
+
+    repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
+
+    let opencode = repo.read_json("opencode.json");
+    assert_eq!(opencode["mcp"]["servers"]["orbit"]["command"][0], "orbit");
+    assert!(
+        opencode["mcp"]["servers"]["orbit"]["command"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "--dir"),
+        "{opencode}"
+    );
+}
+
+#[test]
+fn link_refresh_preserves_each_clients_mcp_mode() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["setup", "claude", "--portable-mcp", "--json"]);
+    repo.ok_json(&["setup", "codex", "--json"]);
+
+    let shared = tempfile::tempdir().unwrap();
+    let board = shared.path().join("board");
+    let other = TestRepo::new();
+    other.ok_json(&[
+        "init",
+        "--board",
+        board.to_str().unwrap(),
+        "--agents",
+        "none",
+        "--json",
+    ]);
+
+    repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
+
+    let claude = repo.read_json(".mcp.json");
+    assert_eq!(claude["mcpServers"]["orbit"]["command"], "orbit");
+    let codex: toml::Value = toml::from_str(&repo.read(".codex/config.toml")).unwrap();
+    let command = codex["mcp_servers"]["orbit"]["command"]
+        .as_str()
+        .expect("command is a string");
+    assert!(std::path::Path::new(command).is_absolute(), "{command}");
+}
+
+#[test]
 fn init_all_wires_every_harness() {
     let repo = TestRepo::new();
 

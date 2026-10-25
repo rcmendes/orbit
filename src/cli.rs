@@ -165,8 +165,17 @@ pub struct InitArgs {
     pub local: bool,
 
     /// Orbit executable to record in agent configs. Defaults to the running binary.
+    ///
+    /// Prefer --portable-mcp when you want the bare `orbit` command.
     #[arg(long = "mcp-bin", value_name = "PATH")]
     pub mcp_bin: Option<PathBuf>,
+
+    /// Write MCP configs with the portable `orbit` command instead of an absolute path.
+    ///
+    /// The editor or agent that launches the MCP server must be able to find
+    /// `orbit` on PATH. In a terminal, init also offers this as a choice.
+    #[arg(long = "portable-mcp", conflicts_with = "mcp_bin")]
+    pub portable_mcp: bool,
 
     /// Board slug used to prefix Task IDs. Bare word: teramigo, not teramigo-.
     #[arg(long, value_name = "SLUG")]
@@ -673,14 +682,24 @@ pub struct SetupArgs {
     pub mcp: bool,
 
     /// Skip MCP configuration and install instruction files only.
-    #[arg(long = "no-mcp", conflicts_with_all = ["mcp", "mcp_bin"])]
+    #[arg(long = "no-mcp", conflicts_with_all = ["mcp", "mcp_bin", "portable_mcp"])]
     pub no_mcp: bool,
 
     /// Orbit executable to record in MCP configs. Defaults to the running binary.
     ///
-    /// Pass `orbit` to write a portable command that relies on the editor's PATH.
+    /// Prefer --portable-mcp when you want the bare `orbit` command.
     #[arg(long = "mcp-bin", value_name = "PATH")]
     pub mcp_bin: Option<PathBuf>,
+
+    /// Write MCP configs with the portable `orbit` command instead of an absolute path.
+    ///
+    /// The editor or agent that launches the MCP server must be able to find
+    /// `orbit` on PATH.
+    #[arg(
+        long = "portable-mcp",
+        conflicts_with_all = ["mcp_bin", "no_mcp", "remove"]
+    )]
+    pub portable_mcp: bool,
 
     /// Preview the files that would change without writing them.
     #[arg(long)]

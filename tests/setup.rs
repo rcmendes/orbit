@@ -480,6 +480,90 @@ fn setup_mcp_bin_can_write_a_portable_command() {
 }
 
 #[test]
+fn setup_portable_mcp_writes_bare_commands_and_is_idempotent() {
+    let repo = TestRepo::new();
+    std::fs::write(
+        repo.path().join(".mcp.json"),
+        "{\n  \"mcpServers\": {\n    \"other\": {\n      \"command\": \"other-server\"\n    }\n  }\n}\n",
+    )
+    .unwrap();
+
+    repo.ok_json(&["setup", "all", "--portable-mcp", "--json"]);
+
+    let claude = repo.read_json(".mcp.json");
+    assert_eq!(claude["mcpServers"]["orbit"]["command"], "orbit");
+    assert_eq!(claude["mcpServers"]["other"]["command"], "other-server");
+
+    let cursor = repo.read_json(".cursor/mcp.json");
+    assert_eq!(cursor["mcpServers"]["orbit"]["command"], "orbit");
+
+    let codex: toml::Value = toml::from_str(&repo.read(".codex/config.toml")).unwrap();
+    assert_eq!(
+        codex["mcp_servers"]["orbit"]["command"].as_str(),
+        Some("orbit")
+    );
+
+    let opencode = repo.read_json("opencode.json");
+    assert_eq!(opencode["mcp"]["servers"]["orbit"]["command"][0], "orbit");
+
+    let claude_before = repo.read(".mcp.json");
+    let cursor_before = repo.read(".cursor/mcp.json");
+    let codex_before = repo.read(".codex/config.toml");
+    let opencode_before = repo.read("opencode.json");
+    let second = repo.ok_json(&["setup", "all", "--portable-mcp", "--json"]);
+    assert_eq!(repo.read(".mcp.json"), claude_before);
+    assert_eq!(repo.read(".cursor/mcp.json"), cursor_before);
+    assert_eq!(repo.read(".codex/config.toml"), codex_before);
+    assert_eq!(repo.read("opencode.json"), opencode_before);
+    assert!(
+        second["data"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|file| { file["action"] == "unchanged" })
+    );
+}
+
+#[test]
+fn setup_portable_mcp_keeps_the_claude_hook_absolute() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["setup", "claude", "--hooks", "--portable-mcp", "--json"]);
+
+    let mcp = repo.read_json(".mcp.json");
+    assert_eq!(mcp["mcpServers"]["orbit"]["command"], "orbit");
+    let settings = repo.read_json(".claude/settings.json");
+    assert_hook_command(&settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]);
+}
+
+#[test]
+fn setup_mcp_bin_orbit_keeps_the_claude_hook_absolute() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["setup", "claude", "--hooks", "--mcp-bin", "orbit", "--json"]);
+
+    let mcp = repo.read_json(".mcp.json");
+    assert_eq!(mcp["mcpServers"]["orbit"]["command"], "orbit");
+    let settings = repo.read_json(".claude/settings.json");
+    assert_hook_command(&settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]);
+}
+
+#[test]
+fn setup_repair_without_the_flag_restores_the_absolute_default() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["setup", "opencode", "--portable-mcp", "--json"]);
+
+    repo.ok_json(&["setup", "opencode", "--json"]);
+    let opencode = repo.read_json("opencode.json");
+    let command = opencode["mcp"]["servers"]["orbit"]["command"][0]
+        .as_str()
+        .expect("command is a string");
+    assert!(Path::new(command).is_absolute(), "{command}");
+
+    let (status, value) = repo.json(&["setup", "opencode", "--check", "--json"]);
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["status"], "installed");
+}
+
+#[test]
 fn setup_warns_when_an_mcp_config_is_tracked() {
     let repo = TestRepo::new();
     std::fs::write(repo.path().join("opencode.json"), "{}\n").unwrap();

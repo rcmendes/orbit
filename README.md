@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.5.0`](https://github.com/rcmendes/orbit/releases/tag/v0.5.0) is the latest release. `main` adds the aligned `orbit list` table, the `--group` outlined view shown below, and per-board Task-ID slugs. The canonical design is [SPEC.md](./docs/SPEC.md); vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.6.0`](https://github.com/rcmendes/orbit/releases/tag/v0.6.0) is the latest release. It adds the aligned `orbit list` table, the `--group` outlined view shown below, and per-board Task-ID slugs. The canonical design is [SPEC.md](./docs/SPEC.md); vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -758,7 +758,7 @@ See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md) and [ADR 0010](./docs/ad
 
 ## Install details
 
-Prebuilt binaries are the primary path. `v0.5.0` is the latest release.
+Prebuilt binaries are the primary path. `v0.6.0` is the latest release.
 
 | Platform | Command |
 | --- | --- |

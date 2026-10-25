@@ -187,10 +187,13 @@ hidden by default; pass --all to include them, or name a terminal status with
 everything one agent is holding.
 
 Human output is an aligned table with ID, STATUS, P, TYPE, TITLE, LABELS, and
-CLAIMED BY columns. Long titles are shortened to 60 characters. --tree keeps
-each Parent Task next to its SubTasks and indents the child title by two spaces.
-The table is for reading; use --json when another program consumes the result,
-because it returns the full task objects in data.tasks plus data.count.
+CLAIMED BY columns. Long titles are shortened to 60 characters. Root Tasks are
+ordered by priority, then creation time and ID; each Parent Task is followed by
+its SubTasks, also ordered by priority. --group renders one outlined table with
+a banner for each Parent Task and its SubTasks beneath it; tasks with no parent
+follow in a final No parent section. The table is for reading; use --json when
+another program consumes the result, because it returns the full task objects in
+data.tasks plus data.count.
 
 --parent lists only the SubTasks of one Parent Task. --type is repeatable and
 matches any listed work shape; --exclude-type hides any listed shape. --label is
@@ -216,8 +219,8 @@ Examples:
   # The pieces of one feature
   orbit list --parent orb-a7b2c9
 
-  # Parents and their SubTasks together
-  orbit list --tree
+  # Group Parent Tasks and SubTasks in one outlined table
+  orbit list --group
 
   # Everything for one repository, optionally with another label
   orbit list --repo api
@@ -283,7 +286,7 @@ Examples:
 
 pub const TREE_LONG: &str = "\
 Shows one Parent Task, its direct SubTasks, and the blocking edges around them.
-Unlike `list --tree`, which shows the whole Board, and `list --parent`, which
+Unlike `list --group`, which shows the whole Board, and `list --parent`, which
 shows only the children, `tree` always includes the root and its family. It is
 the scoped view for an epic, spec, or feature; non-task types appear before the
 title.

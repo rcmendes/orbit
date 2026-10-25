@@ -279,9 +279,9 @@ pub struct ListArgs {
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
-    /// Group each Parent Task with its SubTasks.
+    /// Group tasks under their Parent Task and render the grouped table.
     #[arg(long)]
-    pub tree: bool,
+    pub group: bool,
 
     /// Include done and cancelled tasks.
     #[arg(long)]

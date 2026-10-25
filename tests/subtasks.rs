@@ -538,10 +538,10 @@ fn depend_rejects_parent_child_edges() {
 }
 
 #[test]
-fn list_parent_filters_and_tree_indents() {
+fn list_parent_filters_and_group_layout() {
     let repo = TestRepo::new();
     repo.init();
-    let parent = repo.add("Feature", &[]);
+    let parent = repo.add("Feature", &["--type", "epic"]);
     let child = subtask(&repo, &parent, "Part");
     let other = repo.add("Standalone", &[]);
 
@@ -553,31 +553,97 @@ fn list_parent_filters_and_tree_indents() {
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
 
-    let tree = repo.ok_json(&["list", "--tree", "--json"]);
-    let ids: Vec<&str> = tree["data"]["tasks"]
+    let grouped = repo.ok_json(&["list", "--group", "--json"]);
+    let ids: Vec<&str> = grouped["data"]["tasks"]
         .as_array()
         .unwrap()
         .iter()
         .filter_map(|task| task["id"].as_str())
         .collect();
-    assert!(ids.contains(&parent.as_str()));
-    assert!(ids.contains(&child.as_str()));
-    assert!(ids.contains(&other.as_str()));
+    assert_eq!(ids, vec![parent.as_str(), child.as_str(), other.as_str()]);
 
-    let output = repo.orbit(&["list", "--tree"]);
+    let output = repo.orbit(&["list", "--group"]);
+    assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.lines().next().unwrap().contains("TITLE"), "{stdout}");
-    let child_line = stdout
-        .lines()
-        .find(|line| line.contains(&child))
-        .unwrap_or_else(|| panic!("no child line in {stdout}"));
+    assert_eq!(stdout.matches("CLAIMED BY").count(), 1, "{stdout}");
+    assert!(stdout.contains("╭"), "{stdout}");
+    assert!(stdout.contains("No parent"), "{stdout}");
+    assert_eq!(stdout.matches("Feature").count(), 1, "{stdout}");
+    let widths: Vec<usize> = stdout.lines().map(|line| line.chars().count()).collect();
+    assert!(
+        widths.windows(2).all(|pair| pair[0] == pair[1]),
+        "outline lines must align: {stdout}"
+    );
+
     let parent_line = stdout
         .lines()
-        .find(|line| line.contains(&parent))
-        .unwrap_or_else(|| panic!("no parent line in {stdout}"));
-    // The table indents the title cell, not the whole row.
-    assert!(child_line.contains("task    Part"), "{stdout}");
-    assert!(parent_line.contains("task  Feature"), "{stdout}");
+        .position(|line| line.contains("Feature"))
+        .unwrap_or_else(|| panic!("no parent banner in {stdout}"));
+    let child_line = stdout
+        .lines()
+        .position(|line| line.contains(&child))
+        .unwrap_or_else(|| panic!("no child line in {stdout}"));
+    let other_line = stdout
+        .lines()
+        .position(|line| line.contains(&other))
+        .unwrap_or_else(|| panic!("no standalone line in {stdout}"));
+    assert!(parent_line < child_line, "{stdout}");
+    assert!(child_line < other_line, "{stdout}");
+}
+
+#[test]
+fn list_orders_by_priority_then_parent_then_subtasks() {
+    let repo = TestRepo::new();
+    repo.init();
+    let parent = repo.add("Parent", &["-p", "2", "--type", "epic"]);
+    let child = subtask(&repo, &parent, "Urgent child");
+    repo.ok_json(&["update", &child, "--priority", "0", "--json"]);
+    let middle = repo.add("Middle", &["-p", "1"]);
+    let first = repo.add("First", &["-p", "0"]);
+
+    let output = repo.orbit(&["list"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let position = |needle: &str| {
+        stdout
+            .lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle} in {stdout}"))
+    };
+
+    assert!(position(&first) < position(&middle), "{stdout}");
+    assert!(position(&middle) < position(&parent), "{stdout}");
+    assert!(position(&parent) < position(&child), "{stdout}");
+}
+
+#[test]
+fn tree_flag_is_removed() {
+    let repo = TestRepo::new();
+    repo.init();
+
+    let output = repo.orbit(&["list", "--tree"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--tree"), "{stderr}");
+}
+
+#[test]
+fn group_shows_a_parent_that_the_filter_hides() {
+    let repo = TestRepo::new();
+    repo.init();
+    let parent = repo.add("Feature", &["--type", "epic"]);
+    let child = subtask(&repo, &parent, "Part");
+
+    let listed = repo.ok_json(&["list", "--group", "--type", "task", "--json"]);
+    assert_eq!(listed["data"]["count"], 1);
+    assert_eq!(listed["data"]["tasks"][0]["id"], child.as_str());
+
+    let output = repo.orbit(&["list", "--group", "--type", "task"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&format!("{parent}  Feature")), "{stdout}");
+    assert!(stdout.contains(&child), "{stdout}");
+    assert!(!stdout.contains("No parent"), "{stdout}");
 }
 
 #[test]

@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.5.0`](https://github.com/rcmendes/orbit/releases/tag/v0.5.0) is the latest release. `main` adds the aligned `orbit list` table shown below and per-board Task-ID slugs. The canonical design is [SPEC.md](./docs/SPEC.md); vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.5.0`](https://github.com/rcmendes/orbit/releases/tag/v0.5.0) is the latest release. `main` adds the aligned `orbit list` table, the `--group` outlined view shown below, and per-board Task-ID slugs. The canonical design is [SPEC.md](./docs/SPEC.md); vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -159,18 +159,22 @@ That is the entire loop. There is no daemon to start, no database to migrate, an
 
 ### 5. See the board
 
-`orbit list` is a fast, human-readable view of the graph:
+`orbit list` is a fast, human-readable view of the graph. `--group` keeps each Parent Task and its SubTasks together in one outlined table:
 
 ```text
-$ orbit list --tree
-ID                 STATUS  P   TYPE  TITLE                                   LABELS                       CLAIMED BY
-orb-a7b2c9         todo    P1  epic  Spec: SSO login across api, web, infra  ready-for-agent
-orb-a7b2c9.z21c2w  todo    P0  task    infra: register OIDC client           ready-for-agent, repo:infra
-orb-a7b2c9.hxdmqt  todo    P1  task    api: OIDC callback                    ready-for-agent, repo:api
-orb-a7b2c9.c5qmed  todo    P2  task    web: login redirect                   ready-for-agent, repo:web
+$ orbit list --group
+╭───────────────────┬────────┬────┬──────┬─────────────────────────────┬─────────────────────────────┬────────────╮
+│ ID                │ STATUS │ P  │ TYPE │ TITLE                       │ LABELS                      │ CLAIMED BY │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9  Spec: SSO login across api, web, infra                           epic · todo · P1 · ready-for-agent │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
+│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
+│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ web: login redirect         │ ready-for-agent, repo:web   │            │
+╰───────────────────┴────────┴────┴──────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
-Columns are `ID`, `STATUS`, `P` (priority), `TYPE`, `TITLE`, `LABELS`, and `CLAIMED BY`. Long titles are shortened to 60 characters in the table; `--json` always returns the full title and every field.
+Columns are `ID`, `STATUS`, `P` (priority), `TYPE`, `TITLE`, `LABELS`, and `CLAIMED BY`. Root Tasks are ordered by priority (then creation time and ID), and each Parent Task is followed by its SubTasks, also ordered by priority; `--group` draws that hierarchy and puts tasks without a parent in a final `No parent` section. Long titles are shortened to 60 characters in the table; `--json` always returns the full title and every field.
 
 For one feature, `orbit tree` shows the parent, its children, progress, and blockers:
 

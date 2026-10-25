@@ -723,55 +723,7 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
         })
         .collect();
 
-    tasks.sort_by(|left, right| {
-        (
-            left.front.priority,
-            left.front.created_at.timestamp_millis(),
-            left.id.as_str(),
-        )
-            .cmp(&(
-                right.front.priority,
-                right.front.created_at.timestamp_millis(),
-                right.id.as_str(),
-            ))
-    });
-
-    if args.tree {
-        tasks.sort_by(|left, right| {
-            let left_root = left.front.parent.as_deref().unwrap_or(left.id.as_str());
-            let right_root = right.front.parent.as_deref().unwrap_or(right.id.as_str());
-            let left_root_key = graph.tasks.get(left_root).map(|task| {
-                (
-                    task.front.priority,
-                    task.front.created_at.timestamp_millis(),
-                    task.id.as_str(),
-                )
-            });
-            let right_root_key = graph.tasks.get(right_root).map(|task| {
-                (
-                    task.front.priority,
-                    task.front.created_at.timestamp_millis(),
-                    task.id.as_str(),
-                )
-            });
-            left_root_key
-                .cmp(&right_root_key)
-                .then_with(|| {
-                    left.front
-                        .parent
-                        .is_some()
-                        .cmp(&right.front.parent.is_some())
-                })
-                .then_with(|| left.front.priority.cmp(&right.front.priority))
-                .then_with(|| {
-                    left.front
-                        .created_at
-                        .timestamp_millis()
-                        .cmp(&right.front.created_at.timestamp_millis())
-                })
-                .then_with(|| left.id.cmp(&right.id))
-        });
-    }
+    tasks.sort_by(|left, right| list_sort_key(&graph, left).cmp(&list_sort_key(&graph, right)));
 
     let summaries: Vec<Value> = tasks
         .iter()
@@ -780,8 +732,10 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
     let count = summaries.len();
     let human = if tasks.is_empty() {
         "no tasks".to_string()
+    } else if args.group {
+        format_grouped_table(&group_tasks(&graph, &tasks)?)
     } else {
-        format_table(&tasks, args.tree)
+        format_table(&tasks)
     };
 
     Ok(
@@ -2368,6 +2322,9 @@ fn optional_agent(by: Option<String>) -> Option<String> {
 }
 
 fn truncate(text: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
     if text.chars().count() <= max {
         return text.to_string();
     }
@@ -2375,45 +2332,207 @@ fn truncate(text: &str, max: usize) -> String {
     format!("{head}…")
 }
 
-fn format_table(tasks: &[&Task], tree: bool) -> String {
-    let mut rows =
-        vec![["ID", "STATUS", "P", "TYPE", "TITLE", "LABELS", "CLAIMED BY"].map(String::from)];
+fn list_sort_key<'a>(
+    graph: &'a Graph,
+    task: &'a Task,
+) -> (u8, i64, &'a str, bool, u8, i64, &'a str) {
+    let root = task
+        .front
+        .parent
+        .as_deref()
+        .and_then(|parent_id| graph.tasks.get(parent_id))
+        .unwrap_or(task);
+    (
+        root.front.priority,
+        root.front.created_at.timestamp_millis(),
+        root.id.as_str(),
+        task.front.parent.is_some(),
+        task.front.priority,
+        task.front.created_at.timestamp_millis(),
+        task.id.as_str(),
+    )
+}
+
+struct ListGroup<'a> {
+    parent: Option<&'a Task>,
+    tasks: Vec<&'a Task>,
+}
+
+fn group_tasks<'a>(graph: &'a Graph, tasks: &[&'a Task]) -> Result<Vec<ListGroup<'a>>> {
+    let mut groups: Vec<ListGroup<'a>> = Vec::new();
+    let mut positions: BTreeMap<&'a str, usize> = BTreeMap::new();
+    let mut standalone: Vec<&'a Task> = Vec::new();
+
     for task in tasks {
-        let indent = if tree && task.front.parent.is_some() {
-            "  "
+        if let Some(parent_id) = task.front.parent.as_deref() {
+            if let Some(position) = positions.get(parent_id) {
+                groups[*position].tasks.push(task);
+            } else {
+                let parent = graph.get(parent_id)?;
+                positions.insert(parent_id, groups.len());
+                groups.push(ListGroup {
+                    parent: Some(parent),
+                    tasks: vec![task],
+                });
+            }
         } else {
-            ""
-        };
-        rows.push([
-            task.id.to_string(),
-            task.front.status.as_str().to_string(),
-            format!("P{}", task.front.priority),
-            task.front.task_type.as_str().to_string(),
-            format!("{indent}{}", truncate(&task.front.title, 60)),
-            task.front.labels.join(", "),
-            task.holder().map(|h| h.to_string()).unwrap_or_default(),
-        ]);
+            standalone.push(task);
+        }
     }
-    let widths: Vec<usize> = (0..7)
-        .map(|col| {
+
+    let banner_ids: Vec<&str> = groups
+        .iter()
+        .filter_map(|group| group.parent.map(|parent| parent.id.as_str()))
+        .collect();
+    standalone.retain(|task| !banner_ids.contains(&task.id.as_str()));
+
+    if !standalone.is_empty() {
+        groups.push(ListGroup {
+            parent: None,
+            tasks: standalone,
+        });
+    }
+
+    Ok(groups)
+}
+
+fn group_headers() -> [String; 7] {
+    ["ID", "STATUS", "P", "TYPE", "TITLE", "LABELS", "CLAIMED BY"].map(String::from)
+}
+
+fn task_cells(task: &Task) -> [String; 7] {
+    [
+        task.id.to_string(),
+        task.front.status.as_str().to_string(),
+        format!("P{}", task.front.priority),
+        task.front.task_type.as_str().to_string(),
+        truncate(&task.front.title, 60),
+        task.front.labels.join(", "),
+        task.holder()
+            .map(|holder| holder.to_string())
+            .unwrap_or_default(),
+    ]
+}
+
+fn column_widths(rows: &[[String; 7]]) -> Vec<usize> {
+    (0..7)
+        .map(|column| {
             rows.iter()
-                .map(|row| row[col].chars().count())
+                .map(|row| row[column].chars().count())
                 .max()
                 .unwrap_or(0)
         })
-        .collect();
+        .collect()
+}
+
+fn format_table(tasks: &[&Task]) -> String {
+    let mut rows = vec![group_headers()];
+    rows.extend(tasks.iter().map(|task| task_cells(task)));
+    let widths = column_widths(&rows);
     rows.iter()
         .map(|row| {
-            let line = row
-                .iter()
+            row.iter()
                 .zip(&widths)
                 .map(|(cell, width)| format!("{cell:<width$}"))
                 .collect::<Vec<_>>()
-                .join("  ");
-            line.trim_end().to_string()
+                .join("  ")
+                .trim_end()
+                .to_string()
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn format_grouped_table(groups: &[ListGroup]) -> String {
+    let headers = group_headers();
+    let mut rows = vec![headers.clone()];
+    rows.extend(
+        groups
+            .iter()
+            .flat_map(|group| group.tasks.iter().map(|task| task_cells(task))),
+    );
+    let widths = column_widths(&rows);
+    let inner_width = widths.iter().map(|width| width + 2).sum::<usize>() + widths.len() - 1;
+
+    let mut lines = Vec::new();
+    lines.push(column_border("╭", "┬", "╮", &widths));
+    lines.push(table_row(&headers, &widths));
+    for group in groups {
+        lines.push(full_border("├", "┤", inner_width));
+        if let Some(parent) = group.parent {
+            let left = format!("{}  {}", parent.id, truncate(&parent.front.title, 60));
+            lines.push(banner_row(&left, &group_meta(parent), inner_width));
+        } else {
+            lines.push(banner_row("No parent", "", inner_width));
+        }
+        lines.push(full_border("├", "┤", inner_width));
+        for task in &group.tasks {
+            lines.push(table_row(&task_cells(task), &widths));
+        }
+    }
+    lines.push(column_border("╰", "┴", "╯", &widths));
+    lines.join("\n")
+}
+
+fn group_meta(task: &Task) -> String {
+    let mut parts = vec![
+        task.front.task_type.as_str().to_string(),
+        task.front.status.as_str().to_string(),
+        format!("P{}", task.front.priority),
+    ];
+    if !task.front.labels.is_empty() {
+        parts.push(task.front.labels.join(", "));
+    }
+    if let Some(holder) = task.holder() {
+        parts.push(format!("claimed by {holder}"));
+    }
+    parts.join(" · ")
+}
+
+fn column_border(left: &str, middle: &str, right: &str, widths: &[usize]) -> String {
+    let segments: Vec<String> = widths.iter().map(|width| "─".repeat(width + 2)).collect();
+    format!("{left}{}{right}", segments.join(middle))
+}
+
+fn full_border(left: &str, right: &str, inner_width: usize) -> String {
+    format!("{left}{}{right}", "─".repeat(inner_width))
+}
+
+fn table_row(cells: &[String; 7], widths: &[usize]) -> String {
+    let padded: Vec<String> = cells
+        .iter()
+        .zip(widths)
+        .map(|(cell, width)| format!(" {cell:<width$} "))
+        .collect();
+    format!("│{}│", padded.join("│"))
+}
+
+fn banner_row(left: &str, right: &str, inner_width: usize) -> String {
+    let available = inner_width.saturating_sub(2);
+    let mut left = left.to_string();
+    let mut right = right.to_string();
+
+    if right.chars().count() + 1 > available {
+        right = truncate(&right, available.saturating_sub(1));
+    }
+
+    let max_left = if right.is_empty() {
+        available
+    } else {
+        available.saturating_sub(right.chars().count() + 1)
+    };
+    if left.chars().count() > max_left {
+        left = truncate(&left, max_left);
+    }
+
+    let gap = if right.is_empty() {
+        available.saturating_sub(left.chars().count())
+    } else {
+        available
+            .saturating_sub(left.chars().count() + right.chars().count())
+            .max(1)
+    };
+    format!("│ {left}{}{right} │", " ".repeat(gap))
 }
 
 fn format_summary(task: &Task) -> String {

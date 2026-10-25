@@ -10,9 +10,10 @@ orbit <command> -h        # compact summary
 This guide adds the part help cannot: **when** each command is the right tool.
 Board commands print human-readable text by default; add `--json` to get exactly
 one JSON object on stdout. Human output is for terminals, not parsers: `orbit
-list` renders an aligned table, while `ready`, `tree`, and `prime` use compact
-summary lines. The table's columns, ordering, and title truncation are
-presentation only; `--json` is the stable contract.
+list` renders an aligned table or, with `--group`, a grouped outline, while
+`ready`, `tree`, and `prime` use compact summary lines. The table's columns,
+ordering, and title truncation are presentation only; `--json` is the stable
+contract.
 
 ## Global options
 
@@ -297,8 +298,11 @@ Lists tasks with combinable filters. Done and cancelled tasks are hidden by
 default; pass `--all`, or name a terminal status with `--status`, to include
 them. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`,
 `TITLE`, `LABELS`, and `CLAIMED BY` columns; titles longer than 60 characters
-are shortened with an ellipsis. Use `--json` when a script or agent consumes the
-result.
+are shortened with an ellipsis. Root Tasks are always ordered by priority, then
+creation time and ID; each Parent Task is followed by its SubTasks, also ordered
+by priority. `--group` draws that hierarchy as one outlined table: a banner for
+each Parent Task, its SubTasks underneath, and a final `No parent` section. Use
+`--json` when a script or agent consumes the result.
 
 **Good fit:** a human or agent wants an overview, a triage queue, one agent's
 in-progress work, or the full history.
@@ -313,18 +317,23 @@ orbit list --status done            # closed work, without --all
 orbit list --unlabeled
 orbit list --parent orb-a7b2c9      # only this feature's SubTasks
 orbit list --type epic              # only epics and specs
-orbit list --tree                   # parents and SubTasks together
+orbit list --group                  # parents and SubTasks in one outlined table
 orbit list --exclude-type epic      # hide spec/epic containers
 orbit list --all --json
 ```
 
-Human output looks like this:
+Human output with `--group` looks like this:
 
 ```text
-ID                 STATUS  P   TYPE  TITLE                                   LABELS                       CLAIMED BY
-orb-a7b2c9         todo    P1  epic  Spec: SSO login across api, web, infra  ready-for-agent
-orb-a7b2c9.z21c2w  todo    P0  task    infra: register OIDC client           ready-for-agent, repo:infra
-orb-a7b2c9.hxdmqt  todo    P1  task    api: OIDC callback                    ready-for-agent, repo:api
+╭───────────────────┬────────┬────┬──────┬─────────────────────────────┬─────────────────────────────┬────────────╮
+│ ID                │ STATUS │ P  │ TYPE │ TITLE                       │ LABELS                      │ CLAIMED BY │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9  Spec: SSO login across api, web, infra                           epic · todo · P1 · ready-for-agent │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
+│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
+│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ web: login redirect         │ ready-for-agent, repo:web   │            │
+╰───────────────────┴────────┴────┴──────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
 The table is intentionally not a machine interface. Column widths grow with the
@@ -334,11 +343,12 @@ and long titles are truncated. Parse `--json` instead.
 `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
 any listed shape. `--label` is repeatable and every label must match;
 `--exclude-label` is repeatable and hides a task carrying any of the named labels.
-`--repo NAME` is shorthand for `--label repo:NAME`. `--tree` keeps each Parent
-Task next to its SubTasks and indents the child title by two spaces in the human
-table; JSON always carries `kind`, `type`, `parent`, `subtasks`, and
-`open_subtasks` with the full title. A Parent Task with open SubTasks is not
-Ready, so `list` may show it even though `ready` does not.
+`--repo NAME` is shorthand for `--label repo:NAME`. Parent groups follow the
+parent's priority; SubTasks inside a group follow their own priority. Tasks with
+no parent appear in the final `No parent` section. JSON always carries `kind`,
+`type`, `parent`, `subtasks`, and `open_subtasks` with the full title. A Parent
+Task with open SubTasks is not Ready, so `list` may show it even though `ready`
+does not.
 
 For work that can start now, use `orbit ready` instead: `list` shows all open
 work, including blocked tasks.
@@ -388,7 +398,7 @@ orbit show orb-a7b2c9 --json
 ### `orbit tree` — inspect one epic or spec
 
 Shows one Parent Task, its direct SubTasks, and their blocking edges. Unlike
-`list --tree` (the whole Board) and `list --parent` (children only), `tree`
+`list --group` (the whole Board) and `list --parent` (children only), `tree`
 always includes the root and its family, with resolved/total progress on the
 root.
 

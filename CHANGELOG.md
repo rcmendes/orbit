@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- The packaged-install smoke now runs in an isolated project and home directory, wires a detected harness through normal `orbit init`, verifies the generated MCP command points at the installed binary, and completes an MCP initialize/tools-list handshake through that command.
+- The packaged-install smoke now runs in an isolated project and home directory, wires harnesses detected by `orbit init --agents auto`, verifies the generated MCP command matches the Orbit binary under test, and completes an MCP initialize/tools-list handshake through that command.
 - `orbit init --print` no longer prompts for harness selection in a terminal; previews use detection and return without waiting for input. Pass `--agents ask` to open the prompt explicitly during a preview.
 
 ## 0.7.0 - 2026-10-25

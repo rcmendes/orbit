@@ -1,6 +1,8 @@
 # Install smoke: exercise detected agent setup and MCP with a real binary.
 $ErrorActionPreference = "Stop"
 
+$handshakeInput = Join-Path $PSScriptRoot "onboarding-smoke-mcp.jsonl"
+
 function Resolve-OrbitBinary {
     param([string]$Candidate)
     if ($Candidate -match '[\\/]') {
@@ -28,6 +30,9 @@ $workdir = Join-Path ([System.IO.Path]::GetTempPath()) ("orbit-smoke-" + [guid]:
 $smokeHome = Join-Path ([System.IO.Path]::GetTempPath()) ("orbit-smoke-home-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $workdir, $smokeHome | Out-Null
 $originalLocation = Get-Location
+$previousHome = $env:HOME
+$previousUserProfile = $env:USERPROFILE
+$previousOrbitDir = $env:ORBIT_DIR
 
 try {
     # Keep detection and setup away from the developer's real agent configuration.
@@ -40,8 +45,8 @@ try {
     git config user.email smoke@orbit.invalid
     git config user.name "Orbit Smoke"
 
-    # A project-local marker makes the detected-harness path deterministic without
-    # depending on host tools or the isolated home directory.
+    # A project-local marker guarantees at least one detected harness without
+    # depending on the isolated home directory.
     New-Item -ItemType Directory -Path ".claude" | Out-Null
 
     Invoke-Orbit --version | Out-Null
@@ -52,7 +57,7 @@ try {
     Invoke-Orbit add "Smoke task" --json | Out-Null
     Invoke-Orbit ready --json | Out-Null
 
-    # Check re-resolves the running binary and fails when .mcp.json points elsewhere.
+    # Check re-resolves the running binary, so a stale or foreign MCP command fails here.
     Invoke-Orbit setup claude --check --json | Out-Null
 
     $config = Get-Content ".mcp.json" -Raw | ConvertFrom-Json
@@ -60,20 +65,19 @@ try {
     $mcpCommand = [string]$entry.command
     $mcpArgs = @($entry.args)
 
+    $mcpName = [System.IO.Path]::GetFileName($mcpCommand)
     $portable = $mcpCommand -eq "orbit" -or $mcpCommand -eq "orbit.exe"
-    $installed = $mcpCommand -eq $orbit
-    if (-not ($portable -or $installed)) {
-        throw "onboarding smoke: .mcp.json points at $mcpCommand, not $orbit"
+    if ($mcpName -ne "orbit" -and $mcpName -ne "orbit.exe") {
+        throw "onboarding smoke: MCP command $mcpCommand is not an orbit executable"
+    }
+    if (-not ($portable -or [System.IO.Path]::IsPathRooted($mcpCommand))) {
+        throw "onboarding smoke: MCP command $mcpCommand is not absolute or portable"
     }
     if ($mcpArgs.Count -ne 1 -or $mcpArgs[0] -ne "mcp") {
         throw "onboarding smoke: expected MCP args [mcp], got [$($mcpArgs -join ', ')]"
     }
 
-    $handshake = @(
-        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"orbit-onboarding-smoke","version":"0"}}}',
-        '{"jsonrpc":"2.0","method":"notifications/initialized"}',
-        '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-    ) | & $mcpCommand @mcpArgs
+    $handshake = Get-Content $handshakeInput | & $mcpCommand @mcpArgs
     if ($LASTEXITCODE -ne 0) {
         throw "the generated MCP command failed with exit code $LASTEXITCODE"
     }
@@ -81,15 +85,18 @@ try {
     $responses = @($handshake | ForEach-Object { $_ | ConvertFrom-Json })
     $initialize = $responses | Where-Object { $_.id -eq 1 }
     $tools = $responses | Where-Object { $_.id -eq 2 }
-    if ($initialize.result.serverInfo.name -ne "orbit") {
+    if (-not $initialize -or $initialize.result.serverInfo.name -ne "orbit") {
         throw "MCP initialize did not identify orbit: $handshake"
     }
-    if (@($tools.result.tools | ForEach-Object { $_.name }) -notcontains "ready") {
+    if (-not $tools -or @($tools.result.tools | ForEach-Object { $_.name }) -notcontains "ready") {
         throw "MCP tools/list did not include the ready tool: $handshake"
     }
 
     Write-Output "onboarding smoke passed"
 } finally {
     Set-Location $originalLocation
+    $env:HOME = $previousHome
+    $env:USERPROFILE = $previousUserProfile
+    $env:ORBIT_DIR = $previousOrbitDir
     Remove-Item -Recurse -Force $workdir, $smokeHome -ErrorAction SilentlyContinue
 }

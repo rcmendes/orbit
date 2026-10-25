@@ -85,25 +85,51 @@ Orbit is deliberately narrow. It is not a project-management suite, a time track
 
 ### 1. Install
 
+Orbit's Board requires **Git 2.31+**. The npx trial can check the binary without it, but every persistent route needs Git. Pick one persistent route; the npm and source routes have additional prerequisites.
+
+**macOS / Linux** — Git 2.31+:
+
 ```bash
-# macOS / Linux
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rcmendes/orbit/releases/latest/download/orbit-tracker-installer.sh | sh
+```
 
-# Windows PowerShell
+**Windows PowerShell** — Git 2.31+:
+
+```powershell
 irm https://github.com/rcmendes/orbit/releases/latest/download/orbit-tracker-installer.ps1 | iex
+```
 
-# npm / npx
-npx @rcmendes/orbit --version
+**npm** — Node.js 14.14+, npm 6+, and Git 2.31+:
+
+```bash
 npm install -g @rcmendes/orbit
 ```
 
-From source, with Rust 1.89 or newer:
+The npm package is scoped because the bare name is taken. The command is always `orbit`.
+
+`npx` is a trial path, not a persistent install. It downloads Orbit into npm's prunable `_npx` cache, which is fine for checking the CLI but cannot be recorded by automatic agent setup. Use a persistent install before wiring agents:
 
 ```bash
-cargo install --path .
+npx @rcmendes/orbit --version
 ```
 
-The npm package is scoped because the bare name is taken. The command is always `orbit`.
+**From source** — Rust 1.89+ and Git 2.31+:
+
+```bash
+# Without an existing clone
+cargo install --git https://github.com/rcmendes/orbit --locked orbit-tracker
+
+# From a local clone
+cargo install --path . --locked
+```
+
+Verify the installed command is on `PATH`:
+
+```bash
+orbit --version
+```
+
+If the command is not found, add the install directory to `PATH` and restart your shell. Cargo installs binaries under `$CARGO_HOME/bin` (`%USERPROFILE%\.cargo\bin` by default on Windows). The shell installer prints the directory it added; for global npm, use `npm prefix -g` plus `bin` on macOS/Linux, or the reported prefix itself on Windows.
 
 ### 2. Create the Board and wire your agents
 
@@ -184,6 +210,12 @@ orb-a7b2c9  todo  P1  epic  Spec: SSO login across api, web, infra  [ready-for-a
   orb-a7b2c9.c5qmed  todo  P2  web: login redirect  [ready-for-agent, repo:web]
   orb-a7b2c9.hxdmqt  todo  P1  api: OIDC callback  [ready-for-agent, repo:api]
   orb-a7b2c9.z21c2w  todo  P0  infra: register OIDC client  [ready-for-agent, repo:infra]
+```
+
+Verify Board health, its branch, and uncommitted changes. If a Claude SessionStart hook is configured, `doctor` also warns when `orbit` is not the binary on `PATH`:
+
+```bash
+orbit doctor
 ```
 
 ## Core concepts
@@ -769,19 +801,26 @@ See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md) and [ADR 0010](./docs/ad
 
 ## Install details
 
-Prebuilt binaries are the primary path. `v0.7.0` is the latest release.
+Prebuilt binaries are the primary path. `v0.7.0` is the latest release. Every persistent route requires Git 2.31+ at runtime.
 
-| Platform | Command |
-| --- | --- |
-| macOS / Linux | `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rcmendes/orbit/releases/latest/download/orbit-tracker-installer.sh \| sh` |
-| Windows | `irm https://github.com/rcmendes/orbit/releases/latest/download/orbit-tracker-installer.ps1 \| iex` |
-| npm (global) | `npm install -g @rcmendes/orbit` |
-| npm (one-off) | `npx @rcmendes/orbit --version` |
-| From source | `cargo install --path .` (Rust 1.89+) |
+| Route | Prerequisites | Command |
+| --- | --- | --- |
+| macOS / Linux installer | Git 2.31+ | `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rcmendes/orbit/releases/latest/download/orbit-tracker-installer.sh \| sh` |
+| Windows installer | Git 2.31+ | `irm https://github.com/rcmendes/orbit/releases/latest/download/orbit-tracker-installer.ps1 \| iex` |
+| npm (global) | Node.js 14.14+, npm 6+, Git 2.31+ | `npm install -g @rcmendes/orbit` |
+| npm (one-off trial) | Node.js 14.14+, npm 6+ | `npx @rcmendes/orbit --version` |
+| Source, no clone | Rust 1.89+, Git 2.31+ | `cargo install --git https://github.com/rcmendes/orbit --locked orbit-tracker` |
+| Source, local clone | Rust 1.89+, Git 2.31+ | `cargo install --path . --locked` |
+
+After any persistent route, verify the binary before creating a Board:
+
+```bash
+orbit --version
+```
 
 The installer adds its directory to `PATH` unless it is already there, and tells you what to source if a restart is needed. The npm package is scoped because the bare name is taken; the command is always `orbit`.
 
-`orbit init` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory. Install globally, or pass `--mcp-bin orbit`.
+npx is only for a temporary trial. `orbit init` and `orbit setup` refuse to record a binary inside npm's prunable `_npx` cache or a temporary directory. Install globally, or pass `--mcp-bin orbit`, before wiring agents.
 
 See [RELEASING.md](./docs/RELEASING.md) for the release process, supported targets, and packaging checks.
 

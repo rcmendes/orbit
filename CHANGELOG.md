@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The packaged-install smoke now runs in an isolated project and home directory, wires a detected harness through normal `orbit init`, verifies the generated MCP command points at the installed binary, and completes an MCP initialize/tools-list handshake through that command.
+
 ## 0.7.0 - 2026-10-25
 
 - Added `orbit slug show` and `orbit slug migrate <SLUG>`. `show` reports the bare slug, literal prefix, task/SubTask counts, and comment-file count. `migrate` keeps every random suffix and rewrites Task and SubTask IDs, `parent`/`depends_on`, comment filenames and Orbit headers, and `id.prefix` as one atomic board commit. It supports `--dry-run`, `--json`, and `--force`; refuses an unhealthy Board, prefix collisions, and live claims without `--force`; and is intentionally not exposed over MCP. Task bodies, comment text, Git history, and external links are not rewritten. `SLUG_LOCKED` now points to `orbit slug migrate`.

@@ -57,7 +57,7 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
    gh workflow run "Install smoke" --ref v0.7.0
    ```
 
-   A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init`, `orbit add`, `orbit ready`, and `orbit setup --print`. A red run means the published artifacts are broken even though the release exists.
+   A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init` with detected harnesses, `orbit add`, `orbit ready`, and a real MCP initialize/tools-list handshake through the generated agent command. A red run means the published artifacts are broken even though the release exists.
 
 ## Packaging checks
 
@@ -68,7 +68,7 @@ cargo build --release
 ORBIT_BIN="$PWD/target/release/orbit" bash scripts/onboarding-smoke.sh
 ```
 
-They must stay in sync with the documented quick start; do not add a second smoke sequence.
+Both scripts run in a temporary Git repository with a temporary `HOME`/`USERPROFILE`, create a project-local `.claude` marker so detection is deterministic, and never read or write the developer's real agent configuration. They must stay in sync with the documented quick start; do not add a second smoke sequence.
 
 ## npm notes
 

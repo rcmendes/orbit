@@ -1,9 +1,8 @@
 # Command guide
 
-Status: this guide describes the next release after v0.7.0, including the Orbit
-folder ([ADR 0012](./adr/0012-orbit-folder.md)). The unified `init [DIR]`
-surface, resolver, scoped path-free agent setup, and the `doctor` migration are
-implemented.
+Status: this guide describes v0.8.0, including the Orbit folder
+([ADR 0012](./adr/0012-orbit-folder.md)). The unified `init [DIR]` surface,
+resolver, scoped path-free agent setup, and `doctor` migration are implemented.
 
 Orbit has one command per operation. Every command explains itself:
 
@@ -83,6 +82,36 @@ orbit init ~/src/acme-board      # Board at ~/src/acme-board
 orbit init --global              # Board at ~/.orbit
 orbit init --slug teramigo       # Task IDs become teramigo-…
 ```
+
+**Core options**
+
+| Option | Use it when | Example |
+| --- | --- | --- |
+| *none* | Start a project-local Board at `./.orbit`. | `orbit init` |
+| `DIR` | Choose the Board folder explicitly. Inside a working tree it becomes a worktree; outside it becomes a standalone repository. | `orbit init ~/src/acme/.orbit` |
+| `--global` | Create or reuse the opt-in `~/.orbit` fallback. It conflicts with positional `DIR` and `--dir`/`ORBIT_DIR`, and discovery never creates it. | `orbit init --global` |
+| `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
+| `--agents LIST` | Wire agents non-interactively: `none`, `all`, `auto`, or a client list. | `orbit init --agents all` |
+| `--print` | Preview the Board, exclusion entry, and generated agent files without writing or prompting. | `orbit init DIR --print` |
+
+**Choose by scenario**
+
+- **New product repository:** run `orbit init` at the root. The Board is `./.orbit`, shared by linked worktrees, and IDs use the folder name.
+- **Shared workspace:** create a dedicated folder, run `orbit init` inside it, then `orbit link ~/src/acme/.orbit` in each repository. Use `orbit init ~/src/acme/.orbit` if you are not already in the folder.
+- **CI or scripted setup:** preview with `--print`, then use `--agents none` and an explicit `--slug` when the machine should not receive editor files and IDs must be stable.
+- **Global fallback:** use `--global` only for an intentional machine-wide Board. Project-local Boards still win in discovery.
+- **Joining an existing Board:** use `orbit link DIR`; `init` is for creating or reusing the target `DIR`, not for joining another Board.
+- **Migrating a legacy Board:** use `orbit doctor --migrate`; `init` is not a migration command.
+
+**Supporting options**
+
+| Option | Use it when | Example |
+| --- | --- | --- |
+| `--dir PATH` / `ORBIT_DIR` | You need the global DIR override for one command. Positional `DIR` wins for `init`. | `orbit --dir ~/src/acme/.orbit init` |
+| `--no-agents` | You want `--agents none` without the selector. | `orbit init --no-agents` |
+| `--hooks` | You also want the Claude Code SessionStart hook. | `orbit init --agents claude --hooks` |
+| `--portable-mcp` | MCP configs should call bare `orbit`; the editor's PATH must resolve it. | `orbit init --portable-mcp` |
+| `--mcp-bin PATH` | Record a specific Orbit binary; conflicts with `--portable-mcp`. | `orbit init --mcp-bin /usr/local/bin/orbit` |
 
 On the first run that wires an MCP client, a terminal also asks whether MCP
 configs should record an absolute binary path (the default) or the portable
@@ -247,6 +276,19 @@ orbit setup all --portable-mcp # MCP command `orbit`; editor PATH must find it
 orbit setup cursor --print     # preview
 orbit setup all --remove       # remove only Orbit-managed content
 ```
+
+**Core options**
+
+| Option | Use it when | Example |
+| --- | --- | --- |
+| `--scope project` | Default. Write instruction and MCP files for this repository. | `orbit setup claude` |
+| `--scope user` | One machine-wide integration; writes the harness's user-level locations. | `orbit setup cursor --scope user` |
+| `--check` | CI or a repair check: report installed, missing, or stale and exit non-zero on drift. | `orbit setup all --check` |
+| `--remove` | Remove only Orbit-managed files, sections, hooks, and MCP entries. | `orbit setup all --remove` |
+| `--no-mcp` | Write instruction and skill files without MCP entries. | `orbit setup codex --no-mcp` |
+| `--hooks` | Add the Claude Code SessionStart hook. | `orbit setup claude --hooks` |
+| `--portable-mcp` | Write bare `orbit` in MCP configs; the editor's PATH must resolve it. | `orbit setup opencode --portable-mcp` |
+| `--print` | Preview the exact files that would be written or removed. | `orbit setup all --print` |
 
 An existing `docs/agents/issue-tracker.md` without Orbit's managed marker is
 treated as a hand-written guide: setup reports it as `skipped` and leaves it

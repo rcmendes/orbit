@@ -31,6 +31,14 @@ orbit unlink                     # return to this repository's own Board
 orbit --dir <DIR> list           # override the link for one command
 ```
 
+| Goal | Command |
+| --- | --- |
+| Create a project-local Board | `orbit init` |
+| Create a Board in a specific folder | `orbit init <DIR>` |
+| Create the machine-wide fallback | `orbit init --global` |
+| Join an existing Board | `orbit link <DIR>` |
+| Move a legacy Board | `orbit doctor --migrate` |
+
 A `link` warning about a shadowed Board means the repository still has its own
 Board on disk; linking did not delete it. A missing linked Board fails with
 `LINK_NOT_FOUND`; re-link or restore the Board. A legacy `.git/orbit/board` or

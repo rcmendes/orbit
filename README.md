@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.7.0`](https://github.com/rcmendes/orbit/releases/tag/v0.7.0) is the latest release. The next release introduces the **Orbit folder**: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, path-free agent setup, and a resumable legacy migration. This document describes that target; the canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.8.0`](https://github.com/rcmendes/orbit/releases/tag/v0.8.0) is the latest release. It introduces the **Orbit folder**: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -148,6 +148,36 @@ orbit init --print            # preview without writing
 orbit init ~/src/acme-board   # create a Board at ~/src/acme-board
 orbit init --global           # create the global Board at ~/.orbit
 ```
+
+**Core `init` parameters**
+
+| Parameter | Use it when | Example |
+| --- | --- | --- |
+| *none* | Start a project-local Board at `./.orbit`. | `orbit init` |
+| `DIR` | Put the Board somewhere explicit. Inside a working tree it is a worktree; outside one it is its own repository. | `orbit init ~/src/acme/.orbit` |
+| `--global` | Create or reuse the opt-in global Board at `~/.orbit`. It is the last discovery fallback and is never created implicitly. Conflicts with positional `DIR` and `--dir`/`ORBIT_DIR`. | `orbit init --global` |
+| `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
+| `--agents LIST` | Wire agents without a prompt: `none`, `all`, `auto`, or a comma-separated client list. | `orbit init --agents all` |
+| `--print` | Preview the Board, exclusion entry, and generated agent files without writing or prompting. | `orbit init DIR --print` |
+
+**Choose by scenario**
+
+- **A normal product repository:** run `orbit init` at the repository root. The Board is `./.orbit`, shared by every linked worktree, and IDs use the repository folder name.
+- **A shared workspace:** create a dedicated folder, run `orbit init` inside it, then run `orbit link ~/src/acme/.orbit` from each member repository. Use `orbit init ~/src/acme/.orbit` when you are not already in that folder.
+- **A one-off or CI setup:** use `--print` first, then `--agents none` when the machine should not receive editor configuration. Pass `--slug` when IDs must be predictable.
+- **A global fallback:** use `--global` only when you intentionally want one Board available when no project-local Board resolves. Discovery does not create it.
+- **Joining an existing Board:** use `orbit link DIR`; do not run `init` again. A second local Board in the same working tree is refused.
+- **Moving a legacy Board:** run `orbit doctor --migrate`; `init` is not a migration command.
+
+**Supporting `init` options**
+
+| Parameter | Use it when | Example |
+| --- | --- | --- |
+| `--dir PATH` / `ORBIT_DIR` | You need the global DIR override for one command or shell. Positional `DIR` wins over this in `init`. | `orbit --dir ~/src/acme/.orbit init` |
+| `--no-agents` | You want the same result as `--agents none` without spelling the selector. | `orbit init --no-agents` |
+| `--hooks` | You also want the Claude Code SessionStart hook. | `orbit init --agents claude --hooks` |
+| `--portable-mcp` | Generated MCP entries should call bare `orbit` instead of an absolute binary path. | `orbit init --portable-mcp` |
+| `--mcp-bin PATH` | You need to record a specific Orbit executable for MCP; conflicts with `--portable-mcp`. | `orbit init --mcp-bin /usr/local/bin/orbit` |
 
 ### 3. Put real work on the board
 
@@ -724,6 +754,19 @@ orbit setup all --portable-mcp # MCP command `orbit`; editor PATH must find it
 orbit setup all --remove     # remove only Orbit-managed content
 ```
 
+**Core `setup` parameters**
+
+| Parameter | Use it when | Example |
+| --- | --- | --- |
+| `--scope project` | Default. Write instruction and MCP files for this repository. | `orbit setup claude --scope project` |
+| `--scope user` | One machine-wide integration; writes the harness's user-level locations. | `orbit setup cursor --scope user` |
+| `--check` | CI or a repair check: report installed, missing, or stale and exit non-zero on drift. | `orbit setup all --check` |
+| `--remove` | Uninstall only what Orbit manages, leaving unrelated configuration alone. | `orbit setup all --remove` |
+| `--no-mcp` | Write instruction and skill files without MCP entries. | `orbit setup codex --no-mcp` |
+| `--hooks` | Add the Claude Code SessionStart hook. | `orbit setup claude --hooks` |
+| `--portable-mcp` | Write bare `orbit` in MCP configs; the editor's PATH must resolve it. | `orbit setup opencode --portable-mcp` |
+| `--print` | Preview the exact files that would be written or removed. | `orbit setup all --print` |
+
 Generated configs record the Orbit binary but not the Board path, so moving the Orbit folder does not leave them stale. MCP entries use an absolute binary path by default; `--portable-mcp` writes `orbit` instead, which only works when the editor's `PATH` resolves it. `doctor` reports an older config that still contains an absolute Board path.
 
 A hand-written tracker guide is respected. If `docs/agents/issue-tracker.md` exists without Orbit's managed marker, `orbit setup mattpocock` reports it as `skipped` and leaves it untouched; `--check` treats the custom doc as installed, and `--remove` does not delete it. Tracker files Orbit wrote continue to update and remove normally.
@@ -813,7 +856,7 @@ See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md) and [ADR 0010](./docs/ad
 
 ## Install details
 
-Prebuilt binaries are the primary path. `v0.7.0` is the latest release. Every persistent route requires Git 2.31+ at runtime.
+Prebuilt binaries are the primary path. `v0.8.0` is the latest release. Every persistent route requires Git 2.31+ at runtime.
 
 | Route | Prerequisites | Command |
 | --- | --- | --- |

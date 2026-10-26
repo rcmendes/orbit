@@ -1,6 +1,6 @@
 # Orbit Architecture
 
-Status: describes the next release after v0.7.0, including the Orbit folder (`DIR`, default `.orbit`), user-scoped agent setup, and legacy layout migration. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
+Status: describes v0.8.0, including the Orbit folder (`DIR`, default `.orbit`), user-scoped agent setup, and legacy layout migration. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
 
 The short version: Orbit is one binary, two front doors (the JSON CLI and the MCP stdio server), and no daemon. A board command resolves a Board, takes a lock, rebuilds the task graph from Markdown, applies one transition, publishes files atomically, and optionally commits to an orphan Git branch.
 

@@ -2,7 +2,7 @@
 
 # 🪐 Orbit
 
-### The AI-native issue tracker that lives in your Git repo.
+### The Git-native issue tracker for humans and coding agents.
 
 **One binary. One Markdown board. Zero daemons.**
 
@@ -19,9 +19,9 @@
 
 ---
 
-**Orbit gives coding agents a deterministic work queue without taking your tasks out of Git.** Every task is a Markdown file on a dedicated orphan branch. Every claim is atomic. Mutations are serialized by one lock and published with `fsync` + rename; meaningful changes are committed to Git. There is no database, no daemon, no server, and no context-window tax.
+**Orbit is a local issue tracker whose tasks are Markdown files in your Git repository.** Every task and comment lives on a dedicated orphan branch, so people and agents work from the same reviewable source of truth. Mutations are serialized by one lock and published with `fsync` + rename; meaningful changes are committed to Git. There is no database, daemon, server, or context-window tax.
 
-Claude Code, Cursor, Codex, OpenCode, and any shell-capable agent talk to the same board through a strict JSON CLI or an MCP server. Humans get readable Git diffs; agents get exactly one next task.
+Claude Code, Cursor, Codex, OpenCode, and any shell-capable agent get a deterministic, dependency-aware ready queue through a strict JSON CLI or an MCP server. Every claim is atomic, so two agents never take the same task. Humans get readable Git diffs and exactly the same board.
 
 **1 binary · 0 daemons · 4 statuses · 13 MCP tools · 100% Markdown tasks**
 
@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.8.1`](https://github.com/rcmendes/orbit/releases/tag/v0.8.1) is the latest release. It introduces the **Orbit folder**: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.8.2`](https://github.com/rcmendes/orbit/releases/tag/v0.8.2) is the latest release. It adds a numbered `orbit init` onboarding report, clearer harness and MCP prompts, and a more precise product description. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -138,7 +138,7 @@ cd your-repository
 orbit init
 ```
 
-`orbit init` creates the Board in `./.orbit`, derives the Task-ID slug from the folder, and prints the next step. In a terminal it asks whether to wire the coding-agent harnesses it detects; without a terminal it writes no agent files. Pass `--agents` to decide up front.
+`orbit init` creates the Board in `./.orbit` and derives the Task-ID slug from the folder. It prints a numbered setup report: the Board path, branch, storage mode, Task-ID prefix, and Git exclusion; the coding agents it wired, the MCP command, and every file it created or updated; then `orbit doctor` and the next commands, each with a short explanation. In a terminal it asks whether to wire the coding-agent harnesses it detects; without a terminal it writes no agent files and explains how to wire them. Pass `--agents` to decide up front, and `--print` to see the same report in future tense without writing anything.
 
 ```bash
 orbit init                    # Board in ./.orbit; asks about agents in a TTY
@@ -856,7 +856,7 @@ See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md) and [ADR 0010](./docs/ad
 
 ## Install details
 
-Prebuilt binaries are the primary path. `v0.8.1` is the latest release. Every persistent route requires Git 2.31+ at runtime.
+Prebuilt binaries are the primary path. `v0.8.2` is the latest release. Every persistent route requires Git 2.31+ at runtime.
 
 | Route | Prerequisites | Command |
 | --- | --- | --- |

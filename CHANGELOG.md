@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 - 2026-10-26
+
+- `orbit init` now prints a numbered setup report instead of a terse status line. It states the Board path, branch, storage mode, Task-ID prefix, and Git exclusion; the harnesses wired, MCP command mode, and every managed file; then `orbit doctor` and the next commands, each annotated with what it does. `--print` uses future tense (`would create`, `would list`), states that nothing was written, and keeps the generated file contents. A standalone Board always includes `orbit link DIR` in its next steps, and re-runs report unchanged MCP configs instead of omitting them.
+- The `init` harness and MCP prompts now explain what each choice writes and what it requires, and the installer success message names `orbit init` as the next step for creating a Board and wiring agents.
+- Orbit's description is now consistent in the README, Cargo metadata, CLI help, and generated agent instructions: a Git-native issue tracker for humans and coding agents, with an atomic work queue.
+
 ## 0.8.1 - 2026-10-26
 
 Supersedes 0.8.0, which remains published and deprecated on npm after failing Windows CI. This release contains the Orbit-folder feature set from 0.8.0 plus:

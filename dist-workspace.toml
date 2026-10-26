@@ -19,7 +19,7 @@ npm-package = "orbit"
 # Human-facing name in release notes
 display-name = "orbit"
 # Shown after a successful shell or PowerShell install
-install-success-msg = "Run `orbit init` in your repository to get started."
+install-success-msg = "Run `orbit init` in your repository to create a Board and wire your coding agents."
 # Homebrew is gated on the tap repository and a token with write access.
 # Enable it by adding "homebrew" to installers, adding "homebrew" to
 # publish-jobs, and setting tap = "rcmendes/homebrew-tap" with formula = "orbit".

@@ -1,9 +1,9 @@
 [package]
 name = "orbit-tracker"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 rust-version = "1.89"
-description = "A Markdown-native work queue for coding agents"
+description = "A Git-native issue tracker and atomic work queue for coding agents"
 license = "Apache-2.0"
 repository = "https://github.com/rcmendes/orbit"
 readme = "README.md"

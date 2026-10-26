@@ -706,7 +706,7 @@ fn select_portable_mcp(
 }
 
 fn prompt_portable_mcp(input: &mut impl BufRead, prompt: &mut impl Write) -> Result<bool> {
-    writeln!(prompt, "MCP configuration:")
+    writeln!(prompt, "MCP command for the selected agents:")
         .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
     writeln!(
         prompt,
@@ -715,14 +715,11 @@ fn prompt_portable_mcp(input: &mut impl BufRead, prompt: &mut impl Write) -> Res
     .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
     writeln!(
         prompt,
-        "  2. portable: writes `orbit`; every editor that launches it must find Orbit on PATH"
+        "  2. portable `orbit`: records the bare command; every editor that launches it must find Orbit on PATH"
     )
     .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
-    writeln!(
-        prompt,
-        "Use which MCP command? [Enter = absolute, p = portable]"
-    )
-    .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
+    writeln!(prompt, "Choose 1 or 2 [Enter = 1 absolute, p = 2 portable]")
+        .map_err(|error| OrbitError::io("write the MCP prompt", error))?;
 
     loop {
         write!(prompt, "> ").map_err(|error| OrbitError::io("write the MCP prompt", error))?;
@@ -794,8 +791,11 @@ fn prompt_agents(
     prompt: &mut impl Write,
 ) -> Result<Vec<SetupClient>> {
     let all = SetupClient::all();
-    writeln!(prompt, "Orbit supports:")
-        .map_err(|error| OrbitError::io("write the harness prompt", error))?;
+    writeln!(
+        prompt,
+        "Orbit can wire its task workflow into these coding agents:"
+    )
+    .map_err(|error| OrbitError::io("write the harness prompt", error))?;
     for (index, client) in all.iter().enumerate() {
         let mark = if detected.contains(client) {
             " (detected)"
@@ -807,7 +807,7 @@ fn prompt_agents(
     }
     writeln!(
         prompt,
-        "Wire which harnesses? [Enter = detected, a = all, none = none]"
+        "Select harnesses by number or name [Enter = detected, a = all, none = skip]"
     )
     .map_err(|error| OrbitError::io("write the harness prompt", error))?;
 
@@ -1389,6 +1389,18 @@ fn plan_mcp_json(
         warnings.push(warning);
     }
     if !changed {
+        if existing.is_some() {
+            return insert_plan(
+                plan,
+                FilePlan {
+                    absolute,
+                    relative: PathBuf::from(relative),
+                    action: Action::Unchanged,
+                    content: None,
+                    warning: None,
+                },
+            );
+        }
         return Ok(());
     }
 
@@ -1514,6 +1526,18 @@ fn plan_mcp_toml(
         warnings.push(warning);
     }
     if !changed {
+        if existing.is_some() {
+            return insert_plan(
+                plan,
+                FilePlan {
+                    absolute,
+                    relative: PathBuf::from(relative),
+                    action: Action::Unchanged,
+                    content: None,
+                    warning: None,
+                },
+            );
+        }
         return Ok(());
     }
 
@@ -2091,7 +2115,7 @@ fn mattpocock_section() -> String {
         "{BEGIN_MARKER}
 ## Orbit
 
-We use Orbit, a local AI-native issue tracker. Tasks live as Markdown on the board and are served by the `orbit` CLI; the board is shared by every Git worktree.
+We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdown on the board and are served by the `orbit` CLI; the board is shared by every Git worktree.
 
 - To find actionable work, run `orbit ready --json` and parse `data.tasks`.
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.

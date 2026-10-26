@@ -6,9 +6,10 @@
 //! semantics and shows copy-pasteable usage.
 
 pub const ROOT_LONG: &str = "\
-Orbit keeps every task as a Markdown file on a dedicated Git branch and serves it
-through this CLI. Writes are serialized by one lock and published atomically, so
-several agents can share a Board without a database server.
+Orbit is a Git-native issue tracker for humans and coding agents. It keeps every
+task as a Markdown file on a dedicated Git branch and serves it through this CLI.
+Writes are serialized by one lock and published atomically, so several agents
+can share a Board without a database server.
 
 Run `orbit init` once per repository, then let agents take work with
 `orbit ready --claim`, hold it with `orbit heartbeat`, and finish it with
@@ -67,6 +68,12 @@ wire; without a terminal it writes no agent files and prints the `orbit setup`
 hint. A preview (`--print`) uses detection to show what would change but never
 prompts and never writes. Use --agents all, none, or a comma-separated list to
 select harnesses without a prompt.
+
+Every run prints a numbered summary of the Board, the coding-agent integration,
+and the `orbit doctor` verification step, followed by the next commands. A
+standalone Board also prints the `orbit link` command that member repositories
+need. `--print` shows the same summary in future tense and includes the generated
+file contents.
 
 MCP configurations record the absolute path of the running binary by default, so
 GUI-launched editors do not need Orbit on PATH. Pass --portable-mcp to write the

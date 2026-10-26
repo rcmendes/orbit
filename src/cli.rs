@@ -10,7 +10,7 @@ use crate::task::{Status, TaskType};
 #[command(
     name = "orbit",
     version,
-    about = "A Markdown-native work queue for coding agents",
+    about = "A Git-native issue tracker and atomic work queue for coding agents",
     long_about = help::ROOT_LONG,
     after_long_help = help::ROOT_EXAMPLES
 )]

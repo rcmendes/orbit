@@ -1,7 +1,7 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::Path;
 
 use crate::atomic;
@@ -145,6 +145,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
             .as_ref()
             .is_some_and(|global| global == &board_root);
 
+    let interactive = std::io::stdin().is_terminal();
     let clients = crate::setup::selected_agents(&args, &setup_root)?;
     let selected_portable_mcp = crate::setup::selected_portable_mcp(&args, &clients, &setup_root)?;
     let ignored_portable_mcp = args.portable_mcp && !clients.iter().any(|client| client.uses_mcp());
@@ -158,19 +159,21 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         mut exclude,
         mut warnings,
     } = run_init(&board_root, args.slug.as_deref(), args.print, global)?;
-    let external = storage == crate::board::StorageMode::Repository;
 
     if !args.print && storage == crate::board::StorageMode::Worktree {
         exclude = Board::ensure_excluded(&board_root)?;
     }
 
     let mut files = json!([]);
-    let mut setup_human = String::new();
+    let mut mcp_command = None;
     let mut reported_portable_mcp = false;
     if !clients.is_empty() {
         let mcp_bin =
             crate::setup::configured_mcp_bin(selected_portable_mcp, args.mcp_bin.as_deref())?;
         reported_portable_mcp = crate::setup::is_portable_mcp_bin(&mcp_bin);
+        if clients.iter().any(|client| client.uses_mcp()) {
+            mcp_command = Some(format!("{} mcp", mcp_bin.display()));
+        }
         let hook_bin = if args.hooks {
             Some(crate::setup::configured_hook_bin(args.mcp_bin.as_deref())?)
         } else {
@@ -190,42 +193,26 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         )?;
         files = output.data["files"].clone();
         warnings.extend(output.warnings);
-        setup_human = output.human;
     }
     if ignored_portable_mcp {
         warnings.push("no selected harness uses MCP; ignoring --portable-mcp".to_string());
     }
 
-    let mut human = if args.print {
-        format!(
-            "would initialize Board at {} (branch {branch}, storage {})\n",
-            board_root.display(),
-            storage.as_str()
-        )
-    } else if created {
-        format!(
-            "initialized Board at {} (branch {branch}, storage {})\n",
-            board_root.display(),
-            storage.as_str()
-        )
-    } else {
-        format!(
-            "Board already initialized at {}; reconciled agent integration\n",
-            board_root.display()
-        )
-    };
-    human.push_str(&format!("prefix {prefix}\n"));
-    human.push_str(&format!("storage {}\n", storage.as_str()));
-    if let Some(exclude) = &exclude {
-        human.push_str(&format!("exclude {exclude}\n"));
-    }
-    human.push_str(&setup_human);
-    if clients.is_empty() && !args.print {
-        if external && !global {
-            human.push_str(&format!("next: orbit link {}\n", board_root.display()));
-        }
-        human.push_str("next: orbit setup <client>   # wire an agent\n");
-    }
+    let human = render_init_human(&InitReport {
+        args: &args,
+        interactive,
+        board_root: &board_root,
+        created,
+        prefix: &prefix,
+        storage,
+        branch: &branch,
+        exclude: exclude.as_deref(),
+        global,
+        clients: &clients,
+        files: &files,
+        mcp_command: mcp_command.as_deref(),
+        portable_mcp: reported_portable_mcp,
+    });
 
     let mut output = crate::output::CommandOutput::new(
         json!({
@@ -245,6 +232,211 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     );
     output.warnings = warnings;
     Ok(output)
+}
+
+struct InitReport<'a> {
+    args: &'a InitArgs,
+    interactive: bool,
+    board_root: &'a Path,
+    created: bool,
+    prefix: &'a str,
+    storage: crate::board::StorageMode,
+    branch: &'a str,
+    exclude: Option<&'a str>,
+    global: bool,
+    clients: &'a [crate::setup::SetupClient],
+    files: &'a Value,
+    mcp_command: Option<&'a str>,
+    portable_mcp: bool,
+}
+
+/// Render the human onboarding report. Every section states what happened (or
+/// what a preview would do), so a first run does not require reading the docs.
+fn render_init_human(report: &InitReport<'_>) -> String {
+    let preview = report.args.print;
+    let mut human = String::new();
+
+    if preview {
+        human.push_str("Orbit setup preview (nothing was written).\n\n");
+    } else if report.created {
+        human.push_str("Orbit setup complete.\n\n");
+    } else if report.clients.is_empty() {
+        human.push_str("Orbit is already initialized; the Board was reused.\n\n");
+    } else {
+        human.push_str("Orbit is already initialized; agent integration was reconciled.\n\n");
+    }
+
+    let board_state = match (preview, report.created) {
+        (true, true) => "would create",
+        (true, false) => "existing; would reuse",
+        (false, true) => "created",
+        (false, false) => "existing; reused",
+    };
+    human.push_str(&format!("1. Board ({board_state})\n"));
+    human.push_str(&format!(
+        "   {:<9}{}\n",
+        "path",
+        report.board_root.display()
+    ));
+    human.push_str(&format!("   {:<9}{}\n", "branch", report.branch));
+    let storage = match (report.storage, report.global) {
+        (crate::board::StorageMode::Worktree, _) => {
+            "worktree (shared by every Git worktree of this repository)"
+        }
+        (crate::board::StorageMode::Repository, true) => "repository (global fallback at ~/.orbit)",
+        (crate::board::StorageMode::Repository, false) => {
+            "repository (standalone Board folder; link repositories with `orbit link`)"
+        }
+    };
+    human.push_str(&format!("   {:<9}{storage}\n", "storage"));
+    let prefix = report.prefix;
+    let prefix_detail = match prefix.strip_suffix('-') {
+        Some(slug) if !slug.is_empty() => {
+            format!("{prefix} (Task IDs look like {slug}-a7b2c9)")
+        }
+        _ => format!("{prefix} (Task IDs start with {prefix})"),
+    };
+    human.push_str(&format!("   {:<9}{prefix_detail}\n", "prefix"));
+    if let Some(exclude) = report.exclude {
+        let detail = if preview {
+            "would be listed in .git/info/exclude"
+        } else {
+            "listed in .git/info/exclude"
+        };
+        human.push_str(&format!("   {:<9}{exclude} ({detail})\n", "exclude"));
+    }
+    human.push('\n');
+
+    if report.clients.is_empty() {
+        human.push_str("2. Coding agents (skipped)\n");
+        human.push_str(&format!(
+            "   {:<9}{}\n",
+            "reason",
+            init_agent_skip_reason(report.args, report.interactive)
+        ));
+    } else {
+        human.push_str("2. Coding agents\n");
+        let wired = report
+            .clients
+            .iter()
+            .map(|client| client.name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        human.push_str(&format!("   {:<9}{wired}\n", "wired"));
+        if let Some(command) = report.mcp_command {
+            let detail = if report.portable_mcp {
+                "portable; every editor that launches it must find `orbit` on PATH"
+            } else {
+                "absolute path; GUI-launched editors need no PATH setup"
+            };
+            human.push_str(&format!("   {:<9}{command} ({detail})\n", "mcp"));
+        }
+        if report.args.hooks {
+            human.push_str(&format!("   {:<9}Claude Code SessionStart\n", "hook"));
+        }
+        human.push_str("   files\n");
+        let files = report.files.as_array();
+        if files.is_none_or(|files| files.is_empty()) {
+            human.push_str("     already up to date\n");
+        } else {
+            for file in files.into_iter().flatten() {
+                let action = file["action"].as_str().unwrap_or("unknown");
+                let path = file["path"].as_str().unwrap_or("?");
+                human.push_str(&format!(
+                    "     {:<13}{path}\n",
+                    init_action_label(preview, action)
+                ));
+            }
+        }
+    }
+    human.push('\n');
+
+    human.push_str(if preview {
+        "3. Verify after applying\n"
+    } else {
+        "3. Verify\n"
+    });
+    human.push_str("   orbit doctor   # check the Board, worktree link, and PATH\n\n");
+
+    if preview {
+        human.push_str("Re-run the same command without --print to apply these changes.\n");
+        if let Some(files) = report.files.as_array() {
+            let previews = files
+                .iter()
+                .filter_map(|file| Some((file["path"].as_str()?, file["content"].as_str()?)))
+                .collect::<Vec<_>>();
+            if !previews.is_empty() {
+                human.push_str("\nGenerated file previews:\n");
+                for (path, content) in previews {
+                    human.push_str(&format!("\n--- {path} ---\n{content}"));
+                    if !content.ends_with('\n') {
+                        human.push('\n');
+                    }
+                }
+            }
+        }
+        return human;
+    }
+
+    human.push_str("Next steps:\n");
+    let external = report.storage == crate::board::StorageMode::Repository && !report.global;
+    if external {
+        human.push_str(&format!(
+            "  orbit link {}   # join this Board from each repository\n",
+            report.board_root.display()
+        ));
+    }
+    if report.clients.is_empty() {
+        human.push_str(&format!(
+            "  {:<33}# wire a coding agent\n",
+            "orbit setup <client>"
+        ));
+    }
+    human.push_str(&format!(
+        "  {:<33}# create work on the Board\n",
+        "orbit add \"First task\" -p 1"
+    ));
+    if !report.clients.is_empty() {
+        let agent = report
+            .clients
+            .first()
+            .map(|client| client.name())
+            .unwrap_or("claude");
+        human.push_str(&format!(
+            "  {:<33}# claim one ready task\n",
+            format!("orbit ready --claim --by {agent}")
+        ));
+    }
+    human.push_str(&format!("  {:<33}# see the Board\n", "orbit list"));
+    human
+}
+
+fn init_action_label(preview: bool, action: &str) -> &str {
+    match (preview, action) {
+        (true, "created") => "would create",
+        (true, "updated") => "would update",
+        (true, "removed") => "would remove",
+        _ => action,
+    }
+}
+
+fn init_agent_skip_reason(args: &InitArgs, interactive: bool) -> String {
+    if args.no_agents {
+        return "disabled by --no-agents".to_string();
+    }
+    if let Some(selector) = args.agents.as_deref() {
+        if selector.trim() == "none" {
+            return "disabled by --agents none".to_string();
+        }
+        return "no supported harness detected; pass --agents all or a client list".to_string();
+    }
+    if args.print {
+        return "no supported harness detected; pass --agents all or a client list".to_string();
+    }
+    if !interactive {
+        return "no terminal; pass --agents auto or run `orbit setup <client>`".to_string();
+    }
+    "none selected".to_string()
 }
 
 fn run_init(

@@ -1,6 +1,6 @@
 # Orbit
 
-Orbit is a local work queue for coding agents. Its unit of work is a Task stored as a human-readable file.
+Orbit is a Git-native issue tracker and local work queue for coding agents. Its unit of work is a Task stored as a human-readable file.
 
 ## Language
 

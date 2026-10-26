@@ -1,6 +1,6 @@
 # Command guide
 
-Status: this guide describes v0.8.1, including the Orbit folder
+Status: this guide describes v0.8.2, including the Orbit folder
 ([ADR 0012](./adr/0012-orbit-folder.md)). The unified `init [DIR]` surface,
 resolver, scoped path-free agent setup, and `doctor` migration are implemented.
 
@@ -67,7 +67,7 @@ Creates the Orbit folder (`DIR`, default `./.orbit`) and the Board inside it.
 Inside a Git working tree, `DIR` is a worktree of the repository on the `orbit`
 branch; outside one, it is a standalone Git repository on the same branch.
 The command derives the Task-ID slug, writes the exclusion entry for worktree
-mode, and prints the next step. Re-running on the same `DIR` is safe.
+mode, and prints a numbered setup report. Re-running on the same `DIR` is safe.
 
 **Good fit:** the first time you use Orbit in a repository, when creating a
 shared workspace folder, or when turning a standalone folder into a Board.
@@ -113,6 +113,22 @@ orbit init --slug teramigo       # Task IDs become teramigo-…
 | `--portable-mcp` | MCP configs should call bare `orbit`; the editor's PATH must resolve it. | `orbit init --portable-mcp` |
 | `--mcp-bin PATH` | Record a specific Orbit binary; conflicts with `--portable-mcp`. | `orbit init --mcp-bin /usr/local/bin/orbit` |
 
+Every run ends with the same three-section report:
+
+1. **Board** — whether it was created or reused, its path, branch, storage mode,
+   Task-ID prefix, and the `.git/info/exclude` entry in worktree mode.
+2. **Coding agents** — the harnesses wired, the MCP command written and whether
+   it is absolute or portable, plus every file created, updated, or already
+   unchanged.
+3. **Verify** — `orbit doctor`, followed by the next commands for the selected
+   harnesses or, when none were wired, `orbit setup <client>`. Each next command
+   carries a short explanation of what it does.
+
+`--print` reports the same steps in future tense (`would create`, `would list`)
+and adds the full generated file contents without writing anything. A standalone
+Board always includes `orbit link DIR` in its next steps so member repositories
+can join it.
+
 On the first run that wires an MCP client, a terminal also asks whether MCP
 configs should record an absolute binary path (the default) or the portable
 `orbit` command. The absolute path works for GUI-launched editors without any
@@ -138,9 +154,9 @@ can own one local Board; a second `.orbit` in the same working tree is refused.
 A nested repository maintains its own resolution scope.
 
 Without `--agents`, a terminal asks whether to wire detected harnesses; without
-a terminal, `init` prints the link hint for a standalone Board and the
-`orbit setup` hint. `--agents` accepts `none`, `all`, or a comma-separated client
-list. `init` refuses to create a
+a terminal, `init` writes no agent files and explains how to wire them with
+`orbit setup`. A standalone Board always includes its `orbit link` hint.
+`--agents` accepts `none`, `all`, or a comma-separated client list. `init` refuses to create a
 Board that would compete with an existing repository-local resolution for `DIR`:
 a link, an ancestor `.orbit`, the main checkout's `.orbit`, or a legacy Board is
 reported as `ALREADY_INITIALIZED` before anything is written. `--global` and the

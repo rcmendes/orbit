@@ -155,9 +155,11 @@ fn init_dir_prints_a_next_step() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success());
-    assert!(stdout.contains("initialized Board at"), "{stdout}");
-    assert!(stdout.contains("next: orbit link"), "{stdout}");
-    assert!(stdout.contains("next: orbit setup"), "{stdout}");
+    assert!(stdout.contains("Orbit setup complete."), "{stdout}");
+    assert!(stdout.contains("1. Board (created)"), "{stdout}");
+    assert!(stdout.contains("orbit link"), "{stdout}");
+    assert!(stdout.contains("orbit setup <client>"), "{stdout}");
+    assert!(stdout.contains("3. Verify"), "{stdout}");
 }
 
 #[test]

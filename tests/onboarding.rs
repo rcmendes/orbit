@@ -782,7 +782,8 @@ fn init_without_agents_and_without_a_tty_writes_nothing_and_prints_the_hint() {
     let output = repo.orbit(&["init"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("next: orbit setup"), "{stdout}");
+    assert!(stdout.contains("2. Coding agents (skipped)"), "{stdout}");
+    assert!(stdout.contains("orbit setup <client>"), "{stdout}");
     assert!(!repo.exists("CLAUDE.md"));
     assert!(!repo.exists(".mcp.json"));
     assert!(!repo.exists(".claude/settings.json"));
@@ -917,6 +918,65 @@ fn init_reports_unchanged_artifacts_on_a_second_run() {
         files.iter().all(|file| file["action"] == "unchanged"),
         "{second}"
     );
+    let paths = files
+        .iter()
+        .filter_map(|file| file["path"].as_str())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(&"CLAUDE.md"), "{second}");
+    assert!(paths.contains(&".mcp.json"), "{second}");
+}
+
+#[test]
+fn init_human_report_describes_each_setup_step() {
+    let repo = TestRepo::new();
+
+    let output = repo.orbit(&["init", "--agents", "claude", "--mcp-bin", "orbit"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for expected in [
+        "Orbit setup complete.",
+        "1. Board (created)",
+        "storage  worktree",
+        "exclude  /.orbit/",
+        "2. Coding agents",
+        "wired    claude",
+        "mcp      orbit mcp (portable",
+        "CLAUDE.md",
+        ".mcp.json",
+        "3. Verify",
+        "orbit doctor",
+        "Next steps:",
+        "orbit add \"First task\" -p 1",
+        "orbit ready --claim --by claude",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "missing {expected:?} in:\n{stdout}"
+        );
+    }
+}
+
+#[test]
+fn init_preview_says_nothing_was_written_and_uses_future_tense() {
+    let repo = TestRepo::new();
+
+    let output = repo.orbit(&["init", "--agents", "claude", "--print"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("Orbit setup preview (nothing was written)."),
+        "{stdout}"
+    );
+    assert!(stdout.contains("1. Board (would create)"), "{stdout}");
+    assert!(stdout.contains("would create CLAUDE.md"), "{stdout}");
+    assert!(
+        stdout.contains("Re-run the same command without --print"),
+        "{stdout}"
+    );
+    assert!(!repo.exists("CLAUDE.md"), "preview wrote a file");
+    assert!(!repo.exists(".mcp.json"), "preview wrote a file");
 }
 
 #[test]

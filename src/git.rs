@@ -262,11 +262,7 @@ pub fn worktree_move(repo: &Path, from: &Path, to: &Path) -> Result<()> {
     // so a refusal caused by local changes still stands.
     if !from.exists() {
         if to.exists() {
-            run_git(
-                Some(repo),
-                &["worktree", "repair", to.to_string_lossy().as_ref()],
-                None,
-            )?;
+            repair_moved_worktree(to)?;
             return Ok(());
         }
         return Err(original);
@@ -288,15 +284,39 @@ pub fn worktree_move(repo: &Path, from: &Path, to: &Path) -> Result<()> {
             error,
         )
     })?;
-    if let Err(error) = run_git(
-        Some(repo),
-        &["worktree", "repair", to.to_string_lossy().as_ref()],
-        None,
-    ) {
+    if let Err(error) = repair_moved_worktree(to) {
         let _ = std::fs::rename(to, from);
         return Err(error);
     }
     Ok(())
+}
+
+/// Updates the administrative `gitdir` pointer after a manual worktree move.
+/// This is what `git worktree repair` does, without its Windows failure mode of
+/// trying to enter the old, now-missing worktree first.
+fn repair_moved_worktree(worktree: &Path) -> Result<()> {
+    let dot_git = worktree.join(".git");
+    let contents = std::fs::read_to_string(&dot_git)
+        .map_err(|error| OrbitError::io(format!("read {}", dot_git.display()), error))?;
+    let Some(admin) = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("gitdir: "))
+        .map(str::trim)
+    else {
+        return Err(OrbitError::git(format!(
+            "{} is not a linked worktree",
+            worktree.display()
+        )));
+    };
+    let admin = Path::new(admin);
+    let admin = if admin.is_absolute() {
+        admin.to_path_buf()
+    } else {
+        worktree.join(admin)
+    };
+    let gitdir = admin.join("gitdir");
+    std::fs::write(&gitdir, format!("{}\n", dot_git.display()))
+        .map_err(|error| OrbitError::io(format!("write {}", gitdir.display()), error))
 }
 
 pub fn exclude_entry_for(repo: &Path, dir: &Path) -> Result<String> {

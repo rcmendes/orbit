@@ -606,7 +606,7 @@ A forced `git clean -xdff` that removes `DIR` leaves the `orbit` branch and a st
 | `link DIR` | written | Must already be a Board; a legacy target resolves with a warning. | Refreshes existing managed client files unless `--no-refresh`; no Board path is stored. |
 | `unlink` | removed | The main checkout's `.orbit` becomes active again, if it exists. | Refreshes existing managed client files; no Board path is stored. |
 
-A link warning about a shadowed Board means the repository still has its own Board on disk. Linking did not delete it. A missing target returns `LINK_NOT_FOUND`; the pointer is not repaired automatically. Generated configs record the Orbit binary but no Board path, so moving `DIR` does not stale them; `doctor` reports an older absolute path as `ABSOLUTE_BOARD_PATH`.
+A link warning about a shadowed Board means the repository still has its own Board on disk, at the main checkout's `.orbit` or in the legacy local layout. Linking did not delete it. A missing target returns `LINK_NOT_FOUND`; the pointer is not repaired automatically. A linked legacy Board keeps returning a `LEGACY_LAYOUT` warning until it is migrated. Generated configs record the Orbit binary but no Board path, so moving `DIR` does not stale them; `doctor` reports an older absolute path as `ABSOLUTE_BOARD_PATH`.
 
 ## 5. Task lifecycle
 

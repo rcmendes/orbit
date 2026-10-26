@@ -236,7 +236,7 @@ pub struct Board {
 impl Board {
     pub fn discover(dir_override: Option<&Path>) -> Result<Self> {
         let mut warnings = Vec::new();
-        let root = if let Some(dir) = dir_override {
+        let resolved = if let Some(dir) = dir_override {
             let root = resolve_external(dir)?;
             if !Self::is_board(&root) {
                 return Err(OrbitError::board_not_found());
@@ -249,12 +249,25 @@ impl Board {
                 Some(legacy) => warn_if_ambiguous(&mut warnings, &root, &legacy),
                 None => {}
             }
-            root
+            ResolvedBoard {
+                root,
+                linked: false,
+            }
         } else {
             discover_from_cwd(&mut warnings)?
         };
 
-        let config = Config::load(&root)?;
+        let config = Config::load(&resolved.root)?;
+        if resolved.linked && config.board.storage.is_none() {
+            push_warning(
+                &mut warnings,
+                format!(
+                    "{LEGACY_LAYOUT}: linked Board at {} predates board.storage",
+                    resolved.root.display()
+                ),
+            );
+        }
+        let root = resolved.root;
         let lock_path = if config.board.storage.is_none() {
             legacy_local_lock_for(&root).unwrap_or_else(|| root.join(".lock"))
         } else {
@@ -303,11 +316,15 @@ impl Board {
         if Self::is_board(&nested) {
             return Ok((nested, true));
         }
-        Err(OrbitError::board_not_found())
+        Err(link_not_found(&root))
     }
 
     pub fn link_path() -> Result<PathBuf> {
         Ok(git::common_dir()?.join("orbit").join("link"))
+    }
+
+    pub fn legacy_local_root() -> Result<PathBuf> {
+        Ok(git::common_dir()?.join("orbit").join("board"))
     }
 
     pub fn read_link() -> Result<Option<PathBuf>> {
@@ -732,7 +749,12 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
 }
 
-fn discover_from_cwd(warnings: &mut Vec<String>) -> Result<PathBuf> {
+struct ResolvedBoard {
+    root: PathBuf,
+    linked: bool,
+}
+
+fn discover_from_cwd(warnings: &mut Vec<String>) -> Result<ResolvedBoard> {
     let cwd = std::env::current_dir()
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
     let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
@@ -755,18 +777,24 @@ fn discover_from_cwd(warnings: &mut Vec<String>) -> Result<PathBuf> {
                     ),
                 );
             }
-            return Ok(root);
+            return Ok(ResolvedBoard { root, linked: true });
         }
 
         if let Some(root) = nearest_orbit(&cwd, &repo_root, home.as_deref()) {
             warn_if_ambiguous(warnings, &root, &legacy_local);
-            return Ok(root);
+            return Ok(ResolvedBoard {
+                root,
+                linked: false,
+            });
         }
 
         let main = main_checkout_for(&repo_root, &common).join(".orbit");
         if Board::is_board(&main) {
             warn_if_ambiguous(warnings, &main, &legacy_local);
-            return Ok(main);
+            return Ok(ResolvedBoard {
+                root: main,
+                linked: false,
+            });
         }
         if Board::is_board(&legacy_local) {
             push_warning(
@@ -776,10 +804,16 @@ fn discover_from_cwd(warnings: &mut Vec<String>) -> Result<PathBuf> {
                     legacy_local.display()
                 ),
             );
-            return Ok(legacy_local);
+            return Ok(ResolvedBoard {
+                root: legacy_local,
+                linked: false,
+            });
         }
         if let Some(global) = home.as_deref().and_then(global_board) {
-            return Ok(global);
+            return Ok(ResolvedBoard {
+                root: global,
+                linked: false,
+            });
         }
         return Err(OrbitError::board_not_found());
     }
@@ -789,10 +823,16 @@ fn discover_from_cwd(warnings: &mut Vec<String>) -> Result<PathBuf> {
         .filter(|home| cwd.starts_with(home))
         .unwrap_or_else(|| Path::new("/"));
     if let Some(root) = nearest_orbit(&cwd, stop, home.as_deref()) {
-        return Ok(root);
+        return Ok(ResolvedBoard {
+            root,
+            linked: false,
+        });
     }
     if let Some(global) = home.as_deref().and_then(global_board) {
-        return Ok(global);
+        return Ok(ResolvedBoard {
+            root: global,
+            linked: false,
+        });
     }
     Err(OrbitError::board_not_found())
 }
@@ -951,6 +991,17 @@ fn classify_link_target(path: &Path) -> Result<(PathBuf, bool)> {
             ),
         )
     })
+}
+
+fn link_not_found(path: &Path) -> OrbitError {
+    OrbitError::new(
+        code::LINK_NOT_FOUND,
+        format!(
+            "no Orbit Board found at {}; run `orbit init {}` to create one or pass an existing Orbit folder",
+            path.display(),
+            path.display()
+        ),
+    )
 }
 
 fn warn_if_ambiguous(warnings: &mut Vec<String>, root: &Path, legacy: &Path) {

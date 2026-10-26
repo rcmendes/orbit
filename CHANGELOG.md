@@ -2,7 +2,7 @@
 
 ## 0.8.1 - 2026-10-26
 
-Supersedes 0.8.0, which remains published on npm but failed Windows CI. This release contains the Orbit-folder feature set from 0.8.0 plus:
+Supersedes 0.8.0, which remains published and deprecated on npm after failing Windows CI. This release contains the Orbit-folder feature set from 0.8.0 plus:
 
 - Hardened `doctor --migrate`: it refuses to remove a legacy Board when task or comment Markdown diverges, never removes a dirty worktree, re-attaches an orphan `orbit` worktree from any command, honors `--dir` in `doctor --fix`, warns when other repositories still link to a moved workspace, escapes Git exclude patterns, and prints the discovery trace when a repair fails.
 - Legacy worktree moves now fall back to a directory rename that updates the worktree's `gitdir` pointer directly when Git for Windows refuses `git worktree move`, so migration works on Windows.

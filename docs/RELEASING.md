@@ -5,7 +5,7 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 ## Released versions
 
 - `v0.8.1` — latest
-- `v0.8.0` — superseded (Windows CI failure; npm only)
+- `v0.8.0` — deprecated (Windows CI failure; npm only)
 - `v0.7.0`
 - `v0.6.0`
 - `v0.5.0`
@@ -81,7 +81,7 @@ Both scripts run in a temporary Git repository with a temporary `HOME`/`USERPROF
 
 ## Known issues
 
-- `v0.8.0` failed Windows CI because the doctor tests used Unix-only absolute paths and `git worktree move` could not move a clean worktree out of `.git`. Its GitHub release and tag were removed. The npm package remains published but is superseded by `v0.8.1`; the bypass-2FA token cannot unpublish it, so do not remove `v0.8.0` by tag.
+- `v0.8.0` failed Windows CI because the doctor tests used Unix-only absolute paths and `git worktree move` could not move a clean worktree out of `.git`. Its GitHub release and tag were removed. The npm package remains published and deprecated in favor of `v0.8.1`; the bypass-2FA token cannot unpublish it, so fix a bad version by publishing a new one rather than trying to remove it by tag.
 - The `v0.7.0` tag's CI check is red on Windows because `tests/slug_migrate.rs` asserted an LF-only YAML dependency line; Git checked the migrated file out with CRLF. The Release workflow and its Windows artifact smoke passed, and npm published successfully. The test-only fix is on `main` after the tag.
 - The `v0.1.0` tag's CI check is red on Windows because it predates the Unix-only lock-test import fix. Its Release workflow succeeded and its artifacts are valid; `v0.2.0` has the fix.
 - The `v0.4.0` tag's CI check is red on Windows because the new workspace tests compared `std::fs::canonicalize` verbatim paths with the CLI's `dunce` paths. The Release workflow and the Windows artifact smoke passed; the test-only fix is on `main` after the tag.

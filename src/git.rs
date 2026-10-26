@@ -188,14 +188,71 @@ pub fn worktree_prune(repo: &Path) -> Result<()> {
 }
 
 pub fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>> {
+    Ok(worktree_records(repo)?
+        .into_iter()
+        .map(|record| record.path)
+        .collect())
+}
+
+#[derive(Debug, Clone)]
+pub struct WorktreeRecord {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+    pub missing: bool,
+}
+
+/// Parses `git worktree list --porcelain`, including worktrees whose directory
+/// disappeared and Git marks as `prunable`.
+pub fn worktree_records(repo: &Path) -> Result<Vec<WorktreeRecord>> {
     let output = run_git(Some(repo), &["worktree", "list", "--porcelain"], None)?;
-    let mut paths = Vec::new();
+    let mut records = Vec::new();
+    let mut path = None;
+    let mut branch = None;
+    let mut missing = false;
+
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            paths.push(PathBuf::from(path));
+        if let Some(value) = line.strip_prefix("worktree ") {
+            if let Some(path) = path.take() {
+                records.push(WorktreeRecord {
+                    path,
+                    branch: branch.take(),
+                    missing,
+                });
+            }
+            path = Some(PathBuf::from(value));
+            missing = false;
+        } else if let Some(value) = line.strip_prefix("branch ") {
+            branch = Some(value.trim_start_matches("refs/heads/").to_string());
+        } else if line.starts_with("prunable") {
+            missing = true;
         }
     }
-    Ok(paths)
+    if let Some(path) = path {
+        records.push(WorktreeRecord {
+            path,
+            branch,
+            missing,
+        });
+    }
+
+    for record in &mut records {
+        record.missing |= !record.path.exists();
+    }
+    Ok(records)
+}
+
+pub fn worktree_move(repo: &Path, from: &Path, to: &Path) -> Result<()> {
+    run_git(
+        Some(repo),
+        &[
+            "worktree",
+            "move",
+            from.to_string_lossy().as_ref(),
+            to.to_string_lossy().as_ref(),
+        ],
+        None,
+    )?;
+    Ok(())
 }
 
 pub fn exclude_entry_for(repo: &Path, dir: &Path) -> Result<String> {

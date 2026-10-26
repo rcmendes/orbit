@@ -628,9 +628,13 @@ pub struct CommentListArgs {
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Remove stale temp files.
-    #[arg(long)]
+    /// Remove stale temp files and re-attach an orphaned orbit worktree.
+    #[arg(long, conflicts_with = "migrate")]
     pub fix: bool,
+
+    /// Move a legacy Board to the Orbit folder. Resumable.
+    #[arg(long, conflicts_with = "fix")]
+    pub migrate: bool,
 }
 
 #[derive(Debug, Args)]

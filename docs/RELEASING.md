@@ -4,8 +4,9 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.8.0` — latest
-- `v0.7.0` — previous release
+- `v0.8.1` — latest
+- `v0.8.0` — superseded (Windows CI failure; npm only)
+- `v0.7.0`
 - `v0.6.0`
 - `v0.5.0`
 - `v0.4.0`
@@ -17,7 +18,7 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 1. Ensure the `@rcmendes` npm scope exists and is owned by the publishing account. No organization is needed when `rcmendes` is the npm username.
 2. Create an npm granular access token with read/write access to `@rcmendes`.
-3. Enable **Bypass 2FA** on the token. Without it, `npm publish` fails with `E403` even when the token has publish permission.
+3. Enable **Bypass 2FA** on the token. Without it, `npm publish` fails with `E403` even when the token has publish permission. npm also rejects `npm unpublish` with a bypass-2FA granular token (`E403`), so a bad version must be superseded by a new version or unpublished interactively with an OTP.
 4. Add the token to GitHub Actions as the `NPM_TOKEN` repository secret:
 
    ```bash
@@ -37,13 +38,13 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
 
 ## Cut a release
 
-1. Update `version` in `Cargo.toml` and add a matching heading to `../CHANGELOG.md` (for example `## 0.8.0 - 2026-10-26`). The changelog must stay at the repository root: cargo-dist only discovers release-note entries there.
+1. Update `version` in `Cargo.toml` and add a matching heading to `../CHANGELOG.md` (for example `## 0.8.1 - 2026-10-26`). The changelog must stay at the repository root: cargo-dist only discovers release-note entries there.
 2. Commit the changes.
 3. Tag and push:
 
    ```bash
-   git tag v0.8.0
-   git push origin v0.8.0
+   git tag v0.8.1
+   git push origin v0.8.1
    ```
 
 4. The `Release` workflow:
@@ -55,7 +56,7 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
 5. Trigger the post-release smoke check immediately after the Release workflow finishes:
 
    ```bash
-   gh workflow run "Install smoke" --ref v0.8.0
+   gh workflow run "Install smoke" --ref v0.8.1
    ```
 
    A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init --agents auto` to wire the detected harnesses, `orbit add`, `orbit ready`, and a real MCP initialize/tools-list handshake through the generated agent command. A red run means the published artifacts are broken even though the release exists.
@@ -76,9 +77,11 @@ Both scripts run in a temporary Git repository with a temporary `HOME`/`USERPROF
 - The first publish of a new package can briefly create a `0.0.0-stage` placeholder while npm processes the upload. It is not the `latest` tag; the real version appears after processing.
 - Push tags one at a time, oldest first, so npm's `latest` tag ends on the newest version.
 - A published npm version is immutable. Fix a bad release by publishing a new version, not by moving its tag.
+- npm rejects unpublish with a granular token that bypasses 2FA (`E403`). Use a new version, or unpublish interactively with an OTP within npm's 72-hour window.
 
 ## Known issues
 
+- `v0.8.0` failed Windows CI because the doctor tests used Unix-only absolute paths and `git worktree move` could not move a clean worktree out of `.git`. Its GitHub release and tag were removed. The npm package remains published but is superseded by `v0.8.1`; the bypass-2FA token cannot unpublish it, so do not remove `v0.8.0` by tag.
 - The `v0.7.0` tag's CI check is red on Windows because `tests/slug_migrate.rs` asserted an LF-only YAML dependency line; Git checked the migrated file out with CRLF. The Release workflow and its Windows artifact smoke passed, and npm published successfully. The test-only fix is on `main` after the tag.
 - The `v0.1.0` tag's CI check is red on Windows because it predates the Unix-only lock-test import fix. Its Release workflow succeeded and its artifacts are valid; `v0.2.0` has the fix.
 - The `v0.4.0` tag's CI check is red on Windows because the new workspace tests compared `std::fs::canonicalize` verbatim paths with the CLI's `dunce` paths. The Release workflow and the Windows artifact smoke passed; the test-only fix is on `main` after the tag.

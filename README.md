@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.8.0`](https://github.com/rcmendes/orbit/releases/tag/v0.8.0) is the latest release. It introduces the **Orbit folder**: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.8.1`](https://github.com/rcmendes/orbit/releases/tag/v0.8.1) is the latest release. It introduces the **Orbit folder**: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -856,7 +856,7 @@ See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md) and [ADR 0010](./docs/ad
 
 ## Install details
 
-Prebuilt binaries are the primary path. `v0.8.0` is the latest release. Every persistent route requires Git 2.31+ at runtime.
+Prebuilt binaries are the primary path. `v0.8.1` is the latest release. Every persistent route requires Git 2.31+ at runtime.
 
 | Route | Prerequisites | Command |
 | --- | --- | --- |

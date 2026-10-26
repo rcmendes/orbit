@@ -31,6 +31,19 @@ fn issue_codes(value: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+fn write_absolute_board_config(path: &Path) {
+    let board = tempfile::tempdir().unwrap();
+    let value = serde_json::json!({
+        "mcpServers": {
+            "orbit": {
+                "command": "orbit",
+                "args": ["--dir", board.path().to_str().unwrap(), "mcp"]
+            }
+        }
+    });
+    std::fs::write(path, value.to_string()).unwrap();
+}
+
 fn write_legacy_board_config(board: &Path, prefix: &str) {
     std::fs::create_dir_all(board.join("tasks")).unwrap();
     std::fs::create_dir_all(board.join("comments")).unwrap();
@@ -62,6 +75,17 @@ fn migrate_hidden_board(repo: &TestRepo) {
         config.replace("storage = \"worktree\"\n", ""),
     )
     .unwrap();
+    for args in [
+        &["add", "config.toml"][..],
+        &["commit", "-q", "-m", "legacy config"][..],
+    ] {
+        let output = repo.git_in(&old, args);
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -268,11 +292,7 @@ fn doctor_reports_storage_mismatch() {
 fn doctor_reports_absolute_board_paths_in_manifests() {
     let repo = TestRepo::new();
     repo.init();
-    std::fs::write(
-        repo.path().join(".mcp.json"),
-        r#"{"mcpServers":{"orbit":{"command":"orbit","args":["--dir","/tmp/board","mcp"]}}}"#,
-    )
-    .unwrap();
+    write_absolute_board_config(&repo.path().join(".mcp.json"));
 
     let value = doctor_json(&repo, &["doctor", "--json"]);
 
@@ -283,11 +303,7 @@ fn doctor_reports_absolute_board_paths_in_manifests() {
 fn doctor_reports_absolute_paths_in_user_scope_configs() {
     let repo = TestRepo::new();
     repo.init();
-    std::fs::write(
-        repo.home().join(".claude.json"),
-        r#"{"mcpServers":{"orbit":{"command":"orbit","args":["--dir","/tmp/board","mcp"]}}}"#,
-    )
-    .unwrap();
+    write_absolute_board_config(&repo.home().join(".claude.json"));
 
     let value = doctor_json(&repo, &["doctor", "--json"]);
 

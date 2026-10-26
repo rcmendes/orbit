@@ -242,7 +242,7 @@ pub fn worktree_records(repo: &Path) -> Result<Vec<WorktreeRecord>> {
 }
 
 pub fn worktree_move(repo: &Path, from: &Path, to: &Path) -> Result<()> {
-    run_git(
+    let original = match run_git(
         Some(repo),
         &[
             "worktree",
@@ -251,7 +251,51 @@ pub fn worktree_move(repo: &Path, from: &Path, to: &Path) -> Result<()> {
             to.to_string_lossy().as_ref(),
         ],
         None,
-    )?;
+    ) {
+        Ok(_) => return Ok(()),
+        Err(error) => error,
+    };
+
+    // Git for Windows can refuse to rename a worktree out of `.git` with a
+    // permission error even when the worktree is clean. Move the directory and
+    // repair the worktree metadata instead. Only do this for a clean worktree,
+    // so a refusal caused by local changes still stands.
+    if !from.exists() {
+        if to.exists() {
+            run_git(
+                Some(repo),
+                &["worktree", "repair", to.to_string_lossy().as_ref()],
+                None,
+            )?;
+            return Ok(());
+        }
+        return Err(original);
+    }
+    if to.exists() {
+        return Err(original);
+    }
+    let status = run_git(Some(from), &["status", "--porcelain"], None)?;
+    if !status.stdout.is_empty() {
+        return Err(original);
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| OrbitError::io(format!("create {}", parent.display()), error))?;
+    }
+    std::fs::rename(from, to).map_err(|error| {
+        OrbitError::io(
+            format!("move worktree from {} to {}", from.display(), to.display()),
+            error,
+        )
+    })?;
+    if let Err(error) = run_git(
+        Some(repo),
+        &["worktree", "repair", to.to_string_lossy().as_ref()],
+        None,
+    ) {
+        let _ = std::fs::rename(to, from);
+        return Err(error);
+    }
     Ok(())
 }
 

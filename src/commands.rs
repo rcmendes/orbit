@@ -8,15 +8,15 @@ use crate::atomic;
 use crate::board::Board;
 use crate::cli::{
     AddArgs, CancelArgs, ClaimArgs, Cli, Command, CommentAddArgs, CommentArgs, CommentCommand,
-    CommentListArgs, DeleteArgs, DependArgs, DoctorArgs, DoneArgs, HeartbeatArgs, InitArgs,
-    LabelArgs, LabelCommand, LabelMutationArgs, LinkArgs, ListArgs, PrimeArgs, ReadyArgs,
-    ReleaseArgs, ReopenArgs, ShowArgs, SlugArgs, SlugCommand, SlugMigrateArgs, TreeArgs,
-    UndependArgs, UpdateArgs,
+    CommentListArgs, DeleteArgs, DependArgs, DoneArgs, HeartbeatArgs, InitArgs, LabelArgs,
+    LabelCommand, LabelMutationArgs, LinkArgs, ListArgs, PrimeArgs, ReadyArgs, ReleaseArgs,
+    ReopenArgs, ShowArgs, SlugArgs, SlugCommand, SlugMigrateArgs, TreeArgs, UndependArgs,
+    UpdateArgs,
 };
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::CommitOutcome;
-use crate::graph::{self, Graph, Issue, LoadMode};
+use crate::graph::{self, Graph, LoadMode};
 use crate::migrate::{self, Plan};
 use crate::setup::COMPLETION_LINE;
 use crate::slug;
@@ -77,10 +77,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Setup(args) => crate::setup::run(args, dir.as_deref()),
         Command::Mcp => crate::mcp::serve(dir.as_deref())
             .map(|()| crate::output::CommandOutput::new(Value::Null, "").with_silent()),
-        Command::Doctor(args) => {
-            let exclusive = args.fix;
-            with_board(dir.as_deref(), exclusive, |board| cmd_doctor(board, args))
-        }
+        Command::Doctor(args) => crate::doctor::run(dir.as_deref(), args),
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
     }
 }
@@ -1985,222 +1982,6 @@ fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {
         snapshot,
         format!("exported {task_count} tasks and {comment_count} comments (schema 2)"),
     ))
-}
-
-fn cmd_doctor(board: &Board, args: DoctorArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, mut issues) = Graph::load(board, LoadMode::Lenient)?;
-    let prefix_mismatch = issues
-        .iter()
-        .any(|issue| issue.code == code::PREFIX_MISMATCH);
-    let mut warnings = Vec::new();
-
-    match board.comment_ids() {
-        Ok(ids) => {
-            for id in ids {
-                if !graph.tasks.contains_key(&id) {
-                    issues.push(Issue::new(
-                        code::ORPHAN_COMMENT,
-                        Some(&id),
-                        format!("comments/{id}.md has no matching task"),
-                    ));
-                    continue;
-                }
-                if let Err(error) = board.read_comments(&id) {
-                    issues.push(Issue::new(error.code, Some(&id), error.message));
-                }
-            }
-        }
-        Err(error) => {
-            issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message));
-        }
-    }
-
-    for task in graph.stale_tasks() {
-        warnings.push(format!(
-            "{}: stale claim by {}",
-            task.id,
-            task.holder().unwrap_or("unknown")
-        ));
-    }
-
-    for task in graph.tasks.values() {
-        let no_times = task
-            .front
-            .claim
-            .as_ref()
-            .is_some_and(|claim| !claim.has_times());
-        if no_times || task.front.stray_claim_times.is_some() {
-            warnings.push(format!("{}: claim metadata is incomplete", task.id));
-        }
-
-        // A prefix mismatch means the IDs use the observed prefix; comparing
-        // them with the configured prefix would flag every SubTask.
-        if !prefix_mismatch {
-            let encoded_parent = task::parent_id_from_id(&task.id, &board.config.id.prefix);
-            match (&task.front.parent, encoded_parent) {
-                (Some(parent), Some(encoded)) if parent != &encoded => {
-                    issues.push(Issue::new(
-                        code::PARENT_MISMATCH,
-                        Some(&task.id),
-                        format!(
-                            "{} has parent {parent} but its ID encodes {encoded}",
-                            task.id
-                        ),
-                    ));
-                }
-                (None, Some(encoded)) => {
-                    issues.push(Issue::new(
-                        code::PARENT_MISMATCH,
-                        Some(&task.id),
-                        format!(
-                            "{} is a SubTask ID but has no parent; expected {encoded}",
-                            task.id
-                        ),
-                    ));
-                }
-                (Some(parent), None) => {
-                    issues.push(Issue::new(
-                        code::PARENT_MISMATCH,
-                        Some(&task.id),
-                        format!(
-                            "{} has parent {parent} but its ID is not a SubTask ID",
-                            task.id
-                        ),
-                    ));
-                }
-                _ => {}
-            }
-        }
-
-        if task.front.status == Status::Done {
-            let unfinished = graph.blocking_ids(task);
-            if !unfinished.is_empty() {
-                warnings.push(format!(
-                    "{} is done but has unfinished dependencies: {}",
-                    task.id,
-                    unfinished.join(", ")
-                ));
-            }
-            let open_subtasks = graph.open_children(&task.id);
-            if !open_subtasks.is_empty() {
-                warnings.push(format!(
-                    "{} is done but has open SubTasks: {}",
-                    task.id,
-                    open_subtasks.join(", ")
-                ));
-            }
-        }
-    }
-
-    match crate::git::status_porcelain(&board.root) {
-        Ok(status) if !status.trim().is_empty() => {
-            warnings.push("the board has uncommitted changes; run `orbit sync`".to_string());
-        }
-        Ok(_) => {}
-        Err(error) => issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message)),
-    }
-
-    match crate::git::current_branch(&board.root) {
-        Ok(branch) if branch != board.config.board.branch => issues.push(Issue::new(
-            code::BOARD_CORRUPT,
-            None,
-            format!(
-                "board is on branch {branch}, expected {}",
-                board.config.board.branch
-            ),
-        )),
-        Ok(_) => {}
-        Err(error) => issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message)),
-    }
-
-    let mut stale_temps = atomic::stale_temps(&board.tasks_dir(), std::time::Duration::ZERO);
-    stale_temps.extend(atomic::stale_temps(
-        &board.comments_dir(),
-        std::time::Duration::ZERO,
-    ));
-    if !stale_temps.is_empty() && !args.fix {
-        warnings.push(format!(
-            "{} stale temp file(s) in the board; run `orbit doctor --fix`",
-            stale_temps.len()
-        ));
-    }
-
-    let fixed = if args.fix {
-        let mut fixed = atomic::clean_stale_temps(&board.tasks_dir(), std::time::Duration::ZERO)?;
-        fixed.extend(atomic::clean_stale_temps(
-            &board.comments_dir(),
-            std::time::Duration::ZERO,
-        )?);
-        fixed
-            .into_iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-
-    let orbit_name = if cfg!(windows) { "orbit.exe" } else { "orbit" };
-    let running = std::env::current_exe()
-        .ok()
-        .and_then(|path| dunce::canonicalize(path).ok());
-    let found =
-        crate::setup::find_on_path(orbit_name).and_then(|path| dunce::canonicalize(path).ok());
-    let on_path = match (&found, &running) {
-        (Some(found), Some(running)) => found == running,
-        (Some(_), None) => true,
-        _ => false,
-    };
-    if !on_path {
-        let repo_root =
-            crate::git::repo_root().unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-        if crate::setup::has_orbit_hook(&repo_root) {
-            warnings.push(
-                "`orbit` is not the binary on PATH; the Claude SessionStart hook will not find it"
-                    .to_string(),
-            );
-        }
-    }
-
-    let healthy = issues.is_empty();
-    let mut human = String::new();
-    if healthy {
-        human.push_str("orbit doctor: healthy\n");
-    } else {
-        human.push_str(&format!("orbit doctor: {} issue(s)\n", issues.len()));
-        for issue in &issues {
-            human.push_str(&format!(
-                "- [{}] {}{}\n",
-                issue.code,
-                issue
-                    .task
-                    .as_ref()
-                    .map(|task| format!("{task}: "))
-                    .unwrap_or_default(),
-                issue.message
-            ));
-        }
-    }
-    human.push_str(&format!("tasks: {}\n", graph.tasks.len()));
-    for warning in &warnings {
-        human.push_str(&format!("warning: {warning}\n"));
-    }
-    for path in &fixed {
-        human.push_str(&format!("fixed: {path}\n"));
-    }
-
-    let output = crate::output::CommandOutput::new(
-        json!({
-            "healthy": healthy,
-            "tasks": graph.tasks.len(),
-            "issues": issues,
-            "warnings": warnings,
-            "path_on_path": on_path,
-            "fixed": fixed,
-        }),
-        human,
-    )
-    .with_exit_code(if healthy { 0 } else { 1 });
-    Ok(output)
 }
 
 fn cmd_sync(board: &Board) -> Result<crate::output::CommandOutput> {

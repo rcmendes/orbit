@@ -11,6 +11,108 @@ use crate::task;
 
 pub const LEGACY_LAYOUT: &str = "LEGACY_LAYOUT";
 pub const AMBIGUOUS_BOARD: &str = "AMBIGUOUS_BOARD";
+pub const ORPHAN_WORKTREE: &str = "ORPHAN_WORKTREE";
+pub const STORAGE_MISMATCH: &str = "STORAGE_MISMATCH";
+pub const ABSOLUTE_BOARD_PATH: &str = "ABSOLUTE_BOARD_PATH";
+
+/// One candidate in the Board-resolution order. `doctor` prints the whole
+/// trace so a missing Board names every place it looked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoverySource {
+    Dir,
+    Link,
+    Nearest,
+    MainCheckout,
+    LegacyLocal,
+    Global,
+    None,
+}
+
+impl DiscoverySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dir => "dir",
+            Self::Link => "link",
+            Self::Nearest => "nearest",
+            Self::MainCheckout => "main_checkout",
+            Self::LegacyLocal => "legacy_local",
+            Self::Global => "global",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveryStep {
+    pub source: DiscoverySource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    pub found: bool,
+    pub selected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl DiscoveryStep {
+    fn new(source: DiscoverySource, path: Option<PathBuf>) -> Self {
+        Self {
+            source,
+            found: path.as_deref().is_some_and(Board::is_board),
+            path,
+            selected: false,
+            note: None,
+        }
+    }
+
+    fn missing(source: DiscoverySource) -> Self {
+        Self {
+            source,
+            path: None,
+            found: false,
+            selected: false,
+            note: None,
+        }
+    }
+}
+
+/// The full resolution result. Commands only need `root`; `doctor` also uses
+/// the trace and the layout findings without turning a missing Board into an
+/// error.
+#[derive(Debug)]
+pub struct Discovery {
+    pub root: Option<PathBuf>,
+    pub source: DiscoverySource,
+    pub steps: Vec<DiscoveryStep>,
+    pub warnings: Vec<String>,
+    pub legacy: Option<String>,
+    pub ambiguous: Option<(PathBuf, PathBuf)>,
+    pub error: Option<OrbitError>,
+}
+
+impl Default for Discovery {
+    fn default() -> Self {
+        Self {
+            root: None,
+            source: DiscoverySource::None,
+            steps: Vec::new(),
+            warnings: Vec::new(),
+            legacy: None,
+            ambiguous: None,
+            error: None,
+        }
+    }
+}
+
+/// The repository facts shared by discovery, orphan repair, and migration.
+#[derive(Debug, Clone)]
+pub struct RepoContext {
+    pub cwd: PathBuf,
+    pub repo_root: PathBuf,
+    pub common_dir: PathBuf,
+    pub main_checkout: PathBuf,
+    pub legacy_local_board: PathBuf,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -235,39 +337,31 @@ pub struct Board {
 
 impl Board {
     pub fn discover(dir_override: Option<&Path>) -> Result<Self> {
-        let mut warnings = Vec::new();
-        let resolved = if let Some(dir) = dir_override {
-            let root = resolve_external(dir)?;
-            if !Self::is_board(&root) {
-                return Err(OrbitError::board_not_found());
-            }
-            match legacy_local_board_for(&root) {
-                Some(legacy) if legacy == root => push_warning(
-                    &mut warnings,
-                    format!("{LEGACY_LAYOUT}: using legacy Board at {}", root.display()),
-                ),
-                Some(legacy) => warn_if_ambiguous(&mut warnings, &root, &legacy),
-                None => {}
-            }
-            ResolvedBoard {
-                root,
-                linked: false,
-            }
-        } else {
-            discover_from_cwd(&mut warnings)?
+        let discovery = Self::discovery(dir_override);
+        if let Some(error) = discovery.error {
+            return Err(error);
+        }
+        let Some(root) = discovery.root else {
+            return Err(OrbitError::board_not_found());
         };
-
-        let config = Config::load(&resolved.root)?;
-        if resolved.linked && config.board.storage.is_none() {
+        let linked = matches!(discovery.source, DiscoverySource::Link);
+        let mut board = Self::at_root(root, discovery.warnings)?;
+        if linked && board.config.board.storage.is_none() {
             push_warning(
-                &mut warnings,
+                &mut board.warnings,
                 format!(
                     "{LEGACY_LAYOUT}: linked Board at {} predates board.storage",
-                    resolved.root.display()
+                    board.root.display()
                 ),
             );
         }
-        let root = resolved.root;
+        Ok(board)
+    }
+
+    /// Loads a Board whose root is already known. The caller decides how the
+    /// path was found; discovery warnings are carried through unchanged.
+    pub fn at_root(root: PathBuf, warnings: Vec<String>) -> Result<Self> {
+        let config = Config::load(&root)?;
         let lock_path = if config.board.storage.is_none() {
             legacy_local_lock_for(&root).unwrap_or_else(|| root.join(".lock"))
         } else {
@@ -279,6 +373,42 @@ impl Board {
             config,
             warnings,
         })
+    }
+
+    /// Resolves the Board without failing when none exists. Every candidate is
+    /// recorded in order so `doctor` can print the trace.
+    pub fn discovery(dir_override: Option<&Path>) -> Discovery {
+        let mut discovery = Discovery::default();
+        if let Some(dir) = dir_override {
+            resolve_explicit(dir, &mut discovery);
+            return discovery;
+        }
+        resolve_from_cwd(&mut discovery);
+        discovery
+    }
+
+    /// Repository facts for the current directory, if it is inside a working
+    /// tree. Used by `doctor` and migration when there is no Board to resolve.
+    pub fn repo_context() -> Option<RepoContext> {
+        let cwd = std::env::current_dir().ok()?;
+        let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
+        Self::repo_context_at(&cwd).ok().flatten()
+    }
+
+    pub fn repo_context_at(start: &Path) -> Result<Option<RepoContext>> {
+        let Some(repo_root) = git::toplevel_containing(start) else {
+            return Ok(None);
+        };
+        let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
+        let common_dir = git::common_dir_at(&repo_root)?;
+        let main_checkout = main_checkout_for(&repo_root, &common_dir);
+        Ok(Some(RepoContext {
+            cwd: start.to_path_buf(),
+            legacy_local_board: legacy_local_path(&common_dir),
+            common_dir,
+            main_checkout,
+            repo_root,
+        }))
     }
 
     pub fn local_root() -> Result<PathBuf> {
@@ -749,92 +879,191 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
 }
 
-struct ResolvedBoard {
-    root: PathBuf,
-    linked: bool,
+fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
+    let root = match resolve_external(dir) {
+        Ok(root) => root,
+        Err(error) => {
+            discovery
+                .steps
+                .push(DiscoveryStep::missing(DiscoverySource::Dir));
+            discovery.error = Some(error);
+            return;
+        }
+    };
+    let mut step = DiscoveryStep::new(DiscoverySource::Dir, Some(root.clone()));
+    if !step.found {
+        discovery.steps.push(step);
+        discovery.error = Some(OrbitError::board_not_found());
+        return;
+    }
+
+    step.selected = true;
+    discovery.root = Some(root.clone());
+    discovery.source = DiscoverySource::Dir;
+    match legacy_local_board_for(&root) {
+        Some(legacy) if legacy == root => {
+            let warning = format!("{LEGACY_LAYOUT}: using legacy Board at {}", root.display());
+            discovery.legacy = Some(warning.clone());
+            push_warning(&mut discovery.warnings, warning);
+        }
+        Some(legacy) => {
+            discovery.ambiguous = Some((root.clone(), legacy.clone()));
+            warn_if_ambiguous(&mut discovery.warnings, &root, &legacy);
+        }
+        None => {}
+    }
+    discovery.steps.push(step);
 }
 
-fn discover_from_cwd(warnings: &mut Vec<String>) -> Result<ResolvedBoard> {
-    let cwd = std::env::current_dir()
-        .map_err(|error| OrbitError::io("resolve current directory", error))?;
-    let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
+fn resolve_from_cwd(discovery: &mut Discovery) {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => dunce::canonicalize(&cwd).unwrap_or(cwd),
+        Err(error) => {
+            discovery.error = Some(OrbitError::io("resolve current directory", error));
+            return;
+        }
+    };
     let home = home_dir();
 
     if let Some(repo_root) = git::toplevel_containing(&cwd) {
         let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
-        let common = git::common_dir_at(&repo_root)?;
+        let common = match git::common_dir_at(&repo_root) {
+            Ok(common) => common,
+            Err(error) => {
+                discovery.error = Some(error);
+                return;
+            }
+        };
         let link = common.join("orbit").join("link");
         let legacy_local = legacy_local_path(&common);
-
-        if let Some(target) = read_link_file(&link)? {
-            let (root, nested) = classify_link_target(&target)?;
-            if nested {
-                push_warning(
-                    warnings,
-                    format!(
-                        "{LEGACY_LAYOUT}: linked Board is nested at {}",
-                        root.display()
-                    ),
-                );
-            }
-            return Ok(ResolvedBoard { root, linked: true });
-        }
-
-        if let Some(root) = nearest_orbit(&cwd, &repo_root, home.as_deref()) {
-            warn_if_ambiguous(warnings, &root, &legacy_local);
-            return Ok(ResolvedBoard {
-                root,
-                linked: false,
-            });
-        }
-
+        let nearest = nearest_orbit(&cwd, &repo_root, home.as_deref());
         let main = main_checkout_for(&repo_root, &common).join(".orbit");
-        if Board::is_board(&main) {
-            warn_if_ambiguous(warnings, &main, &legacy_local);
-            return Ok(ResolvedBoard {
-                root: main,
-                linked: false,
-            });
+        let global = home.as_deref().and_then(global_board);
+
+        let mut link_root = None;
+        let mut link_nested = false;
+        match read_link_file(&link) {
+            Ok(Some(target)) => match classify_link_target(&target) {
+                Ok((root, nested)) => {
+                    link_root = Some(root);
+                    link_nested = nested;
+                }
+                Err(error) => discovery.error = Some(error),
+            },
+            Ok(None) => {}
+            Err(error) => discovery.error = Some(error),
         }
-        if Board::is_board(&legacy_local) {
-            push_warning(
-                warnings,
-                format!(
-                    "{LEGACY_LAYOUT}: using legacy Board at {}",
-                    legacy_local.display()
-                ),
+
+        discovery.steps.push(DiscoveryStep::new(
+            DiscoverySource::Link,
+            Some(link.clone()),
+        ));
+        let link_step = discovery.steps.len() - 1;
+        discovery.steps[link_step].found = link_root.is_some();
+        discovery.steps.push(DiscoveryStep::new(
+            DiscoverySource::Nearest,
+            nearest.clone(),
+        ));
+        discovery.steps.push(DiscoveryStep::new(
+            DiscoverySource::MainCheckout,
+            Some(main.clone()),
+        ));
+        discovery.steps.push(DiscoveryStep::new(
+            DiscoverySource::LegacyLocal,
+            Some(legacy_local.clone()),
+        ));
+        discovery
+            .steps
+            .push(DiscoveryStep::missing(DiscoverySource::Global));
+        if let Some(global) = &global {
+            let index = discovery.steps.len() - 1;
+            discovery.steps[index] =
+                DiscoveryStep::new(DiscoverySource::Global, Some(global.clone()));
+        }
+
+        let selected = if discovery.error.is_some() {
+            None
+        } else if let Some(root) = link_root {
+            if link_nested {
+                let warning = format!(
+                    "{LEGACY_LAYOUT}: linked Board is nested at {}",
+                    root.display()
+                );
+                discovery.legacy = Some(warning.clone());
+                push_warning(&mut discovery.warnings, warning);
+            }
+            Some((DiscoverySource::Link, root))
+        } else if let Some(root) = nearest {
+            warn_if_ambiguous(&mut discovery.warnings, &root, &legacy_local);
+            Some((DiscoverySource::Nearest, root))
+        } else if Board::is_board(&main) {
+            warn_if_ambiguous(&mut discovery.warnings, &main, &legacy_local);
+            Some((DiscoverySource::MainCheckout, main.clone()))
+        } else if Board::is_board(&legacy_local) {
+            let warning = format!(
+                "{LEGACY_LAYOUT}: using legacy Board at {}",
+                legacy_local.display()
             );
-            return Ok(ResolvedBoard {
-                root: legacy_local,
-                linked: false,
-            });
+            discovery.legacy = Some(warning.clone());
+            push_warning(&mut discovery.warnings, warning);
+            Some((DiscoverySource::LegacyLocal, legacy_local.clone()))
+        } else {
+            global.map(|global| (DiscoverySource::Global, global))
+        };
+
+        if Board::is_board(&legacy_local) {
+            let new_local = [&main].into_iter().find(|path| Board::is_board(path));
+            if let Some(new_local) = new_local
+                && new_local != &legacy_local
+            {
+                discovery.ambiguous = Some((new_local.clone(), legacy_local.clone()));
+            }
         }
-        if let Some(global) = home.as_deref().and_then(global_board) {
-            return Ok(ResolvedBoard {
-                root: global,
-                linked: false,
-            });
+
+        match selected {
+            Some((source, root)) => {
+                discovery.source = source;
+                discovery.root = Some(root);
+                for step in &mut discovery.steps {
+                    if step.source == source {
+                        step.selected = true;
+                        break;
+                    }
+                }
+            }
+            None if discovery.error.is_none() => {
+                discovery.error = Some(OrbitError::board_not_found());
+            }
+            None => {}
         }
-        return Err(OrbitError::board_not_found());
+        return;
     }
 
     let stop = home
         .as_deref()
         .filter(|home| cwd.starts_with(home))
         .unwrap_or_else(|| Path::new("/"));
-    if let Some(root) = nearest_orbit(&cwd, stop, home.as_deref()) {
-        return Ok(ResolvedBoard {
-            root,
-            linked: false,
-        });
+    let nearest = nearest_orbit(&cwd, stop, home.as_deref());
+    let global = home.as_deref().and_then(global_board);
+    discovery.steps.push(DiscoveryStep::new(
+        DiscoverySource::Nearest,
+        nearest.clone(),
+    ));
+    discovery
+        .steps
+        .push(DiscoveryStep::new(DiscoverySource::Global, global.clone()));
+
+    if let Some(root) = nearest {
+        discovery.source = DiscoverySource::Nearest;
+        discovery.root = Some(root);
+        discovery.steps[0].selected = true;
+    } else if let Some(root) = global {
+        discovery.source = DiscoverySource::Global;
+        discovery.root = Some(root);
+        discovery.steps[1].selected = true;
+    } else {
+        discovery.error = Some(OrbitError::board_not_found());
     }
-    if let Some(global) = home.as_deref().and_then(global_board) {
-        return Ok(ResolvedBoard {
-            root: global,
-            linked: false,
-        });
-    }
-    Err(OrbitError::board_not_found())
 }
 
 pub(crate) fn resolve_external(dir: &Path) -> Result<PathBuf> {

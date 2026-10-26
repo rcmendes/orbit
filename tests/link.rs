@@ -114,28 +114,24 @@ fn unlink_refreshes_managed_files_without_a_local_board() {
     repo.ok_json(&["setup", "claude", "--json"]);
     let linked = repo.read_json(".mcp.json");
     assert!(
-        linked["mcpServers"]["orbit"]["args"]
+        !linked["mcpServers"]["orbit"]["args"]
             .as_array()
             .unwrap()
             .iter()
             .any(|arg| arg == "--dir"),
         "{linked}"
     );
+    let instructions = repo
+        .read("CLAUDE.md")
+        .replace("never edit task files", "stale managed content");
+    std::fs::write(repo.path().join("CLAUDE.md"), instructions).unwrap();
 
     let unlinked = repo.ok_json(&["unlink", "--json"]);
 
     assert_eq!(unlinked["data"]["unlinked"], true);
     assert_eq!(unlinked["data"]["board"], serde_json::Value::Null);
     assert_warning(&unlinked, "no local Board");
-    let local = repo.read_json(".mcp.json");
-    assert!(
-        !local["mcpServers"]["orbit"]["args"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|arg| arg == "--dir"),
-        "{local}"
-    );
+    assert!(repo.read("CLAUDE.md").contains("never edit task files"));
 }
 
 #[test]

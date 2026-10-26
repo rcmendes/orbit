@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 use crate::help;
-use crate::setup::SetupClient;
+use crate::setup::{SetupClient, SetupScope};
 use crate::task::{Status, TaskType};
 
 #[derive(Debug, Parser)]
@@ -657,6 +657,10 @@ pub struct SetupArgs {
     /// Which agent integration to install.
     #[arg(value_enum)]
     pub client: SetupClient,
+
+    /// Where to write the integration: the repository or the user's home.
+    #[arg(long, value_enum, default_value_t = SetupScope::Project)]
+    pub scope: SetupScope,
 
     /// Install the Claude Code SessionStart hook. Other clients ignore it.
     #[arg(long)]

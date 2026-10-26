@@ -63,14 +63,16 @@ OpenCode, and the mattpocock bridge) and writes only the integrations that apply
 Files carry a managed marker, so re-running reconciles integration instead of
 failing. A hand-written docs/agents/issue-tracker.md without the marker is
 reported as skipped and left alone. In a terminal, init asks which harnesses to
-wire; without a terminal it wires the detected ones. A preview (`--print`) uses
-detection and does not prompt by default; pass --agents ask to choose harnesses
-interactively.
+wire; without a terminal it writes no agent files and prints the `orbit setup`
+hint. A preview (`--print`) uses detection to show what would change but never
+prompts and never writes. Use --agents all, none, or a comma-separated list to
+select harnesses without a prompt.
 
 MCP configurations record the absolute path of the running binary by default, so
 GUI-launched editors do not need Orbit on PATH. Pass --portable-mcp to write the
 bare `orbit` command instead; every editor or agent that launches the MCP server
-must then find Orbit on its PATH.";
+must then find Orbit on its PATH. Generated configurations never record the
+Board path; they rely on discovery or on --dir/ORBIT_DIR.";
 
 pub const INIT_EXAMPLES: &str = "\
 Examples:
@@ -689,6 +691,14 @@ SessionStart hook with --hooks. Re-running is safe: only managed sections are
 rewritten. A hand-written docs/agents/issue-tracker.md without the marker is
 reported as skipped and left alone.
 
+--scope project (the default) writes repository-level files. --scope user writes
+the same managed content under the user's home: Claude memory, settings, and
+~/.claude.json; Cursor rules, skill, and mcp.json; Codex global AGENTS.md, skill,
+and config.toml; OpenCode's global config and AGENTS.md; and the user-level
+tracker guide. --print, --check, and --remove all operate on the selected scope.
+Generated configs never record the Board path, so moving the Orbit folder does
+not stale them.
+
 Use init for first-time setup. setup is for adjusting one harness later, checking
 drift in CI with --check (non-zero when missing or stale), or removing Orbit's
 content with --remove.
@@ -702,6 +712,9 @@ pub const SETUP_EXAMPLES: &str = "\
 Examples:
   # Add the Claude hook and MCP entry
   orbit setup claude --hooks
+
+  # Write machine-wide instruction and MCP files
+  orbit setup all --scope user
 
   # Write the portable `orbit` command and rely on the editor's PATH
   orbit setup claude --portable-mcp

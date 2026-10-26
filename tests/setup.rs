@@ -718,15 +718,8 @@ fn setup_print_user_scope_names_exact_files_and_writes_nothing() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("setup preview"), "{stdout}");
     let normalized = stdout.replace('\\', "/");
-    let home = repo.home().to_string_lossy().replace('\\', "/");
-    assert!(
-        normalized.contains(&format!("{home}/.claude/CLAUDE.md")),
-        "{stdout}"
-    );
-    assert!(
-        normalized.contains(&format!("{home}/.claude.json")),
-        "{stdout}"
-    );
+    assert!(normalized.contains(".claude/CLAUDE.md"), "{stdout}");
+    assert!(normalized.contains(".claude.json"), "{stdout}");
     assert!(!repo.home().join(".claude/CLAUDE.md").exists());
     assert!(!repo.home().join(".claude.json").exists());
     assert!(!repo.exists("CLAUDE.md"));

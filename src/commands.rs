@@ -392,13 +392,27 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
     let (target, legacy_nested) = Board::resolve_target(&args.path)?;
     let board = Board::discover(Some(&target))?;
     let local = Board::local_root()?;
-    let shadowed = Board::is_board(&local) && local != board.root;
+    let legacy_local = Board::legacy_local_root()?;
+    let mut shadowed_boards = Vec::new();
+    for candidate in [local.clone(), legacy_local] {
+        if candidate != board.root
+            && Board::is_board(&candidate)
+            && !shadowed_boards.contains(&candidate)
+        {
+            shadowed_boards.push(candidate);
+        }
+    }
+    let shadowed = !shadowed_boards.is_empty();
 
     Board::write_link(&board.root)?;
 
     let root = crate::git::repo_root()?;
     let mut warnings = board.warnings.clone();
-    if board.config.board.storage.is_none() {
+    if board.config.board.storage.is_none()
+        && !warnings
+            .iter()
+            .any(|warning| warning.starts_with(crate::board::LEGACY_LAYOUT))
+    {
         warnings.push(format!(
             "{}: linked Board at {} predates board.storage",
             crate::board::LEGACY_LAYOUT,
@@ -412,10 +426,10 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
             board.root.display()
         ));
     }
-    if shadowed {
+    for path in &shadowed_boards {
         warnings.push(format!(
             "the local Board at {} is now shadowed but was not deleted",
-            local.display()
+            path.display()
         ));
     }
 
@@ -460,6 +474,7 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
             "board": board.root,
             "local_board": local,
             "shadowed": shadowed,
+            "shadowed_boards": shadowed_boards,
             "refreshed": refreshed,
         }),
         human,
@@ -485,15 +500,14 @@ fn cmd_unlink() -> Result<crate::output::CommandOutput> {
     let mut warnings = Vec::new();
 
     if unlinked {
-        if local_exists {
-            match crate::setup::refresh(&root, None) {
-                Ok(output) => warnings.extend(output.warnings),
-                Err(error) => warnings.push(format!(
-                    "could not refresh agent configuration: {}; run `orbit setup <client>` to update MCP entries",
-                    error.message
-                )),
-            }
-        } else {
+        match crate::setup::refresh(&root, None) {
+            Ok(output) => warnings.extend(output.warnings),
+            Err(error) => warnings.push(format!(
+                "could not refresh agent configuration: {}; run `orbit setup <client>` to update MCP entries",
+                error.message
+            )),
+        }
+        if !local_exists {
             warnings.push(
                 "this repository has no local Board; run `orbit init` to create one".to_string(),
             );

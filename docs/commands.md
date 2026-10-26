@@ -153,9 +153,11 @@ orbit link ~/src/acme/.orbit --no-refresh   # leave agent configs alone
 ```
 
 Linking does not delete a local Board. If one exists it is shadowed and `link`
-warns about it. A legacy target — an old `<workspace>/board` or a board root — is
-accepted with a `LEGACY_LAYOUT` warning. A missing target returns
-`LINK_NOT_FOUND`; the pointer is not repaired automatically.
+warns about it; the main checkout's `.orbit` and a legacy local Board are both
+reported. A legacy target — an old `<workspace>/board` or a board root — is
+accepted with a `LEGACY_LAYOUT` warning that continues while the linked Board
+keeps a legacy layout. A target that holds no Board returns `LINK_NOT_FOUND`; the
+pointer is not repaired automatically.
 
 ### `orbit unlink` — go back to a local Board
 

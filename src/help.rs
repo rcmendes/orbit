@@ -107,7 +107,8 @@ worktrees. Existing harness configurations are refreshed unless --no-refresh is
 passed.
 
 Linking does not delete a repository's own Board. If one exists it is shadowed,
-and link prints a warning; the old Board stays on disk.";
+and link prints a warning; the old Board stays on disk. A missing target returns
+LINK_NOT_FOUND; the pointer is not repaired automatically.";
 
 pub const LINK_EXAMPLES: &str = "\
 Examples:
@@ -125,8 +126,8 @@ Removes the shared-Board pointer and refreshes agent configuration to use this
 repository's own Board. The shared Board is left untouched for the other
 repositories that use it.
 
-If this repository has no local Board yet, the link is still removed and the
-command warns you to run `orbit init`.";
+If this repository has no local Board, the link is still removed, previously
+managed files are refreshed, and the command warns you to run `orbit init`.";
 
 pub const UNLINK_EXAMPLES: &str = "\
 Examples:

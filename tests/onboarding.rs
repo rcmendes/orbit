@@ -459,7 +459,7 @@ fn link_rejects_a_directory_that_is_not_a_board() {
     let (status, value) = repo.json(&["link", empty.path().to_str().unwrap(), "--json"]);
 
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "BOARD_NOT_FOUND");
+    assert_eq!(value["error"]["code"], "LINK_NOT_FOUND");
 }
 
 #[test]

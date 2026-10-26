@@ -270,7 +270,15 @@ pub fn exclude_entry_for(repo: &Path, dir: &Path) -> Result<String> {
             "the Board directory cannot be the repository root",
         ));
     }
-    Ok(format!("/{relative}/"))
+    // Escape gitignore metacharacters and keep trailing spaces significant.
+    let mut escaped = String::with_capacity(relative.len() + 2);
+    for ch in relative.chars() {
+        if matches!(ch, '*' | '?' | '[' | ']' | '\\' | ' ' | '!' | '#') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    Ok(format!("/{escaped}/"))
 }
 
 /// Adds an untracked exclusion for `dir` to the repository's local exclude file.

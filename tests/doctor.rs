@@ -139,6 +139,13 @@ fn doctor_migrates_a_legacy_workspace_and_updates_the_pointer() {
 
     assert_eq!(value["data"]["migration"]["migrated"], true);
     assert_eq!(value["data"]["migration"]["storage"], "repository");
+    assert!(
+        value["data"]["migration"]["notes"][0]
+            .as_str()
+            .unwrap()
+            .contains("orbit link"),
+        "{value}"
+    );
     assert!(workspace.join(".orbit/config.toml").is_file());
     assert!(!board.exists());
     let pointer = std::fs::read_to_string(&link).unwrap();
@@ -301,4 +308,74 @@ fn doctor_migrate_reports_when_there_is_nothing_to_move() {
             .unwrap()
             .contains("no legacy")
     );
+}
+
+#[test]
+fn doctor_migrate_refuses_when_the_legacy_board_diverged() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Diverged task", &[]);
+    migrate_hidden_board(&repo);
+    let old = repo.legacy_board_path();
+    let new = repo.board_path();
+    let moved = repo.git(&[
+        "worktree",
+        "move",
+        old.to_str().unwrap(),
+        new.to_str().unwrap(),
+    ]);
+    assert!(moved.status.success());
+
+    write_legacy_board_config(&old, "orb-");
+    let task = std::fs::read_to_string(new.join("tasks").join(format!("{id}.md"))).unwrap();
+    std::fs::write(
+        old.join("tasks").join(format!("{id}.md")),
+        format!("{task}\nedited only in the legacy copy\n"),
+    )
+    .unwrap();
+
+    let (status, value) = repo.json(&["doctor", "--migrate", "--json"]);
+
+    assert_ne!(status, 0, "{value}");
+    assert_eq!(value["error"]["code"], "MIGRATION_BLOCKED", "{value}");
+    assert!(old.join("tasks").join(format!("{id}.md")).is_file());
+}
+
+#[test]
+fn commands_reattach_an_orphan_worktree_on_their_own() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Auto repaired", &[]);
+    std::fs::remove_dir_all(repo.board_path()).unwrap();
+
+    let listed = repo.ok_json(&["list", "--all", "--json"]);
+
+    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert!(repo.board_path().join("config.toml").is_file());
+}
+
+#[test]
+fn doctor_fix_honours_dir_from_another_directory() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Elsewhere", &[]);
+    let board = repo.board_path();
+    std::fs::remove_dir_all(&board).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+
+    let (status, value) = repo.json_in(
+        elsewhere.path(),
+        &[
+            "--dir",
+            board.to_str().unwrap(),
+            "doctor",
+            "--fix",
+            "--json",
+        ],
+    );
+
+    assert!(status == 0 || status == 1, "{value}");
+    assert!(board.join("config.toml").is_file(), "{value}");
+    let listed = repo.ok_json(&["list", "--all", "--json"]);
+    assert_eq!(listed["data"]["tasks"][0]["id"], id);
 }

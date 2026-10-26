@@ -25,6 +25,18 @@ pub struct MigrationReport {
     pub pointer: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed: Vec<PathBuf>,
+    /// Follow-up the migration cannot do itself, such as other Repositories
+    /// still linked to the old path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+fn workspace_notes(old: &Path, new: &Path) -> Vec<String> {
+    vec![format!(
+        "other Repositories linked to {} now fail with LINK_NOT_FOUND; run `orbit link {}` in each",
+        old.display(),
+        new.display()
+    )]
 }
 
 impl MigrationReport {
@@ -46,11 +58,15 @@ impl MigrationReport {
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_default();
-        format!(
+        let mut out = format!(
             "migrated Board from {from} to {to} ({} tasks{})\n",
             self.tasks,
             if self.resumed { ", resumed" } else { "" }
-        )
+        );
+        for note in &self.notes {
+            out.push_str(&format!("note: {note}\n"));
+        }
+        out
     }
 }
 
@@ -166,6 +182,7 @@ fn migrate_workspace(board: &Board) -> Result<MigrationReport> {
             Board::write_link(&new)?;
         }
         let pointer = pointer_target.map(|_| new.clone());
+        let notes = workspace_notes(&old, &new);
         return Ok(MigrationReport {
             migrated: true,
             resumed: true,
@@ -174,6 +191,7 @@ fn migrate_workspace(board: &Board) -> Result<MigrationReport> {
             storage: Some(StorageMode::Repository.as_str().to_string()),
             tasks,
             pointer,
+            notes,
             removed: vec![old],
             ..MigrationReport::default()
         });
@@ -200,6 +218,7 @@ fn migrate_workspace(board: &Board) -> Result<MigrationReport> {
         Board::write_link(&new)?;
     }
     let pointer = pointer_target.map(|_| new.clone());
+    let notes = workspace_notes(&old, &new);
     Ok(MigrationReport {
         migrated: true,
         from: Some(old),
@@ -207,6 +226,7 @@ fn migrate_workspace(board: &Board) -> Result<MigrationReport> {
         storage: Some(StorageMode::Repository.as_str().to_string()),
         tasks,
         pointer,
+        notes,
         ..MigrationReport::default()
     })
 }
@@ -293,16 +313,28 @@ fn update_pointer(old: &Path, new: &Path) -> Result<Option<PathBuf>> {
 }
 
 fn remove_legacy(path: &Path, context: Option<&RepoContext>) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
     if let Some(context) = context
         && git::worktree_remove(&context.repo_root, path).is_ok()
     {
         return Ok(());
     }
-    if path.exists() {
-        std::fs::remove_dir_all(path)
-            .map_err(|error| OrbitError::io(format!("remove {}", path.display()), error))?;
+    // `git worktree remove` refuses a dirty or locked worktree. Wiping it
+    // anyway would lose uncommitted Task edits, so only a plain directory (no
+    // `.git`) is removed here.
+    if path.join(".git").exists() {
+        return Err(OrbitError::new(
+            code::MIGRATION_BLOCKED,
+            format!(
+                "{} is a git worktree that could not be removed cleanly (uncommitted changes?); commit or discard them, then re-run doctor --migrate",
+                path.display()
+            ),
+        ));
     }
-    Ok(())
+    std::fs::remove_dir_all(path)
+        .map_err(|error| OrbitError::io(format!("remove {}", path.display()), error))
 }
 
 fn verify_same_board(old: &Path, new: &Path) -> Result<()> {
@@ -330,7 +362,48 @@ fn verify_same_board(old: &Path, new: &Path) -> Result<()> {
             ),
         ));
     }
+    for dir in ["tasks", "comments"] {
+        if dir_contents(&old.join(dir))? != dir_contents(&new.join(dir))? {
+            return Err(OrbitError::new(
+                code::MIGRATION_BLOCKED,
+                format!(
+                    "{} and {} have diverged ({dir}/ differs); refusing to remove either Board",
+                    old.display(),
+                    new.display()
+                ),
+            ));
+        }
+    }
     Ok(())
+}
+
+/// Relative path -> bytes for every Markdown file under `dir`, so two Boards compare by
+/// content and not only by Task ID.
+fn dir_contents(dir: &Path) -> Result<std::collections::BTreeMap<PathBuf, Vec<u8>>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        let entries = match std::fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(OrbitError::io(format!("read {}", current.display()), error));
+            }
+        };
+        for entry in entries {
+            let path = entry
+                .map_err(|error| OrbitError::io(format!("read {}", current.display()), error))?
+                .path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "md") {
+                let bytes = std::fs::read(&path)
+                    .map_err(|error| OrbitError::io(format!("read {}", path.display()), error))?;
+                files.insert(path.strip_prefix(dir).unwrap_or(&path).to_path_buf(), bytes);
+            }
+        }
+    }
+    Ok(files)
 }
 
 fn task_ids(board: &Board) -> Result<BTreeSet<String>> {

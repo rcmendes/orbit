@@ -337,7 +337,25 @@ pub struct Board {
 
 impl Board {
     pub fn discover(dir_override: Option<&Path>) -> Result<Self> {
-        let discovery = Self::discovery(dir_override);
+        let mut discovery = Self::discovery(dir_override);
+        // A forced working-tree cleanup can delete DIR and leave the `orbit`
+        // worktree record behind; the branch still holds every Task, so
+        // re-attach it and resolve again instead of failing.
+        if dir_override.is_none()
+            && discovery.root.is_none()
+            && discovery
+                .error
+                .as_ref()
+                .is_none_or(|error| error.code == code::BOARD_NOT_FOUND)
+            && let Some(context) = Self::repo_context()
+            && let Ok(fixed) = crate::doctor::reattach_orphans(&context)
+            && !fixed.is_empty()
+        {
+            discovery = Self::discovery(dir_override);
+            for note in fixed {
+                push_warning(&mut discovery.warnings, format!("repaired: {note}"));
+            }
+        }
         if let Some(error) = discovery.error {
             return Err(error);
         }

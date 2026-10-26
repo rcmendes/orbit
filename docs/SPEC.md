@@ -298,7 +298,7 @@ A Board lives in the Orbit folder, `DIR`. The default is `./.orbit` in the curre
 
 A repository owns one local Board. A nested repository (for example a submodule) has its own resolution scope and may resolve its own nested Board, but a second `.orbit` in the same working tree is refused because the `orbit` branch can be checked out by only one worktree.
 
-`orbit init --global` targets `~/.orbit` and creates a `repository`-mode Board unless it already exists. The global Board is the last discovery fallback and is never created while resolving a command.
+`orbit init --global` targets `~/.orbit` and creates a `repository`-mode Board unless it already exists, even when `~` happens to sit inside another Git working tree. The global Board is the last discovery fallback and is never created while resolving a command.
 
 A workspace is a `DIR` outside every member repository plus one link per repository. Create the workspace folder, run `orbit init` inside it, then run `orbit link <DIR>` in each repository. `orbit init` does not clone repositories or link them.
 
@@ -378,7 +378,7 @@ Every command resolves the Board in this order. The first match wins.
 
 1. `--dir` or `ORBIT_DIR`, which names the Orbit folder itself (or a legacy Board root) directly; the resolver does not append `.orbit`.
 2. The link pointer at `<git-common-dir>/orbit/link`. A legacy target — an old board root or a workspace root containing `board/` — resolves with a `LEGACY_LAYOUT` warning.
-3. The nearest `.orbit` walking up from the current directory to the enclosing repository root, or to `$HOME` outside a repository, skipping `~/.orbit` itself.
+3. The nearest `.orbit` walking up from the current directory to the enclosing repository root, or to `$HOME` outside a repository, skipping `~/.orbit` itself. The walk stops at the repository root: a `.orbit` in a folder above the repository is not found, so use `link` or `--dir` to share one across repositories.
 4. The main checkout's `.orbit`. The main checkout is the parent of the Git common directory when that directory is literally named `.git`; otherwise it is the repository root.
 5. The legacy local layout at `<git-common-dir>/orbit/board`, with a `LEGACY_LAYOUT` warning.
 6. `~/.orbit`, only when it already exists.
@@ -489,7 +489,7 @@ orbit sync
 - `tree <id>` returns one Parent Task and its direct SubTasks, root first, with the same task rows as `list`/`ready`; it refuses a SubTask. `data` carries `root`, `tasks`, and `count`.
 - `doctor` reports missing parents (`DANGLING_PARENT`), nested or self parents (`NESTED_SUBTASK`), parent/ID mismatches (`PARENT_MISMATCH`), and an epic on a SubTask (`INVALID_TYPE`).
 - `doctor` runs without a Board. It reports the discovery trace and the layout findings `LEGACY_LAYOUT`, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and `ABSOLUTE_BOARD_PATH`, then runs task-level checks when a Board is resolved.
-- `doctor --fix` removes stale temp files and re-attaches an orphan `orbit` worktree whose `DIR` was deleted. It does not rewrite tasks or comments. `doctor --migrate` performs the explicit, resumable legacy migration described in [Legacy layouts and migration](#legacy-layouts-and-migration).
+- `doctor --fix` removes stale temp files and re-attaches an orphan `orbit` worktree whose `DIR` was deleted; it repairs the repository that holds `--dir`/`ORBIT_DIR` when given, else the current one. It does not rewrite tasks or comments. `doctor --migrate` performs the explicit, resumable legacy migration described in [Legacy layouts and migration](#legacy-layouts-and-migration). Before it deletes a legacy copy it requires the Task and comment Markdown of both copies to be byte-identical and refuses with `MIGRATION_BLOCKED` otherwise, or when the legacy worktree has uncommitted changes. After a workspace migration it lists a note: other Repositories still linked to the old `board` path must run `orbit link` again.
 - `undepend` is idempotent.
 - `cancel` resolves dependents. It requires the claim holder unless `--force`; on a Parent Task, `--force` also cancels open SubTasks.
 - `label add` and `label remove` are idempotent. Labels are lowercase slugs; invalid labels are rejected with `INVALID_LABEL`.
@@ -590,7 +590,7 @@ Warnings and `doctor` findings use a separate namespace: `LEGACY_LAYOUT`, `AMBIG
 - Readers acquire the same lock shared for the duration of the command, so multi-file reads see a consistent snapshot.
 - Each file is written to a temp file in its directory (`tasks/` or `comments/`), fsynced, renamed over the target, and the directory is fsynced on Unix.
 - A crash mid-write leaves the old file intact and a stale temp file; `doctor` reports it and `doctor --fix` removes it.
-- A forced removal of `DIR` leaves the `orbit` branch and a stale worktree record. `doctor` reports `ORPHAN_WORKTREE`; `doctor --fix` or `orbit init` re-attaches `DIR` without losing Tasks.
+- A forced removal of `DIR` leaves the `orbit` branch and a stale worktree record. `doctor` reports `ORPHAN_WORKTREE`. Any command that finds no Board re-attaches `DIR` from the `orbit` branch on its own and warns `repaired: reattached ...`; `doctor --fix` and `orbit init` do the same explicitly. No Task is lost.
 - Multi-file mutations (`delete --force`, `done --comment`/`cancel --comment`, comment append plus task `updated_at`) are serialized but not transactional across files. A crash can leave a partially cleaned board; `doctor` reports dangling dependencies and a repeated `delete --force` resumes the cleanup.
 - `slug migrate` is the exception: it builds the complete rewrite in a temporary detached Git worktree, validates it, commits once, and only then resets the real Board. A crash before the reset leaves the original Board untouched; a crash after it leaves the migrated Board at one commit plus a removable temporary worktree.
 - Network filesystems are unsupported. Locks are advisory; all writes must go through Orbit.

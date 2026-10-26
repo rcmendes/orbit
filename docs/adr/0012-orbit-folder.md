@@ -86,7 +86,7 @@ A worktree-mode `init` writes the DIR path to the containing repository's
 `.git/info/exclude`. It never edits a tracked `.gitignore`, because committing
 the ORBIT folder would put task churn on the code branch (ADR 0001). A forced
 `git clean -xdff` can remove DIR, but the `orbit` branch still holds every Task.
-The next `init` or `doctor --fix` prunes the stale worktree record and re-attaches
+The next command, `init`, or `doctor --fix` prunes the stale worktree record and re-attaches
 DIR with no task loss.
 
 ### Slug

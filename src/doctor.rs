@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::atomic;
 use crate::board::{
     ABSOLUTE_BOARD_PATH, AMBIGUOUS_BOARD, Board, Discovery, LEGACY_LAYOUT, ORPHAN_WORKTREE,
-    STORAGE_MISMATCH, StorageMode,
+    RepoContext, STORAGE_MISMATCH, StorageMode,
 };
 use crate::cli::DoctorArgs;
 use crate::error::{OrbitError, Result, code};
@@ -17,11 +17,21 @@ pub fn run(dir: Option<&Path>, args: DoctorArgs) -> Result<crate::output::Comman
     let mut fixed = Vec::new();
     let mut migration = None;
 
+    // A failed repair must still say where discovery looked, since `doctor` is
+    // the command people run when resolution is already broken.
+    let with_trace = |mut error: OrbitError| {
+        error.message = format!(
+            "{}\n{}",
+            error.message,
+            render_discovery(&Board::discovery(dir)).trim_end()
+        );
+        error
+    };
     if args.fix {
-        fixed = fix(dir)?;
+        fixed = fix(dir).map_err(with_trace)?;
     }
     if args.migrate {
-        migration = Some(crate::legacy::migrate(dir)?);
+        migration = Some(crate::legacy::migrate(dir).map_err(with_trace)?);
     }
 
     diagnose(dir, &args, fixed, migration)
@@ -42,16 +52,45 @@ fn fix(dir: Option<&Path>) -> Result<Vec<String>> {
         fixed.extend(temps.into_iter().map(|path| path.display().to_string()));
     }
 
-    fixed.extend(reattach_orphans()?);
+    if let Some(context) = repair_context(dir) {
+        fixed.extend(reattach_orphans(&context)?);
+    }
     Ok(fixed)
+}
+
+/// Repository whose `orbit` worktree should be repaired: the one holding
+/// `--dir`/ORBIT_DIR when given (its nearest existing ancestor, since the
+/// directory itself may be the missing worktree), else the current directory.
+fn repair_context(dir: Option<&Path>) -> Option<RepoContext> {
+    let Some(dir) = dir else {
+        return Board::repo_context();
+    };
+    let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let start = dir.ancestors().find(|path| path.exists())?;
+    let start = dunce::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    Board::repo_context_at(&start).ok().flatten()
+}
+
+/// Canonical form of a path that may not exist: the nearest existing ancestor
+/// is resolved (`/var` vs `/private/var`) and the rest is appended.
+fn canonical_lenient(path: &Path) -> PathBuf {
+    let mut tail = Vec::new();
+    let mut current = path;
+    while !current.exists() {
+        let (Some(parent), Some(name)) = (current.parent(), current.file_name()) else {
+            return path.to_path_buf();
+        };
+        tail.push(name);
+        current = parent;
+    }
+    let mut resolved = dunce::canonicalize(current).unwrap_or_else(|_| current.to_path_buf());
+    resolved.extend(tail.into_iter().rev());
+    resolved
 }
 
 /// Re-attaches an `orbit` worktree whose directory disappeared. The branch is
 /// the source of truth, so this never rewrites a Task.
-fn reattach_orphans() -> Result<Vec<String>> {
-    let Some(context) = Board::repo_context() else {
-        return Ok(Vec::new());
-    };
+pub(crate) fn reattach_orphans(context: &RepoContext) -> Result<Vec<String>> {
     let records = git::worktree_records(&context.repo_root)?;
     let missing = records
         .into_iter()
@@ -64,7 +103,7 @@ fn reattach_orphans() -> Result<Vec<String>> {
     git::worktree_prune(&context.repo_root)?;
     let mut fixed = Vec::new();
     for record in missing {
-        if record.path == context.legacy_local_board
+        if canonical_lenient(&record.path) == canonical_lenient(&context.legacy_local_board)
             && Board::is_board(&context.main_checkout.join(".orbit"))
         {
             continue;
@@ -91,7 +130,7 @@ fn reattach_orphans() -> Result<Vec<String>> {
                 .map_err(|error| OrbitError::io(format!("create {}", parent.display()), error))?;
         }
         git::worktree_add(&context.repo_root, &target, "orbit")?;
-        if target != context.legacy_local_board {
+        if canonical_lenient(&target) != canonical_lenient(&context.legacy_local_board) {
             Board::ensure_excluded(&target)?;
         }
         fixed.push(format!("reattached {}", target.display()));
@@ -263,11 +302,16 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
         } else if let Some(configured) = board.config.board.storage {
             let actual = StorageMode::detect(&board.root);
             if configured != actual {
+                let hint = if configured == StorageMode::Worktree {
+                    "its .git link to the orbit worktree is missing or damaged; run `orbit doctor --fix`, or move the directory aside and re-run `orbit init`"
+                } else {
+                    "run `orbit doctor --migrate` or repair the worktree"
+                };
                 issues.push(Issue::new(
                     STORAGE_MISMATCH,
                     None,
                     format!(
-                        "Board at {} records storage = {} but its Git shape is {}; run `orbit doctor --migrate` or repair the worktree",
+                        "Board at {} records storage = {} but its Git shape is {}; {hint}",
                         board.root.display(),
                         configured.as_str(),
                         actual.as_str()

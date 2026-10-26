@@ -501,9 +501,18 @@ fn cmd_unlink() -> Result<crate::output::CommandOutput> {
             )),
         }
         if !local_exists {
-            warnings.push(
-                "this repository has no local Board; run `orbit init` to create one".to_string(),
-            );
+            let legacy = Board::legacy_local_root().ok();
+            if let Some(legacy) = legacy.filter(|path| Board::is_board(path)) {
+                warnings.push(format!(
+                    "this repository has no .orbit Board; it still resolves the legacy Board at {}; run `orbit doctor --migrate`",
+                    legacy.display()
+                ));
+            } else {
+                warnings.push(
+                    "this repository has no local Board; run `orbit init` to create one"
+                        .to_string(),
+                );
+            }
         }
     }
 

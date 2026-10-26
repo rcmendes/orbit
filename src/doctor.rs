@@ -64,11 +64,12 @@ fn reattach_orphans() -> Result<Vec<String>> {
     git::worktree_prune(&context.repo_root)?;
     let mut fixed = Vec::new();
     for record in missing {
-        let target = if record.path == context.legacy_local_board {
-            context.main_checkout.join(".orbit")
-        } else {
-            record.path.clone()
-        };
+        if record.path == context.legacy_local_board
+            && Board::is_board(&context.main_checkout.join(".orbit"))
+        {
+            continue;
+        }
+        let target = record.path.clone();
         if target.exists() {
             if Board::is_board(&target) {
                 continue;
@@ -90,7 +91,9 @@ fn reattach_orphans() -> Result<Vec<String>> {
                 .map_err(|error| OrbitError::io(format!("create {}", parent.display()), error))?;
         }
         git::worktree_add(&context.repo_root, &target, "orbit")?;
-        Board::ensure_excluded(&target)?;
+        if target != context.legacy_local_board {
+            Board::ensure_excluded(&target)?;
+        }
         fixed.push(format!("reattached {}", target.display()));
     }
     Ok(fixed)
@@ -291,15 +294,27 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
         }
 
         let root = context.repo_root;
-        for path in absolute_board_configs(&root) {
-            issues.push(Issue::new(
-                ABSOLUTE_BOARD_PATH,
-                None,
-                format!(
-                    "{} records an absolute Board path; re-run `orbit setup` to rewrite it path-free",
-                    path.display()
-                ),
-            ));
+        let mut config_roots = vec![root];
+        if let Some(home) = home_dir()
+            && home != config_roots[0]
+        {
+            config_roots.push(home);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for path in config_roots
+            .iter()
+            .flat_map(|root| absolute_board_configs(root))
+        {
+            if seen.insert(path.clone()) {
+                issues.push(Issue::new(
+                    ABSOLUTE_BOARD_PATH,
+                    None,
+                    format!(
+                        "{} records an absolute Board path; re-run `orbit setup` to rewrite it path-free",
+                        path.display()
+                    ),
+                ));
+            }
         }
     }
 }
@@ -467,7 +482,13 @@ fn diagnose_tasks(
 /// old setup that needs to run again.
 fn absolute_board_configs(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for relative in [".mcp.json", ".cursor/mcp.json", "opencode.json"] {
+    for relative in [
+        ".mcp.json",
+        ".claude.json",
+        ".cursor/mcp.json",
+        "opencode.json",
+        ".config/opencode/opencode.json",
+    ] {
         let path = root.join(relative);
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
@@ -481,7 +502,7 @@ fn absolute_board_configs(root: &Path) -> Vec<PathBuf> {
                 .and_then(|container| container.get("orbit"))
                 .is_some_and(json_entry_records_absolute_board)
         }) {
-            files.push(PathBuf::from(relative));
+            files.push(path);
         }
     }
 
@@ -493,10 +514,17 @@ fn absolute_board_configs(root: &Path) -> Vec<PathBuf> {
             .and_then(|servers| servers.get("orbit"))
             .is_some_and(toml_entry_records_absolute_board)
     {
-        files.push(PathBuf::from(".codex/config.toml"));
+        files.push(path);
     }
 
     files
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .and_then(|home| dunce::canonicalize(home).ok())
 }
 
 fn nested_value<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {

@@ -750,23 +750,30 @@ Examples:
   orbit --dir ~/src/acme-board mcp";
 
 pub const DOCTOR_LONG: &str = "\
-Checks the Board for malformed tasks, dangling dependencies, missing or nested
-parents, cycles, orphan or corrupt comments, stale temp files, uncommitted
-changes, the checked-out branch, and a Claude hook that cannot find the Orbit
-binary on PATH.
+Runs without requiring a Board and prints the discovery trace: explicit DIR,
+link, nearest .orbit, main checkout, legacy layout, and the global fallback. It
+reports LEGACY_LAYOUT, AMBIGUOUS_BOARD, ORPHAN_WORKTREE, STORAGE_MISMATCH, and
+ABSOLUTE_BOARD_PATH findings. When a Board resolves, it also checks malformed
+tasks, dangling dependencies, missing or nested parents, cycles, orphan or
+corrupt comments, stale temp files, uncommitted changes, the checked-out branch,
+and a Claude hook that cannot find the Orbit binary on PATH.
 
-It exits 1 when it finds issues. --fix only removes stale temp files; it never
-rewrites tasks or comments.";
+It exits 1 when it finds issues. --fix removes stale temp files and re-attaches an
+orphan orbit worktree. --migrate moves a legacy Board to the Orbit folder and is
+resumable; it never rewrites task bodies or comments.";
 
 pub const DOCTOR_EXAMPLES: &str = "\
 Examples:
   # Health check after a crash or merge
   orbit doctor
 
-  # Clean up stale temp files left by an interrupted write
+  # Clean up stale temp files and re-attach an orphan worktree
   orbit doctor --fix
 
-  # Inspect the reported issues as JSON
+  # Move a legacy hidden or workspace Board to .orbit
+  orbit doctor --migrate
+
+  # Inspect the discovery trace and reported issues as JSON
   orbit doctor --json";
 
 pub const SYNC_LONG: &str = "\

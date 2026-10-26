@@ -135,6 +135,28 @@ fn unlink_refreshes_managed_files_without_a_local_board() {
 }
 
 #[test]
+fn unlink_points_a_legacy_local_board_at_doctor_migrate() {
+    let repo = TestRepo::new();
+    let legacy = repo.legacy_board_path();
+    std::fs::create_dir_all(legacy.join("tasks")).unwrap();
+    std::fs::create_dir_all(legacy.join("comments")).unwrap();
+    std::fs::write(
+        legacy.join("config.toml"),
+        "[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"orb-\"\n",
+    )
+    .unwrap();
+    repo.link_at(&legacy);
+
+    let value = repo.ok_json(&["unlink", "--json"]);
+
+    let warnings = value["meta"]["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|warning| {
+        let warning = warning.as_str().unwrap();
+        warning.contains("legacy Board") && warning.contains("doctor --migrate")
+    }));
+}
+
+#[test]
 fn link_from_a_worktree_writes_the_common_pointer_and_shares_the_lock() {
     let repo = TestRepo::new();
     repo.init();

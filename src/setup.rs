@@ -972,7 +972,7 @@ fn client_paths(client: SetupClient, scope: SetupScope) -> ClientPaths {
             }),
             ..ClientPaths::default()
         },
-        SetupClient::All => ClientPaths::default(),
+        SetupClient::All => unreachable!("All is expanded before planning"),
     }
 }
 

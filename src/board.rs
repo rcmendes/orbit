@@ -672,6 +672,19 @@ impl Board {
         Ok(None)
     }
 
+    pub fn set_storage_mode(&self, storage: StorageMode) -> Result<CommitOutcome> {
+        let _lock = self.lock_exclusive()?;
+        let mut config = Config::load(&self.root)?;
+        if config.board.storage == Some(storage) {
+            return Ok(CommitOutcome::NoChanges);
+        }
+        config.board.storage = Some(storage);
+        config.validate()?;
+        let toml = config.to_toml()?;
+        crate::atomic::write_atomic(&self.root.join("config.toml"), toml.as_bytes(), true)?;
+        self.commit("orbit: migrate board storage", true)
+    }
+
     /// Changes the Task-ID prefix on an empty Board. The caller must have
     /// decided that the change is wanted; this method re-checks and locks.
     pub fn set_prefix(&self, prefix: &str) -> Result<CommitOutcome> {

@@ -182,15 +182,11 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         let output = crate::setup::install(
             &setup_root,
             crate::setup::InstallOptions {
+                scope: crate::setup::SetupScope::Project,
                 clients: clients.clone(),
                 hooks: args.hooks,
                 hook_bin,
                 mcp_bin: Some(mcp_bin),
-                mcp_dir: if external {
-                    Some(board_root.clone())
-                } else {
-                    None
-                },
                 print: args.print,
                 remove: false,
             },
@@ -421,7 +417,7 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
 
     let mut refreshed = Vec::new();
     if !args.no_refresh {
-        match crate::setup::refresh(&root, Some(&board.root)) {
+        match crate::setup::refresh(&root) {
             Ok(output) => {
                 refreshed = output.data["files"]
                     .as_array()
@@ -486,7 +482,7 @@ fn cmd_unlink() -> Result<crate::output::CommandOutput> {
 
     if unlinked {
         if local_exists {
-            match crate::setup::refresh(&root, None) {
+            match crate::setup::refresh(&root) {
                 Ok(output) => warnings.extend(output.warnings),
                 Err(error) => warnings.push(format!(
                     "could not refresh agent configuration: {}; run `orbit setup <client>` to update MCP entries",

@@ -595,26 +595,161 @@ fn setup_mcp_refuses_to_overwrite_a_foreign_orbit_server() {
 }
 
 #[test]
-fn setup_mcp_passes_an_external_board_dir() {
+fn setup_mcp_never_records_the_board_dir() {
     let repo = TestRepo::new();
     let external = tempfile::tempdir().unwrap();
     let board = external.path().join("board");
     let board_arg = board.to_str().unwrap();
 
-    let output = repo.orbit(&["--dir", board_arg, "init", "--json"]);
+    let output = repo.orbit(&["--dir", board_arg, "init", "--agents", "none", "--json"]);
     assert!(output.status.success());
 
-    let output = repo.orbit(&["--dir", board_arg, "setup", "claude", "--mcp", "--json"]);
+    let output = repo.orbit(&["--dir", board_arg, "setup", "claude", "--json"]);
     assert!(output.status.success());
 
     let config = repo.read_json(".mcp.json");
-    assert_eq!(config["mcpServers"]["orbit"]["args"][0], "--dir");
-    let expected = dunce::canonicalize(&board).unwrap();
     assert_eq!(
-        config["mcpServers"]["orbit"]["args"][1],
-        expected.to_string_lossy().as_ref()
+        config["mcpServers"]["orbit"]["args"],
+        serde_json::json!(["mcp"])
     );
-    assert_eq!(config["mcpServers"]["orbit"]["args"][2], "mcp");
+    let command = config["mcpServers"]["orbit"]["command"]
+        .as_str()
+        .expect("command is a string");
+    assert!(!command.contains(board_arg), "{command}");
+    assert!(
+        !config["mcpServers"]["orbit"]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "--dir"),
+        "{config}"
+    );
+}
+
+#[test]
+fn setup_user_scope_writes_user_files_and_honors_check_and_remove() {
+    let repo = TestRepo::new();
+    repo.ok_json(&["setup", "opencode", "--no-mcp", "--json"]);
+    let project_agents = repo.read("AGENTS.md");
+
+    let value = repo.ok_json(&["setup", "all", "--scope", "user", "--hooks", "--json"]);
+    assert_eq!(value["data"]["scope"], "user");
+    let expected_root = dunce::canonicalize(repo.home()).unwrap();
+    assert_eq!(
+        value["data"]["root"],
+        expected_root.to_string_lossy().as_ref()
+    );
+
+    let home = repo.home();
+    for path in [
+        ".claude/CLAUDE.md",
+        ".claude/settings.json",
+        ".claude.json",
+        ".cursor/rules/orbit.mdc",
+        ".agents/skills/orbit/SKILL.md",
+        ".cursor/mcp.json",
+        ".codex/AGENTS.md",
+        ".codex/config.toml",
+        ".config/opencode/AGENTS.md",
+        ".config/opencode/opencode.json",
+        ".agents/issue-tracker.md",
+    ] {
+        assert!(home.join(path).is_file(), "{path} was not written");
+    }
+    for path in [
+        "CLAUDE.md",
+        ".mcp.json",
+        ".codex/config.toml",
+        "opencode.json",
+    ] {
+        assert!(!repo.exists(path), "{path} leaked into project scope");
+    }
+
+    let claude = std::fs::read_to_string(home.join(".claude.json")).unwrap();
+    let claude: Value = serde_json::from_str(&claude).unwrap();
+    assert_eq!(
+        claude["mcpServers"]["orbit"]["args"],
+        serde_json::json!(["mcp"])
+    );
+
+    let edited = std::fs::read_to_string(home.join(".claude/CLAUDE.md"))
+        .unwrap()
+        .replace("never edit task files", "sometimes edit task files");
+    std::fs::write(home.join(".claude/CLAUDE.md"), edited).unwrap();
+    let (status, value) = repo.json(&[
+        "setup", "all", "--scope", "user", "--hooks", "--check", "--json",
+    ]);
+    assert_eq!(status, 1, "{value}");
+    assert_eq!(value["data"]["status"], "stale");
+
+    repo.ok_json(&["setup", "all", "--scope", "user", "--hooks", "--json"]);
+    let (status, value) = repo.json(&[
+        "setup", "all", "--scope", "user", "--hooks", "--check", "--json",
+    ]);
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["status"], "installed");
+
+    let (status, value) = repo.json(&["setup", "all", "--check", "--json"]);
+    assert_eq!(status, 1, "{value}");
+    assert_eq!(value["data"]["status"], "missing");
+
+    repo.ok_json(&["setup", "all", "--scope", "user", "--remove", "--json"]);
+    for path in [
+        ".claude/CLAUDE.md",
+        ".claude.json",
+        ".cursor/rules/orbit.mdc",
+        ".cursor/mcp.json",
+        ".codex/AGENTS.md",
+        ".codex/config.toml",
+        ".config/opencode/AGENTS.md",
+        ".config/opencode/opencode.json",
+        ".agents/issue-tracker.md",
+    ] {
+        assert!(!home.join(path).exists(), "{path} was not removed");
+    }
+    assert_eq!(repo.read("AGENTS.md"), project_agents);
+}
+
+#[test]
+fn setup_print_user_scope_names_exact_files_and_writes_nothing() {
+    let repo = TestRepo::new();
+    let output = repo.orbit(&["setup", "claude", "--scope", "user", "--print"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("setup preview"), "{stdout}");
+    assert!(
+        stdout.contains(
+            &repo
+                .home()
+                .join(".claude/CLAUDE.md")
+                .to_string_lossy()
+                .to_string()
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            &repo
+                .home()
+                .join(".claude.json")
+                .to_string_lossy()
+                .to_string()
+        ),
+        "{stdout}"
+    );
+    assert!(!repo.home().join(".claude/CLAUDE.md").exists());
+    assert!(!repo.home().join(".claude.json").exists());
+    assert!(!repo.exists("CLAUDE.md"));
+}
+
+#[test]
+fn setup_user_scope_ignores_the_project_directory() {
+    let repo = TestRepo::new();
+    let value = repo.ok_json(&["setup", "claude", "--scope", "user", "--no-mcp", "--json"]);
+    assert_eq!(value["data"]["scope"], "user");
+    assert!(repo.home().join(".claude/CLAUDE.md").is_file());
+    assert!(!repo.exists("CLAUDE.md"));
+    assert!(!repo.home().join(".mcp.json").exists());
 }
 
 #[test]

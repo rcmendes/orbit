@@ -65,6 +65,21 @@ impl SetupClient {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SetupScope {
+    Project,
+    User,
+}
+
+impl SetupScope {
+    pub fn name(self) -> &'static str {
+        match self {
+            SetupScope::Project => "project",
+            SetupScope::User => "user",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Action {
@@ -174,32 +189,18 @@ struct FilePlan {
 }
 
 pub struct InstallOptions {
+    pub scope: SetupScope,
     pub clients: Vec<SetupClient>,
     pub hooks: bool,
     pub hook_bin: Option<PathBuf>,
     pub mcp_bin: Option<PathBuf>,
-    pub mcp_dir: Option<PathBuf>,
     pub print: bool,
     pub remove: bool,
 }
 
-pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOutput> {
-    let root = project_root()?;
-    let linked = crate::board::Board::read_link().ok().flatten();
-    if let Some(path) = &linked
-        && !crate::board::Board::is_board(path)
-    {
-        return Err(OrbitError::new(
-            code::LINK_NOT_FOUND,
-            format!(
-                "the linked Board at {} is missing; run `orbit link <board>` to re-link or restore it",
-                path.display()
-            ),
-        ));
-    }
-    let mcp_dir = dir
-        .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
-        .or_else(|| linked.map(|path| dunce::canonicalize(&path).unwrap_or(path)));
+pub fn run(args: crate::cli::SetupArgs, _dir: Option<&Path>) -> Result<CommandOutput> {
+    let project = project_root()?;
+    let root = scope_root(args.scope, &project)?;
     let mut warnings = Vec::new();
 
     if matches!(args.client, SetupClient::Mattpocock)
@@ -234,16 +235,16 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
         let preview = install(
             &root,
             InstallOptions {
+                scope: args.scope,
                 clients,
                 hooks,
                 hook_bin: hook_bin.clone(),
                 mcp_bin: mcp_bin.clone(),
-                mcp_dir,
                 print: true,
                 remove: false,
             },
         )?;
-        let mut output = check_output(&root, preview);
+        let mut output = check_output(&root, args.scope, preview);
         output.warnings.extend(warnings);
         return Ok(output);
     }
@@ -251,11 +252,11 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
     let mut output = install(
         &root,
         InstallOptions {
+            scope: args.scope,
             clients,
             hooks,
             hook_bin,
             mcp_bin,
-            mcp_dir,
             print: args.print,
             remove: args.remove,
         },
@@ -284,22 +285,16 @@ pub fn install(root: &Path, options: InstallOptions) -> Result<CommandOutput> {
 
     for client in options.clients {
         if options.remove {
-            plan_remove(
-                root,
-                client,
-                &mut plan,
-                &mut warnings,
-                options.mcp_dir.as_deref(),
-            )?;
+            plan_remove(root, client, &mut plan, &mut warnings, options.scope)?;
         } else {
             plan_install(
                 root,
                 client,
                 &PlanOptions {
+                    scope: options.scope,
                     hooks: options.hooks,
                     hook_bin: options.hook_bin.as_deref(),
                     mcp_bin: options.mcp_bin.as_deref(),
-                    mcp_dir: options.mcp_dir.as_deref(),
                 },
                 &mut plan,
                 &mut warnings,
@@ -335,10 +330,11 @@ pub fn install(root: &Path, options: InstallOptions) -> Result<CommandOutput> {
         }
     }
 
-    let human = render_human(root, options.print, &files);
+    let human = render_human(root, options.print, &files, options.scope);
     let mut output = CommandOutput::new(
         json!({
             "root": root.to_string_lossy(),
+            "scope": options.scope.name(),
             "preview": options.print,
             "files": file_values,
         }),
@@ -348,12 +344,13 @@ pub fn install(root: &Path, options: InstallOptions) -> Result<CommandOutput> {
     Ok(output)
 }
 
-pub fn refresh(root: &Path, mcp_dir: Option<&Path>) -> Result<CommandOutput> {
+pub fn refresh(root: &Path) -> Result<CommandOutput> {
     let clients = configured_clients(root);
     if clients.is_empty() {
         return Ok(CommandOutput::new(
             json!({
                 "root": root.to_string_lossy(),
+                "scope": SetupScope::Project.name(),
                 "preview": false,
                 "files": [],
             }),
@@ -369,11 +366,11 @@ pub fn refresh(root: &Path, mcp_dir: Option<&Path>) -> Result<CommandOutput> {
         let output = install(
             root,
             InstallOptions {
+                scope: SetupScope::Project,
                 clients: vec![client],
                 hooks: false,
                 hook_bin: None,
                 mcp_bin: Some(bin),
-                mcp_dir: mcp_dir.map(Path::to_path_buf),
                 print: false,
                 remove: false,
             },
@@ -515,7 +512,7 @@ fn read_toml_orbit_command(root: &Path, relative: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn check_output(root: &Path, preview: CommandOutput) -> CommandOutput {
+fn check_output(root: &Path, scope: SetupScope, preview: CommandOutput) -> CommandOutput {
     let files = preview
         .data
         .get("files")
@@ -529,13 +526,14 @@ fn check_output(root: &Path, preview: CommandOutput) -> CommandOutput {
         human.push_str(&format!(
             "{} {}\n",
             file["action"].as_str().unwrap_or("unknown"),
-            file["path"].as_str().unwrap_or("")
+            display_path(root, scope, file["path"].as_str().unwrap_or(""))
         ));
     }
 
     let mut output = CommandOutput::new(
         json!({
             "root": root.to_string_lossy(),
+            "scope": scope.name(),
             "status": status,
             "files": files,
         }),
@@ -763,7 +761,8 @@ fn prompt_portable_mcp(input: &mut impl BufRead, prompt: &mut impl Write) -> Res
 }
 
 /// Preview runs must never block on input, so they use detection even in a
-/// terminal. Interactive `init` keeps its prompt.
+/// terminal and never prompt for `--agents ask`. Interactive `init` keeps its
+/// prompt; a non-interactive run writes no agent files.
 fn select_agents(
     args: &crate::cli::InitArgs,
     root: &Path,
@@ -775,12 +774,18 @@ fn select_agents(
         return Ok(Vec::new());
     }
     if let Some(selector) = &args.agents {
+        if selector.trim() == "ask" && args.print {
+            return Ok(detect(root));
+        }
         return parse_agents_with(selector, root, input, prompt);
     }
-    if !args.print && interactive {
+    if args.print {
+        return Ok(detect(root));
+    }
+    if interactive {
         return prompt_agents(&detect(root), input, prompt);
     }
-    Ok(detect(root))
+    Ok(Vec::new())
 }
 
 fn prompt_agents(
@@ -874,6 +879,17 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn scope_root(scope: SetupScope, project: &Path) -> Result<PathBuf> {
+    match scope {
+        SetupScope::Project => Ok(project.to_path_buf()),
+        SetupScope::User => home_dir()
+            .map(|home| dunce::canonicalize(&home).unwrap_or(home))
+            .ok_or_else(|| {
+                OrbitError::config("HOME or USERPROFILE must be set for `setup --scope user`")
+            }),
+    }
+}
+
 fn project_root() -> Result<PathBuf> {
     match crate::git::repo_root() {
         Ok(root) => Ok(root),
@@ -883,10 +899,87 @@ fn project_root() -> Result<PathBuf> {
 }
 
 struct PlanOptions<'a> {
+    scope: SetupScope,
     hooks: bool,
     hook_bin: Option<&'a Path>,
     mcp_bin: Option<&'a Path>,
-    mcp_dir: Option<&'a Path>,
+}
+
+#[derive(Default)]
+struct ClientPaths {
+    instructions: Option<&'static str>,
+    rule: Option<&'static str>,
+    skill: Option<&'static str>,
+    hooks: Option<&'static str>,
+    mcp_json: Option<(&'static str, McpJsonKind)>,
+    mcp_toml: Option<&'static str>,
+    tracker: Option<&'static str>,
+}
+
+fn client_paths(client: SetupClient, scope: SetupScope) -> ClientPaths {
+    let user = scope == SetupScope::User;
+    match client {
+        SetupClient::Claude => ClientPaths {
+            instructions: Some(if user {
+                ".claude/CLAUDE.md"
+            } else {
+                "CLAUDE.md"
+            }),
+            hooks: Some(".claude/settings.json"),
+            mcp_json: Some((
+                if user { ".claude.json" } else { ".mcp.json" },
+                McpJsonKind::Servers,
+            )),
+            ..ClientPaths::default()
+        },
+        SetupClient::Cursor => ClientPaths {
+            rule: Some(".cursor/rules/orbit.mdc"),
+            skill: Some(".agents/skills/orbit/SKILL.md"),
+            mcp_json: Some((".cursor/mcp.json", McpJsonKind::Servers)),
+            ..ClientPaths::default()
+        },
+        SetupClient::Codex => ClientPaths {
+            instructions: Some(if user {
+                ".codex/AGENTS.md"
+            } else {
+                "AGENTS.md"
+            }),
+            skill: Some(".agents/skills/orbit/SKILL.md"),
+            mcp_toml: Some(".codex/config.toml"),
+            ..ClientPaths::default()
+        },
+        SetupClient::Opencode => ClientPaths {
+            instructions: Some(if user {
+                ".config/opencode/AGENTS.md"
+            } else {
+                "AGENTS.md"
+            }),
+            mcp_json: Some((
+                if user {
+                    ".config/opencode/opencode.json"
+                } else {
+                    "opencode.json"
+                },
+                McpJsonKind::Opencode,
+            )),
+            ..ClientPaths::default()
+        },
+        SetupClient::Mattpocock => ClientPaths {
+            tracker: Some(if user {
+                ".agents/issue-tracker.md"
+            } else {
+                "docs/agents/issue-tracker.md"
+            }),
+            ..ClientPaths::default()
+        },
+        SetupClient::All => ClientPaths::default(),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PlanTarget<'a> {
+    root: &'a Path,
+    scope: SetupScope,
 }
 
 fn plan_install(
@@ -897,94 +990,45 @@ fn plan_install(
     warnings: &mut Vec<String>,
 ) -> Result<()> {
     let mcp = options.mcp_bin.is_some();
-    match client {
-        SetupClient::Claude => {
-            plan_section(root, "CLAUDE.md", &workflow_section(), plan)?;
-            if options.hooks {
-                plan_claude_hooks(root, options.hook_bin, false, plan)?;
-            }
-            if mcp {
-                plan_mcp_json(
-                    root,
-                    ".mcp.json",
-                    McpJsonKind::Servers,
-                    mcp_servers_entry(
-                        options
-                            .mcp_bin
-                            .expect("MCP binary resolved when MCP is enabled"),
-                        options.mcp_dir,
-                    ),
-                    false,
-                    plan,
-                    warnings,
-                )?;
-            }
+    let paths = client_paths(client, options.scope);
+    let target = PlanTarget {
+        root,
+        scope: options.scope,
+    };
+    let bin = || {
+        options
+            .mcp_bin
+            .expect("MCP binary resolved when MCP is enabled")
+    };
+
+    if let Some(instructions) = paths.instructions {
+        plan_section(root, instructions, &workflow_section(), plan)?;
+    }
+    if let Some(rule) = paths.rule {
+        plan_full_file(root, rule, &cursor_rule(), plan)?;
+    }
+    if let Some(skill) = paths.skill {
+        plan_full_file(root, skill, &skill_file(), plan)?;
+    }
+    if let Some(tracker) = paths.tracker {
+        plan_section_unless_custom(root, tracker, &mattpocock_section(), plan)?;
+    }
+    if options.hooks
+        && let Some(hooks) = paths.hooks
+    {
+        plan_claude_hooks(root, hooks, options.hook_bin, false, plan)?;
+    }
+    if mcp {
+        if let Some((relative, kind)) = paths.mcp_json {
+            let entry = match kind {
+                McpJsonKind::Servers => mcp_servers_entry(bin()),
+                McpJsonKind::Opencode => opencode_entry(bin()),
+            };
+            plan_mcp_json(target, relative, kind, entry, false, plan, warnings)?;
         }
-        SetupClient::Cursor => {
-            plan_full_file(root, ".cursor/rules/orbit.mdc", &cursor_rule(), plan)?;
-            plan_full_file(root, ".agents/skills/orbit/SKILL.md", &skill_file(), plan)?;
-            if mcp {
-                plan_mcp_json(
-                    root,
-                    ".cursor/mcp.json",
-                    McpJsonKind::Servers,
-                    mcp_servers_entry(
-                        options
-                            .mcp_bin
-                            .expect("MCP binary resolved when MCP is enabled"),
-                        options.mcp_dir,
-                    ),
-                    false,
-                    plan,
-                    warnings,
-                )?;
-            }
+        if let Some(relative) = paths.mcp_toml {
+            plan_mcp_toml(target, relative, bin(), mcp_args(), false, plan, warnings)?;
         }
-        SetupClient::Codex => {
-            plan_full_file(root, ".agents/skills/orbit/SKILL.md", &skill_file(), plan)?;
-            plan_section(root, "AGENTS.md", &workflow_section(), plan)?;
-            if mcp {
-                plan_mcp_toml(
-                    root,
-                    ".codex/config.toml",
-                    options
-                        .mcp_bin
-                        .expect("MCP binary resolved when MCP is enabled"),
-                    mcp_args(options.mcp_dir),
-                    false,
-                    plan,
-                    warnings,
-                )?;
-            }
-        }
-        SetupClient::Opencode => {
-            plan_section(root, "AGENTS.md", &workflow_section(), plan)?;
-            if mcp {
-                plan_mcp_json(
-                    root,
-                    "opencode.json",
-                    McpJsonKind::Opencode,
-                    opencode_entry(
-                        options
-                            .mcp_bin
-                            .expect("MCP binary resolved when MCP is enabled"),
-                        options.mcp_dir,
-                    ),
-                    false,
-                    plan,
-                    warnings,
-                )?;
-            }
-        }
-        SetupClient::Mattpocock => {
-            plan_section_unless_custom(
-                root,
-                "docs/agents/issue-tracker.md",
-                &mattpocock_section(),
-                plan,
-            )?;
-        }
-        SetupClient::All => unreachable!("All is expanded before planning"),
     }
     Ok(())
 }
@@ -994,64 +1038,36 @@ fn plan_remove(
     client: SetupClient,
     plan: &mut BTreeMap<PathBuf, FilePlan>,
     warnings: &mut Vec<String>,
-    mcp_dir: Option<&Path>,
+    scope: SetupScope,
 ) -> Result<()> {
-    match client {
-        SetupClient::Claude => {
-            plan_section_remove(root, "CLAUDE.md", plan)?;
-            plan_claude_hooks(root, None, true, plan)?;
-            plan_mcp_json(
-                root,
-                ".mcp.json",
-                McpJsonKind::Servers,
-                mcp_servers_entry(Path::new("orbit"), mcp_dir),
-                true,
-                plan,
-                warnings,
-            )?;
-        }
-        SetupClient::Cursor => {
-            plan_full_file_remove(root, ".cursor/rules/orbit.mdc", plan)?;
-            plan_full_file_remove(root, ".agents/skills/orbit/SKILL.md", plan)?;
-            plan_mcp_json(
-                root,
-                ".cursor/mcp.json",
-                McpJsonKind::Servers,
-                mcp_servers_entry(Path::new("orbit"), mcp_dir),
-                true,
-                plan,
-                warnings,
-            )?;
-        }
-        SetupClient::Codex => {
-            plan_full_file_remove(root, ".agents/skills/orbit/SKILL.md", plan)?;
-            plan_section_remove(root, "AGENTS.md", plan)?;
-            plan_mcp_toml(
-                root,
-                ".codex/config.toml",
-                Path::new("orbit"),
-                Vec::new(),
-                true,
-                plan,
-                warnings,
-            )?;
-        }
-        SetupClient::Opencode => {
-            plan_section_remove(root, "AGENTS.md", plan)?;
-            plan_mcp_json(
-                root,
-                "opencode.json",
-                McpJsonKind::Opencode,
-                opencode_entry(Path::new("orbit"), mcp_dir),
-                true,
-                plan,
-                warnings,
-            )?;
-        }
-        SetupClient::Mattpocock => {
-            plan_section_remove(root, "docs/agents/issue-tracker.md", plan)?;
-        }
-        SetupClient::All => unreachable!("All is expanded before planning"),
+    let paths = client_paths(client, scope);
+    let orbit = Path::new("orbit");
+    let target = PlanTarget { root, scope };
+
+    if let Some(instructions) = paths.instructions {
+        plan_section_remove(root, instructions, plan)?;
+    }
+    if let Some(rule) = paths.rule {
+        plan_full_file_remove(root, rule, plan)?;
+    }
+    if let Some(skill) = paths.skill {
+        plan_full_file_remove(root, skill, plan)?;
+    }
+    if let Some(tracker) = paths.tracker {
+        plan_section_remove(root, tracker, plan)?;
+    }
+    if let Some(hooks) = paths.hooks {
+        plan_claude_hooks(root, hooks, None, true, plan)?;
+    }
+    if let Some((relative, kind)) = paths.mcp_json {
+        let entry = match kind {
+            McpJsonKind::Servers => mcp_servers_entry(orbit),
+            McpJsonKind::Opencode => opencode_entry(orbit),
+        };
+        plan_mcp_json(target, relative, kind, entry, true, plan, warnings)?;
+    }
+    if let Some(relative) = paths.mcp_toml {
+        plan_mcp_toml(target, relative, orbit, Vec::new(), true, plan, warnings)?;
     }
     Ok(())
 }
@@ -1203,17 +1219,16 @@ fn plan_full_file_remove(
 
 fn plan_claude_hooks(
     root: &Path,
+    relative: &str,
     bin: Option<&Path>,
     remove: bool,
     plan: &mut BTreeMap<PathBuf, FilePlan>,
 ) -> Result<()> {
-    let relative = ".claude/settings.json";
     let absolute = root.join(relative);
     let existing = read_optional(&absolute)?;
     let mut value: Value = match &existing {
-        Some(content) => serde_json::from_str(content).map_err(|error| {
-            OrbitError::config(format!("invalid .claude/settings.json: {error}"))
-        })?,
+        Some(content) => serde_json::from_str(content)
+            .map_err(|error| OrbitError::config(format!("invalid {relative}: {error}")))?,
         None => json!({}),
     };
 
@@ -1257,26 +1272,20 @@ fn plan_claude_hooks(
     )
 }
 
-fn mcp_args(dir: Option<&Path>) -> Vec<String> {
-    let mut args = Vec::new();
-    if let Some(dir) = dir {
-        args.push("--dir".to_string());
-        args.push(dir.to_string_lossy().to_string());
-    }
-    args.push("mcp".to_string());
-    args
+fn mcp_args() -> Vec<String> {
+    vec!["mcp".to_string()]
 }
 
-fn mcp_servers_entry(bin: &Path, dir: Option<&Path>) -> Value {
+fn mcp_servers_entry(bin: &Path) -> Value {
     json!({
         "command": bin.to_string_lossy(),
-        "args": mcp_args(dir)
+        "args": mcp_args()
     })
 }
 
-fn opencode_entry(bin: &Path, dir: Option<&Path>) -> Value {
+fn opencode_entry(bin: &Path) -> Value {
     let mut command = vec![bin.to_string_lossy().to_string()];
-    command.extend(mcp_args(dir));
+    command.extend(mcp_args());
     json!({
         "type": "local",
         "command": command
@@ -1284,7 +1293,7 @@ fn opencode_entry(bin: &Path, dir: Option<&Path>) -> Value {
 }
 
 fn plan_mcp_json(
-    root: &Path,
+    target: PlanTarget<'_>,
     relative: &str,
     kind: McpJsonKind,
     entry: Value,
@@ -1292,6 +1301,7 @@ fn plan_mcp_json(
     plan: &mut BTreeMap<PathBuf, FilePlan>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
+    let PlanTarget { root, scope } = target;
     let layout = kind.layout();
     let container_path = layout.container_path;
     let absolute = root.join(relative);
@@ -1369,7 +1379,8 @@ fn plan_mcp_json(
         }
     }
 
-    if !remove && absolute_command && is_git_tracked(root, relative) {
+    if !remove && scope == SetupScope::Project && absolute_command && is_git_tracked(root, relative)
+    {
         warnings.push(format!(
             "{relative} is tracked by git and will contain a machine-specific MCP command; keep it untracked or pass `--mcp-bin orbit` for a portable config"
         ));
@@ -1415,7 +1426,7 @@ fn plan_mcp_json(
 }
 
 fn plan_mcp_toml(
-    root: &Path,
+    target: PlanTarget<'_>,
     relative: &str,
     bin: &Path,
     args: Vec<String>,
@@ -1423,6 +1434,7 @@ fn plan_mcp_toml(
     plan: &mut BTreeMap<PathBuf, FilePlan>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
+    let PlanTarget { root, scope } = target;
     let absolute = root.join(relative);
     let existing = read_optional(&absolute)?;
     let mut value: toml::Value = match &existing {
@@ -1489,7 +1501,11 @@ fn plan_mcp_toml(
         }
     }
 
-    if !remove && bin.is_absolute() && is_git_tracked(root, relative) {
+    if !remove
+        && scope == SetupScope::Project
+        && bin.is_absolute()
+        && is_git_tracked(root, relative)
+    {
         warnings.push(format!(
             "{relative} is tracked by git and will contain a machine-specific MCP command; keep it untracked or pass `--mcp-bin orbit` for a portable config"
         ));
@@ -2098,7 +2114,14 @@ We use Orbit, a local AI-native issue tracker. Tasks live as Markdown on the boa
     )
 }
 
-fn render_human(root: &Path, preview: bool, files: &[FilePlan]) -> String {
+fn display_path(root: &Path, scope: SetupScope, relative: &str) -> String {
+    match scope {
+        SetupScope::Project => relative.to_string(),
+        SetupScope::User => root.join(relative).to_string_lossy().to_string(),
+    }
+}
+
+fn render_human(root: &Path, preview: bool, files: &[FilePlan], scope: SetupScope) -> String {
     let mut output = String::new();
     if preview {
         output.push_str(&format!("setup preview (root: {})\n", root.display()));
@@ -2109,13 +2132,14 @@ fn render_human(root: &Path, preview: bool, files: &[FilePlan]) -> String {
     }
 
     for file in files {
+        let relative = file.relative.to_string_lossy();
         output.push_str(&format!(
             "{} {}\n",
             file.action.as_str(),
-            file.relative.display()
+            display_path(root, scope, &relative)
         ));
         if preview && let Some(content) = &file.content {
-            output.push_str(&format!("--- {} ---\n{content}", file.relative.display()));
+            output.push_str(&format!("--- {relative} ---\n{content}"));
             if !content.ends_with('\n') {
                 output.push('\n');
             }
@@ -2219,7 +2243,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_ask_prompts_even_in_a_preview() {
+    fn preview_ask_does_not_read_input_or_prompt() {
         let root = tempfile::tempdir().unwrap();
         let mut input = std::io::Cursor::new(b"1\n");
         let mut prompt = Vec::new();
@@ -2233,9 +2257,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(selected, vec![SetupClient::Claude]);
-        assert!(input.position() > 0);
-        assert!(!prompt.is_empty());
+        assert_eq!(selected, detect(root.path()));
+        assert_eq!(input.position(), 0, "preview consumed stdin");
+        assert!(prompt.is_empty(), "preview wrote a prompt");
     }
 
     #[test]
@@ -2259,7 +2283,7 @@ mod tests {
     }
 
     #[test]
-    fn non_interactive_init_uses_detection() {
+    fn non_interactive_init_writes_no_agent_files() {
         let root = tempfile::tempdir().unwrap();
         let mut input = std::io::Cursor::new(b"1\n");
         let mut prompt = Vec::new();
@@ -2273,7 +2297,27 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(selected, detect(root.path()));
+        assert!(selected.is_empty());
+        assert_eq!(input.position(), 0);
+        assert!(prompt.is_empty());
+    }
+
+    #[test]
+    fn explicit_agents_skip_the_prompt_without_a_terminal() {
+        let root = tempfile::tempdir().unwrap();
+        let mut input = std::io::Cursor::new(b"1\n");
+        let mut prompt = Vec::new();
+
+        let selected = select_agents(
+            &init_args(false, Some("claude")),
+            root.path(),
+            false,
+            &mut input,
+            &mut prompt,
+        )
+        .unwrap();
+
+        assert_eq!(selected, vec![SetupClient::Claude]);
         assert_eq!(input.position(), 0);
         assert!(prompt.is_empty());
     }

@@ -2,8 +2,8 @@
 
 Status: this guide describes the next release after v0.7.0, including the Orbit
 folder ([ADR 0012](./adr/0012-orbit-folder.md)). The unified `init [DIR]`
-surface and resolver are implemented; user-scoped setup and the `doctor`
-migration remain the final follow-ups.
+surface, resolver, scoped path-free agent setup, and the `doctor` migration are
+implemented.
 
 Orbit has one command per operation. Every command explains itself:
 
@@ -218,6 +218,14 @@ Installs, checks, or removes a harness integration without touching the Board.
 writes the harness's user-level locations. `--print`, `--check`, and `--remove`
 operate on the selected scope. Generated configs record the Orbit binary but not
 the Board path, so moving the Orbit folder does not stale them.
+
+User scope writes Claude memory to `~/.claude/CLAUDE.md`, its hook to
+`~/.claude/settings.json`, and MCP to `~/.claude.json`; Cursor rules, the shared
+skill, and MCP to `~/.cursor/rules/orbit.mdc`, `~/.agents/skills/orbit/SKILL.md`,
+and `~/.cursor/mcp.json`; Codex to `~/.codex/AGENTS.md`, the shared skill, and
+`~/.codex/config.toml`; OpenCode to `~/.config/opencode/AGENTS.md` and
+`~/.config/opencode/opencode.json`; and the mattpocock tracker bridge to
+`~/.agents/issue-tracker.md`. `--print` names each exact file.
 
 MCP entries record the absolute path of the running binary by default, which
 keeps GUI-launched editors working without `PATH` setup. Pass `--portable-mcp`

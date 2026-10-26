@@ -70,6 +70,47 @@ fn init_writes_absolute_mcp_paths_by_default() {
 }
 
 #[test]
+fn init_mcp_configs_never_record_the_board_path() {
+    let repo = TestRepo::new();
+    let shared = tempfile::tempdir().unwrap();
+    let board = shared.path().join("board");
+    let board_arg = board.to_str().unwrap();
+
+    let value = repo.ok_json(&[
+        "init",
+        board_arg,
+        "--agents",
+        "claude,cursor,codex,opencode",
+        "--json",
+    ]);
+
+    let files = value["data"]["files"].as_array().unwrap();
+    let rendered = serde_json::to_string(files).unwrap();
+    assert!(!rendered.contains(board_arg), "{rendered}");
+    assert!(!rendered.contains("--dir"), "{rendered}");
+
+    let claude = repo.read_json(".mcp.json");
+    assert_eq!(
+        claude["mcpServers"]["orbit"]["args"],
+        serde_json::json!(["mcp"])
+    );
+    let opencode = repo.read_json("opencode.json");
+    let command = opencode["mcp"]["servers"]["orbit"]["command"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        command.last().and_then(serde_json::Value::as_str),
+        Some("mcp")
+    );
+    assert!(
+        !command
+            .iter()
+            .any(|arg| arg.as_str().is_some_and(|arg| arg.contains(board_arg))),
+        "{opencode}"
+    );
+}
+
+#[test]
 fn init_portable_mcp_writes_bare_commands_and_explains_the_path_requirement() {
     let repo = TestRepo::new();
 
@@ -187,14 +228,9 @@ fn link_preserves_a_portable_mcp_configuration() {
     repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
 
     let opencode = repo.read_json("opencode.json");
-    assert_eq!(opencode["mcp"]["servers"]["orbit"]["command"][0], "orbit");
-    assert!(
-        opencode["mcp"]["servers"]["orbit"]["command"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|arg| arg == "--dir"),
-        "{opencode}"
+    assert_eq!(
+        opencode["mcp"]["servers"]["orbit"]["command"],
+        serde_json::json!(["orbit", "mcp"])
     );
 }
 
@@ -268,7 +304,7 @@ fn init_print_defaults_to_detection_without_prompting() {
 }
 
 #[test]
-fn init_print_with_agents_ask_still_prompts() {
+fn init_print_with_agents_ask_does_not_prompt() {
     let repo = TestRepo::new();
     std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
     std::fs::create_dir_all(repo.path().join(".cursor")).unwrap();
@@ -277,7 +313,10 @@ fn init_print_with_agents_ask_still_prompts() {
         repo.json_with_stdin(&["init", "--print", "--agents", "ask", "--json"], "1\n");
 
     assert_eq!(status, 0, "{value}");
-    assert_eq!(value["data"]["agents"], serde_json::json!(["claude"]));
+    assert_eq!(
+        value["data"]["agents"],
+        serde_json::json!(["claude", "cursor"])
+    );
     assert_eq!(value["data"]["preview"], true);
     assert!(!repo.board_path().join("config.toml").exists());
     assert!(!repo.exists("CLAUDE.md"));
@@ -526,17 +565,14 @@ fn init_dir_is_idempotent() {
 }
 
 #[test]
-fn link_refreshes_existing_agent_configuration() {
+fn link_refreshes_an_absolute_board_path_out_of_existing_configs() {
     let repo = TestRepo::new();
     repo.ok_json(&["init", "--agents", "claude", "--json"]);
-    let before = repo.read_json(".mcp.json");
-    assert!(
-        !before["mcpServers"]["orbit"]["args"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|arg| arg == "--dir")
-    );
+    std::fs::write(
+        repo.path().join(".mcp.json"),
+        "{\n  \"mcpServers\": {\n    \"orbit\": {\n      \"command\": \"orbit\",\n      \"args\": [\"--dir\", \"/old/board\", \"mcp\"]\n    }\n  }\n}\n",
+    )
+    .unwrap();
 
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
@@ -547,16 +583,11 @@ fn link_refreshes_existing_agent_configuration() {
 
     let after = repo.read_json(".mcp.json");
     let args = after["mcpServers"]["orbit"]["args"].as_array().unwrap();
-    assert!(args.iter().any(|arg| arg == "--dir"));
-    let resolved = std::fs::canonicalize(&board).unwrap();
-    assert!(
-        args.iter().any(|arg| {
-            arg.as_str()
-                .and_then(|arg| std::fs::canonicalize(arg).ok())
-                .is_some_and(|path| path == resolved)
-        }),
-        "{args:?}"
-    );
+    assert_eq!(args, &vec![serde_json::json!("mcp")], "{after}");
+    let command = after["mcpServers"]["orbit"]["command"]
+        .as_str()
+        .expect("command is a string");
+    assert_eq!(command, "orbit");
 }
 
 #[test]
@@ -744,14 +775,17 @@ fn doctor_warns_when_orbit_is_not_on_path() {
 }
 
 #[test]
-fn init_defaults_to_detection_without_a_terminal() {
+fn init_without_agents_and_without_a_tty_writes_nothing_and_prints_the_hint() {
     let repo = TestRepo::new();
     std::fs::create_dir_all(repo.path().join(".claude")).unwrap();
 
-    let value = repo.ok_json(&["init", "--json"]);
-
-    assert_eq!(value["data"]["agents"], serde_json::json!(["claude"]));
-    assert!(repo.exists(".mcp.json"));
+    let output = repo.orbit(&["init"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("next: orbit setup"), "{stdout}");
+    assert!(!repo.exists("CLAUDE.md"));
+    assert!(!repo.exists(".mcp.json"));
+    assert!(!repo.exists(".claude/settings.json"));
 }
 
 #[test]
@@ -798,23 +832,27 @@ fn unlink_refreshes_agent_configuration_back_to_the_local_board() {
 
     repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
     let linked = repo.read_json(".mcp.json");
-    assert!(
-        linked["mcpServers"]["orbit"]["args"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|arg| arg == "--dir")
+    assert_eq!(
+        linked["mcpServers"]["orbit"]["args"],
+        serde_json::json!(["mcp"])
     );
+
+    std::fs::write(
+        repo.path().join(".mcp.json"),
+        "{\n  \"mcpServers\": {\n    \"orbit\": {\n      \"command\": \"orbit\",\n      \"args\": [\"--dir\", \"/old/board\", \"mcp\"]\n    }\n  }\n}\n",
+    )
+    .unwrap();
 
     repo.ok_json(&["unlink", "--json"]);
     let local = repo.read_json(".mcp.json");
-    assert!(
-        !local["mcpServers"]["orbit"]["args"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|arg| arg == "--dir")
+    assert_eq!(
+        local["mcpServers"]["orbit"]["args"],
+        serde_json::json!(["mcp"])
     );
+    let command = local["mcpServers"]["orbit"]["command"]
+        .as_str()
+        .expect("command is a string");
+    assert_eq!(command, "orbit");
 }
 
 #[test]

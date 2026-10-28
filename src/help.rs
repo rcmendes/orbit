@@ -924,6 +924,9 @@ approval or cancellation; only `y` or `yes` applies changes. Without both termin
 prints the preview and never waits for input. `--json` remains non-interactive, and
 `--proposal-file -` reads JSON from stdin.
 
+`orbit triage` rejects a proposal whose resulting labels contain more than one state role or more
+than one category role, with `TRIAGE_INVALID_PROPOSAL`.
+
 Review and apply change the Orbit Board only. GitHub is unchanged until an explicit
 `orbit github sync` command. When evidence is insufficient, record `uncertainty` and leave
 metadata unchanged.";

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 - 2026-10-28
+
+- Wayfinder children are SubTasks labelled `wayfinder:research`, `wayfinder:prototype`, `wayfinder:grilling`, or `wayfinder:task`. Map membership is the parent edge (`orbit list --parent` / `orbit ready --parent`). Claims stay Orbit leases; GitHub assignees are not Wayfinder ownership.
+- `orbit triage` rejects a proposal whose resulting labels would contain more than one state role (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) or more than one category role (`bug`, `enhancement`). The error is `TRIAGE_INVALID_PROPOSAL` and names the conflicting roles. Proposals that do not add or remove labels still apply, and a Task may have neither role.
+- Documented the boundary between Orbit and Matt Pocock's engineering skills in the tracker guide and triage workflow. Orbit tracks work; `orbit triage` only enriches `area`, verification text, and canonical labels. The skills own context gathering, claim verification, grilling, agent briefs, and `.out-of-scope/`. Added [the agent-brief template](./docs/agents/agent-brief.md).
+
 ## 0.9.0 - 2026-10-28
 
 - This release includes `orbit github` and `orbit triage` in the default binaries, shell/PowerShell installers, and npm package. GitHub sync requires Orbit v0.9.0 or newer; personal-account repositories use basic mode, which syncs labels and GitHub-owned fields but does not sync `area` or `verification`.

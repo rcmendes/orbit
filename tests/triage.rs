@@ -529,3 +529,131 @@ fn basic_mode_triage_exposes_only_label_capability() {
     assert_eq!(applied["data"]["applied"], true);
     assert_eq!(applied["data"]["sync_required"], true);
 }
+
+#[test]
+fn triage_review_rejects_conflicting_state_roles() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    let id = adopt_linked(&repo, &fixture);
+    let proposal = repo.path().join("proposal.json");
+    fs::write(&proposal, r#"{"labels_add": ["ready-for-agent"]}"#).unwrap();
+
+    let (status, value) = repo.json_with_env(
+        &[
+            "triage",
+            "review",
+            id.as_str(),
+            "--proposal-file",
+            proposal.to_str().unwrap(),
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "TRIAGE_INVALID_PROPOSAL");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("needs-triage") && message.contains("ready-for-agent"),
+        "{message}"
+    );
+}
+
+#[test]
+fn triage_review_rejects_conflicting_category_roles() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    let id = adopt_linked(&repo, &fixture);
+    let proposal = repo.path().join("proposal.json");
+    fs::write(&proposal, r#"{"labels_add": ["bug", "enhancement"]}"#).unwrap();
+
+    let (status, value) = repo.json_with_env(
+        &[
+            "triage",
+            "review",
+            id.as_str(),
+            "--proposal-file",
+            proposal.to_str().unwrap(),
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "TRIAGE_INVALID_PROPOSAL");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("bug") && message.contains("enhancement"),
+        "{message}"
+    );
+}
+
+#[test]
+fn triage_apply_accepts_state_transition_with_category() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    let id = adopt_linked(&repo, &fixture);
+    repo.ok_json(&["label", "add", id.as_str(), "docs", "--json"]);
+    let proposal = repo.path().join("proposal.json");
+    fs::write(
+        &proposal,
+        r#"{
+  "labels_add": ["bug", "ready-for-agent"],
+  "labels_remove": ["needs-triage"]
+}"#,
+    )
+    .unwrap();
+
+    let applied = repo.ok_json_with_env(
+        &[
+            "triage",
+            "apply",
+            id.as_str(),
+            "--proposal-file",
+            proposal.to_str().unwrap(),
+            "--approve",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(applied["data"]["applied"], true);
+
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(
+        show["data"]["labels"],
+        json!(["bug", "docs", "ready-for-agent"])
+    );
+}
+
+#[test]
+fn triage_apply_accepts_area_only_proposal() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    let id = adopt_linked(&repo, &fixture);
+    let proposal = repo.path().join("proposal.json");
+    fs::write(&proposal, r#"{"area": "cli"}"#).unwrap();
+
+    let applied = repo.ok_json_with_env(
+        &[
+            "triage",
+            "apply",
+            id.as_str(),
+            "--proposal-file",
+            proposal.to_str().unwrap(),
+            "--approve",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(applied["data"]["applied"], true);
+
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["area"], "cli");
+    assert_eq!(show["data"]["labels"], json!(["needs-triage"]));
+}

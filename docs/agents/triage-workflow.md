@@ -1,20 +1,25 @@
 # Agent Triage workflow
 
-Reusable workflow for reviewing **GitHub-linked** Orbit Tasks and proposing metadata
-updates. Orbit stays local-first: triage writes the Board first; GitHub is updated only
-through explicit sync.
+`orbit triage` writes metadata on a **GitHub-linked** Task: `area`, task-level
+`verification`, and canonical labels. It is not Matt Pocock's triage skill.
+The split is in [Compatibility boundary](#compatibility-boundary).
+
+Orbit stays local-first: these commands write the Board first. GitHub changes
+only when you sync explicitly.
 
 ## Scope
 
-Triage may propose changes to:
+A proposal may change:
 
 - `area` (controlled values from [`project-guidance.md`](./project-guidance.md))
-- Task-level `verification`
+- Task-level `verification` (stored text; the command does not run it)
 - Canonical triage/category labels: `needs-triage`, `needs-info`, `ready-for-agent`,
   `ready-for-human`, `wontfix`, `bug`, `enhancement`
 
-Triage does **not**:
+`orbit triage` does **not**:
 
+- Gather context, verify a claim, or grill
+- Write an agent brief ([`agent-brief.md`](./agent-brief.md)) or maintain `.out-of-scope/`
 - Adopt or import GitHub Issues (use `orbit github adopt`)
 - Change GitHub-owned title, body, or open/closed state
 - Add arbitrary labels
@@ -28,7 +33,28 @@ change either field.
 When evidence is insufficient, record `uncertainty` in the proposal and leave metadata
 unchanged.
 
-## Steps for agents
+## Compatibility boundary
+
+Orbit is the tracker. Matt Pocock's engineering skills own the triage state
+machine:
+
+- Gather context from the ticket and the codebase
+- Verify the claim
+- Grill when the request is underspecified
+- Write the agent brief ([`agent-brief.md`](./agent-brief.md))
+- Record rejected enhancements in `.out-of-scope/`
+
+`orbit triage` is the metadata step those skills can call. Given a proposal, it
+previews or writes `area`, `verification`, and canonical labels on a linked
+Task. It does not decide whether a claim is true, interview anyone, compose a
+brief, or create `.out-of-scope/` files.
+
+Wayfinder map membership is a parent edge. Scope a map with
+`orbit ready --parent` or `orbit list --parent`, as documented in
+[`issue-tracker.md`](./issue-tracker.md). This page does not change those
+commands.
+
+## Commands
 
 1. **Context** — load current metadata, allowed areas, canonical labels, and project guidance:
 
@@ -104,15 +130,17 @@ Forbidden proposal keys (GitHub-owned): `title`, `body`, `status`, `state`.
 
 ## Errors
 
+When a proposal adds or removes labels, Orbit checks the label set that would remain. That set may contain at most one state role (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) and at most one category role (`bug`, `enhancement`). Zero of either role is allowed. A proposal that only changes `area` or `verification` does not run this check. Labels that are not state or category roles are left in place.
+
 | Code | Meaning |
 | --- | --- |
 | `TRIAGE_NOT_LINKED` | Task has no GitHub link; adopt the intended Issue with `orbit github adopt <task-id> <issue-url>`. |
 | `TRIAGE_APPROVAL_REQUIRED` | `apply` was run without `--approve`; review the proposal, then rerun the reported command with `--approve`. |
-| `TRIAGE_INVALID_PROPOSAL` | The proposal is invalid; the error identifies the cause and directs you to edit the JSON and review it again. |
+| `TRIAGE_INVALID_PROPOSAL` | The proposal is invalid; the error identifies the cause, including conflicting state/category roles or non-canonical labels, and directs you to edit the JSON and review it again. |
 
 Human errors include a `Next:` action. JSON keeps the existing error envelope and
 adds `cause`, `remediation`, and Task/proposal-file context to `error.details`.
 Do not add GitHub-owned fields (`title`, `body`, `status`, or `state`) to a
 proposal. Only use the supported metadata fields above and canonical labels.
 
-See also [`triage-labels.md`](./triage-labels.md) and [`issue-tracker.md`](./issue-tracker.md).
+See also [`agent-brief.md`](./agent-brief.md), [`triage-labels.md`](./triage-labels.md), and [`issue-tracker.md`](./issue-tracker.md).

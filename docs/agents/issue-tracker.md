@@ -167,6 +167,25 @@ are free-form strings, comments are per-task threads, and blocking edges are
 `--depends-on`. Put parent context and acceptance criteria in the body; use labels
 for state and category, and comments for triage notes.
 
+## When a skill runs triage
+
+Orbit is the tracker. Matt Pocock's engineering skills own the triage state
+machine: gathering context, verifying the claim, grilling, writing the agent
+brief, and maintaining `.out-of-scope/`.
+
+`orbit triage` is a deterministic metadata primitive for a GitHub-linked Task.
+It sets `area`, task-level `verification`, and the canonical labels in
+[`triage-labels.md`](./triage-labels.md). It does not verify a claim, grill,
+write a brief, or update `.out-of-scope/`. The commands are in
+[`triage-workflow.md`](./triage-workflow.md).
+
+Before you implement a `ready-for-agent` ticket, read the agent brief. The
+template is in [`agent-brief.md`](./agent-brief.md).
+
+Wayfinder map membership is the parent edge. Scope a map with
+`orbit ready --parent <map-id>` or `orbit list --parent <map-id>`; the
+commands are in [Wayfinding operations](#wayfinding-operations).
+
 ## Triage operations
 
 - **Unlabeled:** `orbit list --unlabeled --json`
@@ -217,12 +236,21 @@ after a short backoff.
 
 ## Wayfinding operations
 
-A Wayfinder map is a Parent Task labelled `wayfinder:map`; its children are
-SubTasks created with `--parent <map-id>`. The parent edge records the
-relationship; the `wayfinder:<map-id>` label remains useful for filtering.
+A map is a Parent Task labelled `wayfinder:map`. Each child is a SubTask
+created with `--parent <map-id>` and labelled `wayfinder:<type>`, where type is
+one of `research`, `prototype`, `grilling`, or `task`. Map membership is the
+parent edge. Scope a map with `orbit ready --parent <map-id>` or
+`orbit list --parent <map-id>`. Do not record membership with a per-map label.
 
-- **Map**: one Task labelled `wayfinder:map`. Put the destination, scope, and
-  decisions in its body, then capture the returned `data.id`:
+GitHub assignees are not Orbit claims and are not used for Wayfinder ownership.
+Claim with `orbit claim <id> --by <agent>` or
+`orbit ready --parent <map-id> --claim --by <agent>`.
+
+Blocking edges stay `--depends-on` / `orbit depend`. Resolution stays
+`orbit done` or `orbit cancel`.
+
+- **Map**: one Parent Task labelled `wayfinder:map`. Put the destination, scope,
+  and decisions in its body, then capture the returned `data.id`:
 
   ```bash
   orbit add "Wayfinder: <destination>" --label wayfinder:map --body-file - --json
@@ -231,10 +259,11 @@ relationship; the `wayfinder:<map-id>` label remains useful for filtering.
   Find maps with `orbit list --label wayfinder:map --json`.
 
 - **Child SubTask**: create one SubTask per child with the map as its parent and
-  the map's per-map label:
+  one type label: `wayfinder:research`, `wayfinder:prototype`,
+  `wayfinder:grilling`, or `wayfinder:task`.
 
   ```bash
-  orbit add "<child title>" --parent <map-id> --label "wayfinder:<map-id>" --body-file - --json
+  orbit add "<child title>" --parent <map-id> --label wayfinder:research --body-file - --json
   ```
 
 - **Dependency**: `--depends-on <dependency-id>` at creation or
@@ -244,15 +273,24 @@ relationship; the `wayfinder:<map-id>` label remains useful for filtering.
   parentage; `--parent` does that, and the map waits for its SubTasks
   automatically.
 
-- **Frontier**: the Ready SubTasks of one map, not the whole Board:
+- **Claim**: an Orbit lease. GitHub assignees do not own the ticket.
 
   ```bash
-  orbit ready --parent <map-id> --json
+  orbit claim <id> --by <agent>
+  orbit ready --parent <map-id> --claim --by <agent>
   ```
 
   `orbit ready --parent` returns only that map's Ready SubTasks; `--claim` takes
   the first one. Without `--parent`, `orbit ready --claim` claims the
   highest-priority Ready Task anywhere on the Board.
 
-- **Resolve**: `orbit done` each SubTask as its work lands. The map becomes Ready
-  when every SubTask is done or cancelled, and `orbit done` closes it.
+- **Frontier**: the Ready SubTasks of one map, not the whole Board:
+
+  ```bash
+  orbit ready --parent <map-id> --json
+  orbit list --parent <map-id> --json
+  ```
+
+- **Resolve**: `orbit done <id> --by <agent>` or `orbit cancel <id> --by <agent>`
+  each SubTask as its work lands. The map becomes Ready when every SubTask is
+  done or cancelled, and `orbit done` closes it.

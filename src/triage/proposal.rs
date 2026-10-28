@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use crate::error::{OrbitError, Result, code};
 use crate::github::fields::{parse_area, validate_verification};
 use crate::task::{Task, normalize_label, normalize_verification};
-use crate::triage::labels::validate_label_list;
+use crate::triage::labels::{validate_category_roles, validate_label_list, validate_state_roles};
 
 const FORBIDDEN_FIELDS: &[&str] = &["title", "body", "status", "state"];
 
@@ -164,6 +164,13 @@ impl TriageProposal {
             );
         }
 
+        if !self.labels_add.is_empty() || !self.labels_remove.is_empty() {
+            let resulting =
+                labels_after_proposal(&task.front.labels, &self.labels_add, &self.labels_remove);
+            validate_state_roles(&resulting)?;
+            validate_category_roles(&resulting)?;
+        }
+
         let mut add = Vec::new();
         let mut remove = Vec::new();
         for label in &self.labels_add {
@@ -202,20 +209,25 @@ impl TriageProposal {
         }
 
         if !self.labels_add.is_empty() || !self.labels_remove.is_empty() {
-            for label in &self.labels_add {
-                if !task.front.labels.contains(label) {
-                    task.front.labels.push(label.clone());
-                }
-            }
-            task.front
-                .labels
-                .retain(|label| !self.labels_remove.contains(label));
-            task.front.labels.sort();
-            task.front.labels.dedup();
+            task.front.labels =
+                labels_after_proposal(&task.front.labels, &self.labels_add, &self.labels_remove);
         }
 
         Ok(true)
     }
+}
+
+fn labels_after_proposal(current: &[String], add: &[String], remove: &[String]) -> Vec<String> {
+    let mut labels = current.to_vec();
+    for label in add {
+        if !labels.contains(label) {
+            labels.push(label.clone());
+        }
+    }
+    labels.retain(|label| !remove.contains(label));
+    labels.sort();
+    labels.dedup();
+    labels
 }
 
 fn reject_forbidden_fields(value: &Value) -> Result<()> {

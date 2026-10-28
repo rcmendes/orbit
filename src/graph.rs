@@ -161,6 +161,10 @@ impl Graph {
         self.tasks.get(id).ok_or_else(|| OrbitError::not_found(id))
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Task> {
+        self.tasks.values()
+    }
+
     pub fn get_mut(&mut self, id: &str) -> Result<&mut Task> {
         self.tasks
             .get_mut(id)
@@ -583,6 +587,9 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "open_subtask_count": open_subtask_count,
         "eligible_for_close": eligible_for_close,
         "waiting_on": task.front.waiting_on,
+        "area": task.front.area,
+        "verification": task.front.verification,
+        "github": task.front.github,
         "claimed_by": task.holder(),
         "claimed_at": task.claimed_at(),
         "lease_until": task.lease_until(),
@@ -637,6 +644,9 @@ mod tests {
                 depends_on: deps.iter().map(|dep| dep.to_string()).collect(),
                 parent: None,
                 waiting_on: None,
+                area: None,
+                verification: None,
+                github: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: now,

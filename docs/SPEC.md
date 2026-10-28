@@ -21,7 +21,7 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 - Arbitrary-depth hierarchy, Beads-style issue-type entities, or attachments.
   Parent Tasks group one level of SubTasks; work shape is the metadata-only Type
   field.
-- GitHub/Jira/Linear sync.
+- Hosted sync, federation, or opaque remote trackers other than explicit GitHub Issue sync ([github-sync.md](./github-sync.md)).
 - Automatic pushes to a remote.
 
 ## 2. Architecture
@@ -464,6 +464,7 @@ orbit sync
 - v0.8.0: the Orbit folder replaces the hidden `board` path and `orbit workspace`. `init [DIR]` creates every Board shape, `link DIR` shares it, discovery walks `.orbit` to the main checkout and the global fallback, `setup --scope` writes path-free configs, and `doctor` diagnoses and migrates legacy layouts. Superseded by v0.8.1 on Windows.
 - v0.8.1: hardens `doctor --migrate` and makes legacy worktree migration and the test suite pass on Windows. Supersedes v0.8.0.
 - v0.8.2: replaces the terse `init` status with a numbered onboarding report, explains each prompt choice, annotates verification and next-step commands, includes unchanged MCP configs in reconciliation output, and aligns the product description across the README, Cargo metadata, CLI help, and generated agent instructions.
+- Unreleased: optional GitHub Issue provider (`orbit github`) for multi-repository linking, explicit adopt/create, bidirectional sync with conflict detection, and organization Issue Fields for `area` and `verification`. See [github-sync.md](./github-sync.md) and [ADR 0014](./adr/0014-github-issue-provider.md).
 
 ### Command rules
 

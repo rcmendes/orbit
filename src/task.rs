@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::error::{OrbitError, Result};
+use crate::github::link::GitHubLink;
 
 pub const ID_ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 pub const DEFAULT_PREFIX: &str = "orb-";
@@ -114,6 +115,12 @@ struct RawFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     waiting_on: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    area: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verification: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    github: Option<GitHubLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_at: Option<DateTime<Utc>>,
@@ -148,6 +155,9 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             depends_on: raw.depends_on,
             parent: raw.parent,
             waiting_on: raw.waiting_on,
+            area: raw.area,
+            verification: raw.verification,
+            github: raw.github,
             claim,
             stray_claim_times,
             created_at: raw.created_at,
@@ -173,6 +183,9 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             depends_on: front.depends_on,
             parent: front.parent,
             waiting_on: front.waiting_on,
+            area: front.area,
+            verification: front.verification,
+            github: front.github,
             claimed_by,
             claimed_at,
             lease_until,
@@ -194,6 +207,9 @@ pub struct TaskFrontmatter {
     pub depends_on: Vec<String>,
     pub parent: Option<String>,
     pub waiting_on: Option<String>,
+    pub area: Option<String>,
+    pub verification: Option<String>,
+    pub github: Option<GitHubLink>,
     pub claim: Option<Claim>,
     pub stray_claim_times: Option<StrayClaimTimes>,
     pub created_at: DateTime<Utc>,
@@ -223,6 +239,10 @@ impl Task {
 
     pub fn task_type(&self) -> TaskType {
         self.front.task_type
+    }
+
+    pub fn github_link(&self) -> Option<&GitHubLink> {
+        self.front.github.as_ref()
     }
 
     pub fn has_labels(&self, labels: &[String]) -> bool {
@@ -271,6 +291,27 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
         return Err(OrbitError::corrupt_task(format!(
             "task {id} has an empty parent id"
         )));
+    }
+    if let Some(area) = &front.area {
+        crate::github::fields::normalize_area(area).map_err(|error| {
+            OrbitError::corrupt_task(format!("task {id} has an invalid area: {}", error.message))
+        })?;
+    }
+    if let Some(verification) = &front.verification {
+        crate::github::fields::validate_verification(verification).map_err(|error| {
+            OrbitError::corrupt_task(format!(
+                "task {id} has invalid verification: {}",
+                error.message
+            ))
+        })?;
+    }
+    if let Some(link) = &front.github {
+        link.validate().map_err(|error| {
+            OrbitError::corrupt_task(format!(
+                "task {id} has an invalid github link: {}",
+                error.message
+            ))
+        })?;
     }
 
     let mut labels = Vec::with_capacity(front.labels.len());
@@ -446,6 +487,9 @@ mod tests {
                 depends_on: vec!["orb-f14c02".to_string()],
                 parent: None,
                 waiting_on: None,
+                area: None,
+                verification: None,
+                github: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: now(),

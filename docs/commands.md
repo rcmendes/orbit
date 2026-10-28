@@ -58,6 +58,7 @@ the multi-repository model.
 | Collect or archive the board | `orbit export` |
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
 | Recover or maintain the board | `orbit doctor`, `orbit sync` |
+| Link GitHub Issues (optional) | `orbit github` — see [github-sync.md](./github-sync.md) |
 
 ## Set up a Board
 
@@ -745,6 +746,21 @@ changes.
 
 ```bash
 orbit sync
+```
+
+### `orbit github` — GitHub Issue provider
+
+Links explicitly configured repositories, adopts or creates Issues, and runs
+bidirectional sync with conflict detection. Requires `[github]` in `config.toml`,
+the `gh` CLI, and organization Issue Fields. Full setup and semantics are in
+[github-sync.md](./github-sync.md).
+
+```bash
+orbit github repo link acme/widget
+orbit github setup
+orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
+orbit github sync orb-a7b2c9              # dry-run plan
+orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
 ```
 
 ## Scenarios

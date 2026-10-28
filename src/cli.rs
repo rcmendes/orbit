@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
@@ -136,6 +136,10 @@ pub enum Command {
     /// Commit pending lease-only changes to the board branch.
     #[command(long_about = help::SYNC_LONG, after_long_help = help::SYNC_EXAMPLES)]
     Sync,
+
+    /// Link GitHub repositories and synchronize Issues with Tasks.
+    #[command(name = "github", long_about = help::GITHUB_LONG, after_long_help = help::GITHUB_EXAMPLES)]
+    GitHub(GitHubArgs),
 }
 
 #[derive(Debug, Args)]
@@ -705,4 +709,92 @@ pub struct SetupArgs {
     /// Remove Orbit-managed sections, files, and hooks.
     #[arg(long)]
     pub remove: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubArgs {
+    #[command(subcommand)]
+    pub command: GitHubCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GitHubCommand {
+    /// Validate org Issue Fields and persist their ids in config.toml.
+    #[command(after_long_help = help::GITHUB_SETUP_EXAMPLES)]
+    Setup(GitHubSetupArgs),
+    /// Manage explicitly linked GitHub repositories.
+    #[command(subcommand, after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
+    Repo(GitHubRepoCommand),
+    /// Adopt an existing GitHub Issue for a Task.
+    #[command(after_long_help = help::GITHUB_ADOPT_EXAMPLES)]
+    Adopt(GitHubAdoptArgs),
+    /// Create a GitHub Issue for a linked Task.
+    #[command(after_long_help = help::GITHUB_CREATE_EXAMPLES)]
+    Create(GitHubCreateArgs),
+    /// Preview or apply bidirectional sync for linked Tasks.
+    #[command(after_long_help = help::GITHUB_SYNC_CMD_EXAMPLES)]
+    Sync(GitHubSyncArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GitHubRepoCommand {
+    /// Link a repository to this Board.
+    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
+    Link(GitHubRepoLinkArgs),
+    /// Remove a linked repository.
+    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
+    Unlink(GitHubRepoLinkArgs),
+    /// List linked repositories.
+    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
+    List,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubSetupArgs {
+    /// Validate configuration without writing field ids.
+    #[arg(long)]
+    pub validate_only: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubRepoLinkArgs {
+    #[arg(value_name = "OWNER/REPO")]
+    pub repository: String,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubAdoptArgs {
+    #[arg(value_name = "TASK")]
+    pub task: String,
+    #[arg(long, value_name = "OWNER/REPO")]
+    pub repo: String,
+    #[arg(long)]
+    pub number: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubCreateArgs {
+    #[arg(value_name = "TASK")]
+    pub task: String,
+    #[arg(long, value_name = "OWNER/REPO")]
+    pub repo: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum GitHubSyncDirection {
+    #[default]
+    Both,
+    Pull,
+    Push,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubSyncArgs {
+    #[arg(value_name = "TASK")]
+    pub task: Option<String>,
+    #[arg(long, value_enum, default_value_t = GitHubSyncDirection::Both)]
+    pub direction: GitHubSyncDirection,
+    /// Apply the planned sync. Without this flag the command is a dry run.
+    #[arg(long)]
+    pub apply: bool,
 }

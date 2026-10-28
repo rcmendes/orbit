@@ -1,6 +1,6 @@
 ---
 title: Migrate existing Boards into the Workspace Board
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -15,11 +15,8 @@ checkpoint:
   progress: Board migration implementation is running in workspace-migrate; init and repo discovery are merged.
   next: Review migration results, merge, and close ticket.
 area: board
-claimed_by: rodrigomendes
-claimed_at: 2026-10-28T23:10:02.537995Z
-lease_until: 2026-10-29T00:14:40.179753Z
 created_at: 2026-10-28T22:47:25.015063Z
-updated_at: 2026-10-28T23:44:40.179753Z
+updated_at: 2026-10-28T23:48:00.037760Z
 ---
 
 ## Goal

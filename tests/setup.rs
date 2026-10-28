@@ -146,6 +146,9 @@ fn setup_mattpocock_writes_the_issue_tracker_bridge() {
     assert!(tracker.contains(
         r#"`orbit done <ID> --by <agent> --comment "..."` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change."#
     ));
+    let labels = repo.read("docs/agents/triage-labels.md");
+    assert!(labels.contains("BEGIN ORBIT INTEGRATION"));
+    assert!(labels.contains("`needs-triage`"));
 
     repo.ok_json(&["setup", "mattpocock", "--json"]);
     let tracker = repo.read("docs/agents/issue-tracker.md");
@@ -153,6 +156,7 @@ fn setup_mattpocock_writes_the_issue_tracker_bridge() {
 
     repo.ok_json(&["setup", "mattpocock", "--remove", "--json"]);
     assert!(!repo.exists("docs/agents/issue-tracker.md"));
+    assert!(!repo.exists("docs/agents/triage-labels.md"));
 }
 
 #[test]
@@ -225,6 +229,7 @@ fn setup_all_writes_every_integration_and_removes_it() {
         ".cursor/rules/orbit.mdc",
         ".agents/skills/orbit/SKILL.md",
         "docs/agents/issue-tracker.md",
+        "docs/agents/triage-labels.md",
         ".mcp.json",
         ".cursor/mcp.json",
         ".codex/config.toml",
@@ -244,6 +249,7 @@ fn setup_all_writes_every_integration_and_removes_it() {
         ".cursor/rules/orbit.mdc",
         ".agents/skills/orbit/SKILL.md",
         "docs/agents/issue-tracker.md",
+        "docs/agents/triage-labels.md",
         ".mcp.json",
         ".cursor/mcp.json",
         ".codex/config.toml",
@@ -653,6 +659,7 @@ fn setup_user_scope_writes_user_files_and_honors_check_and_remove() {
         ".config/opencode/AGENTS.md",
         ".config/opencode/opencode.json",
         ".agents/issue-tracker.md",
+        ".agents/triage-labels.md",
     ] {
         assert!(home.join(path).is_file(), "{path} was not written");
     }
@@ -704,6 +711,7 @@ fn setup_user_scope_writes_user_files_and_honors_check_and_remove() {
         ".config/opencode/AGENTS.md",
         ".config/opencode/opencode.json",
         ".agents/issue-tracker.md",
+        ".agents/triage-labels.md",
     ] {
         assert!(!home.join(path).exists(), "{path} was not removed");
     }

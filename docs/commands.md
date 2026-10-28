@@ -1,8 +1,9 @@
 # Command guide
 
-Status: this guide describes v0.9.4, including the Orbit folder
-([ADR 0012](./adr/0012-orbit-folder.md)). The unified `init [DIR]` surface,
-resolver, scoped path-free agent setup, and `doctor` migration are implemented.
+Status: this guide describes the current Workspace agent reconciliation and
+Orbit folder ([ADR 0012](./adr/0012-orbit-folder.md)) behavior. The unified
+`init [DIR]` surface, resolver, scoped path-free agent setup, and `doctor`
+migration are implemented.
 
 Orbit has one command per operation. Every command explains itself:
 
@@ -44,6 +45,7 @@ outside Git and a repository-local Board inside Git. See
 | --- | --- |
 | Set up a repository or workspace | `orbit init`, `orbit link`, `orbit unlink` |
 | Discover Workspace repositories | `orbit workspace refresh`, `orbit workspace status` |
+| Set up agents across Workspace repositories | `orbit workspace setup` |
 | File a new ticket | `orbit add` |
 | Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend` |
 | Triage incoming work | `orbit label add/remove/list` |
@@ -223,6 +225,32 @@ override. A non-empty include list is an allowlist, and exclusions always take
 precedence. Full mode remains limited to the configured organization.
 Discovery does not create Tasks or GitHub Issues.
 
+### `orbit workspace setup` — reconcile child-repository agents
+
+Run setup after `orbit workspace refresh`. It uses the saved catalog of included
+child repositories, detects Claude Code, Cursor, Codex, and OpenCode across
+those repositories, and offers an interactive selection in a terminal. Select
+explicitly with `--agents all`, `--agents auto`, `--agents none`, or a comma-
+separated list. `--print` previews without writing files or saving a selection.
+An applied selection is stored in the Workspace Board and reused on later runs,
+so a newly discovered repository receives the same selected harnesses.
+
+```bash
+orbit workspace setup --print
+orbit workspace setup --agents all
+orbit workspace refresh
+orbit workspace setup              # apply saved harnesses to new repositories
+orbit workspace setup --remove     # remove only Orbit-managed sections/config
+```
+
+Selected child repositories receive native instructions and MCP entries without
+an absolute Board path. Workspace-level `AGENTS.md` and `CLAUDE.md` entry points
+are managed separately; existing text outside the managed markers is preserved.
+Matt Pocock skills are detected independently of harness selection. When the
+skills are installed, setup maintains the Orbit tracker and triage-label guides
+without requiring `orbit setup mattpocock`. Custom guide collisions are reported
+and left untouched.
+
 ### `orbit link` — reuse a Board from another repository
 
 Points this repository at an existing Orbit folder, including from all of its
@@ -316,7 +344,8 @@ skill, and MCP to `~/.cursor/rules/orbit.mdc`, `~/.agents/skills/orbit/SKILL.md`
 and `~/.cursor/mcp.json`; Codex to `~/.codex/AGENTS.md`, the shared skill, and
 `~/.codex/config.toml`; OpenCode to `~/.config/opencode/AGENTS.md` and
 `~/.config/opencode/opencode.json`; and the mattpocock tracker bridge to
-`~/.agents/issue-tracker.md`. `--print` names each exact file.
+`~/.agents/issue-tracker.md` and `~/.agents/triage-labels.md`. `--print` names
+each exact file.
 
 MCP entries record the absolute path of the running binary by default, which
 keeps GUI-launched editors working without `PATH` setup. Pass `--portable-mcp`
@@ -350,11 +379,11 @@ orbit setup all --remove       # remove only Orbit-managed content
 | `--portable-mcp` | Write bare `orbit` in MCP configs; the editor's PATH must resolve it. | `orbit setup opencode --portable-mcp` |
 | `--print` | Preview the exact files that would be written or removed. | `orbit setup all --print` |
 
-An existing `docs/agents/issue-tracker.md` without Orbit's managed marker is
-treated as a hand-written guide: setup reports it as `skipped` and leaves it
-unchanged, `--check` treats the integration as satisfied, and agent refresh
-still recognizes the file. Tracker files with the marker update and remove
-normally.
+Existing `docs/agents/issue-tracker.md` or `docs/agents/triage-labels.md` files
+without Orbit's managed marker are treated as hand-written guides: setup reports
+them as `skipped` and leaves them unchanged. Tracker files with the marker
+update and remove normally. Workspace setup detects Matt Pocock skills
+separately and maintains both guides automatically.
 
 ### `orbit mcp` — expose the Board to an MCP client
 

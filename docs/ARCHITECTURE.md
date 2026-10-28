@@ -476,6 +476,43 @@ Board Git repository. `workspace status` reads that snapshot without network or
 filesystem discovery. Stale and removed entries remain in the cache, and the
 command never imports Issues as Tasks.
 
+`workspace setup` consumes that snapshot rather than rescanning or contacting
+GitHub. It installs managed, native harness integrations into included direct
+child repositories, while `AGENTS.md` and `CLAUDE.md` at the Workspace root give
+agents a parent-level entry point. Harness selection is persisted in
+`[workspace].agent_harnesses`, so the next explicit setup reconciles newly
+discovered repositories. Matt Pocock skills use an independent detector and
+receive tracker and triage-label guides without entering the harness selection.
+
+```mermaid
+sequenceDiagram
+    actor Dev as Developer
+    participant CLI as orbit workspace setup
+    participant Board as Workspace Board
+    participant Cache as repositories.json
+    participant Setup as setup generators
+    participant Repo as Child repositories
+
+    Dev->>CLI: workspace setup --print or --agents all
+    CLI->>Board: resolve Workspace root and saved harness choice
+    CLI->>Cache: read last explicitly refreshed repository set
+    CLI->>CLI: filter included direct child Git repositories
+    CLI->>Repo: detect harnesses and Matt skills
+    CLI->>Setup: plan root entry points and child integrations
+    alt Preview
+        Setup-->>Dev: file plans, collisions, no writes
+    else Apply
+        Setup->>Repo: merge managed instructions and MCP entries
+        Setup->>Board: persist selected harnesses for later reconciliation
+        Setup-->>Dev: changed files and warnings
+    end
+```
+
+`src/workspace.rs` coordinates catalog selection and per-repository plans;
+`src/setup.rs` owns harness detection and managed-file generation. Generated MCP
+configurations contain no Board path: each child resolves the Workspace Board
+through ordinary Orbit discovery across its Git boundary.
+
 ```mermaid
 flowchart LR
     subgraph Local["Repository-local Board"]

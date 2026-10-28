@@ -649,6 +649,8 @@ orbit unlink
 orbit workspace refresh
 orbit workspace status
 orbit workspace exclude acme/legacy
+orbit workspace setup --print
+orbit workspace setup --agents all
 ```
 
 `orbit init` only creates the Workspace Board; it does not clone repositories. A child-local Board is reported as `AMBIGUOUS_BOARD` during discovery and blocks Workspace initialization if it exists first. Unknown entries in `.orbit` prevent initialization rather than being overwritten. The catalog cache is never stored in the Board repository.
@@ -665,6 +667,15 @@ poll or scan for new folders. Inaccessible repositories are reported as
 inaccessible on first discovery and stale after they were previously accessible;
 repository directories absent from a refresh are reported as removed. Their
 cached data is retained. Discovery does not create Orbit Tasks or GitHub Issues.
+
+`orbit workspace setup` uses the last refreshed catalog to preview and reconcile
+agent integrations in included child repositories. It supports Claude Code,
+Cursor, Codex, and OpenCode; the selected harnesses are saved on the Workspace
+Board and reused when a later refresh discovers new repositories. The Workspace
+root also gets managed `AGENTS.md` and `CLAUDE.md` entry points. Matt Pocock
+skills are detected separately and receive their Orbit tracker and triage-label
+guidance without appearing in `--agents` selection. Use
+`orbit workspace setup --remove` to remove only Orbit-managed content.
 
 Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link, then the nearest `.orbit` walking up to the repository root (or to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`, then the legacy hidden layout with a warning, then `~/.orbit` if it exists. An explicit override wins for one command:
 
@@ -873,7 +884,7 @@ orbit setup all --remove     # remove only Orbit-managed content
 
 Generated configs record the Orbit binary but not the Board path, so moving the Orbit folder does not leave them stale. MCP entries use an absolute binary path by default; `--portable-mcp` writes `orbit` instead, which only works when the editor's `PATH` resolves it. `doctor` reports an older config that still contains an absolute Board path.
 
-A hand-written tracker guide is respected. If `docs/agents/issue-tracker.md` exists without Orbit's managed marker, `orbit setup mattpocock` reports it as `skipped` and leaves it untouched; `--check` treats the custom doc as installed, and `--remove` does not delete it. Tracker files Orbit wrote continue to update and remove normally.
+A hand-written Matt Pocock guide is respected. If `docs/agents/issue-tracker.md` or `docs/agents/triage-labels.md` exists without Orbit's managed marker, setup reports it as `skipped` and leaves it untouched; `--remove` does not delete it. Workspace setup detects the skills separately and maintains both guides automatically when possible.
 
 CI runs `orbit setup opencode --no-mcp --check` on every push and pull request, so the checked-in `AGENTS.md` managed block cannot drift from the generator. `--no-mcp` keeps the machine-local `opencode.json` out of the check.
 
@@ -897,7 +908,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
 | **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `github status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
-| **Maintain** | `doctor` · `sync` · `github` · `slug` · `mcp` |
+| **Maintain** | `doctor` · `sync` · `workspace` · `github` · `slug` · `mcp` |
 
 Every command explains its own semantics:
 

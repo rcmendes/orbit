@@ -156,6 +156,30 @@ fn catalog_path(workspace: &Path) -> PathBuf {
         .join("repositories.json")
 }
 
+/// Return repositories available for issue creation from the Workspace catalog.
+/// `None` means that this Board is not a Workspace Board.
+pub(crate) fn export_repositories(board: &Board) -> Result<Option<Vec<String>>> {
+    let is_workspace = board.root.file_name().is_some_and(|name| name == "board")
+        && board
+            .root
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == ".orbit");
+    if !is_workspace {
+        return Ok(None);
+    }
+    let workspace = workspace_root(board)?;
+    let catalog = load_catalog(&catalog_path(&workspace))?;
+    Ok(Some(
+        catalog
+            .repositories
+            .values()
+            .filter(|entry| entry.included)
+            .map(|entry| entry.repository.clone())
+            .collect(),
+    ))
+}
+
 fn load_catalog(path: &Path) -> Result<RepositoryCatalog> {
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)

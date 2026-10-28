@@ -1067,38 +1067,279 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
 
 fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::CommandOutput> {
     let graph = Graph::load(board, LoadMode::Strict)?.0;
-    let task = graph.get(&args.task)?.clone();
-    if task.github_link().is_some() {
-        return Err(OrbitError::invalid_argument(format!(
-            "task {} already links to a GitHub Issue",
-            args.task
-        )));
+    let workspace_repositories = crate::workspace::export_repositories(board)?;
+    let repositories = workspace_repositories
+        .clone()
+        .unwrap_or_else(|| board.config.github.repositories.clone());
+    if workspace_repositories.as_ref().is_some_and(Vec::is_empty) && args.repo.is_none() {
+        return Err(OrbitError::invalid_argument(
+            "the Workspace repository catalog has no included repositories; run `orbit workspace refresh` or include a repository before exporting",
+        ));
     }
-    let repo = select_create_repo(&board.config.github, args.repo.as_deref())?;
-    board.config.github.require_linked_repo(&repo)?;
-    if board.config.github.mode.is_basic() {
-        reject_basic_metadata(&task)?;
+    let repo = select_create_repo(&repositories, args.repo.as_deref())?;
+    if workspace_repositories.is_some() {
+        if !repositories
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&repo))
+        {
+            return Err(OrbitError::invalid_argument(format!(
+                "repository `{repo}` is not included in the Workspace catalog; run `orbit workspace refresh` or choose an included repository"
+            )));
+        }
+    } else {
+        board.config.github.require_linked_repo(&repo)?;
     }
-    let client = client_from_env()?;
-    let issue = client.create_issue(
-        &repo,
-        &CreateIssueInput {
-            title: task.front.title.clone(),
-            body: task.body.clone(),
-            labels: task.front.labels.clone(),
-            area: task.front.area.map(|area| area.as_str().to_string()),
-            verification: task.front.verification.clone(),
-        },
-    )?;
-    let mut task = task;
-    task.front.github = Some(GitHubLink::new(repo.clone(), issue.number));
-    task.front.updated_at = Utc::now();
-    set_baseline(&mut task, &issue);
-    persist_task(board, &task, &format!("orbit: github create {}", task.id))?;
+
+    let mut plans = Vec::new();
+    let mut selected = std::collections::HashSet::new();
+    for id in &args.tasks {
+        let task = graph.get(id)?;
+        let rejected = if !selected.insert(id) {
+            Some(format!(
+                "task {id} appears more than once in the export selection"
+            ))
+        } else if task.github_link().is_some() {
+            Some(format!(
+                "task {id} already links to a GitHub Issue; use `orbit github sync {id}` instead"
+            ))
+        } else if task.front.status.is_terminal() && !args.include_terminal {
+            Some(format!(
+                "task {id} is {}; pass --include-terminal to export terminal Tasks",
+                task.front.status.as_str()
+            ))
+        } else if board.config.github.mode.is_basic()
+            && (task.front.area.is_some() || task.front.verification.is_some())
+        {
+            Some(
+                reject_basic_metadata(task)
+                    .expect_err("metadata was checked")
+                    .message,
+            )
+        } else {
+            None
+        };
+        plans.push((task.clone(), rejected));
+    }
+
+    let client = if args.apply && plans.iter().any(|(_, error)| error.is_none()) {
+        Some(client_from_env()?)
+    } else {
+        None
+    };
+    let mut results = Vec::new();
+    let mut human = Vec::new();
+    for (mut task, rejected) in plans {
+        let issue_state = if task.front.status.is_terminal() {
+            "closed"
+        } else {
+            "open"
+        };
+        if let Some(error) = rejected {
+            results.push(json!({
+                "task": task.id,
+                "repository": repo,
+                "title": task.front.title,
+                "body": task.body,
+                "labels": task.front.labels,
+                "area": task.front.area.map(|area| area.as_str()),
+                "verification": task.front.verification,
+                "status": task.front.status,
+                "issue_state": issue_state,
+                "success": false,
+                "error": error,
+            }));
+            human.push(format!(
+                "{}\n  Result: not exported — {error}",
+                format_create_preview(&task, &repo, issue_state)
+            ));
+            continue;
+        }
+
+        let preview = json!({
+            "task": task.id,
+            "repository": repo,
+            "title": task.front.title,
+            "body": task.body,
+            "labels": task.front.labels,
+            "area": task.front.area.map(|area| area.as_str()),
+            "verification": task.front.verification,
+            "status": task.front.status,
+            "issue_state": issue_state,
+        });
+        if !args.apply {
+            results.push(preview);
+            human.push(format!(
+                "{}\n  Nothing written. Apply with --apply.",
+                format_create_preview(&task, &repo, issue_state)
+            ));
+            continue;
+        }
+
+        let client = client.as_ref().expect("apply initialized GitHub client");
+        let issue = match client.create_issue(
+            &repo,
+            &CreateIssueInput {
+                title: task.front.title.clone(),
+                body: task.body.clone(),
+                labels: task.front.labels.clone(),
+                area: task.front.area.map(|area| area.as_str().to_string()),
+                verification: task.front.verification.clone(),
+                organization: board.config.github.organization.clone(),
+                issue_fields: board.config.github.issue_fields.clone(),
+            },
+        ) {
+            Ok(issue) => issue,
+            Err(error) => {
+                results.push(json!({
+                    "task": task.id,
+                    "repository": repo,
+                    "title": task.front.title,
+                    "body": task.body,
+                    "labels": task.front.labels,
+                    "area": task.front.area.map(|area| area.as_str()),
+                    "verification": task.front.verification,
+                    "status": task.front.status,
+                    "issue_state": issue_state,
+                    "success": false,
+                    "error": error.message,
+                    "error_code": error.code,
+                }));
+                human.push(format!(
+                    "{}\n  Result: failed — {}",
+                    format_create_preview(&task, &repo, issue_state),
+                    error.message
+                ));
+                continue;
+            }
+        };
+
+        task.front.github = Some(GitHubLink::new(repo.clone(), issue.number));
+        task.front.updated_at = Utc::now();
+        set_baseline(&mut task, &issue);
+        persist_task(board, &task, &format!("orbit: github create {}", task.id))?;
+
+        let final_issue = if task.front.status.is_terminal() {
+            match client.update_issue(
+                &repo,
+                issue.number,
+                &UpdateIssueInput {
+                    state: Some(crate::github::model::IssueState::Closed),
+                    title: None,
+                    body: None,
+                    labels: None,
+                    area: None,
+                    verification: None,
+                },
+            ) {
+                Ok(closed) => {
+                    set_baseline(&mut task, &closed);
+                    persist_task(board, &task, &format!("orbit: github create {}", task.id))?;
+                    closed
+                }
+                Err(error) => {
+                    results.push(json!({
+                        "task": task.id,
+                        "repository": repo,
+                        "github": task.front.github,
+                        "issue": issue,
+                        "success": false,
+                        "created": true,
+                        "linked": true,
+                        "error": error.message,
+                        "error_code": error.code,
+                        "next_action": format!("run `orbit github sync {} --apply` to close the Issue", task.id),
+                    }));
+                    human.push(format!(
+                        "{}\n  Result: created and linked, but could not close Issue — {}",
+                        format_create_preview(&task, &repo, issue_state),
+                        error.message
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            issue
+        };
+        results.push(json!({
+            "task": task.id,
+            "repository": repo,
+            "title": task.front.title,
+            "body": task.body,
+            "labels": task.front.labels,
+            "area": task.front.area.map(|area| area.as_str()),
+            "verification": task.front.verification,
+            "status": task.front.status,
+            "issue_state": issue_state,
+            "github": task.front.github,
+            "issue": final_issue,
+            "success": true,
+        }));
+        human.push(format!(
+            "{}\n  Result: created {}/#{}",
+            format_create_preview(&task, &repo, issue_state),
+            repo,
+            final_issue.number
+        ));
+    }
+
+    let failures = results
+        .iter()
+        .filter(|result| result["success"] == false)
+        .count();
+    let successes = results
+        .iter()
+        .filter(|result| result["success"] == true)
+        .count();
+    let count = results.len();
+    let data = json!({
+        "repository": repo,
+        "apply_required": !args.apply,
+        "count": count,
+        "preview_count": if args.apply { Value::Null } else { json!(count) },
+        "success_count": if args.apply { json!(successes) } else { Value::Null },
+        "failure_count": if args.apply { json!(failures) } else { Value::Null },
+        "tasks": results,
+    });
+    let summary = if args.apply {
+        format!("Exported {successes} Task(s); {failures} failed")
+    } else {
+        format!("Previewed {count} Task(s); nothing was written. Apply with --apply.")
+    };
     Ok(crate::output::CommandOutput::new(
-        json!({ "task": task.id, "github": task.front.github, "issue": issue }),
-        format!("Created {}/#{} for {}", repo, issue.number, task.id),
+        data,
+        format!("{summary}\n{}", human.join("\n")),
     ))
+}
+
+fn format_create_preview(task: &Task, repository: &str, issue_state: &str) -> String {
+    let body = if task.body.is_empty() {
+        "  (empty)".to_string()
+    } else {
+        task.body
+            .lines()
+            .map(|line| format!("  {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "Task: {}\n  Repository: {}\n  Title: {}\n  Body:\n{}\n  Labels: {}\n  Area: {}\n  Verification: {}\n  Task status: {}\n  GitHub Issue state: {}",
+        task.id,
+        repository,
+        task.front.title,
+        body,
+        if task.front.labels.is_empty() {
+            "(none)".to_string()
+        } else {
+            task.front.labels.join(", ")
+        },
+        task.front
+            .area
+            .map(|area| area.as_str())
+            .unwrap_or("(none)"),
+        task.front.verification.as_deref().unwrap_or("(none)"),
+        task.front.status.as_str(),
+        issue_state,
+    )
 }
 
 fn resolve_adopt_identifier(args: &GitHubAdoptArgs) -> Result<(String, u64)> {
@@ -1168,14 +1409,16 @@ fn parse_issue_url(url: &str) -> Result<(String, u64)> {
     Ok((repo, number))
 }
 
-fn select_create_repo(
-    config: &crate::github::GitHubConfig,
-    requested: Option<&str>,
-) -> Result<String> {
+fn select_create_repo(repositories: &[String], requested: Option<&str>) -> Result<String> {
     if let Some(repo) = requested {
-        return crate::github::GitHubConfig::normalize_repo(repo);
+        let repo = crate::github::GitHubConfig::normalize_repo(repo)?;
+        return repositories
+            .iter()
+            .find(|candidate| candidate.eq_ignore_ascii_case(&repo))
+            .map(|candidate| crate::github::GitHubConfig::normalize_repo(candidate))
+            .unwrap_or(Ok(repo));
     }
-    match config.repositories.as_slice() {
+    match repositories {
         [repo] => crate::github::GitHubConfig::normalize_repo(repo),
         [] => Err(OrbitError::invalid_argument(
             "no GitHub repository is linked; link one with `orbit github repo link OWNER/REPO`, then create without --repo or pass --repo OWNER/REPO",

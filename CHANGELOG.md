@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `orbit github create` now previews selected Local Tasks by default, supports explicit batches and terminal-task opt-in, and applies each Issue independently before persisting its stable Task link and sync baseline. Workspace exports infer a single included repository; linked Tasks are directed to sync instead of being duplicated.
+
 ## 0.9.4 - 2026-10-28
 
 - Treat `admin:org` and `write:org` as satisfying the `read:org` requirement for full GitHub mode. Organization administrators no longer receive a false `GITHUB_SCOPES_MISSING` warning.

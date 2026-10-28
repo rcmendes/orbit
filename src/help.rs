@@ -861,7 +861,10 @@ and scopes, linked repositories, Issue Fields when applicable, pending changes,
 conflicts, unsupported relationships, and the next recommended action. `orbit
 doctor` also checks GitHub configuration when the provider is enabled. GitHub sync
 requires Orbit 0.9.0 or newer; default release builds include the
-`github-provider` capability.";
+`github-provider` capability. `github create` previews one or more Local Tasks by
+default. Pass `--apply` to create Issues and persist their links; done and cancelled
+Tasks also require `--include-terminal`. Workspace Boards infer the destination
+from the included repository catalog when exactly one repository is available.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
@@ -873,7 +876,10 @@ Examples:
   orbit github setup
   orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
   orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
-  orbit github create orb-a7b2c9
+  orbit github create orb-a7b2c9                 # preview only
+  orbit github create orb-a7b2c9 --apply
+  orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
+  orbit github create orb-d4e5f6 --include-terminal --apply
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
 
@@ -951,7 +957,9 @@ Examples:
 pub const GITHUB_CREATE_EXAMPLES: &str = "\
 Examples:
   orbit github create orb-a7b2c9
-  orbit github create orb-a7b2c9 --repo acme/widget";
+  orbit github create orb-a7b2c9 --apply
+  orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
+  orbit github create orb-d4e5f6 --include-terminal --apply";
 
 pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\
 Examples:

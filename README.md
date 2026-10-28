@@ -705,6 +705,7 @@ orbit github status
 orbit add "First GitHub task" -p 1
 # Copy the Task ID printed by `orbit add` and replace orb-a7b2c9 below.
 orbit github create orb-a7b2c9
+orbit github create orb-a7b2c9 --apply
 orbit github sync orb-a7b2c9 # preview only
 orbit github sync orb-a7b2c9 --apply
 ```
@@ -722,6 +723,7 @@ Run `orbit github status` for a read-only diagnostic of the authenticated accoun
 # Personal repository: [github] mode = "basic" + repositories in config.toml.
 orbit github repo link alice/widget
 orbit github create orb-a7b2c9 --repo alice/widget
+orbit github create orb-a7b2c9 --repo alice/widget --apply
 
 # Connect an organization-owned repository from its checkout:
 orbit github connect
@@ -733,9 +735,20 @@ orbit github setup
 orbit github setup --create-fields # create missing fields (organization admin required)
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
-orbit github create orb-a7b2c9 # automatically uses the only linked repository
-orbit github sync orb-a7b2c9 --apply
+orbit github sync orb-a7b2c9 --apply # publish changes to the adopted Issue
+orbit add "A new local task"        # use its printed ID below
+orbit github create orb-d4e5f6     # preview; automatically uses the only linked repository
+orbit github create orb-d4e5f6 --apply
 ```
+
+`github create` accepts one or more Task IDs and previews the destination,
+Issue title/body, labels, Orbit status, and mapped open/closed state without
+writing. Pass `--apply` to create Issues and link each Task only after GitHub
+confirms creation. A batch reports each Task's result independently; linked Tasks
+are rejected on retry and should use `orbit github sync`. Done and cancelled
+Tasks require `--include-terminal`. From a Workspace Board, the sole included
+repository is inferred from `orbit workspace refresh`; when more than one is
+included, pass `--repo OWNER/REPO`.
 
 `orbit github setup` does not create fields unless `--create-fields` is passed.
 See [the GitHub sync guide](./docs/github-sync.md) for required permissions and

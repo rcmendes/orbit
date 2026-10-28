@@ -937,7 +937,7 @@ pub enum GitHubCommand {
     /// Adopt an existing GitHub Issue for a Task.
     #[command(after_long_help = help::GITHUB_ADOPT_EXAMPLES)]
     Adopt(GitHubAdoptArgs),
-    /// Create a GitHub Issue for a linked Task.
+    /// Preview or create GitHub Issues for selected Local Tasks.
     #[command(after_long_help = help::GITHUB_CREATE_EXAMPLES)]
     Create(GitHubCreateArgs),
     /// Preview or apply bidirectional sync for linked Tasks.
@@ -991,10 +991,25 @@ pub struct GitHubAdoptArgs {
 
 #[derive(Debug, Args)]
 pub struct GitHubCreateArgs {
-    #[arg(value_name = "TASK")]
-    pub task: String,
-    #[arg(long, value_name = "OWNER/REPO")]
+    #[arg(
+        value_name = "TASK",
+        required = true,
+        num_args = 1..,
+        help = "One or more Local Task IDs to export"
+    )]
+    pub tasks: Vec<String>,
+    #[arg(
+        long,
+        value_name = "OWNER/REPO",
+        help = "Choose an included repository (inferred only when one is available)"
+    )]
     pub repo: Option<String>,
+    /// Create Issues and link Tasks. Without this flag, show a read-only preview.
+    #[arg(long)]
+    pub apply: bool,
+    /// Include done and cancelled Tasks in the export.
+    #[arg(long)]
+    pub include_terminal: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]

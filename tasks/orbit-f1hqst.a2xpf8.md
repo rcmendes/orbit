@@ -1,6 +1,6 @@
 ---
 title: Build and browse the Remote Issue catalog
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -10,8 +10,11 @@ depends_on:
 - orbit-f1hqst.r02zj4
 parent: orbit-f1hqst
 area: board
+claimed_by: rodrigomendes
+claimed_at: 2026-10-28T23:20:52.206844Z
+lease_until: 2026-10-28T23:50:52.206844Z
 created_at: 2026-10-28T22:47:50.427118Z
-updated_at: 2026-10-28T22:47:50.427118Z
+updated_at: 2026-10-28T23:20:52.206844Z
 ---
 
 ## Goal

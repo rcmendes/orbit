@@ -1,6 +1,6 @@
 ---
 title: Add reusable agent Triage review and apply workflow
-status: todo
+status: done
 type: task
 priority: 2
 depends_on:
@@ -8,7 +8,7 @@ depends_on:
 - orbit-6pm4p0.2m09a7
 parent: orbit-6pm4p0
 created_at: 2026-10-28T14:07:27.390594Z
-updated_at: 2026-10-28T14:07:27.390594Z
+updated_at: 2026-10-28T14:44:17.076064Z
 ---
 
 ## Goal

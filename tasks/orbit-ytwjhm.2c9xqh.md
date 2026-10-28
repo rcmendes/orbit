@@ -1,6 +1,6 @@
 ---
 title: Add explicit GitHub basic mode for personal accounts
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -8,8 +8,11 @@ labels:
 - ready-for-agent
 parent: orbit-ytwjhm
 area: cli
+claimed_by: impl-0nbgfx
+claimed_at: 2026-10-28T15:27:06.790161Z
+lease_until: 2026-10-28T15:57:06.790161Z
 created_at: 2026-10-28T15:23:46.609777Z
-updated_at: 2026-10-28T15:23:46.609777Z
+updated_at: 2026-10-28T15:27:06.790161Z
 ---
 
 ## Goal

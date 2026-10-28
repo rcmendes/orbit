@@ -9,12 +9,17 @@ labels:
 depends_on:
 - orbit-ytwjhm.z30hsp
 parent: orbit-ytwjhm
+checkpoint:
+  by: impl-v8vgqe
+  at: 2026-10-28T15:40:27.922826Z
+  progress: Verified ticket branch is based on integrate/orbit-ytwjhm; inspected existing GitHub client/sync/relationship and doctor seams. Using CLI integration tests for human/JSON status, doctor diagnostics, and read-only behavior.
+  next: Add failing status/doctor integration tests, then implement status diagnostics and docs.
 area: cli
 claimed_by: impl-v8vgqe
 claimed_at: 2026-10-28T15:39:34.116849Z
 lease_until: 2026-10-28T16:09:54.069981Z
 created_at: 2026-10-28T15:23:57.647591Z
-updated_at: 2026-10-28T15:39:54.069981Z
+updated_at: 2026-10-28T15:40:27.922826Z
 ---
 
 ## Goal

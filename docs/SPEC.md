@@ -335,6 +335,21 @@ persist overrides in the Workspace Board's `[workspace]` config. A non-empty
 include list is an allowlist; exclusions take precedence, and the two override
 lists cannot contain the same repository.
 
+### Remote Issue catalog
+
+`orbit workspace issues refresh` first reconciles direct child repository
+discovery, then paginates all open and closed Issues for included repositories.
+Pull requests are excluded. It stores summary fields, including stable
+`OWNER/REPO#NUMBER` identity, labels, Issue Fields, URL, and timestamps, in
+`<workspace>/.orbit/cache/issues.json`; bodies and comments are fetched only by
+`orbit workspace issues inspect OWNER/REPO#NUMBER`. Each repository records its
+last successful refresh and any error. A failed refresh retains its previous
+snapshot and reports it as stale; a repository with no successful snapshot is
+unavailable. Listing can filter by repository, state, labels, title text, and
+whether an Issue is linked to a Task. Catalog entries are never Tasks and are
+excluded from task listing, readiness, claims, and Task export until explicitly
+imported.
+
 The status snapshot reports included and excluded repositories, first-time
 access failures (`inaccessible`), previously cached but unavailable repositories
 (`stale`), repositories no longer present (`removed`), unsupported owners,

@@ -1,14 +1,11 @@
 ---
 title: Add structured agent metadata and shared project guidance
-status: in_progress
+status: done
 type: task
 priority: 2
 parent: orbit-6pm4p0
-claimed_by: implementer-2m09a7
-claimed_at: 2026-10-28T14:27:19.795011Z
-lease_until: 2026-10-28T14:57:19.795011Z
 created_at: 2026-10-28T14:07:19.676388Z
-updated_at: 2026-10-28T14:27:19.795011Z
+updated_at: 2026-10-28T14:33:36.153105Z
 ---
 
 ## Goal

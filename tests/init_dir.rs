@@ -15,6 +15,7 @@ fn init_dir_creates_a_repository_board() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let folder = parent.path().join("acme");
+    let board = folder.join(".orbit/board");
 
     let value = repo.ok_json_in(
         parent.path(),
@@ -25,10 +26,10 @@ fn init_dir_creates_a_repository_board() {
     assert_eq!(value["data"]["branch"], "orbit");
     assert_eq!(value["data"]["storage"], "repository");
     assert_eq!(value["data"]["prefix"], "acme-");
-    assert_eq!(value["data"]["board"].as_str().unwrap(), canonical(&folder));
-    assert!(folder.join("config.toml").exists());
-    assert!(folder.join(".git").exists());
-    assert!(!folder.join("board").exists());
+    assert_eq!(value["data"]["board"].as_str().unwrap(), canonical(&board));
+    assert!(board.join("config.toml").exists());
+    assert!(board.join(".git").exists());
+    assert!(folder.join(".orbit/cache").is_dir());
 }
 
 #[test]
@@ -157,13 +158,17 @@ fn init_dir_prints_a_next_step() {
     assert!(output.status.success());
     assert!(stdout.contains("Orbit setup complete."), "{stdout}");
     assert!(stdout.contains("1. Board (created)"), "{stdout}");
-    assert!(stdout.contains("orbit link"), "{stdout}");
+    assert!(
+        stdout.contains("Workspace Board at <workspace>/.orbit/board"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("orbit link"), "{stdout}");
     assert!(stdout.contains("orbit setup <client>"), "{stdout}");
     assert!(stdout.contains("3. Verify"), "{stdout}");
 }
 
 #[test]
-fn init_dir_refuses_a_non_empty_repository_directory() {
+fn workspace_init_preserves_existing_workspace_files() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let folder = parent.path().join("acme");
@@ -175,19 +180,13 @@ fn init_dir_refuses_a_non_empty_repository_directory() {
         &["init", "acme", "--agents", "none", "--json"],
     );
 
-    assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "CONFIG_ERROR");
-    assert!(
-        value["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("empty")
-    );
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["storage"], "repository");
     assert_eq!(
         std::fs::read_to_string(folder.join("keep.txt")).unwrap(),
         "keep"
     );
-    assert!(!folder.join("config.toml").exists());
+    assert!(folder.join(".orbit/board/config.toml").exists());
 }
 
 #[test]
@@ -224,7 +223,10 @@ fn init_dir_option_creates_that_dir_without_linking() {
         "--json",
     ]);
 
-    assert_eq!(value["data"]["board"].as_str().unwrap(), canonical(&target));
+    assert_eq!(
+        value["data"]["board"].as_str().unwrap(),
+        canonical(&target.join(".orbit/board"))
+    );
     assert_eq!(value["data"]["storage"], "repository");
     assert!(!repo.path().join(".git/orbit/link").exists());
 }
@@ -351,8 +353,11 @@ fn init_positional_dir_wins_over_dir_override() {
         "--json",
     ]);
 
-    assert_eq!(value["data"]["board"].as_str().unwrap(), canonical(&target));
-    assert!(target.join("config.toml").exists());
+    assert_eq!(
+        value["data"]["board"].as_str().unwrap(),
+        canonical(&target.join(".orbit/board"))
+    );
+    assert!(target.join(".orbit/board/config.toml").exists());
     assert!(!ignored.exists());
 }
 

@@ -1,6 +1,6 @@
 # Orbit Architecture
 
-Status: describes v0.9.4 behavior, including the Orbit folder (`DIR`, default `.orbit`), user-scoped agent setup, legacy layout migration, and GitHub provider diagnostics. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
+Status: describes Workspace-root Board discovery (`<workspace>/.orbit/board`), the repository-local Orbit folder (`.orbit`), user-scoped agent setup, legacy layout migration, and GitHub provider diagnostics. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
 
 The short version: Orbit is one binary, two front doors (the JSON CLI and the MCP stdio server), and no daemon. A board command resolves a Board, takes a lock, rebuilds the task graph from Markdown, applies one transition, publishes files atomically, and optionally commits to an orphan Git branch.
 
@@ -152,7 +152,7 @@ Every command resolves the Board before it does any work. The first match wins.
 ```mermaid
 flowchart TD
     START(["orbit command"]) --> OVERRIDE{"--dir or ORBIT_DIR set?"}
-    OVERRIDE -->|yes| EXPLICIT["resolve DIR<br/>new or legacy shape"]
+    OVERRIDE -->|yes| EXPLICIT["resolve Workspace root<br/>or Board directory"]
     EXPLICIT --> EXISTS{"Board found?"}
     EXISTS -->|no| NOBOARD["BOARD_NOT_FOUND"]
     EXISTS -->|yes| LOCK["acquire DIR/.lock"]
@@ -162,7 +162,9 @@ flowchart TD
     LINKED -->|yes| TARGET{"target has a Board?"}
     TARGET -->|no| LINKERR["LINK_NOT_FOUND"]
     TARGET -->|yes| SHARED["use linked DIR"]
-    LINKED -->|no| NEAREST{"nearest .orbit<br/>skipping ~/.orbit?"}
+    LINKED -->|no| WORKSPACE{"containing Workspace<br/>.orbit/board?"}
+    WORKSPACE -->|yes| WBOARD["use Workspace Board"]
+    WORKSPACE -->|no| NEAREST{"nearest repository .orbit<br/>skipping ~/.orbit?"}
     NEAREST -->|yes| OWN["use nearest .orbit"]
     NEAREST -->|no| MAIN{"main checkout<br/>.orbit exists?"}
     MAIN -->|yes| OWN
@@ -172,17 +174,20 @@ flowchart TD
     GLOBAL -->|yes| GLOBALUSE["use global Board"]
     GLOBAL -->|no| NOBOARD2["BOARD_NOT_FOUND<br/>run orbit init"]
 
-    REPO -->|no| OUTSIDE{".orbit ancestor<br/>skipping ~/.orbit?"}
-    OUTSIDE -->|yes| OWN
-    OUTSIDE -->|no| GLOBAL
+    REPO -->|no| OUTSIDE{"Workspace Board ancestor<br/>.orbit/board?"}
+    OUTSIDE -->|yes| WBOARD
+    OUTSIDE -->|no| OUTSIDEORBIT{"nearest .orbit<br/>skipping ~/.orbit?"}
+    OUTSIDEORBIT -->|yes| OWN
+    OUTSIDEORBIT -->|no| GLOBAL
 
     SHARED --> LOCK
+    WBOARD --> LOCK
     OWN --> LOCK
     LEGACYUSE --> LOCK
     GLOBALUSE --> LOCK
 ```
 
-The pointer lives in the Git common directory, not in a worktree. That is why a claim made from a linked worktree and a claim made from the main worktree serialize on the same `<DIR>/.lock` and see the same tasks. A linked Board is a `DIR` outside the member repository; the global Board at `~/.orbit` is the last fallback and is never created by discovery. A legacy Board keeps its old hidden worktree and lock until `doctor --migrate` moves it. When both a new `.orbit` and a legacy local Board exist, the new one wins and the command warns with `AMBIGUOUS_BOARD`; `doctor` reports the duplicate.
+The pointer lives in the Git common directory, not in a worktree. That is why a claim made from a linked worktree and a claim made from the main worktree serialize on the same Board lock and see the same tasks. A Workspace Board at `<workspace>/.orbit/board` is found above child Git roots and needs no per-repository pointer; outside repositories can link the Workspace root. The global Board at `~/.orbit` is the last fallback and is never created by discovery. A legacy Board keeps its old hidden worktree and lock until migration. When a child-local Board competes with its Workspace Board, the Workspace Board wins and the command warns with `AMBIGUOUS_BOARD`; `doctor` reports the duplicate.
 
 ### Domain relationships
 
@@ -462,7 +467,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 
 ### Topology
 
-A Workspace is one Board plus every Repository linked to it. The Board lives in the Orbit folder (`DIR`): inside a Git working tree, `DIR` is a worktree of that repository on the `orbit` branch; outside one, it is a standalone Git repository. Linking writes a pointer in each Repository's Git common directory, so cross-repository Dependencies share one graph. `unlink` removes the pointer and returns the Repository to the main checkout's `.orbit`, if one exists. The global Board at `~/.orbit` is the last discovery fallback.
+A Workspace is an ordinary, non-Git folder containing repositories and one Board. Its Board is the standalone repository at `<workspace>/.orbit/board`; the rebuildable catalog cache is separate at `<workspace>/.orbit/cache`. Child repositories discover the Workspace Board by walking above their Git boundary and need no link. Repositories outside the Workspace can link its root; the link pointer remains in each Repository's Git common directory. The repository-local Board remains `<repository>/.orbit`, and the global Board at `~/.orbit` is the last discovery fallback.
 
 ```mermaid
 flowchart LR
@@ -472,9 +477,10 @@ flowchart LR
     end
 
     subgraph Shared["Shared Board"]
-        SHARED["shared DIR<br/>standalone repository"]
-        R1["repository A<br/>.git/orbit/link"]
-        R2["repository B<br/>.git/orbit/link"]
+        SHARED["Workspace Board<br/>.orbit/board"]
+        CACHE["Workspace cache<br/>.orbit/cache"]
+        R1["child repository A"]
+        R2["child repository B"]
     end
 
     subgraph Global["Global fallback"]
@@ -482,8 +488,8 @@ flowchart LR
     end
 
     WT -.->|resolves| MAIN
-    R1 -.->|links to| SHARED
-    R2 -.->|links to| SHARED
+    R1 -.->|discovers across Git boundary| SHARED
+    R2 -.->|discovers across Git boundary| SHARED
     MAIN --> LOCALGRAPH["one task graph<br/>tasks and comments"]
     SHARED --> SHAREDGRAPH["one task graph<br/>tasks and comments"]
     GLOBAL --> GLOBALGRAPH["only when no other<br/>Board resolves"]
@@ -491,7 +497,7 @@ flowchart LR
 
 ### Resolving the Task-ID slug
 
-`orbit init` resolves the literal `id.prefix` from `DIR` before creating a Board. A `DIR` named `.orbit` uses its parent folder name; any other `DIR` uses its own name; `--global` and `~/.orbit` use `orb` with a warning; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the anchor rule.
+`orbit init` resolves the literal `id.prefix` from the repository or Workspace root before creating a Board. `--global` and `~/.orbit` use `orb` with a warning; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the anchor rule.
 
 `orbit slug show` reads the stored prefix, task/SubTask counts, and comment-file count without loading the graph. `orbit slug migrate <slug>` is the explicit rewrite path for a populated Board. It keeps each random suffix, rewrites `parent`, `depends_on`, comment filenames and Orbit headers, updates `id.prefix`, and records one commit. It refuses an unhealthy Board, a target collision, and live claims unless `--force`; a dry run reports the plan and claims without writing.
 
@@ -517,11 +523,11 @@ The temporary worktree is the transaction boundary: the real Board is not touche
 
 ### Creating a Board
 
-`orbit init [DIR]` chooses the storage mode from where `DIR` lives. It refuses to create a Board that would compete with an existing repository-local resolution for `DIR`: if a link, an ancestor `.orbit`, the main checkout's `.orbit`, or a legacy Board already resolves, the command returns `ALREADY_INITIALIZED` before writing. `--global` and the `~/.orbit` fallback are exempt. Re-running on the same `DIR` is idempotent.
+`orbit init [DIR]` creates a repository-local Board at `./.orbit` inside Git or a Workspace Board at `<workspace>/.orbit/board` outside Git. `--dir`/`ORBIT_DIR` use the Workspace root. It refuses to shadow an existing child-repository Board or overwrite unknown `.orbit` contents; a legacy Board directly at `<workspace>/.orbit` gets a migration diagnostic. Running `init` from a child Repository with a discovered Workspace Board reuses it. `--global` and the `~/.orbit` fallback are exempt.
 
 ```mermaid
 flowchart TD
-    I["orbit init [DIR]"] --> R["resolve DIR<br/>default ./.orbit"]
+    I["orbit init [DIR]"] --> R["resolve root<br/>repo .orbit or Workspace .orbit/board"]
     R --> EXISTS{"DIR is a Board?"}
     EXISTS -->|yes| REUSE["reuse it<br/>idempotent"]
     EXISTS -->|no| SECOND{"another Board resolves<br/>for DIR?"}
@@ -540,7 +546,7 @@ flowchart TD
     PROMPT -->|--agents none| HINT
 ```
 
-A standalone `DIR` must be empty apart from `.git`, so the first commit contains only Board files; otherwise `init` returns `CONFIG_ERROR`. A worktree-mode `init` writes the `DIR` path to `.git/info/exclude`; it never edits a tracked `.gitignore`. `--print` returns the same plan without writing.
+A standalone Board directory must be empty apart from `.git`, so its first commit contains only Board files. The Workspace root itself may contain repositories and user data; init only creates the reserved `.orbit/board` and `.orbit/cache` entries, and refuses unknown entries under `.orbit`. A worktree-mode init writes the repository-local Board path to `.git/info/exclude`; it never edits a tracked `.gitignore`. `--print` returns the same plan without writing.
 
 ### Initializing a Board and wiring agents
 

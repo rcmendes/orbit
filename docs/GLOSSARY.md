@@ -110,16 +110,25 @@ A process that reads and mutates Tasks on behalf of a developer.
 _Avoid_: Worker, bot, client
 
 **Workspace**:
-The scope an Agent sees: one Board and every Repository linked to it.
+An ordinary, non-Git folder that contains repositories and one Workspace Board.
+Repositories inside it discover that Board by walking through their Git boundary;
+repositories outside it can join with `orbit link`.
 _Avoid_: Project, database
 
 **Board**:
-The versioned store of Tasks and configuration for a Workspace. A Board lives in one Orbit folder and has one `orbit` branch.
+The versioned store of Tasks and configuration for a Workspace. In a repository,
+the Board lives at `<repository>/.orbit`; in a Workspace it lives at
+`<workspace>/.orbit/board`. Both have one `orbit` branch.
 _Avoid_: Database, store, project
 
 **Orbit folder** (DIR):
-The single directory delegated to Orbit that holds `config.toml`, `tasks/`, and `comments/`. The default is `<project>/.orbit`. Inside a Git working tree the folder is a worktree of that repository on the `orbit` branch; outside one it is a standalone Git repository. All commands take DIR the same way.
-_Avoid_: Board root, workspace, data directory, hidden worktree
+The Board directory that holds `config.toml`, `tasks/`, and `comments/`. It is
+`<repository>/.orbit` for a repository-local Board and
+`<workspace>/.orbit/board` for a Workspace Board. `--dir` and `ORBIT_DIR` may
+name either the Orbit folder or its Workspace root. Inside a Git working tree it
+is a worktree of that repository on `orbit`; outside one it is a standalone Git
+repository.
+_Avoid_: Workspace root, data directory, hidden worktree
 
 **Storage mode**:
 How an Orbit folder is backed by Git: `worktree` when DIR is inside a working tree and shared by every worktree of the repository, or `repository` when DIR is its own Git repository. The mode is recorded in `config.toml` and changes only Git plumbing, never the Board contract.
@@ -129,8 +138,19 @@ _Avoid_: Layout, backend, external board
 The opt-in Board at `~/.orbit`, created only by `orbit init --global`. It is the last discovery fallback and is never created implicitly by a command.
 _Avoid_: Default board, user board, central board
 
+**Workspace cache**:
+The reserved, rebuildable local data directory at `<workspace>/.orbit/cache`.
+It is separate from the versioned Board at `<workspace>/.orbit/board`.
+_Avoid_: Board, task store
+
 **Legacy layout**:
-A Board from before the Orbit folder: the hidden worktree at `<git-common-dir>/orbit/board`, a shared `<workspace>/board`, or an old `--board` path. It keeps resolving with a `LEGACY_LAYOUT` warning until `orbit doctor --migrate` moves it.
+A Board from before the current path contract: the hidden worktree at
+`<git-common-dir>/orbit/board`, a shared `<workspace>/board`, a Board directly at
+`<workspace>/.orbit`, or an old `--board` path. Legacy layouts keep resolving
+where supported with a warning; `orbit init <workspace>` reports a direct
+`<workspace>/.orbit` Board and refuses to shadow it. The previous
+`<workspace>/board` layout migrates to
+`<workspace>/.orbit/board`.
 _Avoid_: Old mode, compatibility board
 
 **Linked Repository**:

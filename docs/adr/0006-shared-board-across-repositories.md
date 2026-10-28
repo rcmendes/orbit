@@ -2,7 +2,7 @@
 
 A Workspace is one Board plus every Repository linked to it, so a product backlog can span several repositories without copying Tasks between Boards. A Repository selects a non-local Board through an explicit pointer in its Git common directory, written by `orbit link`; `--dir` and `ORBIT_DIR` still override it, and a Repository with no pointer uses the Board inside its Git common directory. Cross-repository Dependencies work because every linked Repository shares one graph.
 
-> **Amended by [ADR 0012](./0012-orbit-folder.md):** the pointer target is the Orbit folder `DIR`, not a board root or workspace root. A Repository without a pointer resolves the nearest `.orbit`, then the main checkout's `.orbit`. The only user-level Board is the opt-in `~/.orbit` fallback.
+> **Amended by [ADR 0012](./0012-orbit-folder.md):** a pointer may target an Orbit folder or Workspace root. Child repositories discover a Workspace Board at `<workspace>/.orbit/board` without pointers; repositories outside the Workspace may use `orbit link <workspace-root>`. A Repository without a Workspace match or pointer resolves its nearest `.orbit`, then the main checkout's `.orbit`. The only user-level Board is the opt-in `~/.orbit` fallback.
 
 ## Considered Options
 

@@ -22,6 +22,7 @@ pub const ABSOLUTE_BOARD_PATH: &str = "ABSOLUTE_BOARD_PATH";
 pub enum DiscoverySource {
     Dir,
     Link,
+    Workspace,
     Nearest,
     MainCheckout,
     LegacyLocal,
@@ -34,6 +35,7 @@ impl DiscoverySource {
         match self {
             Self::Dir => "dir",
             Self::Link => "link",
+            Self::Workspace => "workspace",
             Self::Nearest => "nearest",
             Self::MainCheckout => "main_checkout",
             Self::LegacyLocal => "legacy_local",
@@ -472,6 +474,14 @@ impl Board {
         let root = resolve_external(path)?;
         if Self::is_board(&root) {
             return Ok((root, false));
+        }
+        let workspace = root.join(".orbit").join("board");
+        if Self::is_board(&workspace) {
+            return Ok((workspace, false));
+        }
+        let legacy_orbit = root.join(".orbit");
+        if Self::is_board(&legacy_orbit) {
+            return Ok((legacy_orbit, true));
         }
         let nested = root.join("board");
         if Self::is_board(&nested) {
@@ -948,27 +958,82 @@ fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
             return;
         }
     };
-    let mut step = DiscoveryStep::new(DiscoverySource::Dir, Some(root.clone()));
-    if !step.found {
-        discovery.steps.push(step);
+    let internal = root.join(".orbit").join("board");
+    let legacy_orbit = root.join(".orbit");
+    let legacy_nested = root.join("board");
+    let (selected_root, workspace, legacy) = if Board::is_board(&root) {
+        (root.clone(), false, false)
+    } else if Board::is_board(&internal) {
+        (internal, true, false)
+    } else if Board::is_board(&legacy_orbit) {
+        (legacy_orbit.clone(), true, true)
+    } else if Board::is_board(&legacy_nested) {
+        (legacy_nested, true, true)
+    } else {
+        discovery
+            .steps
+            .push(DiscoveryStep::new(DiscoverySource::Dir, Some(root.clone())));
         discovery.error = Some(OrbitError::board_not_found());
         return;
-    }
-
+    };
+    let mut step = DiscoveryStep::new(DiscoverySource::Dir, Some(root.clone()));
+    step.found = true;
     step.selected = true;
-    discovery.root = Some(root.clone());
+    discovery.root = Some(selected_root.clone());
     discovery.source = DiscoverySource::Dir;
-    match legacy_local_board_for(&root) {
-        Some(legacy) if legacy == root => {
-            let warning = format!("{LEGACY_LAYOUT}: using legacy Board at {}", root.display());
-            discovery.legacy = Some(warning.clone());
-            push_warning(&mut discovery.warnings, warning);
+    if legacy {
+        let warning = format!(
+            "{LEGACY_LAYOUT}: using legacy Workspace Board at {}",
+            selected_root.display()
+        );
+        discovery.legacy = Some(warning.clone());
+        push_warning(&mut discovery.warnings, warning);
+    }
+    if workspace && selected_root != legacy_orbit && Board::is_board(&legacy_orbit) {
+        discovery.ambiguous = Some((selected_root.clone(), legacy_orbit.clone()));
+        push_warning(
+            &mut discovery.warnings,
+            format!(
+                "{AMBIGUOUS_BOARD}: both Workspace Board {} and legacy Board {} exist; using {}",
+                selected_root.display(),
+                legacy_orbit.display(),
+                selected_root.display()
+            ),
+        );
+    }
+    if workspace {
+        match workspace_child_board(&root) {
+            Ok(Some(local)) if local != selected_root => {
+                discovery.ambiguous = Some((selected_root.clone(), local.clone()));
+                push_warning(
+                    &mut discovery.warnings,
+                    format!(
+                        "{AMBIGUOUS_BOARD}: Workspace Board {} and child-repository Board {} both exist; using the Workspace Board",
+                        selected_root.display(),
+                        local.display()
+                    ),
+                );
+            }
+            Ok(_) => {}
+            Err(error) => discovery.error = Some(error),
         }
-        Some(legacy) => {
-            discovery.ambiguous = Some((root.clone(), legacy.clone()));
-            warn_if_ambiguous(&mut discovery.warnings, &root, &legacy);
+    }
+    if !workspace {
+        match legacy_local_board_for(&selected_root) {
+            Some(other) if other == selected_root => {
+                let warning = format!(
+                    "{LEGACY_LAYOUT}: using legacy Board at {}",
+                    selected_root.display()
+                );
+                discovery.legacy = Some(warning.clone());
+                push_warning(&mut discovery.warnings, warning);
+            }
+            Some(other) => {
+                discovery.ambiguous = Some((selected_root.clone(), other.clone()));
+                warn_if_ambiguous(&mut discovery.warnings, &selected_root, &other);
+            }
+            None => {}
         }
-        None => {}
     }
     discovery.steps.push(step);
 }
@@ -995,6 +1060,7 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         let link = common.join("orbit").join("link");
         let legacy_local = legacy_local_path(&common);
         let nearest = nearest_orbit(&cwd, &repo_root, home.as_deref());
+        let workspace = nearest_workspace_board(&cwd);
         let main = main_checkout_for(&repo_root, &common).join(".orbit");
         let global = home.as_deref().and_then(global_board);
 
@@ -1018,6 +1084,10 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         ));
         let link_step = discovery.steps.len() - 1;
         discovery.steps[link_step].found = link_root.is_some();
+        discovery.steps.push(DiscoveryStep::new(
+            DiscoverySource::Workspace,
+            workspace.clone(),
+        ));
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::Nearest,
             nearest.clone(),
@@ -1051,6 +1121,19 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
                 push_warning(&mut discovery.warnings, warning);
             }
             Some((DiscoverySource::Link, root))
+        } else if let Some(root) = workspace {
+            if let Some(local) = nearest.as_ref().filter(|local| *local != &root) {
+                discovery.ambiguous = Some((root.clone(), local.clone()));
+                push_warning(
+                    &mut discovery.warnings,
+                    format!(
+                        "{AMBIGUOUS_BOARD}: Workspace Board {} and child-repository Board {} both exist; using the Workspace Board",
+                        root.display(),
+                        local.display()
+                    ),
+                );
+            }
+            Some((DiscoverySource::Workspace, root))
         } else if let Some(root) = nearest {
             warn_if_ambiguous(&mut discovery.warnings, &root, &legacy_local);
             Some((DiscoverySource::Nearest, root))
@@ -1102,7 +1185,12 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         .filter(|home| cwd.starts_with(home))
         .unwrap_or_else(|| Path::new("/"));
     let nearest = nearest_orbit(&cwd, stop, home.as_deref());
+    let workspace = nearest_workspace_board(&cwd);
     let global = home.as_deref().and_then(global_board);
+    discovery.steps.push(DiscoveryStep::new(
+        DiscoverySource::Workspace,
+        workspace.clone(),
+    ));
     discovery.steps.push(DiscoveryStep::new(
         DiscoverySource::Nearest,
         nearest.clone(),
@@ -1111,14 +1199,37 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         .steps
         .push(DiscoveryStep::new(DiscoverySource::Global, global.clone()));
 
-    if let Some(root) = nearest {
-        discovery.source = DiscoverySource::Nearest;
+    if let Some(root) = workspace {
+        if let Some(legacy) = nearest.as_ref().filter(|path| *path != &root) {
+            discovery.ambiguous = Some((root.clone(), legacy.clone()));
+            push_warning(
+                &mut discovery.warnings,
+                format!(
+                    "{AMBIGUOUS_BOARD}: Workspace Board {} and legacy Board {} both exist; using the Workspace Board",
+                    root.display(),
+                    legacy.display()
+                ),
+            );
+        }
+        discovery.source = DiscoverySource::Workspace;
         discovery.root = Some(root);
         discovery.steps[0].selected = true;
+    } else if let Some(root) = nearest {
+        discovery.source = DiscoverySource::Nearest;
+        if root.file_name().and_then(|name| name.to_str()) == Some(".orbit") {
+            let warning = format!(
+                "{LEGACY_LAYOUT}: using a legacy Board directly at {}",
+                root.display()
+            );
+            discovery.legacy = Some(warning.clone());
+            push_warning(&mut discovery.warnings, warning);
+        }
+        discovery.root = Some(root);
+        discovery.steps[1].selected = true;
     } else if let Some(root) = global {
         discovery.source = DiscoverySource::Global;
         discovery.root = Some(root);
-        discovery.steps[1].selected = true;
+        discovery.steps[2].selected = true;
     } else {
         discovery.error = Some(OrbitError::board_not_found());
     }
@@ -1188,6 +1299,55 @@ fn nearest_orbit(start: &Path, stop: &Path, skip: Option<&Path>) -> Option<PathB
         current = dir.parent();
     }
     None
+}
+
+fn nearest_workspace_board(start: &Path) -> Option<PathBuf> {
+    let mut current = Some(start);
+    while let Some(directory) = current {
+        let candidate = directory.join(".orbit").join("board");
+        if Board::is_board(&candidate) {
+            return Some(candidate);
+        }
+        current = directory.parent();
+    }
+    None
+}
+
+pub(crate) fn workspace_child_board(workspace: &Path) -> Result<Option<PathBuf>> {
+    if !workspace.exists() {
+        return Ok(None);
+    }
+    let mut pending = vec![workspace.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|error| OrbitError::io(format!("read {}", directory.display()), error))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| OrbitError::io(format!("read {}", directory.display()), error))?;
+            let path = entry.path();
+            if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let name = entry.file_name();
+            if name == ".orbit" || name == ".git" {
+                continue;
+            }
+            if path.join(".git").exists() {
+                let local = path.join(".orbit");
+                if Board::is_board(&local) {
+                    return Ok(Some(local));
+                }
+                let common = git::common_dir_at(&path)?;
+                let legacy = common.join("orbit/board");
+                if Board::is_board(&legacy) {
+                    return Ok(Some(legacy));
+                }
+                continue;
+            }
+            pending.push(path);
+        }
+    }
+    Ok(None)
 }
 
 fn main_checkout_for(repo_root: &Path, common: &Path) -> PathBuf {

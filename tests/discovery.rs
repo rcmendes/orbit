@@ -13,6 +13,23 @@ fn write_legacy_board(repo: &TestRepo) {
     .unwrap();
 }
 
+fn init_child_repo(repo: &TestRepo, path: &std::path::Path) {
+    std::fs::create_dir_all(path).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.name", "Test"][..],
+        &["config", "user.email", "test@example.com"][..],
+        &["commit", "--allow-empty", "-q", "-m", "init"][..],
+    ] {
+        let output = repo.git_in(path, args);
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 fn assert_warning(value: &serde_json::Value, code: &str) {
     assert!(
         value["meta"]["warnings"]
@@ -200,6 +217,7 @@ fn a_repository_mode_board_records_its_storage() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let board = parent.path().join("shared");
+    let internal = board.join(".orbit/board");
 
     let value = repo.ok_json(&[
         "init",
@@ -210,7 +228,7 @@ fn a_repository_mode_board_records_its_storage() {
     ]);
 
     assert_eq!(value["data"]["storage"], "repository");
-    let config = std::fs::read_to_string(board.join("config.toml")).unwrap();
+    let config = std::fs::read_to_string(internal.join("config.toml")).unwrap();
     assert!(config.contains("storage = \"repository\""), "{config}");
 }
 
@@ -341,4 +359,274 @@ fn a_legacy_config_without_storage_still_loads_without_a_command_warning() {
 
     assert_eq!(value["data"]["count"], 0);
     assert!(value["meta"].get("warnings").is_none(), "{value}");
+}
+
+#[test]
+fn init_creates_a_workspace_board_inside_a_non_git_root() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("acme");
+    std::fs::create_dir(&workspace).unwrap();
+    let cache = workspace.join(".orbit/cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("keep.json"), "cached snapshot").unwrap();
+
+    let value = repo.ok_json_in(
+        parent.path(),
+        &[
+            "init",
+            workspace.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+
+    let internal = workspace.join(".orbit");
+    assert_eq!(
+        value["data"]["board"],
+        dunce::canonicalize(internal.join("board"))
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert!(internal.join("board/config.toml").is_file());
+    assert!(internal.join("cache").is_dir());
+    assert_eq!(
+        std::fs::read_to_string(cache.join("keep.json")).unwrap(),
+        "cached snapshot"
+    );
+    assert!(!workspace.join("config.toml").exists());
+}
+
+#[test]
+fn workspace_board_resolves_from_root_and_every_nested_repository_level() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("acme");
+    std::fs::create_dir(&workspace).unwrap();
+    repo.ok_json_in(
+        parent.path(),
+        &[
+            "init",
+            workspace.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+    let child = workspace.join("api");
+    init_child_repo(&repo, &child);
+    let nested = child.join("src/deep");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let initialized = repo.ok_json_in(&child, &["init", "--agents", "none", "--json"]);
+    assert_eq!(initialized["data"]["created"], false);
+    assert_eq!(
+        initialized["data"]["board"],
+        dunce::canonicalize(workspace.join(".orbit/board"))
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert!(!child.join(".orbit").exists());
+
+    let added = repo.ok_json_in(&workspace, &["add", "Workspace task", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap();
+    for cwd in [&workspace, &child, &nested] {
+        let listed = repo.ok_json_in(cwd, &["list", "--all", "--json"]);
+        assert_eq!(
+            listed["data"]["tasks"][0]["id"],
+            id,
+            "from {}",
+            cwd.display()
+        );
+    }
+    assert!(!child.join(".git/orbit/link").exists());
+}
+
+#[test]
+fn dir_and_orbit_dir_accept_a_workspace_root() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("acme");
+    std::fs::create_dir(&workspace).unwrap();
+    repo.ok_json_in(
+        parent.path(),
+        &[
+            "init",
+            workspace.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+    let added = repo.ok_json_in(&workspace, &["add", "Workspace override", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap();
+
+    let listed = repo.ok_json(&[
+        "--dir",
+        workspace.to_str().unwrap(),
+        "list",
+        "--all",
+        "--json",
+    ]);
+    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+
+    let (status, listed) = repo.json_with_env(
+        &["list", "--all", "--json"],
+        &[("ORBIT_DIR", workspace.to_str().unwrap())],
+    );
+    assert_eq!(status, 0, "{listed}");
+    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+}
+
+#[test]
+fn an_outside_repository_can_link_to_the_workspace_root() {
+    let creator = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("acme");
+    std::fs::create_dir(&workspace).unwrap();
+    creator.ok_json_in(
+        parent.path(),
+        &[
+            "init",
+            workspace.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+    let added = creator.ok_json_in(&workspace, &["add", "Linked Workspace task", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap();
+
+    let outside = TestRepo::new();
+    outside.ok_json(&["link", workspace.to_str().unwrap(), "--json"]);
+    let listed = outside.ok_json(&["list", "--all", "--json"]);
+
+    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+}
+
+#[test]
+fn workspace_init_refuses_to_shadow_a_child_repository_board() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("acme");
+    std::fs::create_dir(&workspace).unwrap();
+    let child = workspace.join("api");
+    init_child_repo(&repo, &child);
+    repo.ok_json_in(&child, &["init", "--agents", "none", "--json"]);
+
+    let (status, value) = repo.json_in(
+        parent.path(),
+        &[
+            "init",
+            workspace.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "ALREADY_INITIALIZED");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("api/.orbit")
+    );
+    assert!(!workspace.join(".orbit/board/config.toml").exists());
+}
+
+#[test]
+fn workspace_init_refuses_an_unrecognized_orbit_layout() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("acme");
+    std::fs::create_dir_all(workspace.join(".orbit")).unwrap();
+    std::fs::write(workspace.join(".orbit/user-data"), "keep me").unwrap();
+
+    let (status, value) = repo.json_in(
+        parent.path(),
+        &[
+            "init",
+            workspace.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "ALREADY_INITIALIZED");
+    assert!(workspace.join(".orbit/user-data").is_file());
+}
+
+#[test]
+fn a_child_repository_board_is_reported_as_ambiguous_after_workspace_init() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("acme");
+    std::fs::create_dir(&workspace).unwrap();
+    repo.ok_json_in(
+        parent.path(),
+        &[
+            "init",
+            workspace.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+    let child = workspace.join("api");
+    init_child_repo(&repo, &child);
+    repo.ok_json_in(&child, &["init", ".orbit", "--agents", "none", "--json"]);
+    let added = repo.ok_json_in(&workspace, &["add", "Workspace task", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap();
+
+    let listed = repo.ok_json_in(&child, &["list", "--all", "--json"]);
+
+    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_warning(&listed, "AMBIGUOUS_BOARD");
+}
+
+#[test]
+fn workspace_init_reports_the_legacy_dot_orbit_board_for_migration() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("acme");
+    let legacy = workspace.join(".orbit");
+    std::fs::create_dir_all(legacy.join("tasks")).unwrap();
+    std::fs::create_dir_all(legacy.join("comments")).unwrap();
+    std::fs::write(
+        legacy.join("config.toml"),
+        "[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"orb-\"\n",
+    )
+    .unwrap();
+
+    let (status, value) = repo.json_in(
+        parent.path(),
+        &[
+            "init",
+            workspace.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "CONFIG_ERROR");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--dir")
+    );
+    assert!(legacy.join("config.toml").is_file());
+    assert!(!workspace.join(".orbit/board").exists());
+
+    let compatible = repo.ok_json(&["--dir", legacy.to_str().unwrap(), "list", "--json"]);
+    assert_eq!(compatible["data"]["count"], 0);
 }

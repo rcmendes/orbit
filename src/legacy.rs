@@ -170,7 +170,8 @@ fn migrate_workspace(board: &Board) -> Result<MigrationReport> {
     let new = old
         .parent()
         .ok_or_else(|| OrbitError::config("legacy workspace Board has no parent directory"))?
-        .join(".orbit");
+        .join(".orbit")
+        .join("board");
 
     let pointer_target = pointer_needs_update(&old)?;
 
@@ -178,6 +179,7 @@ fn migrate_workspace(board: &Board) -> Result<MigrationReport> {
         verify_same_board(&old, &new)?;
         remove_legacy(&old, None)?;
         let (tasks, _) = finalize(&new, StorageMode::Repository)?;
+        create_workspace_cache(&new)?;
         if pointer_target.is_some() {
             Board::write_link(&new)?;
         }
@@ -214,6 +216,7 @@ fn migrate_workspace(board: &Board) -> Result<MigrationReport> {
         )
     })?;
     let (tasks, _) = finalize(&new, StorageMode::Repository)?;
+    create_workspace_cache(&new)?;
     if pointer_target.is_some() {
         Board::write_link(&new)?;
     }
@@ -229,6 +232,15 @@ fn migrate_workspace(board: &Board) -> Result<MigrationReport> {
         notes,
         ..MigrationReport::default()
     })
+}
+
+fn create_workspace_cache(board: &Path) -> Result<()> {
+    let cache = board
+        .parent()
+        .ok_or_else(|| OrbitError::config("Workspace Board has no .orbit parent"))?
+        .join("cache");
+    std::fs::create_dir_all(&cache)
+        .map_err(|error| OrbitError::io(format!("create {}", cache.display()), error))
 }
 
 fn keep_existing(board: &Board, context: Option<&RepoContext>) -> Result<MigrationReport> {

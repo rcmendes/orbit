@@ -492,20 +492,21 @@ fn linked_worktrees_share_one_board() {
 fn external_boards_work_outside_a_repository() {
     let repo = TestRepo::new();
     let external = tempfile::tempdir().unwrap();
-    let board = external.path().join("board");
-    let board_arg = board.to_str().unwrap();
+    let workspace = external.path().join("workspace");
+    let board = workspace.join(".orbit/board");
+    let workspace_arg = workspace.to_str().unwrap();
 
-    let output = repo.orbit(&["--dir", board_arg, "init", "--json"]);
+    let output = repo.orbit(&["--dir", workspace_arg, "init", "--json"]);
     assert!(output.status.success());
     let init: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(init["data"]["storage"], "repository");
     assert_eq!(init["data"]["global"], false);
     assert!(board.join("config.toml").is_file());
 
-    let output = repo.orbit(&["--dir", board_arg, "add", "External task", "--json"]);
+    let output = repo.orbit(&["--dir", workspace_arg, "add", "External task", "--json"]);
     assert!(output.status.success());
 
-    let output = repo.orbit(&["--dir", board_arg, "list", "--json"]);
+    let output = repo.orbit(&["--dir", workspace_arg, "list", "--json"]);
     assert!(output.status.success());
     let list: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(list["data"]["count"], 1);

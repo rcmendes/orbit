@@ -114,10 +114,7 @@ impl TriageProposal {
 
     pub fn build_preview(&self, task: &Task) -> Result<(Value, bool)> {
         if self.uncertainty.is_some() && !self.has_metadata_changes() {
-            return Ok((
-                json!({}),
-                false,
-            ));
+            return Ok((json!({}), false));
         }
         if !self.has_metadata_changes() {
             return Err(OrbitError::new(
@@ -140,11 +137,8 @@ impl TriageProposal {
             }
         } else if let Some(area) = &self.area {
             let current = task.front.area.map(|area| area.as_str());
-            if current.as_deref() != Some(area.as_str()) {
-                changes.insert(
-                    "area".into(),
-                    json!({ "from": current, "to": area }),
-                );
+            if current != Some(area.as_str()) {
+                changes.insert("area".into(), json!({ "from": current, "to": area }));
             }
         }
 
@@ -158,16 +152,16 @@ impl TriageProposal {
                     }),
                 );
             }
-        } else if let Some(verification) = &self.verification {
-            if task.front.verification.as_deref() != Some(verification.as_str()) {
-                changes.insert(
-                    "verification".into(),
-                    json!({
-                        "from": task.front.verification,
-                        "to": verification
-                    }),
-                );
-            }
+        } else if let Some(verification) = &self.verification
+            && task.front.verification.as_deref() != Some(verification.as_str())
+        {
+            changes.insert(
+                "verification".into(),
+                json!({
+                    "from": task.front.verification,
+                    "to": verification
+                }),
+            );
         }
 
         let mut add = Vec::new();
@@ -213,7 +207,9 @@ impl TriageProposal {
                     task.front.labels.push(label.clone());
                 }
             }
-            task.front.labels.retain(|label| !self.labels_remove.contains(label));
+            task.front
+                .labels
+                .retain(|label| !self.labels_remove.contains(label));
             task.front.labels.sort();
             task.front.labels.dedup();
         }

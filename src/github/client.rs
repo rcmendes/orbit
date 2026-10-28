@@ -52,11 +52,7 @@ pub trait GitHubClient: Send + Sync {
 
     fn repository_info(&self, repo: &str) -> Result<RepositoryInfo>;
 
-    fn validate_org_fields(
-        &self,
-        org: &str,
-        fields: &IssueFieldConfig,
-    ) -> Result<FieldSetup>;
+    fn validate_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup>;
 
     fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup>;
 
@@ -131,11 +127,7 @@ impl GitHubClient for GhCliClient {
         })
     }
 
-    fn validate_org_fields(
-        &self,
-        org: &str,
-        fields: &IssueFieldConfig,
-    ) -> Result<FieldSetup> {
+    fn validate_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
         let query = format!(
             "organization(login:\"{org}\"){{ issueFields(first:100) {{ nodes {{ ... on IssueField {{ id name }} }} }} }}"
         );
@@ -615,11 +607,10 @@ pub struct FixtureClient {
 
 impl FixtureClient {
     pub fn load(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|error| OrbitError::io("read fixture", error))?;
-        let store: FixtureStore = serde_json::from_str(&content).map_err(|error| {
-            OrbitError::config(format!("invalid github fixture: {error}"))
-        })?;
+        let content =
+            std::fs::read_to_string(path).map_err(|error| OrbitError::io("read fixture", error))?;
+        let store: FixtureStore = serde_json::from_str(&content)
+            .map_err(|error| OrbitError::config(format!("invalid github fixture: {error}")))?;
         Ok(Self {
             store: Arc::new(Mutex::new(FixtureStore {
                 fixture_path: path.to_path_buf(),
@@ -659,11 +650,7 @@ impl GitHubClient for FixtureClient {
         })
     }
 
-    fn validate_org_fields(
-        &self,
-        org: &str,
-        fields: &IssueFieldConfig,
-    ) -> Result<FieldSetup> {
+    fn validate_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
         let store = self.store.lock().expect("fixture lock");
         let area_key = format!("{org}/{}", fields.area_name);
         let verification_key = format!("{org}/{}", fields.verification_name);

@@ -974,7 +974,9 @@ fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::Comm
             if created_fields_count == 0 {
                 format!("GitHub Issue Fields already exist for `{org}`; ids stored")
             } else {
-                format!("Created {created_fields_count} missing GitHub Issue Field(s) for `{org}` and stored ids")
+                format!(
+                    "Created {created_fields_count} missing GitHub Issue Field(s) for `{org}` and stored ids"
+                )
             }
         } else {
             format!("Stored GitHub Issue Field ids for `{org}`")
@@ -1230,7 +1232,7 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
             "relationships": relationship,
         }));
         if args.apply && !plan.has_conflicts() {
-            apply_plan(board, task, &link, &plan, &client)?;
+            apply_plan(board, task, &link, &plan, client.as_ref())?;
         } else if args.apply && plan.has_conflicts() {
             return Err(OrbitError::new(
                 code::GITHUB_ISSUE_CONFLICT,
@@ -1338,7 +1340,7 @@ fn apply_plan(
     task: &Task,
     link: &GitHubLink,
     plan: &SyncPlan,
-    client: &Box<dyn GitHubClient>,
+    client: &dyn GitHubClient,
 ) -> Result<()> {
     let mut task = task.clone();
     if let Some(title) = &plan.apply_title {

@@ -36,10 +36,7 @@ mod tests {
 
     #[test]
     fn maps_closed_issues_to_done_or_cancelled() {
-        assert_eq!(
-            status_from_issue(IssueState::Closed, &[]),
-            Status::Done
-        );
+        assert_eq!(status_from_issue(IssueState::Closed, &[]), Status::Done);
         assert_eq!(
             status_from_issue(IssueState::Closed, &["wontfix".to_string()]),
             Status::Cancelled

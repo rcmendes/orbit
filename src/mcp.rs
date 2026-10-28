@@ -412,10 +412,7 @@ fn dispatch_tool(
             return tool_invalid("`blocker` and `clear_blocker` are mutually exclusive");
         }
     }
-    if name == "update"
-        && arguments.get("area").is_some()
-        && bool_arg(arguments, "clear_area")
-    {
+    if name == "update" && arguments.get("area").is_some() && bool_arg(arguments, "clear_area") {
         return tool_invalid("`area` and `clear_area` are mutually exclusive");
     }
     if name == "update"

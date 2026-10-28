@@ -96,13 +96,15 @@ pub fn ensure_same_repo(left: &GitHubLink, right: &GitHubLink) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
     use crate::github::model::IssueState;
     use crate::task::{TaskFrontmatter, TaskType, default_priority};
+    use chrono::TimeZone;
     use std::collections::BTreeMap;
 
     fn task(id: &str) -> Task {
-        let now = chrono::Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap();
+        let now = chrono::Utc
+            .with_ymd_and_hms(2026, 10, 23, 12, 0, 0)
+            .unwrap();
         Task {
             id: id.to_string(),
             front: TaskFrontmatter {
@@ -142,14 +144,17 @@ mod tests {
             state: IssueState::Open,
             labels: vec![],
             assignees: vec![],
-            updated_at: chrono::Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap(),
+            updated_at: chrono::Utc
+                .with_ymd_and_hms(2026, 10, 23, 12, 0, 0)
+                .unwrap(),
             area: None,
             verification: None,
             parent_issue: vec![],
             blocked_by: vec![],
             blocking: vec![],
         };
-        let report = plan_relationship_sync(&parent, &parent_link, &issue, &[(child, child_link)], &[]);
+        let report =
+            plan_relationship_sync(&parent, &parent_link, &issue, &[(child, child_link)], &[]);
         assert_eq!(report.supported.len(), 0);
         assert_eq!(report.unsupported.len(), 1);
     }

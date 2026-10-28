@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{BufRead, IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::path::Path;
 
 use chrono::Utc;
 use serde_json::json;
@@ -30,14 +30,14 @@ pub fn run(
 fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(id)?;
-    let link = require_github_link(&task)?;
+    let link = require_github_link(task)?;
 
     let (guidance, guidance_path) = read_project_guidance(board);
     let mut warnings = Vec::new();
-    if guidance.is_none() {
-        if let Some(ref path) = guidance_path {
-            warnings.push(guidance_missing_note(path));
-        }
+    if guidance.is_none()
+        && let Some(ref path) = guidance_path
+    {
+        warnings.push(guidance_missing_note(path));
     }
 
     let guidance_path_json = guidance_path
@@ -78,10 +78,10 @@ fn cmd_review(
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
-    require_github_link(&task)?;
+    require_github_link(task)?;
 
     let (changes, apply_ready) = proposal
-        .build_preview(&task)
+        .build_preview(task)
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     reject_basic_structured_changes(board, &changes)?;
     let preview = render_preview(&args.task, &proposal, &changes);
@@ -141,9 +141,9 @@ fn cmd_apply(board: &Board, args: TriageApplyArgs) -> Result<crate::output::Comm
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
-    require_github_link(&task)?;
+    require_github_link(task)?;
 
-    let (changes, apply_ready) = validate_proposal_for_apply(board, &proposal, &task)
+    let (changes, apply_ready) = validate_proposal_for_apply(board, &proposal, task)
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     if !apply_ready {
         return Err(OrbitError::new(
@@ -296,6 +296,85 @@ fn prompt_for_approval(input: &mut impl BufRead, output: &mut impl Write) -> Res
     }
 }
 
+fn reject_basic_structured_changes(board: &Board, changes: &serde_json::Value) -> Result<()> {
+    if !board.config.github.mode.is_basic() {
+        return Ok(());
+    }
+    let has_structured_field = changes.as_object().is_some_and(|changes| {
+        changes.contains_key("area") || changes.contains_key("verification")
+    });
+    if has_structured_field {
+        return Err(OrbitError::invalid_argument(
+            "GitHub basic mode Triage supports labels only; area and verification require mode = `full` with organization Issue Fields",
+        ));
+    }
+    Ok(())
+}
+
+fn load_proposal(path: &Path) -> Result<TriageProposal> {
+    let raw = if path.as_os_str() == "-" {
+        let mut raw = String::new();
+        std::io::stdin()
+            .read_to_string(&mut raw)
+            .map_err(|error| OrbitError::io("read proposal from stdin", error))?;
+        raw
+    } else {
+        fs::read_to_string(path).map_err(|error| {
+            OrbitError::io(format!("read proposal file {}", path.display()), error)
+        })?
+    };
+    let mut proposal = TriageProposal::parse_json(&raw)?;
+    proposal.normalize()?;
+    Ok(proposal)
+}
+
+fn require_github_link(task: &Task) -> Result<serde_json::Value> {
+    task.github_link()
+        .map(|link| json!({ "repo": link.repo, "number": link.number }))
+        .ok_or_else(|| {
+            OrbitError::new(
+                code::TRIAGE_NOT_LINKED,
+                format!(
+                    "task {} is not linked to a GitHub Issue; adopt explicitly with `orbit github adopt` before triage",
+                    task.id
+                ),
+            )
+            .with_details(json!({ "task": task.id }))
+        })
+}
+
+fn proposal_context(task: &str, path: &Path) -> serde_json::Value {
+    json!({
+        "task": task,
+        "proposal_file": path.display().to_string(),
+    })
+}
+
+fn with_proposal_context(mut error: OrbitError, task: &str, path: &Path) -> OrbitError {
+    if error.code == code::TRIAGE_INVALID_PROPOSAL {
+        let mut details = match error.details.take() {
+            Some(serde_json::Value::Object(details)) => details,
+            Some(value) => serde_json::Map::from_iter([("value".to_string(), value)]),
+            None => serde_json::Map::new(),
+        };
+        details.extend(
+            proposal_context(task, path)
+                .as_object()
+                .expect("proposal context is an object")
+                .clone(),
+        );
+        error.details = Some(serde_json::Value::Object(details));
+    }
+    error
+}
+
+fn persist_task(board: &Board, task: &Task, message: &str) -> Result<()> {
+    let rendered = task::render_task(task)?;
+    atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
+    board.commit(message, false)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{prompt_for_approval, render_preview};
@@ -348,83 +427,4 @@ mod tests {
         let noop_preview = render_preview("orb-123", &satisfied, &serde_json::json!({}));
         assert!(noop_preview.contains("No metadata changes: the proposal is already satisfied."));
     }
-}
-
-fn reject_basic_structured_changes(board: &Board, changes: &serde_json::Value) -> Result<()> {
-    if !board.config.github.mode.is_basic() {
-        return Ok(());
-    }
-    let has_structured_field = changes.as_object().is_some_and(|changes| {
-        changes.contains_key("area") || changes.contains_key("verification")
-    });
-    if has_structured_field {
-        return Err(OrbitError::invalid_argument(
-            "GitHub basic mode Triage supports labels only; area and verification require mode = `full` with organization Issue Fields",
-        ));
-    }
-    Ok(())
-}
-
-fn load_proposal(path: &PathBuf) -> Result<TriageProposal> {
-    let raw = if path.as_os_str() == "-" {
-        let mut raw = String::new();
-        std::io::stdin()
-            .read_to_string(&mut raw)
-            .map_err(|error| OrbitError::io("read proposal from stdin", error))?;
-        raw
-    } else {
-        fs::read_to_string(path).map_err(|error| {
-            OrbitError::io(format!("read proposal file {}", path.display()), error)
-        })?
-    };
-    let mut proposal = TriageProposal::parse_json(&raw)?;
-    proposal.normalize()?;
-    Ok(proposal)
-}
-
-fn require_github_link(task: &Task) -> Result<serde_json::Value> {
-    task.github_link()
-        .map(|link| json!({ "repo": link.repo, "number": link.number }))
-        .ok_or_else(|| {
-            OrbitError::new(
-                code::TRIAGE_NOT_LINKED,
-                format!(
-                    "task {} is not linked to a GitHub Issue; adopt explicitly with `orbit github adopt` before triage",
-                    task.id
-                ),
-            )
-            .with_details(json!({ "task": task.id }))
-        })
-}
-
-fn proposal_context(task: &str, path: &PathBuf) -> serde_json::Value {
-    json!({
-        "task": task,
-        "proposal_file": path.display().to_string(),
-    })
-}
-
-fn with_proposal_context(mut error: OrbitError, task: &str, path: &PathBuf) -> OrbitError {
-    if error.code == code::TRIAGE_INVALID_PROPOSAL {
-        let mut details = match error.details.take() {
-            Some(serde_json::Value::Object(details)) => details,
-            Some(value) => serde_json::Map::from_iter([("value".to_string(), value)]),
-            None => serde_json::Map::new(),
-        };
-        details.extend(
-            proposal_context(task, path)
-                .as_object()
-                .expect("proposal context is an object")
-                .clone(),
-        );
-        error.details = Some(serde_json::Value::Object(details));
-    }
-    error
-}
-
-fn persist_task(board: &Board, task: &Task, message: &str) -> Result<()> {
-    let rendered = task::render_task(task)?;
-    atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
-    board.commit(message, false)?;
-    Ok(())
 }

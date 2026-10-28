@@ -420,7 +420,10 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
     labels.dedup();
 
     let verification = normalize_verification(front.verification.take()).map_err(|error| {
-        OrbitError::corrupt_task(format!("task {id} has invalid verification: {}", error.message))
+        OrbitError::corrupt_task(format!(
+            "task {id} has invalid verification: {}",
+            error.message
+        ))
     })?;
 
     let mut front = front;

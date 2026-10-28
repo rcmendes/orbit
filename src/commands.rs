@@ -116,10 +116,7 @@ where
 
 /// Resolve and read a Board without `Board::discover`'s orphan-worktree repair.
 /// Read-only diagnostics must not repair storage as a side effect of discovery.
-fn with_board_read_only<F>(
-    dir: Option<&Path>,
-    f: F,
-) -> Result<crate::output::CommandOutput>
+fn with_board_read_only<F>(dir: Option<&Path>, f: F) -> Result<crate::output::CommandOutput>
 where
     F: FnOnce(&Board) -> Result<crate::output::CommandOutput>,
 {
@@ -1093,11 +1090,7 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
             if args.exclude_type.contains(&task.front.task_type) {
                 return false;
             }
-            if !args.area.is_empty()
-                && !args
-                    .area
-                    .iter()
-                    .any(|area| task.front.area == Some(*area))
+            if !args.area.is_empty() && !args.area.iter().any(|area| task.front.area == Some(*area))
             {
                 return false;
             }
@@ -1164,13 +1157,15 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         let agent = resolve_agent(args.by)?;
         let ready = ready_for_filters(
             graph.ready_tasks(),
-            args.parent.as_deref(),
-            &label_filters,
-            &excluded_labels,
-            &args.task_type,
-            &args.exclude_type,
-            &args.area,
-            &args.exclude_area,
+            ReadyFilters {
+                parent: args.parent.as_deref(),
+                labels: &label_filters,
+                excluded: &excluded_labels,
+                types: &args.task_type,
+                excluded_types: &args.exclude_type,
+                areas: &args.area,
+                excluded_areas: &args.exclude_area,
+            },
         );
         if ready.is_empty() {
             return Ok(
@@ -1207,13 +1202,15 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
 
     let mut ready = ready_for_filters(
         graph.ready_tasks(),
-        args.parent.as_deref(),
-        &label_filters,
-        &excluded_labels,
-        &args.task_type,
-        &args.exclude_type,
-        &args.area,
-        &args.exclude_area,
+        ReadyFilters {
+            parent: args.parent.as_deref(),
+            labels: &label_filters,
+            excluded: &excluded_labels,
+            types: &args.task_type,
+            excluded_types: &args.exclude_type,
+            areas: &args.area,
+            excluded_areas: &args.exclude_area,
+        },
     );
     if let Some(limit) = args.limit {
         ready.truncate(limit);
@@ -2434,16 +2431,26 @@ fn generate_unique_id(board: &Board, parent: Option<&str>) -> Result<String> {
     ))
 }
 
-fn ready_for_filters(
-    mut ready: Vec<Task>,
-    parent: Option<&str>,
-    labels: &[String],
-    excluded: &[String],
-    types: &[TaskType],
-    excluded_types: &[TaskType],
-    areas: &[TaskArea],
-    excluded_areas: &[TaskArea],
-) -> Vec<Task> {
+struct ReadyFilters<'a> {
+    parent: Option<&'a str>,
+    labels: &'a [String],
+    excluded: &'a [String],
+    types: &'a [TaskType],
+    excluded_types: &'a [TaskType],
+    areas: &'a [TaskArea],
+    excluded_areas: &'a [TaskArea],
+}
+
+fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Task> {
+    let ReadyFilters {
+        parent,
+        labels,
+        excluded,
+        types,
+        excluded_types,
+        areas,
+        excluded_areas,
+    } = filters;
     if let Some(parent) = parent {
         ready.retain(|task| task.front.parent.as_deref() == Some(parent));
     }
@@ -2460,11 +2467,7 @@ fn ready_for_filters(
         ready.retain(|task| !excluded_types.contains(&task.front.task_type));
     }
     if !areas.is_empty() {
-        ready.retain(|task| {
-            task.front
-                .area
-                .is_some_and(|area| areas.contains(&area))
-        });
+        ready.retain(|task| task.front.area.is_some_and(|area| areas.contains(&area)));
     }
     if !excluded_areas.is_empty() {
         ready.retain(|task| {

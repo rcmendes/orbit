@@ -579,11 +579,7 @@ pub struct UpdateArgs {
     pub clear_area: bool,
 
     /// New verification checks or commands for agents.
-    #[arg(
-        long,
-        value_name = "TEXT",
-        conflicts_with = "clear_verification"
-    )]
+    #[arg(long, value_name = "TEXT", conflicts_with = "clear_verification")]
     pub verification: Option<String>,
 
     /// Remove task-level verification guidance.

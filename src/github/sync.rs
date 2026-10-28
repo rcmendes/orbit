@@ -3,15 +3,19 @@ use chrono::Utc;
 use crate::github::fields::validate_verification;
 use crate::github::link::{GitHubLink, GitHubSyncBaseline};
 use crate::github::model::{IssueSnapshot, SyncConflict, SyncDirection, SyncPlan};
-use crate::github::status::{self, issue_state_from_status, status_from_issue, WONTFIX_LABEL};
-use crate::task::{Task, Status};
+use crate::github::status::{self, WONTFIX_LABEL, issue_state_from_status, status_from_issue};
+use crate::task::{Status, Task};
 
 pub struct OrbitSyncView<'a> {
     pub task: &'a Task,
     pub link: &'a GitHubLink,
 }
 
-pub fn plan_sync(view: OrbitSyncView<'_>, issue: &IssueSnapshot, direction: SyncDirection) -> SyncPlan {
+pub fn plan_sync(
+    view: OrbitSyncView<'_>,
+    issue: &IssueSnapshot,
+    direction: SyncDirection,
+) -> SyncPlan {
     let mut plan = SyncPlan {
         direction,
         apply_title: None,
@@ -41,11 +45,7 @@ pub fn plan_sync(view: OrbitSyncView<'_>, issue: &IssueSnapshot, direction: Sync
     let orbit_title = view.task.front.title.clone();
     let orbit_body = view.task.body.clone();
     let orbit_labels = view.task.front.labels.clone();
-    let orbit_area = view
-        .task
-        .front
-        .area
-        .map(|area| area.as_str().to_string());
+    let orbit_area = view.task.front.area.map(|area| area.as_str().to_string());
     let orbit_verification = view.task.front.verification.clone();
     let orbit_status = view.task.front.status;
 
@@ -59,10 +59,8 @@ pub fn plan_sync(view: OrbitSyncView<'_>, issue: &IssueSnapshot, direction: Sync
             orbit_changed,
             github_changed,
         );
-        if plan.conflicts.iter().all(|c| c.field != "title") {
-            if issue.title != orbit_title {
-                plan.apply_title = Some(issue.title.clone());
-            }
+        if plan.conflicts.iter().all(|c| c.field != "title") && issue.title != orbit_title {
+            plan.apply_title = Some(issue.title.clone());
         }
 
         maybe_pull_field(
@@ -74,15 +72,14 @@ pub fn plan_sync(view: OrbitSyncView<'_>, issue: &IssueSnapshot, direction: Sync
             orbit_changed,
             github_changed,
         );
-        if plan.conflicts.iter().all(|c| c.field != "body") {
-            if issue.body != orbit_body {
-                plan.apply_body = Some(issue.body.clone());
-            }
+        if plan.conflicts.iter().all(|c| c.field != "body") && issue.body != orbit_body {
+            plan.apply_body = Some(issue.body.clone());
         }
 
         let github_status = status_from_issue(issue.state, &issue.labels);
         if !status::preserves_in_progress(orbit_status) && github_status != orbit_status {
-            if orbit_status == Status::InProgress && issue.state == crate::github::model::IssueState::Open
+            if orbit_status == Status::InProgress
+                && issue.state == crate::github::model::IssueState::Open
             {
                 // Open GitHub issues preserve todo/in_progress; do not downgrade active work.
             } else if github_status != orbit_status {
@@ -90,7 +87,14 @@ pub fn plan_sync(view: OrbitSyncView<'_>, issue: &IssueSnapshot, direction: Sync
             }
         }
 
-        merge_labels(&mut plan, &orbit_labels, &issue.labels, baseline, orbit_changed, github_changed);
+        merge_labels(
+            &mut plan,
+            &orbit_labels,
+            &issue.labels,
+            baseline,
+            orbit_changed,
+            github_changed,
+        );
 
         pull_orbit_owned_field(
             &mut plan,
@@ -119,9 +123,7 @@ pub fn plan_sync(view: OrbitSyncView<'_>, issue: &IssueSnapshot, direction: Sync
             plan.push_labels = Some(orbit_labels.clone());
         }
 
-        if plan.conflicts.iter().all(|c| c.field != "area")
-            && orbit_area != issue.area
-        {
+        if plan.conflicts.iter().all(|c| c.field != "area") && orbit_area != issue.area {
             plan.push_area = Some(orbit_area.clone());
         }
         if plan.conflicts.iter().all(|c| c.field != "verification")
@@ -234,9 +236,10 @@ fn merge_labels(
         return;
     }
     if let Some(base) = baseline {
-        let orbit_changed_labels = orbit_changed == Some(true) && orbit_labels != &base.labels;
+        let orbit_changed_labels =
+            orbit_changed == Some(true) && orbit_labels != base.labels.as_slice();
         let github_changed_labels =
-            github_changed == Some(true) && github_labels != &base.labels;
+            github_changed == Some(true) && github_labels != base.labels.as_slice();
         if orbit_changed_labels && github_changed_labels {
             plan.conflicts.push(SyncConflict {
                 field: "labels".into(),
@@ -270,8 +273,8 @@ pub fn validate_orbit_metadata(task: &Task) -> Result<(), crate::error::OrbitErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task::{TaskArea, TaskFrontmatter, TaskType, default_priority};
     use chrono::TimeZone;
-    use crate::task::{TaskFrontmatter, TaskType, TaskArea, default_priority};
     use std::collections::BTreeMap;
 
     fn sample_task(title: &str, body: &str, status: Status) -> Task {
@@ -339,18 +342,16 @@ mod tests {
         let issue = sample_issue("GitHub title", "GitHub body");
         let link = task.front.github.as_ref().unwrap();
         let plan = plan_sync(
-            OrbitSyncView {
-                task: &task,
-                link,
-            },
+            OrbitSyncView { task: &task, link },
             &issue,
             SyncDirection::Both,
         );
         assert!(plan.has_conflicts());
-        assert!(plan
-            .conflicts
-            .iter()
-            .any(|conflict| conflict.field == "title"));
+        assert!(
+            plan.conflicts
+                .iter()
+                .any(|conflict| conflict.field == "title")
+        );
     }
 
     #[test]
@@ -361,10 +362,7 @@ mod tests {
         let issue = sample_issue("GitHub title", "Old body");
         let link = task.front.github.as_ref().unwrap();
         let plan = plan_sync(
-            OrbitSyncView {
-                task: &task,
-                link,
-            },
+            OrbitSyncView { task: &task, link },
             &issue,
             SyncDirection::Pull,
         );

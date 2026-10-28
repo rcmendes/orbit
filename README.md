@@ -648,12 +648,21 @@ ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Sync is explicit, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. See [docs/github-sync.md](./docs/github-sync.md).
 
 ```bash
-# config.toml: [github] organization + repositories, then:
+# Personal repository: [github] mode = "basic" + repositories in config.toml.
+orbit github repo link alice/widget
+orbit github create orb-a7b2c9 --repo alice/widget
+
+# Organization repository: configure mode = "full" (the default), organization,
+# repositories, and Issue Fields in config.toml, then run setup:
 orbit github repo link acme/widget
 orbit github setup
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
 orbit github sync orb-a7b2c9 --apply
 ```
+
+Basic mode syncs titles, bodies, labels, and open/closed state without Issue
+Fields. `area` and `verification` sync and structured Triage require full mode.
+See [docs/github-sync.md](./docs/github-sync.md) for limitations and upgrade steps.
 
 ## Triage, labels, and comments
 

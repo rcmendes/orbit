@@ -802,8 +802,9 @@ orbit sync
 
 Links explicitly configured repositories, adopts or creates Issues, and runs
 bidirectional sync with conflict detection. Requires `[github]` in `config.toml`,
-the `gh` CLI, and organization Issue Fields. Full setup and semantics are in
-[github-sync.md](./github-sync.md).
+and the `gh` CLI. Full mode uses organization Issue Fields; basic mode supports
+personal repositories without them and limits Triage to labels. Full setup and
+semantics are in [github-sync.md](./github-sync.md).
 
 ```bash
 orbit github repo link acme/widget

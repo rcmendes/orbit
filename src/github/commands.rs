@@ -10,10 +10,10 @@ use crate::cli::{
 use crate::error::{OrbitError, Result, code};
 use crate::git::CommitOutcome;
 use crate::github::client::{CreateIssueInput, GitHubClient, UpdateIssueInput, client_from_env};
+use crate::github::fields::parse_area;
 use crate::github::link::{GitHubLink, GitHubSyncBaseline};
 use crate::github::model::{IssueSnapshot, SyncDirection, SyncPlan};
 use crate::github::relationships;
-use crate::github::fields::parse_area;
 use crate::github::sync::{self, OrbitSyncView, validate_orbit_metadata};
 use crate::graph::{Graph, LoadMode};
 use crate::task::{self, Task};
@@ -102,7 +102,10 @@ fn cmd_repo_link(board: &Board, args: GitHubRepoLinkArgs) -> Result<crate::outpu
     ))
 }
 
-fn cmd_repo_unlink(board: &Board, args: GitHubRepoLinkArgs) -> Result<crate::output::CommandOutput> {
+fn cmd_repo_unlink(
+    board: &Board,
+    args: GitHubRepoLinkArgs,
+) -> Result<crate::output::CommandOutput> {
     let repo = crate::github::GitHubConfig::normalize_repo(&args.repository)?;
     board.save_config("orbit: github repo unlink", |config| {
         if config.github.unlink_repo(&repo)? {
@@ -120,7 +123,10 @@ fn cmd_repo_unlink(board: &Board, args: GitHubRepoLinkArgs) -> Result<crate::out
 fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::CommandOutput> {
     board.config.github.require_linked_repo(&args.repo)?;
     let client = client_from_env()?;
-    let issue = client.get_issue(&args.repo, args.number)?;
+    let mut issue = client.get_issue(&args.repo, args.number)?;
+    if board.config.github.mode.is_basic() {
+        omit_issue_fields(&mut issue);
+    }
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let task = graph.get(&args.task)?.clone();
     if task.github_link().is_some() {
@@ -132,7 +138,7 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
     let mut task = task;
     task.front.github = Some(GitHubLink::new(args.repo.clone(), args.number));
     task.front.updated_at = Utc::now();
-    apply_issue_to_task(&mut task, &issue)?;
+    apply_issue_to_task(&mut task, &issue, !board.config.github.mode.is_basic())?;
     validate_orbit_metadata(&task)?;
     persist_task(board, &task, &format!("orbit: github adopt {}", task.id))?;
     let human = format!("Adopted {}/#{} for {}", args.repo, args.number, task.id);
@@ -155,6 +161,9 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         .repo
         .ok_or_else(|| OrbitError::invalid_argument("--repo is required when creating an issue"))?;
     board.config.github.require_linked_repo(&repo)?;
+    if board.config.github.mode.is_basic() {
+        reject_basic_metadata(&task)?;
+    }
     let client = client_from_env()?;
     let issue = client.create_issue(
         &repo,
@@ -209,12 +218,14 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
             .ok_or_else(|| OrbitError::invalid_argument(format!("task {id} has no GitHub link")))?
             .clone();
         board.config.github.require_linked_repo(&link.repo)?;
-        let issue = client.get_issue(&link.repo, link.number)?;
-        let plan = sync::plan_sync(
-            OrbitSyncView { task, link: &link },
-            &issue,
-            direction,
-        );
+        if board.config.github.mode.is_basic() && direction != SyncDirection::Pull {
+            reject_basic_metadata(task)?;
+        }
+        let mut issue = client.get_issue(&link.repo, link.number)?;
+        if board.config.github.mode.is_basic() {
+            omit_issue_fields(&mut issue);
+        }
+        let plan = sync::plan_sync(OrbitSyncView { task, link: &link }, &issue, direction);
         let relationship = relationships::plan_relationship_sync(task, &link, &issue, &[], &[]);
         plans.push(json!({
             "task": id,
@@ -265,10 +276,7 @@ fn apply_plan(
         task.front.labels = labels.clone();
     }
     if let Some(area) = &plan.apply_area {
-        task.front.area = area
-            .as_ref()
-            .map(|value| parse_area(value))
-            .transpose()?;
+        task.front.area = area.as_ref().map(|value| parse_area(value)).transpose()?;
     }
     if let Some(verification) = &plan.apply_verification {
         task.front.verification = verification.clone();
@@ -296,19 +304,44 @@ fn apply_plan(
     Ok(())
 }
 
-fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot) -> Result<()> {
+fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot, include_fields: bool) -> Result<()> {
     task.front.title = issue.title.clone();
     task.body = issue.body.clone();
     task.front.labels = issue.labels.clone();
-    task.front.area = issue
-        .area
-        .as_deref()
-        .map(parse_area)
-        .transpose()?;
-    task.front.verification = issue.verification.clone();
+    if include_fields {
+        task.front.area = issue.area.as_deref().map(parse_area).transpose()?;
+        task.front.verification = issue.verification.clone();
+    }
     task.front.status = crate::github::status::status_from_issue(issue.state, &issue.labels);
     set_baseline(task, issue);
     Ok(())
+}
+
+fn reject_basic_metadata(task: &Task) -> Result<()> {
+    let fields = [
+        task.front.area.map(|area| area.as_str().to_string()),
+        task.front.verification.clone(),
+    ];
+    let present: Vec<_> = ["area", "verification"]
+        .into_iter()
+        .zip(fields)
+        .filter_map(|(name, value)| value.map(|_| name))
+        .collect();
+    if present.is_empty() {
+        return Ok(());
+    }
+    Err(OrbitError::invalid_argument(format!(
+        "GitHub basic mode cannot sync task {} field(s): {}; remove them or use mode = `full` with organization Issue Fields",
+        task.id,
+        present.join(", ")
+    )))
+}
+
+fn omit_issue_fields(issue: &mut IssueSnapshot) {
+    // REST Issues for personal repositories do not expose organization Issue
+    // Fields. Ignore fixture/legacy values rather than importing them.
+    issue.area = None;
+    issue.verification = None;
 }
 
 fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {

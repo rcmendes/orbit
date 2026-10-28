@@ -2,14 +2,20 @@
 
 Orbit can link a Board to one or more GitHub repositories and keep durable Tasks aligned with GitHub Issues through explicit sync. Orbit remains local-first: the Board is updated first; GitHub changes are published only when you run sync with `--apply`.
 
-## Prerequisites
+## Provider modes
 
-- GitHub CLI (`gh`) authenticated for the organization and repositories you link.
-- Organization-level Issue Fields named **Area** and **Verification** (names are configurable under `[github.issue_fields]`).
-- A `[github]` section in `<DIR>/config.toml`:
+Orbit supports two modes. Existing configuration defaults to `full`, so existing
+organization setups keep their current behavior.
+
+### Full mode (organization Issue Fields)
+
+- Requires organization-level Issue Fields named **Area** and **Verification** (names are configurable under `[github.issue_fields]`).
+- Run `orbit github setup` to resolve and store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to check configuration without writing ids.
+- Full mode syncs Orbit `area` and `verification` through those organization Issue Fields.
 
 ```toml
 [github]
+mode = "full" # optional; full is the default
 organization = "acme-corp"
 repositories = ["acme-corp/widget"]
 
@@ -18,7 +24,43 @@ area_name = "Area"
 verification_name = "Verification"
 ```
 
-Run `orbit github setup` to resolve and store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to check configuration without writing ids.
+### Basic mode (personal repositories)
+
+Basic mode supports personal repositories without organization Issue Fields or
+`orbit github setup`:
+
+```toml
+[github]
+mode = "basic"
+repositories = ["alice/widget"]
+```
+
+Link repositories, adopt or create Issues, and sync GitHub-owned title, body,
+open/closed state, and labels. Title, body, and state flow from GitHub to Orbit;
+labels merge in both directions, and Orbit status changes can open or close an
+Issue. GitHub assignees remain informational and are never mapped to Orbit
+claims.
+
+Basic mode does **not** support organization Issue Fields: `area` and
+`verification` are neither imported from GitHub nor pushed to GitHub. Create
+and push sync fail with a clear error when a Task has either value, rather than
+silently dropping it. Pull-only sync preserves Orbit's local values. Triage
+context reports these capabilities as unavailable; Triage review/apply may
+change labels, but proposals that change `area` or `verification` are rejected.
+`orbit github setup` is unavailable in basic mode. Do not set `organization`,
+custom Issue Field names, or Issue Field ids with `mode = "basic"`.
+
+To upgrade, change `mode` to `"full"`, configure `organization` and the field
+names, then run `orbit github setup`. Once the Issue Field ids are stored,
+create and push sync can publish `area` and `verification`.
+
+## Prerequisites
+
+- GitHub CLI (`gh`) authenticated for the repositories you link.
+- Organization-level Issue Fields only when using full mode.
+- A `[github]` section in `<DIR>/config.toml`:
+
+See [Provider modes](#provider-modes) for the full-mode configuration.
 
 ## Link repositories
 
@@ -56,9 +98,10 @@ Rules:
 
 | Field | Authority | Notes |
 | --- | --- | --- |
-| Title, body, open/closed | GitHub | Pulled on sync; closed + `wontfix` label → Orbit `cancelled` |
+| Title, body | GitHub | Pulled on sync |
+| Open/closed | GitHub + Orbit status | Pulled on sync; Orbit `done`/`cancelled` pushes closed/open state; closed + `wontfix` → Orbit `cancelled` |
 | Labels | Both | Merged; concurrent edits since last sync → conflict |
-| `area`, `verification` | Orbit (via Issue Fields) | Pushed to GitHub fields; concurrent edits → conflict |
+| `area`, `verification` | Orbit (via Issue Fields) | Full mode only; pushed to fields; concurrent edits → conflict; unavailable in basic mode |
 | Assignees | GitHub only | Never mapped to Orbit claims |
 | Claims, checkpoints, status while in progress | Orbit | Open GitHub Issues preserve `todo` / `in_progress` |
 
@@ -93,6 +136,6 @@ Controlled `area` values match `TaskArea`: `board`, `cli`, `mcp`, `setup`, `docs
 
 ## Testing
 
-Integration tests set `ORBIT_GITHUB_FIXTURE` to a JSON file with mock org fields and issues so CI does not call GitHub.
+Integration tests set `ORBIT_GITHUB_FIXTURE` to a JSON file with mock org fields and issues so CI does not call GitHub. Basic mode ignores Issue Field values in fixture Issues.
 
 See [ADR 0014](./adr/0014-github-issue-provider.md).

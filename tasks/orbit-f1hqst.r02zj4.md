@@ -1,6 +1,6 @@
 ---
 title: Discover and manage Workspace repositories
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -10,8 +10,11 @@ depends_on:
 - orbit-f1hqst.84hvkj
 parent: orbit-f1hqst
 area: setup
+claimed_by: rodrigomendes
+claimed_at: 2026-10-28T23:10:04.529162Z
+lease_until: 2026-10-28T23:40:04.529162Z
 created_at: 2026-10-28T22:47:25.108099Z
-updated_at: 2026-10-28T22:47:25.108099Z
+updated_at: 2026-10-28T23:10:04.529162Z
 ---
 
 ## Goal

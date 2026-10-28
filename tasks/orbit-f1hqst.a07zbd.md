@@ -1,6 +1,6 @@
 ---
 title: Export Local Tasks as GitHub Issues
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -15,11 +15,8 @@ checkpoint:
   progress: 'Implemented preview/apply GitHub export for selected Local Tasks, batched per-task results, terminal opt-in, Workspace repository inference, and fixture coverage/docs. Commits: b58a5e3, merge f6e4190 (integration tip 3e35de9), docs ca11989. Full tests (425) and clippy pass.'
   next: Review merged Workspace issue catalog integration and close this ticket when appropriate.
 area: cli
-claimed_by: rodrigomendes
-claimed_at: 2026-10-28T23:20:53.946201Z
-lease_until: 2026-10-29T00:03:44.188488Z
 created_at: 2026-10-28T22:47:50.481711Z
-updated_at: 2026-10-28T23:36:16.838792Z
+updated_at: 2026-10-28T23:37:05.230825Z
 ---
 
 ## Goal

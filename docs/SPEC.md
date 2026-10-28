@@ -543,7 +543,7 @@ the status check only requires the `repo` scope.
 ### Milestones
 
 - M0: core CLI, JSON contract, global lock, atomic writes, auto-commit, and tests. Implemented.
-- M1: `setup` recipes, `prime --hook-json`, Claude hooks, skill files, and the mattpocock bridge. Implemented.
+- M1: `setup` recipes, `prime --hook-json`, Claude hooks, skill files, the mattpocock bridge, and Workspace agent reconciliation. Implemented.
 - M2: `orbit mcp` over stdio, `orbit://tasks/{id}` resources, and project-local MCP configs. Implemented.
 - M3: packaging and release automation. Implemented.
 - M4: labels, comments, hold labels, and triage integration. Implemented.
@@ -719,7 +719,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **M5 — one-command onboarding.** Idempotent `init`, harness detection and selection, shared-Board `link`/`unlink`, absolute-binary hooks, and `setup --check`. Implemented; v0.8.1 makes `init` pure and moves wiring behind the prompt or `setup`.
 
-**M6 — workspaces, SubTasks, and export.** Workspaces now use a DIR plus `link`; the former `orbit workspace <folder>` creation command was removed in v0.8.1. The current `orbit workspace` commands manage repository discovery only. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
+**M6 — workspaces, SubTasks, and export.** Workspaces now use a DIR plus `link`; the former `orbit workspace <folder>` creation command was removed in v0.8.1. The current `orbit workspace` commands manage repository discovery and reconcile agent integrations. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
 
 **v0.5.0 — structural Type.** Metadata-only `type`, `tree` family view, close candidates, parent progress fields, and label/type exclusions. Implemented.
 

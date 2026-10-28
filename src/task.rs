@@ -96,6 +96,46 @@ pub struct StrayClaimTimes {
     pub lease_until: Option<DateTime<Utc>>,
 }
 
+/// The latest handoff note from the claim holder: where the work stands, what to
+/// do next, and what is blocking it. Replaced on each update; retained on the
+/// Task as archived history after a terminal transition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Checkpoint {
+    pub by: String,
+    pub at: DateTime<Utc>,
+    pub progress: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<String>,
+}
+
+impl Checkpoint {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.by.trim().is_empty() {
+            return Err("checkpoint author must not be empty".to_string());
+        }
+        if self.progress.trim().is_empty() {
+            return Err("checkpoint progress must not be empty".to_string());
+        }
+        if self
+            .next
+            .as_ref()
+            .is_some_and(|next| next.trim().is_empty())
+        {
+            return Err("checkpoint next action must not be empty".to_string());
+        }
+        if self
+            .blocker
+            .as_ref()
+            .is_some_and(|blocker| blocker.trim().is_empty())
+        {
+            return Err("checkpoint blocker must not be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// On-disk shape: the Claim is stored as three flat keys (see docs/SPEC.md).
 #[derive(Serialize, Deserialize)]
 struct RawFrontmatter {
@@ -113,6 +153,8 @@ struct RawFrontmatter {
     parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     waiting_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoint: Option<Checkpoint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,6 +190,7 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             depends_on: raw.depends_on,
             parent: raw.parent,
             waiting_on: raw.waiting_on,
+            checkpoint: raw.checkpoint,
             claim,
             stray_claim_times,
             created_at: raw.created_at,
@@ -173,6 +216,7 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             depends_on: front.depends_on,
             parent: front.parent,
             waiting_on: front.waiting_on,
+            checkpoint: front.checkpoint,
             claimed_by,
             claimed_at,
             lease_until,
@@ -194,6 +238,7 @@ pub struct TaskFrontmatter {
     pub depends_on: Vec<String>,
     pub parent: Option<String>,
     pub waiting_on: Option<String>,
+    pub checkpoint: Option<Checkpoint>,
     pub claim: Option<Claim>,
     pub stray_claim_times: Option<StrayClaimTimes>,
     pub created_at: DateTime<Utc>,
@@ -271,6 +316,11 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
         return Err(OrbitError::corrupt_task(format!(
             "task {id} has an empty parent id"
         )));
+    }
+    if let Some(checkpoint) = &front.checkpoint
+        && let Err(reason) = checkpoint.validate()
+    {
+        return Err(OrbitError::corrupt_task(format!("task {id}: {reason}")));
     }
 
     let mut labels = Vec::with_capacity(front.labels.len());
@@ -446,6 +496,7 @@ mod tests {
                 depends_on: vec!["orb-f14c02".to_string()],
                 parent: None,
                 waiting_on: None,
+                checkpoint: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: now(),
@@ -611,5 +662,31 @@ Body.
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         assert!(task.front.claim.is_none() && task.front.stray_claim_times.is_some());
         assert_eq!(render_task(&task).unwrap(), content);
+    }
+
+    #[test]
+    fn checkpoint_round_trips_and_preserves_unknown_fields() {
+        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: 2\ncheckpoint:\n  by: alice\n  at: 2026-10-23T12:00:00Z\n  progress: Parser done\n  next: Wire the CLI\n  blocker: Waiting on review\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        let checkpoint = task.front.checkpoint.as_ref().unwrap();
+        assert_eq!(checkpoint.by, "alice");
+        assert_eq!(checkpoint.progress, "Parser done");
+        assert_eq!(checkpoint.next.as_deref(), Some("Wire the CLI"));
+        assert_eq!(checkpoint.blocker.as_deref(), Some("Waiting on review"));
+        assert_eq!(render_task(&task).unwrap(), content);
+    }
+
+    #[test]
+    fn rejects_a_checkpoint_without_progress_or_author() {
+        for checkpoint in [
+            "checkpoint:\n  by: alice\n  at: 2026-10-23T12:00:00Z\n  progress: ' '\n",
+            "checkpoint:\n  by: ' '\n  at: 2026-10-23T12:00:00Z\n  progress: Done\n",
+        ] {
+            let content = format!(
+                "---\ntitle: t\nstatus: in_progress\n{checkpoint}created_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n"
+            );
+            let error = parse_task("orb-a7b2c9".to_string(), &content).unwrap_err();
+            assert_eq!(error.code, crate::error::code::CORRUPT_TASK);
+        }
     }
 }

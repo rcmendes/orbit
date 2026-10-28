@@ -12,9 +12,9 @@ Writes are serialized by one lock and published atomically, so several agents
 can share a Board without a database server.
 
 Run `orbit init` once per repository, then let agents take work with
-`orbit ready --claim`, hold it with `orbit heartbeat`, and finish it with
-`orbit done`. Every command accepts --json and then prints exactly one JSON
-object on stdout.
+`orbit ready --claim`, hold it with `orbit heartbeat`, record a handoff with
+`orbit checkpoint`, and finish it with `orbit done`. Every command accepts --json
+and then prints exactly one JSON object on stdout.
 
 Board discovery order: --dir or ORBIT_DIR, then the repository link, then the
 nearest .orbit, then the main checkout's .orbit, then a legacy Board, then
@@ -29,6 +29,7 @@ Typical agent loop:
   orbit add \"Build the CLI router\" -p 1 --label ready-for-agent
   orbit ready --claim --by claude
   orbit heartbeat orb-a7b2c9 --by claude
+  orbit checkpoint orb-a7b2c9 --by claude --progress \"Parser done\" --next \"Wire the CLI\"
   orbit done orb-a7b2c9 --by claude --comment \"Implemented and verified\"
 
 Inspect work without changing it:
@@ -157,8 +158,8 @@ populated Board: it keeps every random suffix, rewrites Task and SubTask IDs plu
 one-prefix invariant.
 
 Migration refuses an inconsistent Board, prefix collisions, and live claims
-unless --force. It never rewrites free-form task bodies, comment text, Git
-history, or external references. Use --dry-run first.";
+unless --force. It never rewrites free-form task bodies, checkpoint text,
+comment text, Git history, or external references. Use --dry-run first.";
 
 pub const SLUG_EXAMPLES: &str = "\
 Examples:
@@ -200,7 +201,7 @@ heartbeat-only changes are committed first, so the migration commit is the singl
 rollback point. Live claims require --force because the holder still has the old
 ID cached; affected holders are listed in the result.
 
-Task bodies, comment text, Git history, pull requests, and external links are not
+Task bodies, checkpoint text, comment text, Git history, pull requests, and external links are not
 rewritten. Existing links to old IDs break; agents must re-read the Board. On an
 empty Board this is equivalent to setting the prefix.";
 
@@ -437,6 +438,37 @@ Examples:
 
   # List the tasks you currently hold
   orbit list --status in_progress --claimed-by claude";
+
+pub const CHECKPOINT_LONG: &str = "\
+Records or replaces the latest handoff checkpoint on a claimed task: the current
+progress, the next useful action, and any blocker. The claim holder owns the
+checkpoint; a stale lease still counts until another agent takes the claim with
+`orbit claim --steal`. The checkpoint survives release, takeover, and reopen, so
+the next claimant can read it from `orbit show`, `orbit ready`, or a claim result.
+
+The first checkpoint requires --progress. Later updates may pass only the fields
+that changed; omitted fields keep their previous value, and --clear-next or
+--clear-blocker removes one. Progress, next, and blocker are free-form text.
+
+Checkpoints are execution state: they do not affect readiness, claim eligibility,
+or dependencies, and they are not synchronized to an external issue tracker. On a
+done or cancelled task the latest checkpoint stays in the task file as archived
+history, but the command refuses new checkpoints there; use comments for notes
+after closing.";
+
+pub const CHECKPOINT_EXAMPLES: &str = "\
+Examples:
+  # Record progress and the next action while holding the claim
+  orbit checkpoint orb-a7b2c9 --by claude \
+      --progress \"Parser and tests pass\" --next \"Wire the CLI\"
+
+  # Add a blocker, then clear it once resolved
+  orbit checkpoint orb-a7b2c9 --by claude --blocker \"Waiting on review\"
+  orbit checkpoint orb-a7b2c9 --by claude --clear-blocker
+
+  # Release the task with a checkpoint the next agent can pick up
+  orbit release orb-a7b2c9 --by claude
+  orbit ready --json";
 
 pub const DONE_LONG: &str = "\
 Moves the task to done and records the completion. Unfinished dependencies always
@@ -737,13 +769,14 @@ Examples:
 
 pub const MCP_LONG: &str = "\
 Runs the Model Context Protocol server over stdio. Editors start this process from
-their MCP configuration, so it is rarely run by hand. It exposes 13 tools (ready,
-list, get, create, update, claim, release, heartbeat, finish, link, delete, label,
-comment) and the orbit://tasks/{id} Markdown resource, reusing the CLI's lock,
-atomic writes, and auto-commit. `create` accepts `parent` to make a SubTask and
-`type` to set the work shape; `update` accepts `type`. `list` and `ready` accept
-`parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types` to
-scope a feature, repository, or work shape.
+their MCP configuration, so it is rarely run by hand. It exposes 14 tools (ready,
+list, get, create, update, claim, release, heartbeat, checkpoint, finish, link,
+delete, label, comment) and the orbit://tasks/{id} Markdown resource, reusing the
+CLI's lock, atomic writes, and auto-commit. `create` accepts `parent` to make a
+SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint`
+records the claim holder's handoff. `list` and `ready` accept `parent`, `repo`,
+`labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature,
+repository, or work shape.
 
 Use `orbit mcp` as the command in a client configuration. Pass --dir globally to
 serve a specific Board.";

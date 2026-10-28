@@ -2065,6 +2065,7 @@ Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit t
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
+- `orbit checkpoint <id> --by <agent> --progress \"...\" [--next \"...\"] [--blocker \"...\"]` records a handoff that survives release and takeover.
 {COMPLETION_LINE}
 - `orbit add \"title\" -p N --depends-on <id>` creates work.
 - `orbit add \"title\" --parent <id>` creates a SubTask. A spec or epic is a top-level Task with `--type epic`; its issues are SubTasks. `type` is metadata: task, epic, spike, chore, decision. Epic is top-level only. SubTasks are one level deep and the parent waits for them.
@@ -2119,6 +2120,7 @@ We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdo
 
 - To find actionable work, run `orbit ready --json` and parse `data.tasks`.
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
+- To hand off work, run `orbit checkpoint <ID> --by <agent> --progress \"...\" --next \"...\"`; the record survives release and takeover, and never affects readiness.
 - To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change.
 - To create work, run `orbit add \"Title\" -p N --depends-on <ID>`.
 - Orbit calls the unit a Task. A skill's \"issue\" is a Task; a \"sub-issue\" is a SubTask; an \"epic\" or \"spec\" is a top-level Task with `--type epic`.

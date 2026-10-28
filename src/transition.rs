@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::error::{OrbitError, code};
 #[cfg(test)]
 use crate::task::TaskType;
-use crate::task::{Claim, Status, Task};
+use crate::task::{Checkpoint, Claim, Status, Task};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -24,6 +24,8 @@ pub enum InvalidReason {
     ReleaseTerminal(Status),
     HeartbeatNotInProgress(Status),
     HeartbeatNoClaim,
+    CheckpointTerminal(Status),
+    CheckpointNoClaim,
     ClaimTerminal(Status),
     CompleteCancelled,
     CancelDone,
@@ -47,6 +49,15 @@ impl InvalidReason {
                 )
             }
             Self::HeartbeatNoClaim => format!("{id} has no claim"),
+            Self::CheckpointTerminal(status) => {
+                format!(
+                    "{id} is {}; checkpoints only apply to active tasks",
+                    status.as_str()
+                )
+            }
+            Self::CheckpointNoClaim => {
+                format!("{id} has no claim; claim it before recording a checkpoint")
+            }
             Self::ClaimTerminal(status) => {
                 format!("{id} is {}; it cannot be claimed", status.as_str())
             }
@@ -86,6 +97,7 @@ pub enum TransitionError {
         id: String,
         holder: String,
     },
+    InvalidCheckpoint(String),
     AlreadyClaimed {
         id: String,
         holder: String,
@@ -112,6 +124,32 @@ pub enum TransitionError {
         id: String,
         labels: Vec<String>,
     },
+}
+
+/// One optional text field in a checkpoint update.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum FieldUpdate<T> {
+    #[default]
+    Keep,
+    Clear,
+    Set(T),
+}
+
+/// A partial checkpoint write. `progress` omitted means keep the current value;
+/// `next` and `blocker` can be kept, cleared, or replaced.
+#[derive(Debug, Clone, Default)]
+pub struct CheckpointUpdate {
+    pub progress: Option<String>,
+    pub next: FieldUpdate<String>,
+    pub blocker: FieldUpdate<String>,
+}
+
+impl CheckpointUpdate {
+    pub fn is_empty(&self) -> bool {
+        self.progress.is_none()
+            && matches!(self.next, FieldUpdate::Keep)
+            && matches!(self.blocker, FieldUpdate::Keep)
+    }
 }
 
 /// Readiness context for `claim`, derived by the Graph.
@@ -241,6 +279,70 @@ impl Task {
             .lease_until = Some(lease_until);
         self.touch(now);
         Ok(lease_until)
+    }
+
+    /// Replaces the active work checkpoint. The caller must hold the claim; a
+    /// stale lease still counts so the holder can hand off after a long run.
+    pub fn record_checkpoint(
+        &mut self,
+        agent: &str,
+        update: CheckpointUpdate,
+        now: DateTime<Utc>,
+    ) -> Result<Outcome, TransitionError> {
+        if self.front.status.is_terminal() {
+            return Err(self.invalid(InvalidReason::CheckpointTerminal(self.front.status)));
+        }
+        let Some(claim) = &self.front.claim else {
+            return Err(self.invalid(InvalidReason::CheckpointNoClaim));
+        };
+        self.require_holder(claim, Some(agent))?;
+        if update.is_empty() {
+            return Err(TransitionError::InvalidCheckpoint(
+                "nothing to record in the checkpoint".to_string(),
+            ));
+        }
+
+        let existing = self.front.checkpoint.clone();
+        let progress = update
+            .progress
+            .or_else(|| {
+                existing
+                    .as_ref()
+                    .map(|checkpoint| checkpoint.progress.clone())
+            })
+            .ok_or_else(|| {
+                TransitionError::InvalidCheckpoint(
+                    "--progress is required to record the first checkpoint".to_string(),
+                )
+            })?;
+        let next = match update.next {
+            FieldUpdate::Keep => existing
+                .as_ref()
+                .and_then(|checkpoint| checkpoint.next.clone()),
+            FieldUpdate::Clear => None,
+            FieldUpdate::Set(value) => Some(value.trim().to_string()),
+        };
+        let blocker = match update.blocker {
+            FieldUpdate::Keep => existing
+                .as_ref()
+                .and_then(|checkpoint| checkpoint.blocker.clone()),
+            FieldUpdate::Clear => None,
+            FieldUpdate::Set(value) => Some(value.trim().to_string()),
+        };
+
+        let checkpoint = Checkpoint {
+            by: agent.to_string(),
+            at: now,
+            progress: progress.trim().to_string(),
+            next,
+            blocker,
+        };
+        if let Err(reason) = checkpoint.validate() {
+            return Err(TransitionError::InvalidCheckpoint(reason));
+        }
+        self.front.checkpoint = Some(checkpoint);
+        self.touch(now);
+        Ok(Outcome::Changed)
     }
 
     /// Readiness gate first (so `steal` never bypasses it), then the existing Claim.
@@ -379,6 +481,7 @@ impl From<TransitionError> for OrbitError {
         use TransitionError::*;
         match error {
             InvalidTransition { id, reason } => reason.into_error(&id),
+            InvalidCheckpoint(message) => OrbitError::invalid_argument(message),
             NotClaimHolder { id, holder } => OrbitError::new(
                 code::NOT_CLAIM_HOLDER,
                 format!("{id} is claimed by {holder}"),
@@ -465,6 +568,7 @@ mod tests {
                 depends_on: Vec::new(),
                 parent: None,
                 waiting_on: Some("vendor".to_string()),
+                checkpoint: None,
                 stray_claim_times: None,
                 claim: lease_until.map(|lease_until| Claim {
                     holder: "alice".to_string(),
@@ -604,6 +708,108 @@ mod tests {
                 assert_eq!(t.front.updated_at, now());
             }
         }
+    }
+
+    #[test]
+    fn checkpoint_requires_an_active_claim_held_by_the_caller() {
+        let mut t = task(InProgress, Live);
+        let outcome = t
+            .record_checkpoint(
+                "alice",
+                CheckpointUpdate {
+                    progress: Some("Parser done".into()),
+                    next: FieldUpdate::Set("Wire".into()),
+                    blocker: FieldUpdate::Keep,
+                },
+                now(),
+            )
+            .unwrap();
+        assert_eq!(outcome, Outcome::Changed);
+        let checkpoint = t.front.checkpoint.clone().unwrap();
+        assert_eq!(checkpoint.by, "alice");
+        assert_eq!(checkpoint.progress, "Parser done");
+        assert_eq!(checkpoint.next.as_deref(), Some("Wire"));
+        assert_eq!(t.front.updated_at, now());
+
+        t.record_checkpoint(
+            "alice",
+            CheckpointUpdate {
+                progress: None,
+                next: FieldUpdate::Keep,
+                blocker: FieldUpdate::Set("Review".into()),
+            },
+            now(),
+        )
+        .unwrap();
+        let checkpoint = t.front.checkpoint.clone().unwrap();
+        assert_eq!(checkpoint.progress, "Parser done");
+        assert_eq!(checkpoint.next.as_deref(), Some("Wire"));
+        assert_eq!(checkpoint.blocker.as_deref(), Some("Review"));
+
+        t.record_checkpoint(
+            "alice",
+            CheckpointUpdate {
+                blocker: FieldUpdate::Clear,
+                ..Default::default()
+            },
+            now(),
+        )
+        .unwrap();
+        assert!(t.front.checkpoint.unwrap().blocker.is_none());
+
+        let mut unclaimed = task(Todo, No);
+        assert_eq!(
+            unclaimed.record_checkpoint(
+                "alice",
+                CheckpointUpdate {
+                    progress: Some("x".into()),
+                    ..Default::default()
+                },
+                now()
+            ),
+            Err(invalid(InvalidReason::CheckpointNoClaim))
+        );
+
+        let mut other = task(InProgress, Live);
+        assert_eq!(
+            other.record_checkpoint(
+                "bob",
+                CheckpointUpdate {
+                    progress: Some("x".into()),
+                    ..Default::default()
+                },
+                now()
+            ),
+            Err(not_holder())
+        );
+
+        let mut missing_progress = task(InProgress, Live);
+        assert_eq!(
+            missing_progress.record_checkpoint(
+                "alice",
+                CheckpointUpdate {
+                    next: FieldUpdate::Set("Later".into()),
+                    ..Default::default()
+                },
+                now()
+            ),
+            Err(TransitionError::InvalidCheckpoint(
+                "--progress is required to record the first checkpoint".to_string()
+            ))
+        );
+
+        let mut done = task(Done, No);
+        assert_eq!(
+            done.record_checkpoint(
+                "alice",
+                CheckpointUpdate {
+                    blocker: FieldUpdate::Clear,
+                    ..Default::default()
+                },
+                now()
+            ),
+            Err(invalid(InvalidReason::CheckpointTerminal(Done)))
+        );
     }
 
     #[test]

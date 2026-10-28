@@ -276,6 +276,23 @@ impl TestRepo {
         self.board_path().join("tasks").join(format!("{id}.md"))
     }
 
+    /// Rewrite the lease to a time in the past so the claim is stale.
+    pub fn make_stale(&self, id: &str) {
+        let content = self.read_task(id);
+        let updated = content
+            .lines()
+            .map(|line| {
+                if line.starts_with("lease_until:") {
+                    "lease_until: 2020-01-01T00:00:00Z".to_string()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.write_task(id, &(updated + "\n"));
+    }
+
     fn command(&self, program: &str, cwd: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(program);
         command.current_dir(cwd);

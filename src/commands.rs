@@ -7,11 +7,11 @@ use std::path::Path;
 use crate::atomic;
 use crate::board::Board;
 use crate::cli::{
-    AddArgs, CancelArgs, ClaimArgs, Cli, Command, CommentAddArgs, CommentArgs, CommentCommand,
-    CommentListArgs, DeleteArgs, DependArgs, DoneArgs, HeartbeatArgs, InitArgs, LabelArgs,
-    LabelCommand, LabelMutationArgs, LinkArgs, ListArgs, PrimeArgs, ReadyArgs, ReleaseArgs,
-    ReopenArgs, ShowArgs, SlugArgs, SlugCommand, SlugMigrateArgs, TreeArgs, UndependArgs,
-    UpdateArgs,
+    AddArgs, CancelArgs, CheckpointArgs, ClaimArgs, Cli, Command, CommentAddArgs, CommentArgs,
+    CommentCommand, CommentListArgs, DeleteArgs, DependArgs, DoneArgs, HeartbeatArgs, InitArgs,
+    LabelArgs, LabelCommand, LabelMutationArgs, LinkArgs, ListArgs, PrimeArgs, ReadyArgs,
+    ReleaseArgs, ReopenArgs, ShowArgs, SlugArgs, SlugCommand, SlugMigrateArgs, TreeArgs,
+    UndependArgs, UpdateArgs,
 };
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
@@ -21,7 +21,7 @@ use crate::migrate::{self, Plan};
 use crate::setup::COMPLETION_LINE;
 use crate::slug;
 use crate::task::{self, Status, Task, TaskFrontmatter, TaskType};
-use crate::transition::{ClaimGate, Outcome, TransitionError};
+use crate::transition::{CheckpointUpdate, ClaimGate, FieldUpdate, Outcome, TransitionError};
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     let Cli { json, dir, command } = cli;
@@ -54,6 +54,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         }
         Command::Heartbeat(args) => {
             with_board(dir.as_deref(), true, |board| cmd_heartbeat(board, args))
+        }
+        Command::Checkpoint(args) => {
+            with_board(dir.as_deref(), true, |board| cmd_checkpoint(board, args))
         }
         Command::Done(args) => with_board(dir.as_deref(), true, |board| cmd_done(board, args)),
         Command::Cancel(args) => with_board(dir.as_deref(), true, |board| cmd_cancel(board, args)),
@@ -976,6 +979,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
             depends_on,
             parent,
             waiting_on,
+            checkpoint: None,
             claim: None,
             stray_claim_times: None,
             created_at: now,
@@ -1304,6 +1308,39 @@ fn cmd_heartbeat(board: &Board, args: HeartbeatArgs) -> Result<crate::output::Co
         ),
     )
     .with_meta(json!({ "committed": false })))
+}
+
+fn cmd_checkpoint(board: &Board, args: CheckpointArgs) -> Result<crate::output::CommandOutput> {
+    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let agent = resolve_agent(args.by)?;
+    let update = CheckpointUpdate {
+        progress: args.progress,
+        next: checkpoint_field(args.next, args.clear_next),
+        blocker: checkpoint_field(args.blocker, args.clear_blocker),
+    };
+
+    let (_, task) = transition(&mut graph, &args.id, |task| {
+        task.record_checkpoint(&agent, update, Utc::now())
+    })?;
+    write_task(board, &task)?;
+
+    task_output(
+        board,
+        &graph,
+        &task,
+        format!("checkpoint recorded for {} by {agent}", args.id),
+        &format!("orbit: checkpoint {}", args.id),
+    )
+}
+
+fn checkpoint_field(value: Option<String>, clear: bool) -> FieldUpdate<String> {
+    if clear {
+        FieldUpdate::Clear
+    } else if let Some(value) = value {
+        FieldUpdate::Set(value)
+    } else {
+        FieldUpdate::Keep
+    }
 }
 
 fn cmd_done(board: &Board, args: DoneArgs) -> Result<crate::output::CommandOutput> {
@@ -2053,6 +2090,7 @@ fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOut
 Use the CLI; never edit task files directly.\n\
 - `orbit ready --claim --by <agent>` takes one ready task.\n\
 - `orbit heartbeat <id> --by <agent>` extends the lease while working.\n\
+- `orbit checkpoint <id> --by <agent> --progress \"...\"` leaves a handoff that survives release and takeover.\n\
 {COMPLETION_LINE}\n\
 - `orbit add \"title\" -p N --depends-on <id>` creates work.\n\
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.\n\
@@ -2123,6 +2161,7 @@ Use the CLI; never edit task files directly.\n\
     } else {
         for task in &stale {
             human.push_str(&format!("  {}\n", format_summary_value(task)));
+            push_summary_checkpoint(&mut human, task);
         }
     }
 
@@ -2661,6 +2700,21 @@ fn banner_row(left: &str, right: &str, inner_width: usize) -> String {
     format!("│ {left}{}{right} │", " ".repeat(gap))
 }
 
+fn push_summary_checkpoint(human: &mut String, task: &Value) {
+    let Some(checkpoint) = task.get("checkpoint").filter(|value| !value.is_null()) else {
+        return;
+    };
+    if let Some(progress) = checkpoint["progress"].as_str() {
+        human.push_str(&format!("    checkpoint: {progress}\n"));
+    }
+    if let Some(next) = checkpoint["next"].as_str() {
+        human.push_str(&format!("    next: {next}\n"));
+    }
+    if let Some(blocker) = checkpoint["blocker"].as_str() {
+        human.push_str(&format!("    blocker: {blocker}\n"));
+    }
+}
+
 fn format_summary(task: &Task) -> String {
     format_summary_with_parent(task, true)
 }
@@ -2758,6 +2812,16 @@ fn format_summary_value(value: &Value) -> String {
     format!("{id}  {status:<11}  P{priority}  {type_prefix}{title}{labels}{claim}{parent}")
 }
 
+fn push_field_lines(lines: &mut Vec<String>, label: &str, text: &str) {
+    let mut text = text.lines();
+    if let Some(first) = text.next() {
+        lines.push(format!("  {label}: {first}"));
+        for line in text {
+            lines.push(format!("    {line}"));
+        }
+    }
+}
+
 fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
     let mut lines = Vec::new();
     lines.push(format!("{}  {}", task.id, task.front.title));
@@ -2775,6 +2839,25 @@ fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
     }
     if let Some(waiting) = &task.front.waiting_on {
         lines.push(format!("waiting_on: {waiting}"));
+    }
+    if let Some(checkpoint) = &task.front.checkpoint {
+        let label = if task.front.status.is_terminal() {
+            "checkpoint (archived)"
+        } else {
+            "checkpoint"
+        };
+        lines.push(format!(
+            "{label}: {} at {}",
+            checkpoint.by,
+            checkpoint.at.to_rfc3339()
+        ));
+        push_field_lines(&mut lines, "progress", &checkpoint.progress);
+        if let Some(next) = &checkpoint.next {
+            push_field_lines(&mut lines, "next", next);
+        }
+        if let Some(blocker) = &checkpoint.blocker {
+            push_field_lines(&mut lines, "blocker", blocker);
+        }
     }
     if let Some(claim) = &task.front.claim {
         let until = claim

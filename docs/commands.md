@@ -251,7 +251,7 @@ are listed so they can re-read the Board. An unhealthy Board returns
 two IDs returns `PREFIX_COLLISION`. On an empty Board migration is equivalent to
 setting the prefix.
 
-Task bodies, comment text, Git history, pull requests, and external links are
+Task bodies, comment text, checkpoint text, Git history, pull requests, and external links are
 **not** rewritten. A body that mentions `orb-a7b2c9` keeps that text; old links
 and cached agent IDs stop resolving. `--json` reports `current`, `target`,
 `changed`, `tasks`, `subtasks`, `comment_files`, `references`, `mappings`,
@@ -314,11 +314,12 @@ normally.
 
 ### `orbit mcp` — expose the Board to an MCP client
 
-Runs the Model Context Protocol server over stdio with 13 tools and the
+Runs the Model Context Protocol server over stdio with 14 tools and the
 `orbit://tasks/{id}` resource. Editors launch it from their MCP configuration.
-`create` accepts `parent` and `type`; `update` accepts `type`; `list` and `ready`
-accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`
-to scope a feature or repository.
+`create` accepts `parent` and `type`; `update` accepts `type`; `checkpoint`
+records the claim holder's handoff; `list` and `ready` accept `parent`, `repo`,
+`labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature or
+repository.
 
 **Good fit:** an editor or agent that speaks MCP should read and update the Board
 directly instead of shelling out to the CLI.
@@ -536,16 +537,19 @@ orbit ready --json              # NO_READY_TASKS means wait and retry
 
 `--parent`, `--repo`, repeatable `--label`, `--type`, and `--exclude-label`
 combine with AND. `--type` matches any listed shape; `--exclude-type` hides any
-listed shape. `--exclude-label` remains for legacy label-only boards.
+listed shape. `--exclude-label` remains for legacy label-only boards. A released
+task can still carry the previous claimant's checkpoint; `--json` includes it so
+the next claim starts with the handoff context.
 
 ### `orbit show` — load one ticket
 
 Prints the full task: body, labels, dependencies, kind, type, parent, SubTasks,
-dependents, claim state, and comments. `--json` is the form an agent should load
-before starting work.
+dependents, claim state, checkpoint, and comments. `--json` is the form an agent
+should load before starting work. A terminal task keeps its latest checkpoint as
+archived history, marked by `checkpoint_archived: true`.
 
 **Good fit:** before implementing a ticket, when checking why a task is blocked,
-or when reading a handoff comment.
+or when reading a handoff checkpoint or comment.
 
 ```bash
 orbit show orb-a7b2c9
@@ -588,13 +592,14 @@ orbit prime --json
 `--repo` and repeatable `--label` scope the counts, ready tasks, close
 candidates, and stale claims to a repository or label set. A close candidate is
 a non-terminal Parent Task with at least one SubTask and no open SubTasks; Orbit
-never closes it automatically.
+never closes it automatically. Task summaries in `--json` include a checkpoint
+when one is recorded, so a stale claim carries its handoff context.
 
 ### `orbit export` — snapshot the board
 
 Emits a deterministic JSON snapshot of every Task and SubTask, including terminal
 work, with type, labels, dependency and parent edges, parent progress fields,
-derived readiness, and comments.
+checkpoints, derived readiness, and comments.
 The snapshot is ordered by task ID and contains no timestamps or machine-local
 paths.
 
@@ -617,7 +622,8 @@ and `data.tasks`; each task has the same shape as `show --json`, plus comments.
 Claims one task by ID instead of taking the top of the ready queue. The task must
 be active and unclaimed (a stale claim needs `--steal`), not waiting on an
 external blocker or an unfinished dependency, free of hold labels, and, if it is
-a Parent Task, have no open SubTasks.
+a Parent Task, have no open SubTasks. The claim result includes any checkpoint
+left by the previous holder.
 
 **Good fit:** a human assigns a ticket, an agent resumes known work, or another
 agent's lease expired and the task must be recovered.
@@ -642,10 +648,45 @@ or a supervisor wants to confirm an agent is still alive.
 orbit heartbeat orb-a7b2c9 --by claude
 ```
 
+### `orbit checkpoint` — hand off active work
+
+Records or replaces the claim holder's latest checkpoint: current progress, the
+next useful action, and any blocker. The first write requires `--progress`; later
+writes can update only the fields that changed, and `--clear-next` or
+`--clear-blocker` removes one. The caller must hold the claim. A stale lease still
+counts until another agent takes the task over, so the outgoing holder can hand
+off after a long run.
+
+The checkpoint is visible in `show` (human and JSON), the JSON of `ready`,
+`list`, and `prime`, the claim result, MCP `get`, and `export`. It survives
+`release`, `claim --steal`, and `reopen`; it never changes readiness, claim
+eligibility, or dependencies. Each write attributes the record to the current
+claimant, even when a partial update keeps the previous progress text. On a done
+or cancelled task the latest checkpoint is retained in the task file as archived
+history, but new checkpoints are refused there.
+
+**Good fit:** pausing work, handing a task to another agent, or leaving enough
+context that a stale claim can be recovered without reading logs.
+
+```bash
+# Record progress, the next action, and a blocker
+orbit checkpoint orb-a7b2c9 --by claude \
+  --progress "Parser and tests pass" --next "Wire the CLI" \
+  --blocker "Waiting on review"
+
+# Update one field; omitted fields keep their previous value
+orbit checkpoint orb-a7b2c9 --by claude --clear-blocker
+
+# Leave a handoff, then requeue the task
+orbit checkpoint orb-a7b2c9 --by claude --progress "Half done" --next "Finish the tests"
+orbit release orb-a7b2c9 --by claude
+```
+
 ### `orbit release` — hand work back
 
 Clears the claim and returns the task to `todo`. The holder can release; `--force`
-releases someone else's claim. Terminal tasks cannot be released.
+releases someone else's claim. Terminal tasks cannot be released. The latest
+checkpoint is kept for the next claimant.
 
 **Good fit:** work is deliberately handed back, a human takes over, or a claim was
 taken by mistake and the queue should see the task again.

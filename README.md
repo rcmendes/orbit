@@ -23,7 +23,7 @@
 
 Claude Code, Cursor, Codex, OpenCode, and any shell-capable agent get a deterministic, dependency-aware ready queue through a strict JSON CLI or an MCP server. Every claim is atomic, so two agents never take the same task. Humans get readable Git diffs and exactly the same board.
 
-**1 binary · 0 daemons · 4 statuses · 13 MCP tools · 100% Markdown tasks**
+**1 binary · 0 daemons · 4 statuses · 14 MCP tools · 100% Markdown tasks**
 
 ```text
 $ orbit ready --claim --by claude
@@ -209,6 +209,11 @@ orbit show orb-a7b2c9.z21c2w --json
 # Extend the lease during a long build or test run.
 orbit heartbeat orb-a7b2c9.z21c2w --by claude
 
+# Record a checkpoint before pausing, releasing, or finishing the lease.
+orbit checkpoint orb-a7b2c9.z21c2w --by claude \
+  --progress "OIDC callback implemented; one regression open" \
+  --next "Fix the round-trip test" --blocker "Waiting on review"
+
 # Close the task and record the note in the same transaction.
 orbit done orb-a7b2c9.z21c2w --by claude --comment "Implemented and verified; tests added."
 ```
@@ -268,6 +273,7 @@ Orbit keeps the vocabulary small on purpose. Everything else is derived.
 | **Dependency** | Another Task that must be `done` or `cancelled` before this one is Ready. |
 | **Claim** | Exclusive, time-bounded responsibility for a Task, held by one agent. |
 | **Lease** | The time window during which a Claim is valid. Default: 30 minutes. |
+| **Checkpoint** | The claim holder's latest handoff note: current progress, the next useful action, and any blocker. It survives release and takeover but never affects readiness. |
 | **Ready** | Derived: `todo`, unclaimed, not Waiting, no Hold Label, every Dependency resolved, and every SubTask resolved. Never stored. |
 | **Waiting** | An external blocker recorded in `waiting_on`. Not a Status. |
 | **Comment** | An append-only, authored, timestamped note attached to a Task. |
@@ -383,7 +389,7 @@ updated_at: 2026-10-23T12:00:00Z
 Body text, acceptance criteria, and notes.
 ```
 
-The filename is the ID. There is no `id` field in frontmatter. A SubTask ID is the parent ID, a dot, and a fresh suffix (`orb-a7b2c9.d4b3df`). One dot, one level.
+The filename is the ID. There is no `id` field in frontmatter. A SubTask ID is the parent ID, a dot, and a fresh suffix (`orb-a7b2c9.d4b3df`). One dot, one level. A claimed Task may also carry one `checkpoint` block with `by`, `at`, `progress`, and optional `next` and `blocker`; Orbit replaces it in place and it never changes readiness.
 
 ### Why an orphan branch?
 
@@ -424,6 +430,12 @@ sequenceDiagram
     Note right of Git: heartbeat is not committed until orbit sync
     CLI-->>Agent: lease_until, meta.committed false
 
+    Agent->>CLI: orbit checkpoint ID --by claude --progress "..." --next "..."
+    CLI->>Lock: acquire exclusive
+    CLI->>Board: replace checkpoint in task frontmatter
+    CLI->>Git: commit "orbit: checkpoint ID"
+    CLI-->>Agent: JSON detail with the checkpoint
+
     Agent->>CLI: orbit done ID --by claude --comment "verified"
     CLI->>Lock: acquire exclusive
     CLI->>CLI: check dependencies, SubTasks, and claim holder
@@ -439,6 +451,8 @@ If nothing can start, `ready --claim` is still a success:
 ```
 
 Polling loops should wait and retry rather than treating that as an error. When another agent holds the task, the loser gets `ALREADY_CLAIMED` with the holder and lease. When a lease expires, the task becomes **stale**, not Ready; recover it with `orbit claim <id> --steal` or return it to the queue with `orbit release <id> --force`.
+
+A checkpoint is the structured handoff for that recovery. Only the claim holder can write one; it records progress, the next action, and any blocker. Releasing or stealing the task keeps the checkpoint, so the next claimant sees it in `orbit show`, the JSON for `orbit ready`, MCP `get`, or the claim result. On a done or cancelled task the latest checkpoint stays in the file as archived history (`checkpoint_archived: true`) but is not part of the active queue.
 
 ### The readiness gate
 
@@ -486,6 +500,7 @@ stateDiagram-v2
 
     in_progress --> todo: release
     in_progress --> in_progress: heartbeat
+    in_progress --> in_progress: checkpoint
     in_progress --> in_progress: claim --steal
     in_progress --> done: done
     in_progress --> cancelled: cancel
@@ -574,7 +589,7 @@ orbit slug migrate atlas --dry-run    # counts, references, and affected claims
 orbit slug migrate atlas              # rewrite, validate, and commit once
 ```
 
-Migration keeps each random suffix (`orb-32fdfd` → `atlas-32fdfd`, `orb-32fdfd.7fk2m9` → `atlas-32fdfd.7fk2m9`), rewrites `parent` and `depends_on`, renames comment files and their Orbit header, and updates `id.prefix`. It refuses an unhealthy Board or a prefix collision, and live claims require `--force` so the affected agents know to re-read. Task bodies, comment text, Git history, and external links are not rewritten.
+Migration keeps each random suffix (`orb-32fdfd` → `atlas-32fdfd`, `orb-32fdfd.7fk2m9` → `atlas-32fdfd.7fk2m9`), rewrites `parent` and `depends_on`, renames comment files and their Orbit header, and updates `id.prefix`. It refuses an unhealthy Board or a prefix collision, and live claims require `--force` so the affected agents know to re-read. Task bodies, checkpoint text, comment text, Git history, and external links are not rewritten.
 
 ## Multi-repository workspaces
 
@@ -701,16 +716,16 @@ Exit codes are `0` for success, `1` for a domain failure, and `2` for a usage er
 
 ### MCP
 
-`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 13 tools:
+`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 14 tools:
 
-`ready` · `list` · `get` · `create` · `update` · `claim` · `release` · `heartbeat` · `finish` · `link` · `delete` · `label` · `comment`
+`ready` · `list` · `get` · `create` · `update` · `claim` · `release` · `heartbeat` · `checkpoint` · `finish` · `link` · `delete` · `label` · `comment`
 
 ```bash
 orbit mcp
 orbit --dir ~/src/acme/.orbit mcp   # serve a shared Board
 ```
 
-MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent` and `type`; `update` accepts `type`; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`.
+MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent` and `type`; `update` accepts `type`; `checkpoint` records the active handoff state on a claimed task; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`.
 
 Editors launch the server from their MCP configuration. `orbit setup` writes project-level configs for Claude, Cursor, Codex, and OpenCode by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. `--scope user` writes the harness's user-level locations instead. Generated configs record no Board path; discovery starts from the project directory, and `--dir`/`ORBIT_DIR` covers an editor that launches elsewhere. Use `--no-mcp` for instructions only, or `--portable-mcp` to write the bare `orbit` command instead; the editor or agent that launches the MCP server must then find Orbit on its `PATH`. A repair without `--portable-mcp` returns MCP entries to the absolute-path default.
 
@@ -792,7 +807,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | **Set up** | `init` · `link` · `unlink` · `setup` |
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
 | **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` |
-| **Execute** | `claim` · `heartbeat` · `release` · `done` · `cancel` · `reopen` |
+| **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
 | **Maintain** | `doctor` · `sync` · `slug` · `mcp` |
 
 Every command explains its own semantics:
@@ -811,6 +826,7 @@ The full guide — when to use each command, end-to-end scenarios, and a common-
 | Nothing is startable | `NO_READY_TASKS` is a success with `data: null`. Wait, triage, or remove a hold label. |
 | Another agent owns the task | Pick other work, or `orbit claim <id> --by you --steal`. |
 | A lease expired | `orbit claim <id> --by you --steal`, or `orbit release <id> --force` to requeue it. |
+| Work must be handed off | `orbit checkpoint <id> --by you --progress "..." --next "..."`, then `orbit release <id> --by you`; the next claimant sees it in `ready` and `show`. |
 | Dependencies are unfinished | Read `error.details.blocking`, then finish or cancel those IDs. |
 | A parent has open children | Finish the children, or pass `--force` to `done`/`cancel` to cancel them. |
 | A test failed after a crash | `orbit doctor` reports integrity issues; `doctor --fix` removes stale temp files and re-attaches a deleted `.orbit` worktree. |

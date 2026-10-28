@@ -115,7 +115,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 13);
+    assert_eq!(names.len(), 14);
     for expected in [
         "ready",
         "list",
@@ -125,6 +125,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "claim",
         "release",
         "heartbeat",
+        "checkpoint",
         "finish",
         "link",
         "delete",
@@ -196,6 +197,61 @@ fn create_claim_heartbeat_and_finish_round_trip() {
     let list = tool_envelope(&list);
     assert_eq!(list["data"]["count"], 1);
     assert_eq!(list["data"]["tasks"][0]["status"], "done");
+}
+
+#[test]
+fn checkpoint_round_trips_over_mcp() {
+    let repo = TestRepo::new();
+    repo.init();
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let created = client.call(20, "create", json!({ "title": "MCP checkpoint" }));
+    let created = tool_envelope(&created);
+    let id = created["data"]["id"].as_str().unwrap().to_string();
+
+    let claimed = client.call(21, "claim", json!({ "id": id, "by": "claude" }));
+    let claimed = tool_envelope(&claimed);
+    assert_eq!(claimed["data"]["claimed_by"], "claude");
+
+    let recorded = client.call(
+        22,
+        "checkpoint",
+        json!({
+            "id": id,
+            "progress": "Parser done",
+            "next": "Wire the CLI",
+            "blocker": "Waiting on review",
+            "by": "claude"
+        }),
+    );
+    let recorded = tool_envelope(&recorded);
+    assert_eq!(recorded["data"]["checkpoint"]["progress"], "Parser done");
+    assert_eq!(recorded["data"]["checkpoint"]["next"], "Wire the CLI");
+    assert_eq!(
+        recorded["data"]["checkpoint"]["blocker"],
+        "Waiting on review"
+    );
+
+    let updated = client.call(
+        23,
+        "checkpoint",
+        json!({ "id": id, "clear_blocker": true, "by": "claude" }),
+    );
+    let updated = tool_envelope(&updated);
+    assert_eq!(updated["data"]["checkpoint"]["next"], "Wire the CLI");
+    assert!(updated["data"]["checkpoint"]["blocker"].is_null());
+
+    let get = client.call(24, "get", json!({ "id": id }));
+    let get = tool_envelope(&get);
+    assert_eq!(get["data"]["checkpoint"]["progress"], "Parser done");
+
+    let invalid = client.call(
+        25,
+        "checkpoint",
+        json!({ "id": id, "next": "x", "clear_next": true, "by": "claude" }),
+    );
+    assert_eq!(invalid["result"]["isError"], true);
 }
 
 #[test]

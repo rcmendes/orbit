@@ -583,6 +583,12 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "open_subtask_count": open_subtask_count,
         "eligible_for_close": eligible_for_close,
         "waiting_on": task.front.waiting_on,
+        "checkpoint": task.front.checkpoint,
+        "checkpoint_archived": task
+            .front
+            .checkpoint
+            .as_ref()
+            .map(|_| task.front.status.is_terminal()),
         "claimed_by": task.holder(),
         "claimed_at": task.claimed_at(),
         "lease_until": task.lease_until(),
@@ -637,6 +643,7 @@ mod tests {
                 depends_on: deps.iter().map(|dep| dep.to_string()).collect(),
                 parent: None,
                 waiting_on: None,
+                checkpoint: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: now,

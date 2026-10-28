@@ -126,6 +126,22 @@ Every triage comment must begin with:
 Comments on terminal tasks are allowed. Do not edit or delete comments; add a new
 correcting comment instead.
 
+## Checkpoints
+
+A checkpoint is the structured handoff for active work: progress, the next useful
+action, and any blocker. Only the claim holder can write it:
+
+```bash
+orbit checkpoint <ID> --by <agent> --progress "..." --next "..." --blocker "..."
+orbit checkpoint <ID> --by <agent> --clear-blocker
+```
+
+The record survives `release`, `claim --steal`, and `reopen`, so the next claimant
+sees it in `show`, `ready`, MCP `get`, or the claim result. It never changes
+readiness or claim eligibility. On a done or cancelled task the latest checkpoint
+stays as archived history and new checkpoints are refused; use a comment for notes
+after closing.
+
 ## When a skill says "publish to the issue tracker"
 
 Create one task per ticket, blockers first, and capture the returned `data.id`:
@@ -179,13 +195,16 @@ label.
 ```bash
 orbit ready --claim --by opencode
 orbit heartbeat <ID> --by opencode
+orbit checkpoint <ID> --by opencode --progress "..." --next "..."
 orbit done <ID> --by opencode --comment "Implemented and verified."
 orbit cancel <ID> --by opencode
 ```
 
 Pass `--comment` (or `--comment-file`) to `done` or `cancel` when the
 terminal note belongs with the transition; it is written and committed with the
-status change. Use `orbit comment add` for notes on an active task.
+status change. Use `orbit comment add` for notes on an active task. Record a
+checkpoint before releasing or handing off so the next claimant inherits the
+state.
 
 If a claim is stale, take it over with
 `orbit claim <ID> --by opencode --steal`. If the board returns `LOCKED`, retry

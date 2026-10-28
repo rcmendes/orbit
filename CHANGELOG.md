@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added claim checkpoints. `orbit checkpoint <id> --progress ... [--next ...] [--blocker ...]` records the claim holder's latest handoff state in the Task's frontmatter; later calls can update one field or clear the next action/blocker. The record survives `release`, `claim --steal`, and `reopen`, appears in `show`/`ready`/`list`/`prime`, MCP `get`, and `export`, and never changes readiness or claim eligibility. A done or cancelled Task keeps it as archived history (`checkpoint_archived: true`) but refuses new checkpoints. Exposed over MCP as `checkpoint`; not synchronized to external issue trackers.
+- Updated the README, command guide, specification, architecture, glossary, tracker guide, ADR 0013, CLI/MCP help, generated agent guidance, and integration tests for checkpoints.
+
 ## 0.8.2 - 2026-10-26
 
 - `orbit init` now prints a numbered setup report instead of a terse status line. It states the Board path, branch, storage mode, Task-ID prefix, and Git exclusion; the harnesses wired, MCP command mode, and every managed file; then `orbit doctor` and the next commands, each annotated with what it does. `--print` uses future tense (`would create`, `would list`), states that nothing was written, and keeps the generated file contents. A standalone Board always includes `orbit link DIR` in its next steps, and re-runs report unchanged MCP configs instead of omitting them.

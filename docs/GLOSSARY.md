@@ -13,7 +13,7 @@ The Board's short name that prefixes every Task ID, such as `teramigo` in `teram
 _Avoid_: Project name, namespace
 
 **Slug migration**:
-An explicit, one-commit rewrite of every Task and SubTask ID from the Board's current prefix to a new Slug. It preserves random suffixes and rewrites structured `parent` and `depends_on` references, comment filenames, and Orbit comment headers. It never rewrites task bodies, comment text, Git history, or external links.
+An explicit, one-commit rewrite of every Task and SubTask ID from the Board's current prefix to a new Slug. It preserves random suffixes and rewrites structured `parent` and `depends_on` references, comment filenames, and Orbit comment headers. It never rewrites task bodies, checkpoint text, comment text, Git history, or external links.
 _Avoid_: Multi-prefix mode, alias table
 
 **SubTask**:
@@ -89,6 +89,10 @@ _Avoid_: Assignment, lock, reservation
 The time window during which a Claim is valid.
 _Avoid_: Timeout, TTL
 
+**Checkpoint**:
+The claim holder's latest handoff note on a Task: current progress, the next useful action, and any blocker. A Checkpoint survives release, takeover, and reopen, never affects readiness or Claim eligibility, and stays as archived history after the Task is done or cancelled.
+_Avoid_: Status update, progress log, assignment note
+
 **Stale**:
 A condition of a Task whose Claim's Lease has expired but the Claim has not been released. A Stale Task is not Ready; it can be released or stolen.
 _Avoid_: Expired claim, abandoned
@@ -149,3 +153,4 @@ for the Type field.
 - [`docs/adr/0009-keep-task-vocabulary.md`](./adr/0009-keep-task-vocabulary.md) for the Task/Issue naming decision.
 - [`docs/adr/0010-structural-type-field.md`](./adr/0010-structural-type-field.md) for the Type field.
 - [`docs/adr/0012-orbit-folder.md`](./adr/0012-orbit-folder.md) for the Orbit folder, storage modes, discovery, and legacy migration.
+- [`docs/adr/0013-claim-checkpoints.md`](./adr/0013-claim-checkpoints.md) for checkpoint storage and lifecycle.

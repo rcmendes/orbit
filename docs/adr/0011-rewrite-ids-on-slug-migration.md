@@ -9,7 +9,7 @@ The Board's identity can legitimately change: a repository is renamed, a workspa
 Use one explicit migration operation, `orbit slug migrate <SLUG>`, with a read-only companion, `orbit slug show`.
 
 - The migration keeps each random suffix and rewrites only the prefix: `orb-a7b2c9` becomes `atlas-a7b2c9`, and `orb-a7b2c9.d4b3df` becomes `atlas-a7b2c9.d4b3df`.
-- Structured `parent` and `depends_on` values, comment filenames, the Orbit-generated comment header, and `id.prefix` move with the IDs. Free-form task bodies and comment text are copied verbatim.
+- Structured `parent` and `depends_on` values, comment filenames, the Orbit-generated comment header, and `id.prefix` move with the IDs. Free-form task bodies, checkpoint text, and comment text are copied verbatim.
 - The Board must pass strict loading plus the integrity checks that matter for a rewrite: orphan or corrupt comments, comment-header mismatches, parent/ID mismatches, and the checked-out branch. An unhealthy Board is refused with `MIGRATION_BLOCKED`.
 - Live claims require `--force`, because the holder still has the old ID cached. The plan and result list each affected ID, new ID, holder, and lease.
 - The plan is available with `--dry-run`, which performs the same checks and writes nothing. The same slug is a no-op.

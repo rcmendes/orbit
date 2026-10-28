@@ -77,6 +77,10 @@ pub enum Command {
     #[command(long_about = help::HEARTBEAT_LONG, after_long_help = help::HEARTBEAT_EXAMPLES)]
     Heartbeat(HeartbeatArgs),
 
+    /// Record or update the active work checkpoint.
+    #[command(long_about = help::CHECKPOINT_LONG, after_long_help = help::CHECKPOINT_EXAMPLES)]
+    Checkpoint(CheckpointArgs),
+
     /// Complete a claimed task.
     #[command(long_about = help::DONE_LONG, after_long_help = help::DONE_EXAMPLES)]
     Done(DoneArgs),
@@ -407,6 +411,36 @@ pub struct ReleaseArgs {
 pub struct HeartbeatArgs {
     /// Task ID, for example orb-a7b2c9.
     pub id: String,
+
+    /// Agent identity. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct CheckpointArgs {
+    /// Task ID, for example orb-a7b2c9.
+    pub id: String,
+
+    /// Current progress. Required when recording the first checkpoint.
+    #[arg(long, value_name = "TEXT")]
+    pub progress: Option<String>,
+
+    /// The next useful action for the next claimant.
+    #[arg(long, value_name = "TEXT", conflicts_with = "clear_next")]
+    pub next: Option<String>,
+
+    /// Remove the next action from the checkpoint.
+    #[arg(long = "clear-next")]
+    pub clear_next: bool,
+
+    /// A blocker the next claimant must know about.
+    #[arg(long, value_name = "TEXT", conflicts_with = "clear_blocker")]
+    pub blocker: Option<String>,
+
+    /// Remove the blocker from the checkpoint.
+    #[arg(long = "clear-blocker")]
+    pub clear_blocker: bool,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
     #[arg(long, value_name = "NAME")]

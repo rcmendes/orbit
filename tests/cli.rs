@@ -5,22 +5,6 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::process::Stdio;
 
-fn make_stale(repo: &TestRepo, id: &str) {
-    let content = repo.read_task(id);
-    let updated = content
-        .lines()
-        .map(|line| {
-            if line.starts_with("lease_until:") {
-                "lease_until: 2020-01-01T00:00:00Z".to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    repo.write_task(id, &(updated + "\n"));
-}
-
 #[test]
 fn init_creates_the_local_orbit_folder() {
     let repo = TestRepo::new();
@@ -261,7 +245,7 @@ fn stale_claims_are_visible_and_stealable() {
     let id = repo.add("Stale", &[]);
 
     repo.ok_json(&["claim", id.as_str(), "--by", "agent-1", "--json"]);
-    make_stale(&repo, &id);
+    repo.make_stale(&id);
 
     let (_, error) = repo.err_json(&["claim", id.as_str(), "--by", "agent-2", "--json"]);
     assert_eq!(error["error"]["code"], "CLAIM_STALE");

@@ -271,6 +271,7 @@ stateDiagram-v2
 
     in_progress --> todo: release
     in_progress --> in_progress: heartbeat
+    in_progress --> in_progress: checkpoint
     in_progress --> in_progress: claim --steal
     in_progress --> done: done
     in_progress --> cancelled: cancel
@@ -311,8 +312,9 @@ These rules live in `src/transition.rs`: a Task owns its transitions and returns
 | none | `add` | `todo` | Creates `tasks/ID.md`. Type defaults to `task`; priority defaults to `2`; dependencies must exist. `--parent` must name an existing, non-terminal Task that is not itself a SubTask, and cannot be combined with `--type epic`. |
 | `todo` | `claim` or `ready --claim` | `in_progress` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
 | `in_progress` | `heartbeat` | `in_progress` | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
-| `in_progress` | `claim --steal` | `in_progress` | Replaces the holder and resets `claimed_at` and `lease_until`. `--steal` does not bypass hold labels or dependencies. |
-| `in_progress` | `release` | `todo` | The holder must release unless `--force`; clears all claim fields. Releasing an unclaimed task is a no-op. |
+| `in_progress` | `checkpoint` | `in_progress` | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a terminal task or a task with no claim. |
+| `in_progress` | `claim --steal` | `in_progress` | Replaces the holder and resets `claimed_at` and `lease_until`, preserving the latest checkpoint. `--steal` does not bypass hold labels or dependencies. |
+| `in_progress` | `release` | `todo` | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. |
 | `todo` or `in_progress` | `done` | `done` | Every dependency must be `done` or `cancelled`, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields and `waiting_on`. |
 | `todo` or `in_progress` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields and `waiting_on`. Resolves dependents. |
 | `done` or `cancelled` | `reopen` | `todo` | Reopening a SubTask of a done parent reopens the parent too; a cancelled parent must be reopened first. Refuses when a dependent is already `done` unless `--force`. Clears claim fields and `waiting_on`. |
@@ -358,6 +360,7 @@ The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_B
 | SubTasks | yes, on the child | `parent` points at the Parent Task |
 | External wait | yes | `waiting_on` text |
 | Claim and lease | yes | `claimed_by`, `claimed_at`, `lease_until` |
+| Checkpoint | yes | `checkpoint` with `by`, `at`, `progress`, `next`, `blocker` |
 | Comments | yes, separately | `comments/ID.md` |
 | Ready | no | `Graph::is_ready` |
 | Blocked | no | `Graph::blocking_ids` and `Graph::open_children` |
@@ -399,6 +402,7 @@ flowchart TB
     subgraph Execute["4. Claim and resolve"]
         CLAIM["claim<br/>or ready --claim"]
         HEART["heartbeat"]
+        CHECKPOINT["checkpoint"]
         RELEASE["release"]
         DONE["done"]
         CANCEL["cancel"]
@@ -432,6 +436,8 @@ flowchart TB
     CLAIM -->|in_progress and lease| HEART
     HEART -->|extends lease| DONE
     HEART -->|extends lease| CANCEL
+    CLAIM -->|records progress| CHECKPOINT
+    CHECKPOINT -.->|handoff context| RELEASE
     CLAIM -->|stops work| RELEASE
     DONE -->|terminal| REOPEN
     CANCEL -->|terminal| REOPEN
@@ -447,7 +453,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
 | Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. |
-| Execution | `claim`, `ready --claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen` | Change Status or the claim. Writes take the exclusive lock. |
+| Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
 | Maintenance | `doctor`, `sync`, `slug`, `mcp` | Check integrity, commit heartbeat-only changes, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Board layouts and initialization
@@ -610,7 +616,7 @@ A link warning about a shadowed Board means the repository still has its own Boa
 
 ## 5. Task lifecycle
 
-The common agent path is `add` → `ready --claim` → `heartbeat` → `done`. Each command is a separate process; the Board lock is held only for that process.
+The common agent path is `add` → `ready --claim` → `heartbeat` → `checkpoint` → `done`. Each command is a separate process; the Board lock is held only for that process.
 
 ```mermaid
 sequenceDiagram
@@ -655,6 +661,16 @@ sequenceDiagram
     Note right of GIT: no commit until orbit sync
     CLI-->>Agent: lease_until, meta.committed false
 
+    Note over Agent,GIT: checkpoint
+    Agent->>CLI: orbit checkpoint ID --by claude --progress "..." --next "..."
+    CLI->>BRD: discover
+    BRD->>LCK: acquire exclusive
+    CLI->>FS: read all tasks
+    CLI->>CLI: verify holder; merge progress, next, blocker
+    CLI->>FS: atomic write checkpoint in frontmatter
+    CLI->>GIT: commit orbit: checkpoint ID
+    CLI-->>Agent: JSON detail with the checkpoint
+
     Note over Agent,GIT: complete
     Agent->>CLI: orbit done ID --by claude --comment "verified"
     CLI->>BRD: discover
@@ -673,6 +689,8 @@ sequenceDiagram
 ```
 
 `done` refuses unfinished dependencies and cancelled tasks. A live claim requires the holder unless `--force`; a stale claim does not. If a completion comment fails after the status write, the task is still done and the result carries `COMMENT_FAILED` with exit code `1`.
+
+A checkpoint is optional and independent of the lease: the holder can record progress, the next action, and a blocker at any point, then release or let the lease expire. `claim --steal`, `release`, and `reopen` preserve the record; terminal transitions keep it as archived history while the active queue stops exposing it.
 
 ### Concurrent claims
 

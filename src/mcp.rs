@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::error::{OrbitError, Result};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
-const INSTRUCTIONS: &str = "Orbit is the task tracker for this repository. Use `ready` with `claim:true` and a stable `by` to take work, `heartbeat` with the same `by` while working, and `finish` with `by` when done. `create`, `update`, `link`, and `delete` shape the board. Never edit task files directly.";
+const INSTRUCTIONS: &str = "Orbit is the task tracker for this repository. Use `ready` with `claim:true` and a stable `by` to take work, `heartbeat` with the same `by` while working, and `finish` with `by` when done. Use `checkpoint` with the same `by` to record progress, the next action, and blockers for a handoff. `create`, `update`, `link`, and `delete` shape the board. Never edit task files directly.";
 
 pub fn serve(dir: Option<&Path>) -> Result<()> {
     let executable = std::env::current_exe()
@@ -235,6 +235,20 @@ fn tool_definitions() -> Vec<Value> {
             &["id"],
         ),
         tool(
+            "checkpoint",
+            "Record or update the active work checkpoint on a claimed task.",
+            json!({
+                "id": { "type": "string" },
+                "progress": { "type": "string", "description": "Current progress. Required for the first checkpoint." },
+                "next": { "type": "string", "description": "Next useful action for the next claimant." },
+                "clear_next": { "type": "boolean", "description": "Remove the next action." },
+                "blocker": { "type": "string", "description": "A blocker the next claimant must know about." },
+                "clear_blocker": { "type": "boolean", "description": "Remove the blocker." },
+                "by": { "type": "string", "description": "Agent identity; must match the claim holder." }
+            }),
+            &["id"],
+        ),
+        tool(
             "finish",
             "Complete or cancel a task. Done still requires finished dependencies.",
             json!({
@@ -308,7 +322,7 @@ fn resource_template() -> Value {
         "uriTemplate": "orbit://tasks/{id}",
         "name": "orbit-task",
         "title": "Orbit task",
-        "description": "A task's Markdown body and acceptance criteria.",
+        "description": "A task's Markdown body, acceptance criteria, claim state, and checkpoint.",
         "mimeType": "text/markdown"
     })
 }
@@ -379,6 +393,14 @@ fn dispatch_tool(
         && bool_arg(arguments, "clear_waiting")
     {
         return tool_invalid("`waiting_on` and `clear_waiting` are mutually exclusive");
+    }
+    if name == "checkpoint" {
+        if arguments.get("next").is_some() && bool_arg(arguments, "clear_next") {
+            return tool_invalid("`next` and `clear_next` are mutually exclusive");
+        }
+        if arguments.get("blocker").is_some() && bool_arg(arguments, "clear_blocker") {
+            return tool_invalid("`blocker` and `clear_blocker` are mutually exclusive");
+        }
     }
     if name == "create"
         && let Some(depends_on) = arguments.get("depends_on")
@@ -674,6 +696,35 @@ fn dispatch_tool(
             };
             args.push("heartbeat".to_string());
             args.push(id);
+            if let Some(by) = optional_str(arguments, "by") {
+                args.push("--by".to_string());
+                args.push(by);
+            }
+        }
+        "checkpoint" => {
+            let Some(id) = required_str(arguments, "id") else {
+                return tool_invalid("missing or invalid `id`");
+            };
+            args.push("checkpoint".to_string());
+            args.push(id);
+            if let Some(progress) = optional_str(arguments, "progress") {
+                args.push("--progress".to_string());
+                args.push(progress);
+            }
+            if let Some(next) = optional_str(arguments, "next") {
+                args.push("--next".to_string());
+                args.push(next);
+            }
+            if bool_arg(arguments, "clear_next") {
+                args.push("--clear-next".to_string());
+            }
+            if let Some(blocker) = optional_str(arguments, "blocker") {
+                args.push("--blocker".to_string());
+                args.push(blocker);
+            }
+            if bool_arg(arguments, "clear_blocker") {
+                args.push("--clear-blocker".to_string());
+            }
             if let Some(by) = optional_str(arguments, "by") {
                 args.push("--by".to_string());
                 args.push(by);
@@ -979,9 +1030,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_list_contains_all_thirteen_tools() {
+    fn tool_list_contains_all_fourteen_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 14);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -995,6 +1046,7 @@ mod tests {
             "claim",
             "release",
             "heartbeat",
+            "checkpoint",
             "finish",
             "link",
             "delete",

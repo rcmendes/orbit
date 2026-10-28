@@ -14,7 +14,7 @@ checkpoint:
   next: Run final clippy on merged tip, verify clean branch includes current integration tip, then close ticket with the lint limitation recorded.
 area: cli
 created_at: 2026-10-28T15:23:46.609777Z
-updated_at: 2026-10-28T15:39:24.636769Z
+updated_at: 2026-10-28T15:42:25.365128Z
 ---
 
 ## Goal

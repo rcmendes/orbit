@@ -440,12 +440,16 @@ fn github_scope_status(
     } else {
         required_scopes
             .iter()
-            .filter(|required| !scopes.iter().any(|scope| scope == **required))
+            .filter(|required| !scopes.iter().any(|scope| scope_satisfies(scope, required)))
             .copied()
             .collect()
     };
 
     (required_scopes, missing_scopes)
+}
+
+fn scope_satisfies(granted: &str, required: &str) -> bool {
+    granted == required || (required == "read:org" && matches!(granted, "admin:org" | "write:org"))
 }
 
 pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
@@ -1443,4 +1447,23 @@ fn persist_task(board: &Board, task: &Task, message: &str) -> Result<CommitOutco
     let rendered = task::render_task(task)?;
     atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
     board.commit(message, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::github_scope_status;
+
+    #[test]
+    fn organization_admin_scope_satisfies_read_org() {
+        let scopes = vec!["admin:org".to_string(), "repo".to_string()];
+        let (_, missing) = github_scope_status(false, &scopes);
+        assert!(missing.is_empty(), "missing: {missing:?}");
+    }
+
+    #[test]
+    fn organization_write_scope_satisfies_read_org() {
+        let scopes = vec!["write:org".to_string(), "repo".to_string()];
+        let (_, missing) = github_scope_status(false, &scopes);
+        assert!(missing.is_empty(), "missing: {missing:?}");
+    }
 }

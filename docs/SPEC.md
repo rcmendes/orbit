@@ -415,6 +415,8 @@ Before this layout, a local Board lived at `<git-common-dir>/orbit/board` with i
 
 `doctor` runs without a Board and reports the discovery trace. Running without a Board is not itself a failure; the layout findings and task checks determine health. It diagnoses a legacy layout, a half-moved Board (`AMBIGUOUS_BOARD`), an orphan worktree whose `orbit` branch record outlived `DIR` (`ORPHAN_WORKTREE`), a storage mode that disagrees with `board.storage` (`STORAGE_MISMATCH`), and managed agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`). `doctor --fix` removes stale temp files and re-attaches an orphan worktree; `doctor --migrate` performs the legacy migration above. Task-level checks run when a Board is resolved.
 
+When the Board has a configured GitHub provider, `doctor` also reports GitHub authentication and required scopes, linked-repository access, and (in full mode) organization Issue Field configuration problems. These checks are read-only and are collected alongside Board diagnostics; a GitHub problem does not prevent task or Board integrity checks from running.
+
 Auto-commit policy: create/update/claim/release/checkpoint/done/cancel/reopen/depend/undepend/delete/comment/label commit immediately as `orbit: <verb> <id>`. Heartbeat and lease-only writes are not committed until the next meaningful mutation or `orbit sync`. A failed commit does not fail the operation: the state is already on disk and the result carries `meta.warnings: ["COMMIT_FAILED: ..."]`. `doctor` reports uncommitted board changes. A slug migration first flushes heartbeat-only writes as `orbit: sync`, then records one `orbit: migrate task prefix from <old> to <new>` commit. Nothing is pushed.
 
 ## 6. Commands
@@ -460,7 +462,17 @@ orbit setup <claude|cursor|codex|opencode|mattpocock|all> [--scope project|user]
 orbit mcp
 orbit doctor [--fix | --migrate]
 orbit sync
+orbit github status
 ```
+
+`orbit github status` is a read-only provider diagnostic. It reports the `gh`
+identity and known token scopes, configured organization and linked repositories,
+Area and Verification field configuration/resolution, linked Task count, pending
+pull/push changes, conflicts, unsupported cross-repository relationships, and a
+recommended next step. `--json` exposes the same diagnostic data in a stable
+structure, including provider `mode`, field applicability, `next_action`, and
+`next_command`. In basic mode, organization Issue Fields are not applicable and
+the status check only requires the `repo` scope.
 
 `--agents` accepts `none`, `all`, or a comma-separated list of client names. Without it, `init` asks in a TTY and otherwise writes no agent files while explaining the `orbit setup` hint in its report; `--print` never prompts. `--agents none` is the non-interactive "Board only" choice.
 
@@ -482,7 +494,7 @@ orbit sync
 - v0.8.1: hardens `doctor --migrate` and makes legacy worktree migration and the test suite pass on Windows. Supersedes v0.8.0.
 - v0.8.2: replaces the terse `init` status with a numbered onboarding report, explains each prompt choice, annotates verification and next-step commands, includes unchanged MCP configs in reconciliation output, and aligns the product description across the README, Cargo metadata, CLI help, and generated agent instructions.
 - Unreleased: claim checkpoints. A claimant records progress, the next action, and a blocker in the task frontmatter; the record survives release, takeover, and reopen, never affects readiness, and stays as archived history after done or cancelled. Exposed through the CLI, MCP, detail JSON, and export.
-- Unreleased: optional GitHub Issue provider (`orbit github`) for multi-repository linking, explicit adopt/create, and bidirectional sync with conflict detection. Default `full` mode uses organization Issue Fields for `area` and `verification`; `basic` mode supports personal repositories without Issue Fields and limits Triage to labels. `orbit github connect` configures organization-owned origins and leaves personal-account origins unchanged with next steps. `orbit github setup` resolves existing fields by default; `--create-fields` explicitly creates missing fields after checking organization administrator access. See [github-sync.md](./github-sync.md) and [ADR 0014](./adr/0014-github-issue-provider.md).
+- Unreleased: optional GitHub Issue provider (`orbit github`) for multi-repository linking, explicit adopt/create, and bidirectional sync with conflict detection. Default `full` mode uses organization Issue Fields for `area` and `verification`; `basic` mode supports personal repositories without Issue Fields and limits Triage to labels. `orbit github connect` configures organization-owned origins and leaves personal-account origins unchanged with next steps. `orbit github setup` resolves existing fields by default; `--create-fields` explicitly creates missing fields after checking organization administrator access. `orbit github status` reports integration health without writing; `doctor` checks GitHub configuration when enabled. See [github-sync.md](./github-sync.md) and [ADR 0014](./adr/0014-github-issue-provider.md).
 
 ### Command rules
 

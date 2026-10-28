@@ -83,6 +83,35 @@ For manual full-mode configuration, run `orbit github setup` to resolve and
 store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to
 check configuration without writing ids.
 
+## Diagnose the integration
+
+`orbit github status` checks the current `gh` authentication identity and scopes,
+linked repository access, and—when using full mode—the configured organization
+and whether its Area and Verification Issue Fields are present with current stored
+ids. It also loads linked Tasks and previews their sync plans to count pending
+pull and push changes and detect conflicts. Cross-repository SubTask and
+dependency links are reported as unsupported. The command is read-only: it does
+not change Board configuration, Tasks, GitHub Issues, or the fixture used by
+integration tests. In basic mode, it reports the `repo` scope, skips organization
+checks, and marks Area and Verification as not applicable.
+
+Use `--json` for the stable diagnostic structure. `data.pending.pull` and
+`data.pending.push` count field changes; `pull_tasks` and `push_tasks` identify the
+affected Tasks and counts. `data.conflicts` and `data.conflict_details` report
+conflicts, while `data.unsupported_relationships` and `data.unsupported_details`
+report relationships Orbit cannot synchronize. `data.next_action` recommends the
+next step, and `data.next_command` supplies an executable command when one applies.
+`data.auth.scopes_known` distinguishes an unreported scope list from an empty one.
+When the GitHub provider is configured,
+`orbit doctor` also reports authentication, repository access, and Issue Field
+configuration problems alongside normal Board diagnostics.
+
+```bash
+orbit github status
+orbit github status --json
+orbit doctor --json
+```
+
 ## Link repositories
 
 Repositories are linked explicitly; Orbit does not bulk-import an entire repository.

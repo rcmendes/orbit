@@ -844,10 +844,15 @@ personal-account origin, it leaves the Board unchanged and reports next steps.
 
 `orbit github setup` resolves existing fields by default. Creating missing
 fields is opt-in with `--create-fields` and requires organization administrator
-access.";
+access. Run `orbit github status` for a read-only health report of authentication
+and scopes, linked repositories, Issue Fields when applicable, pending changes,
+conflicts, unsupported relationships, and the next recommended action. `orbit
+doctor` also checks GitHub configuration when the provider is enabled.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
+  orbit github status
+  orbit github status --json
   orbit github connect
   orbit github connect --json
   orbit github repo link acme/widget
@@ -857,6 +862,14 @@ Examples:
   orbit github create orb-a7b2c9
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
+
+pub const GITHUB_STATUS_EXAMPLES: &str = "\
+Examples:
+  # Check GitHub configuration and the next recommended action
+  orbit github status
+
+  # Read the same diagnostic fields as JSON
+  orbit github status --json";
 
 pub const GITHUB_CONNECT_EXAMPLES: &str = "\
 Examples:

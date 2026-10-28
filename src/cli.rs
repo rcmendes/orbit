@@ -842,6 +842,9 @@ pub struct GitHubArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum GitHubCommand {
+    /// Report GitHub integration health without changing the Board or GitHub.
+    #[command(after_long_help = help::GITHUB_STATUS_EXAMPLES)]
+    Status,
     /// Detect the origin repository and configure GitHub for this Board.
     #[command(after_long_help = help::GITHUB_CONNECT_EXAMPLES)]
     Connect,

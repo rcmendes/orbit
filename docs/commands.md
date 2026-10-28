@@ -808,10 +808,16 @@ repository, it leaves configuration unchanged and reports next steps; manually
 configure `mode = "basic"` to use personal-repository sync. Existing integrations
 can link repositories explicitly. Sync requires the `gh` CLI and `[github]` in
 `config.toml`; full mode uses organization Issue Fields, while basic mode limits
-Triage to labels. See [github-sync.md](./github-sync.md).
+Triage to labels. `orbit github status` is a read-only diagnostic that reports
+authentication and scopes, linked repositories, Issue Field configuration when
+applicable, linked Task count, pending changes, conflicts, unsupported
+relationships, and a recommended next action. `orbit doctor` checks GitHub
+configuration when the provider is enabled. See [github-sync.md](./github-sync.md).
 
 ```bash
 orbit github connect
+orbit github status
+orbit github status --json
 orbit github repo link acme/widget
 orbit github setup
 orbit github setup --create-fields       # explicitly create missing org Issue Fields

@@ -649,6 +649,8 @@ Boards can link GitHub repositories and map Tasks to Issues by repository and is
 
 `orbit github connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports next steps; configure `mode = "basic"` manually to use personal-repository sync. Use `orbit github connect --json` for machine-readable status.
 
+Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
+
 ```bash
 # Personal repository: [github] mode = "basic" + repositories in config.toml.
 orbit github repo link alice/widget
@@ -656,6 +658,7 @@ orbit github create orb-a7b2c9 --repo alice/widget
 
 # Connect an organization-owned repository from its checkout:
 orbit github connect
+orbit github status --json
 
 # Or configure organization mode manually:
 orbit github repo link acme/widget

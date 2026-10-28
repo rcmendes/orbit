@@ -1,0 +1,5 @@
+.lock
+.init.lock
+.tmp-orbit-*
+tasks/.tmp-orbit-*
+comments/.tmp-orbit-*

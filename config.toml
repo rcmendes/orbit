@@ -1,0 +1,16 @@
+[board]
+branch = "orbit"
+storage = "worktree"
+lease_minutes = 30
+default_priority = 2
+non_ready_labels = [
+    "needs-triage",
+    "needs-info",
+    "ready-for-human",
+]
+auto_commit = true
+lock_timeout_ms = 2000
+
+[id]
+length = 6
+prefix = "orbit-"

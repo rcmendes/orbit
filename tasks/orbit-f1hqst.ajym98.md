@@ -1,6 +1,6 @@
 ---
 title: Migrate existing Boards into the Workspace Board
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -10,8 +10,11 @@ depends_on:
 - orbit-f1hqst.84hvkj
 parent: orbit-f1hqst
 area: board
+claimed_by: rodrigomendes
+claimed_at: 2026-10-28T23:10:02.537995Z
+lease_until: 2026-10-28T23:40:02.537995Z
 created_at: 2026-10-28T22:47:25.015063Z
-updated_at: 2026-10-28T22:48:44.943438Z
+updated_at: 2026-10-28T23:10:02.537995Z
 ---
 
 ## Goal

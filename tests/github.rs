@@ -71,6 +71,117 @@ fn write_status_fixture(dir: &TempDir) -> std::path::PathBuf {
     path
 }
 
+#[test]
+fn unlinked_repository_errors_include_safe_remediation_in_json_and_human_output() {
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    let id = repo.add("Create issue", &[]);
+
+    let (_, json_error) = repo.json(&[
+        "github",
+        "create",
+        id.as_str(),
+        "--repo",
+        "acme/private",
+        "--json",
+    ]);
+    assert_eq!(json_error["error"]["code"], "GITHUB_REPO_NOT_LINKED");
+    assert_eq!(json_error["error"]["details"]["repository"], "acme/private");
+    let remediation = json_error["error"]["details"]["remediation"]
+        .as_str()
+        .expect("JSON error should include remediation");
+    assert!(remediation.contains("orbit github repo link acme/private"));
+    assert!(
+        json_error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(remediation)
+    );
+
+    let human = repo.orbit(&["github", "create", id.as_str(), "--repo", "acme/private"]);
+    assert!(!human.status.success());
+    let human = String::from_utf8_lossy(&human.stderr);
+    assert!(human.contains("acme/private"));
+    assert!(human.contains(remediation));
+}
+
+#[test]
+fn github_not_configured_errors_include_login_and_connect_actions() {
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    repo.fake_command("gh");
+    let gh = repo.bin().join("gh");
+    let secret = "ghp_exampleSecretValue123456789";
+    fs::write(
+        &gh,
+        format!("#!/bin/sh\necho 'GitHub API unavailable: {secret}' >&2\nexit 1\n"),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (status, value) = repo.json(&["github", "setup", "--validate-only", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "GITHUB_NOT_CONFIGURED");
+    let remediation = value["error"]["details"]["remediation"]
+        .as_str()
+        .expect("JSON error should include remediation");
+    assert!(remediation.contains("orbit github connect"));
+    assert!(remediation.contains("gh auth login"));
+    assert!(
+        value["error"]["details"]["cause"]
+            .as_str()
+            .unwrap()
+            .contains("GitHub API unavailable")
+    );
+    assert!(!value.to_string().contains(secret));
+
+    let human = repo.orbit(&["github", "setup", "--validate-only"]);
+    assert!(!human.status.success());
+    assert!(String::from_utf8_lossy(&human.stderr).contains(remediation));
+}
+
+#[test]
+fn github_setup_incomplete_errors_name_the_missing_field_and_resolution_action() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_dir.path().join("empty-fields.json");
+    fs::write(&fixture, r#"{"org_fields":{},"issues":{}}"#).unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let (status, value) = repo.json_with_env(
+        &["github", "setup", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "GITHUB_SETUP_INCOMPLETE");
+    assert_eq!(value["error"]["details"]["organization"], "acme");
+    assert_eq!(value["error"]["details"]["fields"][0], "Area");
+    let remediation = value["error"]["details"]["remediation"]
+        .as_str()
+        .expect("JSON error should include remediation");
+    assert!(remediation.contains("orbit github setup --create-fields"));
+    assert!(
+        value["error"]["details"]["cause"]
+            .as_str()
+            .unwrap()
+            .contains("Issue Field `Area`")
+    );
+
+    let human = repo.orbit_with_env(
+        &["github", "setup"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(!human.status.success());
+    assert!(String::from_utf8_lossy(&human.stderr).contains(remediation));
+}
+
 fn set_configured_issue_field_ids(repo: &TestRepo) {
     let path = repo.board_path().join("config.toml");
     let mut config: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -860,6 +971,34 @@ fn github_sync_human_dry_run_shows_conflicting_values_and_keeps_json_plan() {
     assert_eq!(conflict["field"], "title");
     assert_eq!(conflict["orbit_value"], "Local edit");
     assert_eq!(conflict["github_value"], "Remote edit");
+
+    let (status, error) = repo.json_with_env(
+        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(status, 1);
+    assert_eq!(error["error"]["code"], "GITHUB_ISSUE_CONFLICT");
+    assert_eq!(error["error"]["details"]["task"], id);
+    assert_eq!(error["error"]["details"]["repository"], "acme/widget");
+    assert_eq!(error["error"]["details"]["number"], 42);
+    assert_eq!(error["error"]["details"]["conflicting_fields"], "title");
+    let remediation = error["error"]["details"]["remediation"].as_str().unwrap();
+    assert!(remediation.contains(&format!("Task {id}")));
+    assert!(remediation.contains("acme/widget#42"));
+    assert!(remediation.contains("title"));
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(remediation)
+    );
+
+    let human = repo.orbit_with_env(
+        &["github", "sync", id.as_str(), "--apply"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(!human.status.success());
+    assert!(String::from_utf8_lossy(&human.stderr).contains(remediation));
 }
 
 #[test]

@@ -1228,7 +1228,12 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
                 code::GITHUB_ISSUE_CONFLICT,
                 format!("sync for {id} has unresolved conflicts"),
             )
-            .with_details(json!({ "task": id, "conflicts": plan.conflicts })));
+            .with_details(json!({
+                "task": id,
+                "repository": link.repo,
+                "number": link.number,
+                "conflicts": plan.conflicts,
+            })));
         }
     }
 

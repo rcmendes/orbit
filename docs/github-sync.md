@@ -167,6 +167,25 @@ Rules:
 
 Conflicts return `GITHUB_ISSUE_CONFLICT` with per-field details. Sync never silently overwrites concurrent edits on both sides.
 
+GitHub command errors include a `Next:` action in human output. With `--json`,
+the existing `{ "ok": false, "error": ... }` envelope is unchanged and
+`error.details` includes the original `cause` and the same `remediation`, plus
+the affected organization, repository, Task, Issue, or fields when known.
+
+- `GITHUB_NOT_CONFIGURED`: run `orbit github connect` from the checkout with
+  the intended GitHub origin; authenticate first with `gh auth login` if needed.
+- `GITHUB_SETUP_INCOMPLETE`: run `orbit github setup` to resolve field ids. If
+  a named Issue Field is missing, create it under organization **Settings >
+  Projects > Issue fields** or run `orbit github setup --create-fields` as an
+  organization administrator. Run `orbit github connect` if the organization
+  is not configured.
+- `GITHUB_REPO_NOT_LINKED`: the error names `OWNER/REPO` and gives the exact
+  `orbit github repo link OWNER/REPO` command.
+- `GITHUB_ISSUE_CONFLICT`: the error names the Task, Issue, and conflicting
+  fields. Resolve each conflict on either Orbit or GitHub, review with
+  `orbit github sync <task-id>`, then retry with
+  `orbit github sync <task-id> --apply`.
+
 ## Relationships
 
 SubTasks and dependencies sync to GitHub sub-issues and blocked-by relationships when linked Issues live in the **same** repository as the parent. Cross-repository relationships are listed in sync output as unsupported rather than flattened.

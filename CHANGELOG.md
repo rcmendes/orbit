@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.2 - 2026-10-28
+
+- Fixed live GitHub organization Issue Field discovery. GitHub exposes the `IssueFields` union with concrete field types, so `orbit github setup` and `orbit github setup --create-fields` now query those concrete types instead of the non-existent `IssueField` type. This is required for organization-backed setup against the current GitHub GraphQL API.
+
 ## 0.9.1 - 2026-10-28
 
 - Wayfinder children are SubTasks labelled `wayfinder:research`, `wayfinder:prototype`, `wayfinder:grilling`, or `wayfinder:task`. Map membership is the parent edge (`orbit list --parent` / `orbit ready --parent`). Claims stay Orbit leases; GitHub assignees are not Wayfinder ownership.

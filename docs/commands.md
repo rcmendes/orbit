@@ -800,6 +800,10 @@ orbit sync
 
 ### `orbit github` — GitHub Issue provider
 
+GitHub sync and Triage require Orbit 0.9.0 or newer. Default release builds
+include the provider; a build without the `github-provider` capability reports
+`GITHUB_UNSUPPORTED` when it loads a Board with active `[github]` configuration.
+
 Connects the current checkout's origin repository, adopts or creates Issues, and
 runs bidirectional sync with conflict detection. `orbit github connect` checks
 `gh` authentication and repository access. For an organization-owned repository,

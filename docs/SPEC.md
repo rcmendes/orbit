@@ -462,8 +462,14 @@ orbit setup <claude|cursor|codex|opencode|mattpocock|all> [--scope project|user]
 orbit mcp
 orbit doctor [--fix | --migrate]
 orbit sync
-orbit github status
+orbit github <status|connect|setup|repo|adopt|create|sync>
+orbit triage <context|review|apply>
 ```
+
+GitHub sync and Triage require Orbit 0.9.0 or newer. Default release builds
+include the `github-provider` capability. A build without that capability returns
+`GITHUB_UNSUPPORTED` when it loads a Board with active `[github]` configuration;
+it must not silently ignore configured GitHub state.
 
 `orbit github status` is a read-only provider diagnostic. It reports the `gh`
 identity and known token scopes, configured organization and linked repositories,
@@ -494,7 +500,7 @@ the status check only requires the `repo` scope.
 - v0.8.1: hardens `doctor --migrate` and makes legacy worktree migration and the test suite pass on Windows. Supersedes v0.8.0.
 - v0.8.2: replaces the terse `init` status with a numbered onboarding report, explains each prompt choice, annotates verification and next-step commands, includes unchanged MCP configs in reconciliation output, and aligns the product description across the README, Cargo metadata, CLI help, and generated agent instructions.
 - Unreleased: claim checkpoints. A claimant records progress, the next action, and a blocker in the task frontmatter; the record survives release, takeover, and reopen, never affects readiness, and stays as archived history after done or cancelled. Exposed through the CLI, MCP, detail JSON, and export.
-- Unreleased: optional GitHub Issue provider (`orbit github`) for multi-repository linking, explicit adopt/create, and bidirectional sync with conflict detection. Default `full` mode uses organization Issue Fields for `area` and `verification`; `basic` mode supports personal repositories without Issue Fields and limits Triage to labels. `orbit github connect` configures organization-owned origins and leaves personal-account origins unchanged with next steps. `orbit github setup` resolves existing fields by default; `--create-fields` explicitly creates missing fields after checking organization administrator access. `orbit github status` reports integration health without writing; `doctor` checks GitHub configuration when enabled. See [github-sync.md](./github-sync.md) and [ADR 0014](./adr/0014-github-issue-provider.md).
+- Unreleased (minimum Orbit version 0.9.0): optional GitHub Issue provider (`orbit github`) for multi-repository linking, explicit adopt/create, and bidirectional sync with conflict detection. The provider and `orbit triage` ship in default release binaries and installers. Default `full` mode uses organization Issue Fields for `area` and `verification`; `basic` mode supports personal repositories without Issue Fields and limits Triage to labels. `orbit github connect` configures organization-owned origins and leaves personal-account origins unchanged with next steps. `orbit github setup` resolves existing fields by default; `--create-fields` explicitly creates missing fields after checking organization administrator access. `orbit github status` reports integration health without writing; `doctor` checks GitHub configuration when enabled. See [github-sync.md](./github-sync.md) and [ADR 0014](./adr/0014-github-issue-provider.md).
 
 ### Command rules
 

@@ -1,6 +1,6 @@
 ---
 title: Set up coding agents across Workspace repositories
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -16,11 +16,8 @@ checkpoint:
   progress: Workspace agent setup implementation is running in workspace-agent-setup; prerequisite init and repo discovery are merged.
   next: Review, merge, close ticket.
 area: setup
-claimed_by: rodrigomendes
-claimed_at: 2026-10-28T23:20:47.097557Z
-lease_until: 2026-10-29T00:03:44.176094Z
 created_at: 2026-10-28T22:47:34.547399Z
-updated_at: 2026-10-28T23:33:49.729900Z
+updated_at: 2026-10-28T23:44:31.997678Z
 ---
 
 ## Goal

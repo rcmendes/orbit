@@ -56,19 +56,33 @@ unchanged.
    }
    ```
 
-3. **Review** — validate and preview without writing:
+3. **Review** — validate and display the proposal. Interactive review shows a field-by-field diff
+   for `area`, `verification`, and label additions/removals when a proposal file is used and both
+   stdin and stdout are terminals:
 
    ```bash
-   orbit triage review <ID> --proposal-file proposal.json --json
+   orbit triage review <ID> --proposal-file proposal.json
    ```
 
-4. **Apply** — requires explicit approval; updates Orbit only:
+   The command asks for explicit confirmation. Enter `y` or `yes` to apply; any cancel response or
+   end of input leaves the Board unchanged. If either stream is not a terminal, review prints the
+   diff and exits without prompting or applying. `--json` also remains non-interactive and
+   preserves the JSON preview output. A proposal can instead be read from stdin with
+   `--proposal-file -`:
+
+   ```bash
+   orbit triage review <ID> --proposal-file - --json < proposal.json
+   ```
+
+4. **Apply** — the explicit non-interactive alternative requires `--approve`; it updates Orbit
+   only:
 
    ```bash
    orbit triage apply <ID> --proposal-file proposal.json --approve --json
    ```
 
-5. **Sync to GitHub** — publish Orbit-owned fields and labels:
+5. **Sync to GitHub** — review and apply do not write to GitHub. Publish Orbit-owned fields and
+   labels only with an explicit sync:
 
    ```bash
    orbit github sync <ID> --direction push --apply

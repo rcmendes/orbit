@@ -835,14 +835,19 @@ permissions, and remediation.
 
 ### `orbit triage` — agent review and apply
 
-Reviews GitHub-linked Tasks only. Agents draft a proposal JSON file, preview changes
-with `review`, apply approved metadata to Orbit with `apply --approve`, then publish
-with `orbit github sync`. Does not modify GitHub-owned title, body, or status. See
+Reviews GitHub-linked Tasks only. Review displays field-by-field changes and, when a
+proposal file is used with stdin and stdout connected to terminals, prompts for
+explicit approval or cancellation. Non-TTY and `--json` reviews only preview; they
+never prompt or apply. `--proposal-file -` reads a proposal from stdin. Applying
+changes Orbit only; it does not modify GitHub-owned title, body, or status. Publish
+with an explicit `orbit github sync`. See
 [agents/triage-workflow.md](./agents/triage-workflow.md).
 
 ```bash
 orbit triage context orb-a7b2c9 --json
+orbit triage review orb-a7b2c9 --proposal-file proposal.json
 orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
+orbit triage review orb-a7b2c9 --proposal-file - --json < proposal.json
 orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json
 orbit github sync orb-a7b2c9 --direction push --apply
 ```

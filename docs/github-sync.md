@@ -89,7 +89,7 @@ github:
     verification: cargo test
 ```
 
-Controlled `area` values: `backend`, `frontend`, `infra`, `docs`, `agents`, `product`, `other`.
+Controlled `area` values match `TaskArea`: `board`, `cli`, `mcp`, `setup`, `docs`, `release`.
 
 ## Testing
 

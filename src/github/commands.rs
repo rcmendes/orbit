@@ -13,6 +13,7 @@ use crate::github::client::{CreateIssueInput, GitHubClient, UpdateIssueInput, cl
 use crate::github::link::{GitHubLink, GitHubSyncBaseline};
 use crate::github::model::{IssueSnapshot, SyncDirection, SyncPlan};
 use crate::github::relationships;
+use crate::github::fields::parse_area;
 use crate::github::sync::{self, OrbitSyncView, validate_orbit_metadata};
 use crate::graph::{Graph, LoadMode};
 use crate::task::{self, Task};
@@ -131,7 +132,7 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
     let mut task = task;
     task.front.github = Some(GitHubLink::new(args.repo.clone(), args.number));
     task.front.updated_at = Utc::now();
-    apply_issue_to_task(&mut task, &issue);
+    apply_issue_to_task(&mut task, &issue)?;
     validate_orbit_metadata(&task)?;
     persist_task(board, &task, &format!("orbit: github adopt {}", task.id))?;
     let human = format!("Adopted {}/#{} for {}", args.repo, args.number, task.id);
@@ -161,7 +162,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             title: task.front.title.clone(),
             body: task.body.clone(),
             labels: task.front.labels.clone(),
-            area: task.front.area.clone(),
+            area: task.front.area.map(|area| area.as_str().to_string()),
             verification: task.front.verification.clone(),
         },
     )?;
@@ -264,7 +265,10 @@ fn apply_plan(
         task.front.labels = labels.clone();
     }
     if let Some(area) = &plan.apply_area {
-        task.front.area = area.clone();
+        task.front.area = area
+            .as_ref()
+            .map(|value| parse_area(value))
+            .transpose()?;
     }
     if let Some(verification) = &plan.apply_verification {
         task.front.verification = verification.clone();
@@ -292,14 +296,19 @@ fn apply_plan(
     Ok(())
 }
 
-fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot) {
+fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot) -> Result<()> {
     task.front.title = issue.title.clone();
     task.body = issue.body.clone();
     task.front.labels = issue.labels.clone();
-    task.front.area = issue.area.clone();
+    task.front.area = issue
+        .area
+        .as_deref()
+        .map(parse_area)
+        .transpose()?;
     task.front.verification = issue.verification.clone();
     task.front.status = crate::github::status::status_from_issue(issue.state, &issue.labels);
     set_baseline(task, issue);
+    Ok(())
 }
 
 fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {
@@ -311,7 +320,7 @@ fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {
             title: issue.title.clone(),
             body: issue.body.clone(),
             labels: issue.labels.clone(),
-            area: task.front.area.clone(),
+            area: task.front.area.map(|area| area.as_str().to_string()),
             verification: task.front.verification.clone(),
         });
     }

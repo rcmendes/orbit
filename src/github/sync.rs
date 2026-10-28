@@ -1,6 +1,6 @@
 use chrono::Utc;
 
-use crate::github::fields;
+use crate::github::fields::validate_verification;
 use crate::github::link::{GitHubLink, GitHubSyncBaseline};
 use crate::github::model::{IssueSnapshot, SyncConflict, SyncDirection, SyncPlan};
 use crate::github::status::{self, issue_state_from_status, status_from_issue, WONTFIX_LABEL};
@@ -41,7 +41,11 @@ pub fn plan_sync(view: OrbitSyncView<'_>, issue: &IssueSnapshot, direction: Sync
     let orbit_title = view.task.front.title.clone();
     let orbit_body = view.task.body.clone();
     let orbit_labels = view.task.front.labels.clone();
-    let orbit_area = view.task.front.area.clone();
+    let orbit_area = view
+        .task
+        .front
+        .area
+        .map(|area| area.as_str().to_string());
     let orbit_verification = view.task.front.verification.clone();
     let orbit_status = view.task.front.status;
 
@@ -151,7 +155,7 @@ pub fn baseline_from(view: OrbitSyncView<'_>, issue: &IssueSnapshot) -> GitHubSy
         title: issue.title.clone(),
         body: issue.body.clone(),
         labels: issue.labels.clone(),
-        area: view.task.front.area.clone(),
+        area: view.task.front.area.map(|area| area.as_str().to_string()),
         verification: view.task.front.verification.clone(),
     }
 }
@@ -257,11 +261,8 @@ fn merge_labels(
 }
 
 pub fn validate_orbit_metadata(task: &Task) -> Result<(), crate::error::OrbitError> {
-    if let Some(area) = task.front.area.as_deref() {
-        fields::normalize_area(area)?;
-    }
     if let Some(verification) = task.front.verification.as_deref() {
-        fields::validate_verification(verification)?;
+        validate_verification(verification)?;
     }
     Ok(())
 }
@@ -270,7 +271,7 @@ pub fn validate_orbit_metadata(task: &Task) -> Result<(), crate::error::OrbitErr
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use crate::task::{TaskFrontmatter, TaskType, default_priority};
+    use crate::task::{TaskFrontmatter, TaskType, TaskArea, default_priority};
     use std::collections::BTreeMap;
 
     fn sample_task(title: &str, body: &str, status: Status) -> Task {
@@ -290,7 +291,7 @@ mod tests {
                 stray_claim_times: None,
                 created_at: now,
                 updated_at: now,
-                area: Some("backend".into()),
+                area: Some(TaskArea::Cli),
                 verification: Some("cargo test".into()),
                 github: Some(GitHubLink {
                     repo: "acme/app".into(),
@@ -302,7 +303,7 @@ mod tests {
                         title: "Old".into(),
                         body: "Old body".into(),
                         labels: vec!["bug".into()],
-                        area: Some("backend".into()),
+                        area: Some("cli".into()),
                         verification: Some("cargo test".into()),
                     }),
                 }),
@@ -322,7 +323,7 @@ mod tests {
             labels: vec!["bug".into()],
             assignees: vec!["human".into()],
             updated_at: Utc.with_ymd_and_hms(2026, 10, 23, 13, 0, 0).unwrap(),
-            area: Some("backend".into()),
+            area: Some("cli".into()),
             verification: Some("cargo test".into()),
             parent_issue: vec![],
             blocked_by: vec![],

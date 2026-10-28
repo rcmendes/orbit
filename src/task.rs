@@ -11,6 +11,44 @@ pub const ID_ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 pub const DEFAULT_PREFIX: &str = "orb-";
 pub const DEFAULT_ID_LENGTH: usize = 6;
 pub const MAX_LABEL_LENGTH: usize = 32;
+pub const MAX_VERIFICATION_LENGTH: usize = 2000;
+
+/// Stable classification of where work primarily lands in the repository.
+/// Shared metadata for agents and filters; not personal or session-local state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskArea {
+    Board,
+    Cli,
+    Mcp,
+    Setup,
+    Docs,
+    Release,
+}
+
+impl TaskArea {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskArea::Board => "board",
+            TaskArea::Cli => "cli",
+            TaskArea::Mcp => "mcp",
+            TaskArea::Setup => "setup",
+            TaskArea::Docs => "docs",
+            TaskArea::Release => "release",
+        }
+    }
+
+    pub fn all() -> &'static [TaskArea] {
+        &[
+            TaskArea::Board,
+            TaskArea::Cli,
+            TaskArea::Mcp,
+            TaskArea::Setup,
+            TaskArea::Docs,
+            TaskArea::Release,
+        ]
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -115,7 +153,7 @@ struct RawFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     waiting_on: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    area: Option<String>,
+    area: Option<TaskArea>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     verification: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,7 +222,7 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             parent: front.parent,
             waiting_on: front.waiting_on,
             area: front.area,
-            verification: front.verification,
+            verification: front.verification.clone(),
             github: front.github,
             claimed_by,
             claimed_at,
@@ -207,7 +245,7 @@ pub struct TaskFrontmatter {
     pub depends_on: Vec<String>,
     pub parent: Option<String>,
     pub waiting_on: Option<String>,
-    pub area: Option<String>,
+    pub area: Option<TaskArea>,
     pub verification: Option<String>,
     pub github: Option<GitHubLink>,
     pub claim: Option<Claim>,
@@ -258,12 +296,32 @@ impl Task {
     }
 }
 
+pub fn normalize_verification(verification: Option<String>) -> Result<Option<String>> {
+    match verification {
+        None => Ok(None),
+        Some(value) => {
+            let value = value.trim().to_string();
+            if value.is_empty() {
+                return Err(OrbitError::invalid_argument(
+                    "verification must not be empty",
+                ));
+            }
+            if value.len() > MAX_VERIFICATION_LENGTH {
+                return Err(OrbitError::invalid_argument(format!(
+                    "verification must be at most {MAX_VERIFICATION_LENGTH} characters"
+                )));
+            }
+            Ok(Some(value))
+        }
+    }
+}
+
 pub fn parse_task(id: String, content: &str) -> Result<Task> {
     let (frontmatter, body) = split_frontmatter(content).ok_or_else(|| {
         OrbitError::corrupt_task(format!("task {id} has no complete YAML frontmatter block"))
     })?;
 
-    let front: TaskFrontmatter = serde_yaml_ng::from_str(frontmatter).map_err(|error| {
+    let mut front: TaskFrontmatter = serde_yaml_ng::from_str(frontmatter).map_err(|error| {
         OrbitError::corrupt_task(format!("task {id} has invalid frontmatter: {error}"))
     })?;
 
@@ -292,19 +350,6 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             "task {id} has an empty parent id"
         )));
     }
-    if let Some(area) = &front.area {
-        crate::github::fields::normalize_area(area).map_err(|error| {
-            OrbitError::corrupt_task(format!("task {id} has an invalid area: {}", error.message))
-        })?;
-    }
-    if let Some(verification) = &front.verification {
-        crate::github::fields::validate_verification(verification).map_err(|error| {
-            OrbitError::corrupt_task(format!(
-                "task {id} has invalid verification: {}",
-                error.message
-            ))
-        })?;
-    }
     if let Some(link) = &front.github {
         link.validate().map_err(|error| {
             OrbitError::corrupt_task(format!(
@@ -324,8 +369,13 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
     labels.sort();
     labels.dedup();
 
+    let verification = normalize_verification(front.verification.take()).map_err(|error| {
+        OrbitError::corrupt_task(format!("task {id} has invalid verification: {}", error.message))
+    })?;
+
     let mut front = front;
     front.labels = labels;
+    front.verification = verification;
 
     Ok(Task {
         id,

@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
-use crate::task::{Status, TaskType};
+use crate::task::{Status, TaskArea, TaskType};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -264,6 +264,14 @@ pub struct AddArgs {
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
 
+    /// Stable work area: board, cli, mcp, setup, docs, or release.
+    #[arg(long, value_name = "AREA")]
+    pub area: Option<String>,
+
+    /// Concise verification checks or commands for agents.
+    #[arg(long, value_name = "TEXT")]
+    pub verification: Option<String>,
+
     /// Task body. Use "-" to read stdin.
     #[arg(long, value_name = "TEXT", conflicts_with = "body_file")]
     pub body: Option<String>,
@@ -298,6 +306,14 @@ pub struct ListArgs {
     /// Exclude work shapes. Repeatable; excludes any listed type.
     #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
     pub exclude_type: Vec<TaskType>,
+
+    /// Filter by work area. Repeatable; matches any listed area.
+    #[arg(long, value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
+    pub area: Vec<TaskArea>,
+
+    /// Exclude tasks with any listed area.
+    #[arg(long = "exclude-area", value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
+    pub exclude_area: Vec<TaskArea>,
 
     /// Filter by label. Repeatable; every label must match.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -349,6 +365,14 @@ pub struct ReadyArgs {
     /// Exclude Ready tasks with any of these work shapes. Repeatable.
     #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
     pub exclude_type: Vec<TaskType>,
+
+    /// Only Ready tasks with any listed work area. Repeatable.
+    #[arg(long, value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
+    pub area: Vec<TaskArea>,
+
+    /// Exclude Ready tasks with any listed work area. Repeatable.
+    #[arg(long = "exclude-area", value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
+    pub exclude_area: Vec<TaskArea>,
 
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -507,6 +531,26 @@ pub struct UpdateArgs {
     /// Remove the external blocker.
     #[arg(long = "clear-waiting")]
     pub clear_waiting: bool,
+
+    /// New work area: board, cli, mcp, setup, docs, or release.
+    #[arg(long, value_name = "AREA", conflicts_with = "clear_area")]
+    pub area: Option<String>,
+
+    /// Remove the work area classification.
+    #[arg(long = "clear-area")]
+    pub clear_area: bool,
+
+    /// New verification checks or commands for agents.
+    #[arg(
+        long,
+        value_name = "TEXT",
+        conflicts_with = "clear_verification"
+    )]
+    pub verification: Option<String>,
+
+    /// Remove task-level verification guidance.
+    #[arg(long = "clear-verification")]
+    pub clear_verification: bool,
 }
 
 #[derive(Debug, Args)]

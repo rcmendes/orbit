@@ -32,7 +32,7 @@ fn write_fixture(dir: &TempDir) -> std::path::PathBuf {
       "labels": ["bug"],
       "assignees": ["human"],
       "updated_at": "2026-10-23T13:00:00Z",
-      "area": "backend",
+      "area": "cli",
       "verification": "cargo test"
     }
   }
@@ -79,7 +79,7 @@ fn github_repo_link_and_adopt_use_fixture_client() {
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["github"]["repo"], "acme/widget");
     assert_eq!(show["data"]["title"], "Imported issue");
-    assert_eq!(show["data"]["area"], "backend");
+    assert_eq!(show["data"]["area"], "cli");
 }
 
 #[test]

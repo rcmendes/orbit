@@ -37,6 +37,14 @@ _Avoid_: Category, issue type
 The work shape of a Task: `task`, `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness. `epic` is allowed only on a top-level Task.
 _Avoid_: Kind, category, label
 
+**Area**:
+An optional, single controlled classification of where work primarily lands (`board`, `cli`, `mcp`, `setup`, `docs`, or `release`). Area is shared metadata for filtering and agent routing; it is not personal or session-local state.
+_Avoid_: Label, component tag, free-form tag
+
+**Verification**:
+Optional, concise checks or commands agents should run for a Task, stored separately from narrative acceptance criteria in the body. Project-wide defaults live in [`docs/agents/project-guidance.md`](./agents/project-guidance.md); Task-level `verification` adds to or narrows those defaults.
+_Avoid_: Acceptance criteria, comment, checkpoint
+
 **Status**:
 The stored lifecycle position of a Task: `todo`, `in_progress`, `done`, or `cancelled`.
 _Avoid_: State, phase

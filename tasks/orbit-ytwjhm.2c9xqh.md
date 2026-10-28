@@ -9,15 +9,15 @@ labels:
 parent: orbit-ytwjhm
 checkpoint:
   by: impl-2c9xqh
-  at: 2026-10-28T15:34:20.124428Z
-  progress: Implemented explicit GitHub basic mode, personal-repository create/adopt/sync behavior, structured-metadata rejection, and Triage label-only capability; focused GitHub tests pass.
-  next: Finish targeted Triage verification, run requested checks, inspect docs and diff, commit, then merge latest integrate/orbit-ytwjhm into the ticket branch.
+  at: 2026-10-28T15:39:04.804690Z
+  progress: Implemented and documented basic mode; merged latest integration branch updates including URL-based adopt and single-linked-repository create. GitHub/Triage focused tests pass after merge. Clippy reports pre-existing repo lints.
+  next: Run final clippy on merged tip, verify clean branch includes current integration tip, then close ticket with the lint limitation recorded.
 area: cli
 claimed_by: impl-2c9xqh
 claimed_at: 2026-10-28T15:27:21.098653Z
-lease_until: 2026-10-28T16:04:20.096859Z
+lease_until: 2026-10-28T16:09:04.779840Z
 created_at: 2026-10-28T15:23:46.609777Z
-updated_at: 2026-10-28T15:34:20.124428Z
+updated_at: 2026-10-28T15:39:04.804690Z
 ---
 
 ## Goal

@@ -1,6 +1,6 @@
 ---
 title: Add orbit github status and diagnostics
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -15,11 +15,8 @@ checkpoint:
   progress: 'Implemented and committed read-only GitHub status plus doctor diagnostics, docs/help, and integration coverage. Merged latest integrate/orbit-ytwjhm at 4aa7a350 into the ticket branch as e2657eb, preserving status diagnostics and full/basic mode plus opt-in field creation. Final cargo test: 385 passed.'
   next: Await integration merger; do not mark ticket done until merged.
 area: cli
-claimed_by: impl-v8vgqe
-claimed_at: 2026-10-28T15:39:34.116849Z
-lease_until: 2026-10-28T16:34:49.908857Z
 created_at: 2026-10-28T15:23:57.647591Z
-updated_at: 2026-10-28T16:04:49.942668Z
+updated_at: 2026-10-28T16:06:45.286769Z
 ---
 
 ## Goal

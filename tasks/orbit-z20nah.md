@@ -1,10 +1,10 @@
 ---
 title: Persist claim checkpoints across agent handoffs
-status: todo
+status: done
 type: task
 priority: 2
 created_at: 2026-10-28T14:07:08.761511Z
-updated_at: 2026-10-28T14:27:40.281467Z
+updated_at: 2026-10-28T14:40:07.268761Z
 ---
 
 ## Context

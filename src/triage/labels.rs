@@ -10,8 +10,44 @@ pub const CANONICAL_TRIAGE_LABELS: &[&str] = &[
     "enhancement",
 ];
 
+pub const STATE_ROLES: &[&str] = &[
+    "needs-triage",
+    "needs-info",
+    "ready-for-agent",
+    "ready-for-human",
+    "wontfix",
+];
+
+pub const CATEGORY_ROLES: &[&str] = &["bug", "enhancement"];
+
 pub fn is_canonical(label: &str) -> bool {
     CANONICAL_TRIAGE_LABELS.contains(&label)
+}
+
+pub fn validate_state_roles(labels: &[String]) -> Result<()> {
+    reject_conflicting_roles(labels, STATE_ROLES, "state")
+}
+
+pub fn validate_category_roles(labels: &[String]) -> Result<()> {
+    reject_conflicting_roles(labels, CATEGORY_ROLES, "category")
+}
+
+fn reject_conflicting_roles(labels: &[String], roles: &[&str], kind: &str) -> Result<()> {
+    let conflicting: Vec<&str> = roles
+        .iter()
+        .copied()
+        .filter(|role| labels.iter().any(|label| label == role))
+        .collect();
+    if conflicting.len() > 1 {
+        return Err(OrbitError::new(
+            code::TRIAGE_INVALID_PROPOSAL,
+            format!(
+                "proposal would leave conflicting {kind} roles: {}",
+                conflicting.join(", ")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_label_list(labels: &[String], field: &str) -> Result<()> {

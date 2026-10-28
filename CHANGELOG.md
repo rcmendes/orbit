@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `orbit triage` rejects a proposal whose resulting labels would contain more than one state role (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) or more than one category role (`bug`, `enhancement`). The error is `TRIAGE_INVALID_PROPOSAL` and names the conflicting roles. Proposals that do not add or remove labels still apply, and a Task may have neither role.
 - Added claim checkpoints. `orbit checkpoint <id> --progress ... [--next ...] [--blocker ...]` records the claim holder's latest handoff state in the Task's frontmatter; later calls can update one field or clear the next action/blocker. The record survives `release`, `claim --steal`, and `reopen`, appears in `show`/`ready`/`list`/`prime`, MCP `get`, and `export`, and never changes readiness or claim eligibility. A done or cancelled Task keeps it as archived history (`checkpoint_archived: true`) but refuses new checkpoints. Exposed over MCP as `checkpoint`; not synchronized to external issue trackers.
 - Updated the README, command guide, specification, architecture, glossary, tracker guide, ADR 0013, CLI/MCP help, generated agent guidance, and integration tests for checkpoints.
 

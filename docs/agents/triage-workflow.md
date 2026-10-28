@@ -44,9 +44,10 @@ previews or writes `area`, `verification`, and canonical labels on a linked
 Task. It does not decide whether a claim is true, interview anyone, compose a
 brief, or create `.out-of-scope/` files.
 
-Wayfinder map membership is a parent edge. Filtering still uses
-`wayfinder:<map-id>` as documented in [`issue-tracker.md`](./issue-tracker.md);
-this page does not change those commands.
+Wayfinder map membership is a parent edge. Scope a map with
+`orbit ready --parent` or `orbit list --parent`, as documented in
+[`issue-tracker.md`](./issue-tracker.md). This page does not change those
+commands.
 
 ## Commands
 

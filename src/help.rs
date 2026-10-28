@@ -838,10 +838,14 @@ assignees to Orbit claims.
 Full mode (the default) uses organization-level Issue Fields for Orbit-owned
 area and verification values; run setup after editing config.toml. Basic mode
 supports personal repositories without setup, but cannot sync area or
-verification. Triage in basic mode supports labels only.";
+verification. Triage in basic mode supports labels only. `orbit github connect`
+checks the current origin and configures organization-owned repositories; for a
+personal-account origin, it leaves the Board unchanged and reports next steps.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
+  orbit github connect
+  orbit github connect --json
   orbit github repo link acme/widget
   orbit github setup
   orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
@@ -849,6 +853,14 @@ Examples:
   orbit github create orb-a7b2c9
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
+
+pub const GITHUB_CONNECT_EXAMPLES: &str = "\
+Examples:
+  # Detect origin, authenticate with gh, and configure an organization-owned repo
+  orbit github connect
+
+  # Inspect the detected owner, fields, and next action as JSON
+  orbit github connect --json";
 
 pub const GITHUB_SETUP_EXAMPLES: &str = "\
 Examples:

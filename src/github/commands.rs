@@ -19,14 +19,214 @@ use crate::graph::{Graph, LoadMode};
 use crate::task::{self, Task};
 
 pub fn run(board: &Board, args: GitHubArgs) -> Result<crate::output::CommandOutput> {
-    require_github_section(board)?;
     match args.command {
-        GitHubCommand::Setup(args) => cmd_setup(board, args),
-        GitHubCommand::Repo(command) => cmd_repo(board, command),
-        GitHubCommand::Adopt(args) => cmd_adopt(board, args),
-        GitHubCommand::Create(args) => cmd_create(board, args),
-        GitHubCommand::Sync(args) => cmd_sync(board, args),
+        GitHubCommand::Connect => cmd_connect(board),
+        command => {
+            require_github_section(board)?;
+            match command {
+                GitHubCommand::Setup(args) => cmd_setup(board, args),
+                GitHubCommand::Repo(command) => cmd_repo(board, command),
+                GitHubCommand::Adopt(args) => cmd_adopt(board, args),
+                GitHubCommand::Create(args) => cmd_create(board, args),
+                GitHubCommand::Sync(args) => cmd_sync(board, args),
+                GitHubCommand::Connect => unreachable!(),
+            }
+        }
     }
+}
+
+fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
+    let repo = parse_github_remote(&crate::git::origin_url()?)?;
+    let client = client_from_env()?;
+    let auth = client.auth_status();
+    if !auth.authenticated {
+        return Ok(connect_blocked(
+            json!({
+                "repository": repo,
+                "owner_type": null,
+                "organization": null,
+                "field_status": {"area": "unknown", "verification": "unknown"},
+                "next_action": "authenticate_gh",
+                "remediation": "Install GitHub CLI if needed, then run `gh auth login` and rerun `orbit github connect`.",
+                "auth_message": auth.message,
+            }),
+            "GitHub CLI authentication is missing or insufficient. Install `gh` if needed, run `gh auth login`, then rerun `orbit github connect`.".to_string(),
+        ));
+    }
+
+    let repository = match client.repository_info(&repo) {
+        Ok(repository) => repository,
+        Err(error) => {
+            return Ok(connect_blocked(
+                json!({
+                    "repository": repo,
+                    "owner_type": null,
+                    "organization": null,
+                    "field_status": {"area": "unknown", "verification": "unknown"},
+                    "next_action": "grant_repository_access",
+                    "remediation": format!("Confirm `{repo}` exists and that the account from `gh auth status` can access it, then rerun `orbit github connect`."),
+                    "access_error": error.message,
+                }),
+                format!(
+                    "Cannot access `{repo}` with the current GitHub account. Confirm the repository exists and grant that account access, then rerun `orbit github connect`."
+                ),
+            ));
+        }
+    };
+
+    if repository.owner_type.eq_ignore_ascii_case("user") {
+        return Ok(connect_blocked(
+            json!({
+                "repository": repo,
+                "owner_type": "user",
+                "organization": null,
+                "field_status": {"area": "not_applicable", "verification": "not_applicable"},
+                "next_action": "choose_personal_account_path",
+                "next_actions": [
+                    "Use an organization-owned GitHub repository to enable Issue Fields.",
+                    "Use `orbit github basic` when personal-account basic mode is available.",
+                    "Cancel and leave this Board unchanged."
+                ],
+            }),
+            format!(
+                "`{repo}` is owned by a personal account. Organization Issue Fields are unavailable; use an organization-owned repository, use basic mode when available, or cancel. No configuration was changed."
+            ),
+        ));
+    }
+
+    if !repository.owner_type.eq_ignore_ascii_case("organization") {
+        return Ok(connect_blocked(
+            json!({
+                "repository": repo,
+                "owner_type": repository.owner_type,
+                "organization": null,
+                "field_status": {"area": "unknown", "verification": "unknown"},
+                "next_action": "check_repository_owner",
+                "remediation": "Check that the origin is a GitHub repository owned by a User or Organization.",
+            }),
+            format!(
+                "Could not determine whether `{repo}` is owned by a GitHub user or organization. Check the origin repository."
+            ),
+        ));
+    }
+
+    let organization = repo.split('/').next().unwrap_or_default();
+    let setup = match client.validate_org_fields(organization, &board.config.github.issue_fields) {
+        Ok(setup) => setup,
+        Err(error) => {
+            let message = error.message;
+            let area_missing = message.contains(&format!(
+                "missing Issue Field `{}`",
+                board.config.github.issue_fields.area_name
+            ));
+            let verification_missing = message.contains(&format!(
+                "missing Issue Field `{}`",
+                board.config.github.issue_fields.verification_name
+            ));
+            let fields_missing = area_missing || verification_missing;
+            let area_status = if area_missing {
+                "missing"
+            } else if fields_missing {
+                "ready"
+            } else {
+                "unknown"
+            };
+            let verification_status = if verification_missing {
+                "missing"
+            } else if fields_missing {
+                "ready"
+            } else {
+                "unknown"
+            };
+            return Ok(connect_blocked(
+                json!({
+                    "repository": repo,
+                    "owner_type": "organization",
+                    "organization": organization,
+                    "field_status": {"area": area_status, "verification": verification_status},
+                    "next_action": if fields_missing {
+                        "create_issue_fields"
+                    } else {
+                        "grant_issue_field_access"
+                    },
+                    "remediation": format!("Create the missing organization Issue Field(s) `{}` and `{}` for `{organization}`, then rerun `orbit github connect`. If they exist, run `gh auth refresh --hostname github.com --scopes read:org,repo` and retry.", board.config.github.issue_fields.area_name, board.config.github.issue_fields.verification_name),
+                    "field_error": message,
+                }),
+                format!(
+                    "Organization `{organization}` is missing a required Issue Field or the current account cannot read it. Create `{}` and `{}`, or refresh `gh` scopes with `gh auth refresh --hostname github.com --scopes read:org,repo`, then rerun `orbit github connect`.",
+                    board.config.github.issue_fields.area_name,
+                    board.config.github.issue_fields.verification_name
+                ),
+            ));
+        }
+    };
+
+    let changed = board.config.github.organization.as_deref() != Some(organization)
+        || !board.config.github.contains_repo(&repo)
+        || board.config.github.issue_fields.area_id.as_deref() != Some(setup.area_id.as_str())
+        || board.config.github.issue_fields.verification_id.as_deref()
+            != Some(setup.verification_id.as_str());
+    if changed {
+        board.save_config("orbit: github connect", |config| {
+            config.github.organization = Some(organization.to_string());
+            config.github.link_repo(&repo)?;
+            config.github.issue_fields.area_id = Some(setup.area_id);
+            config.github.issue_fields.verification_id = Some(setup.verification_id);
+            Ok(())
+        })?;
+    }
+    Ok(crate::output::CommandOutput::new(
+        json!({
+            "status": "connected",
+            "owner_type": "organization",
+            "organization": organization,
+            "repository": repo,
+            "field_status": {"area": "ready", "verification": "ready"},
+            "next_action": "connected",
+            "changed": changed,
+        }),
+        format!(
+            "Connected `{repo}` to the Board (organization `{organization}`; Area and Verification fields ready).{}",
+            if changed {
+                " Configuration updated."
+            } else {
+                " Configuration was already current."
+            }
+        ),
+    ))
+}
+
+fn connect_blocked(data: serde_json::Value, human: String) -> crate::output::CommandOutput {
+    let mut data = data;
+    if let Some(object) = data.as_object_mut() {
+        object.insert("status".to_string(), json!("blocked"));
+        object.insert("changed".to_string(), json!(false));
+    }
+    crate::output::CommandOutput::new(data, human)
+}
+
+fn parse_github_remote(remote: &str) -> Result<String> {
+    let path = if let Some(path) = remote.strip_prefix("https://github.com/") {
+        path
+    } else if let Some(path) = remote.strip_prefix("http://github.com/") {
+        path
+    } else if let Some(path) = remote.strip_prefix("ssh://git@github.com/") {
+        path
+    } else if let Some(path) = remote.strip_prefix("git@github.com:") {
+        path
+    } else {
+        return Err(OrbitError::new(
+            code::GITHUB_NOT_CONFIGURED,
+            format!(
+                "origin `{remote}` is not a supported github.com remote; use HTTPS or SSH and rerun `orbit github connect`"
+            ),
+        ));
+    };
+    let path = path
+        .strip_suffix(".git")
+        .unwrap_or(path)
+        .trim_end_matches('/');
+    crate::github::GitHubConfig::normalize_repo(path)
 }
 
 fn require_github_section(board: &Board) -> Result<()> {

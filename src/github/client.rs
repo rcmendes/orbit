@@ -14,6 +14,17 @@ pub struct FieldSetup {
     pub verification_id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct AuthStatus {
+    pub authenticated: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepositoryInfo {
+    pub owner_type: String,
+}
+
 pub struct CreateIssueInput {
     pub title: String,
     pub body: String,
@@ -32,6 +43,10 @@ pub struct UpdateIssueInput {
 }
 
 pub trait GitHubClient: Send + Sync {
+    fn auth_status(&self) -> AuthStatus;
+
+    fn repository_info(&self, repo: &str) -> Result<RepositoryInfo>;
+
     fn validate_org_fields(
         &self,
         org: &str,
@@ -60,6 +75,51 @@ pub fn client_from_env() -> Result<Box<dyn GitHubClient>> {
 struct GhCliClient;
 
 impl GitHubClient for GhCliClient {
+    fn auth_status(&self) -> AuthStatus {
+        use std::process::Command;
+
+        match Command::new("gh").args(["auth", "status"]).output() {
+            Ok(output) => AuthStatus {
+                authenticated: output.status.success(),
+                message: String::from_utf8_lossy(if output.status.success() {
+                    &output.stdout
+                } else {
+                    &output.stderr
+                })
+                .trim()
+                .to_string(),
+            },
+            Err(error) => AuthStatus {
+                authenticated: false,
+                message: format!("could not run `gh auth status`: {error}"),
+            },
+        }
+    }
+
+    fn repository_info(&self, repo: &str) -> Result<RepositoryInfo> {
+        #[derive(Deserialize)]
+        struct RepositoryResponse {
+            owner: RepositoryOwnerResponse,
+        }
+        #[derive(Deserialize)]
+        struct RepositoryOwnerResponse {
+            #[serde(rename = "type")]
+            owner_type: String,
+        }
+
+        let path = format!("/repos/{repo}");
+        let output = gh_api(&["api", &path])?;
+        let response: RepositoryResponse = serde_json::from_slice(&output).map_err(|error| {
+            OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                format!("invalid GitHub repository response: {error}"),
+            )
+        })?;
+        Ok(RepositoryInfo {
+            owner_type: response.owner.owner_type,
+        })
+    }
+
     fn validate_org_fields(
         &self,
         org: &str,
@@ -85,15 +145,16 @@ impl GitHubClient for GhCliClient {
                 ),
             )
         })?;
-        let verification_id = find_field_id(&nodes, &fields.verification_name).ok_or_else(|| {
-            OrbitError::new(
-                code::GITHUB_SETUP_INCOMPLETE,
-                format!(
-                    "organization `{org}` is missing Issue Field `{}`",
-                    fields.verification_name
-                ),
-            )
-        })?;
+        let verification_id =
+            find_field_id(&nodes, &fields.verification_name).ok_or_else(|| {
+                OrbitError::new(
+                    code::GITHUB_SETUP_INCOMPLETE,
+                    format!(
+                        "organization `{org}` is missing Issue Field `{}`",
+                        fields.verification_name
+                    ),
+                )
+            })?;
         Ok(FieldSetup {
             area_id,
             verification_id,
@@ -291,8 +352,31 @@ fn parse_rest_issue(repo: &str, bytes: &[u8]) -> Result<IssueSnapshot> {
 
 #[derive(Debug, Clone, Deserialize)]
 struct FixtureStore {
+    #[serde(default = "fixture_authenticated")]
+    authenticated: bool,
+    #[serde(default)]
+    auth_message: String,
+    #[serde(default)]
+    repositories: HashMap<String, FixtureRepository>,
+    #[serde(default)]
     org_fields: HashMap<String, String>,
+    #[serde(default)]
     issues: HashMap<String, IssueSnapshot>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FixtureRepository {
+    owner_type: String,
+    #[serde(default = "fixture_accessible")]
+    accessible: bool,
+}
+
+fn fixture_authenticated() -> bool {
+    true
+}
+
+fn fixture_accessible() -> bool {
+    true
 }
 
 pub struct FixtureClient {
@@ -313,6 +397,33 @@ impl FixtureClient {
 }
 
 impl GitHubClient for FixtureClient {
+    fn auth_status(&self) -> AuthStatus {
+        let store = self.store.lock().expect("fixture lock");
+        AuthStatus {
+            authenticated: store.authenticated,
+            message: store.auth_message.clone(),
+        }
+    }
+
+    fn repository_info(&self, repo: &str) -> Result<RepositoryInfo> {
+        let store = self.store.lock().expect("fixture lock");
+        let repository = store.repositories.get(repo).ok_or_else(|| {
+            OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                format!("repository `{repo}` was not found or is not accessible"),
+            )
+        })?;
+        if !repository.accessible {
+            return Err(OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                format!("repository `{repo}` was not found or is not accessible"),
+            ));
+        }
+        Ok(RepositoryInfo {
+            owner_type: repository.owner_type.clone(),
+        })
+    }
+
     fn validate_org_fields(
         &self,
         org: &str,
@@ -323,14 +434,26 @@ impl GitHubClient for FixtureClient {
         let verification_key = format!("{org}/{}", fields.verification_name);
         Ok(FieldSetup {
             area_id: store.org_fields.get(&area_key).cloned().ok_or_else(|| {
-                OrbitError::new(code::GITHUB_SETUP_INCOMPLETE, "missing area field")
+                OrbitError::new(
+                    code::GITHUB_SETUP_INCOMPLETE,
+                    format!(
+                        "organization `{org}` is missing Issue Field `{}`",
+                        fields.area_name
+                    ),
+                )
             })?,
             verification_id: store
                 .org_fields
                 .get(&verification_key)
                 .cloned()
                 .ok_or_else(|| {
-                    OrbitError::new(code::GITHUB_SETUP_INCOMPLETE, "missing verification field")
+                    OrbitError::new(
+                        code::GITHUB_SETUP_INCOMPLETE,
+                        format!(
+                            "organization `{org}` is missing Issue Field `{}`",
+                            fields.verification_name
+                        ),
+                    )
                 })?,
         })
     }

@@ -647,16 +647,21 @@ ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 
 Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Sync is explicit, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. See [docs/github-sync.md](./docs/github-sync.md).
 
+`orbit github connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports next steps; configure `mode = "basic"` manually to use personal-repository sync. Use `orbit github connect --json` for machine-readable status.
+
 ```bash
 # Personal repository: [github] mode = "basic" + repositories in config.toml.
 orbit github repo link alice/widget
 orbit github create orb-a7b2c9 --repo alice/widget
 
-# Organization repository: configure mode = "full" (the default), organization,
-# repositories, and Issue Fields in config.toml, then run setup:
+# Connect an organization-owned repository from its checkout:
+orbit github connect
+
+# Or configure organization mode manually:
 orbit github repo link acme/widget
 orbit github setup
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
+orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
 orbit github create orb-a7b2c9 # automatically uses the only linked repository
 orbit github sync orb-a7b2c9 --apply
 ```

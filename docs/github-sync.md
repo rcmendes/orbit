@@ -13,6 +13,12 @@ organization setups keep their current behavior.
 - Run `orbit github setup` to resolve and store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to check configuration without writing ids.
 - Full mode syncs Orbit `area` and `verification` through those organization Issue Fields.
 
+Connect an organization-owned repository from its checkout with `orbit github
+connect`. It checks `gh auth status` and repository access, validates the
+organization fields, and writes the `[github]` configuration. It preserves other
+Board settings and is safe to rerun. Use `orbit github connect --json` for
+machine-readable status. To configure the Board manually, use:
+
 ```toml
 [github]
 mode = "full" # optional; full is the default
@@ -54,13 +60,24 @@ To upgrade, change `mode` to `"full"`, configure `organization` and the field
 names, then run `orbit github setup`. Once the Issue Field ids are stored,
 create and push sync can publish `area` and `verification`.
 
-## Prerequisites
+### Connect behavior and prerequisites
 
 - GitHub CLI (`gh`) authenticated for the repositories you link.
 - Organization-level Issue Fields only when using full mode.
-- A `[github]` section in `<DIR>/config.toml`; choose either the basic or full configuration above.
 
-See [Provider modes](#provider-modes) for both configurations and the full-mode setup steps.
+`orbit github connect` reads the current checkout's GitHub `origin`, checks
+authentication and access, and detects whether the owner is an organization or a
+personal account. For a personal-account repository it leaves configuration
+unchanged and reports next steps; manually configure basic mode to use it. For
+an organization repository, it validates and stores the repository and Issue
+Field configuration. Missing authentication, repository access, or fields are
+reported with remediation actions. JSON output includes `owner_type`,
+`organization`, `repository`, `field_status`, `next_action`, and whether the
+configuration changed.
+
+For manual full-mode configuration, run `orbit github setup` to resolve and
+store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to
+check configuration without writing ids.
 
 ## Link repositories
 

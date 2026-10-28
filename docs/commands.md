@@ -800,13 +800,18 @@ orbit sync
 
 ### `orbit github` — GitHub Issue provider
 
-Links explicitly configured repositories, adopts or creates Issues, and runs
-bidirectional sync with conflict detection. Requires `[github]` in `config.toml`,
-and the `gh` CLI. Full mode uses organization Issue Fields; basic mode supports
-personal repositories without them and limits Triage to labels. Full setup and
-semantics are in [github-sync.md](./github-sync.md).
+Connects the current checkout's origin repository, adopts or creates Issues, and
+runs bidirectional sync with conflict detection. `orbit github connect` checks
+`gh` authentication and repository access. For an organization-owned repository,
+it validates Issue Fields and writes `[github]` configuration. For a personal
+repository, it leaves configuration unchanged and reports next steps; manually
+configure `mode = "basic"` to use personal-repository sync. Existing integrations
+can link repositories explicitly. Sync requires the `gh` CLI and `[github]` in
+`config.toml`; full mode uses organization Issue Fields, while basic mode limits
+Triage to labels. See [github-sync.md](./github-sync.md).
 
 ```bash
+orbit github connect
 orbit github repo link acme/widget
 orbit github setup
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42

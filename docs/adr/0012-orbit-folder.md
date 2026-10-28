@@ -168,7 +168,8 @@ editor launches the server elsewhere.
 `doctor --fix` keeps its existing repairs (stale temp files) and re-attaches an
 orphan worktree. `doctor --migrate` is the explicit, resumable legacy migration:
 it re-attaches a local hidden Board at `<main>/.orbit`, moves a shared
-`<workspace>/board` to `<workspace>/.orbit`, keeps an arbitrary `--board` root
+`<workspace>/board` to `<workspace>/.orbit/board` and reserves
+`<workspace>/.orbit/cache`, keeps an arbitrary `--board` root
 outside every working tree and records `repository` mode, moves other roots to a
 DIR that matches their storage mode, verifies every Task, removes the old
 worktree or directory, and updates the current repository's pointer. Interrupting
@@ -248,3 +249,30 @@ own resolution scope; a second `.orbit` in the same working tree returns
   DIR. The only user-level Board is the opt-in `~/.orbit` fallback.
 - **ADR 0008:** replaced. There is no `orbit workspace` and no
   `<workspace>/board`; a workspace is a DIR plus the repositories linked to it.
+
+## Workspace-root path extension
+
+The local-first Workspace issue catalog extends the path contract without
+changing the Board's contents or Git storage model:
+
+- A Workspace is a normal folder, not a Git repository. Its Board is
+  `<workspace>/.orbit/board`; its separate rebuildable catalog cache is
+  `<workspace>/.orbit/cache`.
+- `orbit init <workspace-root>` initializes that internal layout. Running
+  `orbit init` from the non-Git Workspace root does the same. Running `orbit init`
+  from a discovered child Repository reuses the Workspace Board instead of
+  creating a second local Board.
+- `--dir` and `ORBIT_DIR` accept the Workspace root, not the internal
+  `.orbit/board` path. Existing Board directories remain accepted directly for
+  explicit compatibility.
+- Discovery walks above child Git roots for a Workspace Board. A repository link
+  still takes precedence for a Repository outside the Workspace. Child
+  repositories need no per-repository link.
+- Initialization refuses an existing child-repository Board or an unrecognized
+  `.orbit` entry. A Board directly at `<workspace>/.orbit` is a legacy layout;
+  initialization reports its explicit `--dir` compatibility path and refuses to
+  move or shadow it under the new path.
+
+This path extension keeps Workspace metadata/cache out of the Board's Git
+repository, preserves child-local data, and makes the Workspace root the stable
+user-facing path.

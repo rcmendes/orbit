@@ -324,7 +324,7 @@ fn init_print_with_agents_ask_does_not_prompt() {
 }
 
 #[test]
-fn init_outside_a_git_repository_creates_a_repository_board() {
+fn init_outside_a_git_repository_creates_a_workspace_board() {
     let repo = TestRepo::new();
     let outside = tempfile::tempdir().unwrap();
 
@@ -333,7 +333,8 @@ fn init_outside_a_git_repository_creates_a_repository_board() {
     assert_eq!(status, 0, "{value}");
     assert_eq!(value["data"]["storage"], "repository");
     assert_eq!(value["data"]["global"], false);
-    assert!(outside.path().join(".orbit/config.toml").is_file());
+    assert!(outside.path().join(".orbit/board/config.toml").is_file());
+    assert!(outside.path().join(".orbit/cache").is_dir());
 }
 
 #[test]

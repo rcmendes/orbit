@@ -170,12 +170,13 @@ fn doctor_migrates_a_legacy_workspace_and_updates_the_pointer() {
             .contains("orbit link"),
         "{value}"
     );
-    assert!(workspace.join(".orbit/config.toml").is_file());
+    assert!(workspace.join(".orbit/board/config.toml").is_file());
+    assert!(workspace.join(".orbit/cache").is_dir());
     assert!(!board.exists());
     let pointer = std::fs::read_to_string(&link).unwrap();
     assert_eq!(
         pointer.trim(),
-        dunce::canonicalize(workspace.join(".orbit"))
+        dunce::canonicalize(workspace.join(".orbit/board"))
             .unwrap()
             .to_str()
             .unwrap()

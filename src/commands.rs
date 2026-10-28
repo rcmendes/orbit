@@ -149,11 +149,6 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
     let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
     let in_repo = crate::git::is_git_repo(&cwd);
-    let setup_root = if in_repo {
-        crate::git::repo_root()?
-    } else {
-        cwd.clone()
-    };
 
     if args.global && dir.is_some() {
         return Err(OrbitError::invalid_argument(
@@ -168,7 +163,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         ));
     }
     let global_dir = home.as_ref().map(|home| home.join(".orbit"));
-    let (board_root, explicit_global) = if args.global {
+    let (requested_root, explicit_global) = if args.global {
         (global_dir.clone().expect("global home was checked"), true)
     } else if let Some(target) = args.target.as_deref() {
         (crate::board::resolve_external(target)?, false)
@@ -177,10 +172,30 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     } else {
         (default_init_dir(&cwd)?, false)
     };
+    let workspace_root = is_workspace_root(&requested_root);
+    let setup_root = if workspace_root {
+        requested_root.clone()
+    } else if in_repo {
+        crate::git::repo_root()?
+    } else {
+        cwd.clone()
+    };
+    let board_root = if workspace_root {
+        requested_root.join(".orbit").join("board")
+    } else {
+        requested_root.clone()
+    };
     let global = explicit_global
         || global_dir
             .as_ref()
             .is_some_and(|global| global == &board_root);
+
+    if workspace_root {
+        validate_workspace_layout(&requested_root)?;
+        if let Some(existing) = crate::board::workspace_child_board(&requested_root)? {
+            return Err(crate::board::already_initialized(&existing));
+        }
+    }
 
     let interactive = std::io::stdin().is_terminal();
     let clients = crate::setup::selected_agents(&args, &setup_root)?;
@@ -195,7 +210,22 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         branch,
         mut exclude,
         mut warnings,
-    } = run_init(&board_root, args.slug.as_deref(), args.print, global)?;
+    } = run_init(
+        &board_root,
+        workspace_root.then_some(requested_root.as_path()),
+        args.slug.as_deref(),
+        args.print,
+        global,
+    )?;
+
+    if workspace_root && !args.print {
+        std::fs::create_dir_all(requested_root.join(".orbit/cache")).map_err(|error| {
+            OrbitError::io(
+                format!("create {}", requested_root.join(".orbit/cache").display()),
+                error,
+            )
+        })?;
+    }
 
     if !args.print && storage == crate::board::StorageMode::Worktree {
         exclude = Board::ensure_excluded(&board_root)?;
@@ -249,6 +279,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         files: &files,
         mcp_command: mcp_command.as_deref(),
         portable_mcp: reported_portable_mcp,
+        workspace: workspace_root,
     });
 
     let mut output = crate::output::CommandOutput::new(
@@ -285,6 +316,7 @@ struct InitReport<'a> {
     files: &'a Value,
     mcp_command: Option<&'a str>,
     portable_mcp: bool,
+    workspace: bool,
 }
 
 /// Render the human onboarding report. Every section states what happened (or
@@ -321,6 +353,9 @@ fn render_init_human(report: &InitReport<'_>) -> String {
             "worktree (shared by every Git worktree of this repository)"
         }
         (crate::board::StorageMode::Repository, true) => "repository (global fallback at ~/.orbit)",
+        (crate::board::StorageMode::Repository, false) if report.workspace => {
+            "repository (Workspace Board at <workspace>/.orbit/board)"
+        }
         (crate::board::StorageMode::Repository, false) => {
             "repository (standalone Board folder; link repositories with `orbit link`)"
         }
@@ -416,7 +451,9 @@ fn render_init_human(report: &InitReport<'_>) -> String {
     }
 
     human.push_str("Next steps:\n");
-    let external = report.storage == crate::board::StorageMode::Repository && !report.global;
+    let external = report.storage == crate::board::StorageMode::Repository
+        && !report.global
+        && !report.workspace;
     if external {
         human.push_str(&format!(
             "  orbit link {}   # join this Board from each repository\n",
@@ -478,6 +515,7 @@ fn init_agent_skip_reason(args: &InitArgs, interactive: bool) -> String {
 
 fn run_init(
     board_root: &Path,
+    slug_root: Option<&Path>,
     slug_arg: Option<&str>,
     print: bool,
     global: bool,
@@ -511,7 +549,7 @@ fn run_init(
             slug::explicit_prefix(slug)?;
             (slug.to_string(), None)
         }
-        None => slug::auto_slug_for_dir(board_root),
+        None => slug::auto_slug_for_dir(slug_root.unwrap_or(board_root)),
     };
     let prefix = slug::prefix(&slug);
     let storage = if global {
@@ -554,8 +592,15 @@ fn run_init(
 }
 
 fn default_init_dir(cwd: &Path) -> Result<std::path::PathBuf> {
+    let discovery = Board::discovery(None);
+    if discovery.source == crate::board::DiscoverySource::Workspace
+        && let Some(board) = discovery.root
+        && let Some(workspace) = board.parent().and_then(Path::parent)
+    {
+        return Ok(workspace.to_path_buf());
+    }
     let Ok(repo_root) = crate::git::repo_root() else {
-        return Ok(cwd.join(".orbit"));
+        return Ok(cwd.to_path_buf());
     };
     let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
     let main = slug::main_checkout_anchor().unwrap_or_else(|_| repo_root.clone());
@@ -563,6 +608,53 @@ fn default_init_dir(cwd: &Path) -> Result<std::path::PathBuf> {
         return Ok(main.join(".orbit"));
     }
     Ok(cwd.join(".orbit"))
+}
+
+/// A non-Git directory is the Workspace boundary. Existing direct Board paths
+/// remain accepted when they already contain a Board or use a legacy Board
+/// directory name; new workspaces keep their Board under `.orbit/board`.
+fn is_workspace_root(path: &Path) -> bool {
+    if crate::git::toplevel_containing(path).is_some() || Board::is_board(path) {
+        return false;
+    }
+    !matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".orbit" | "board")
+    )
+}
+
+fn validate_workspace_layout(workspace: &Path) -> Result<()> {
+    let orbit = workspace.join(".orbit");
+    if Board::is_board(&orbit) {
+        return Err(OrbitError::config(format!(
+            "found a legacy Board at {}; it remains available with `--dir {}`. Back it up and migrate it to {}/.orbit/board before initializing this Workspace",
+            orbit.display(),
+            orbit.display(),
+            workspace.display()
+        )));
+    }
+    let entries = match std::fs::read_dir(&orbit) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(OrbitError::io(format!("read {}", orbit.display()), error)),
+    };
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| OrbitError::io(format!("read {}", orbit.display()), error))?;
+        let name = entry.file_name();
+        if name != "board" && name != "cache" {
+            return Err(crate::board::already_initialized(&entry.path()));
+        }
+    }
+    let board = orbit.join("board");
+    if board.exists() && !Board::is_board(&board) {
+        return Err(crate::board::already_initialized(&board));
+    }
+    let cache = orbit.join("cache");
+    if cache.exists() && !cache.is_dir() {
+        return Err(crate::board::already_initialized(&cache));
+    }
+    Ok(())
 }
 
 fn home_dir() -> Result<std::path::PathBuf> {

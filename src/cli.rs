@@ -19,7 +19,7 @@ pub struct Cli {
     #[arg(global = true, long)]
     pub json: bool,
 
-    /// Orbit folder (DIR) override. Also read from ORBIT_DIR.
+    /// Workspace root or Orbit Board directory override. Also read from ORBIT_DIR.
     #[arg(global = true, long, env = "ORBIT_DIR", value_name = "PATH")]
     pub dir: Option<PathBuf>,
 

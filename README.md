@@ -138,14 +138,14 @@ cd your-repository
 orbit init
 ```
 
-`orbit init` creates the Board in `./.orbit` and derives the Task-ID slug from the folder. It prints a numbered setup report: the Board path, branch, storage mode, Task-ID prefix, and Git exclusion; the coding agents it wired, the MCP command, and every file it created or updated; then `orbit doctor` and the next commands, each with a short explanation. In a terminal it asks whether to wire the coding-agent harnesses it detects; without a terminal it writes no agent files and explains how to wire them. Pass `--agents` to decide up front, and `--print` to see the same report in future tense without writing anything.
+In a Git repository, `orbit init` creates the Board in `./.orbit`. At a non-Git Workspace root, it creates `<workspace>/.orbit/board` and reserves `<workspace>/.orbit/cache`; child repositories discover the Board without `orbit link`. It derives the Task-ID slug from the repository or Workspace folder and prints a numbered setup report: the Board path, branch, storage mode, Task-ID prefix, and Git exclusion; the coding agents it wired, the MCP command, and every file it created or updated; then `orbit doctor` and the next commands, each with a short explanation. In a terminal it asks whether to wire the coding-agent harnesses it detects; without a terminal it writes no agent files and explains how to wire them. Pass `--agents` to decide up front, and `--print` to see the same report in future tense without writing anything.
 
 ```bash
-orbit init                    # Board in ./.orbit; asks about agents in a TTY
+orbit init                    # repo ./.orbit, or Workspace ./.orbit/board
 orbit init --agents all       # wire every supported harness
 orbit init --agents none      # Board only, no agent files
 orbit init --print            # preview without writing
-orbit init ~/src/acme-board   # create a Board at ~/src/acme-board
+orbit init ~/src/acme         # Workspace Board at ~/src/acme/.orbit/board
 orbit init --global           # create the global Board at ~/.orbit
 ```
 
@@ -153,8 +153,8 @@ orbit init --global           # create the global Board at ~/.orbit
 
 | Parameter | Use it when | Example |
 | --- | --- | --- |
-| *none* | Start a project-local Board at `./.orbit`. | `orbit init` |
-| `DIR` | Put the Board somewhere explicit. Inside a working tree it is a worktree; outside one it is its own repository. | `orbit init ~/src/acme/.orbit` |
+| *none* | Start a project-local Board in Git, or a Workspace Board outside Git. | `orbit init` |
+| `DIR` | Name a Workspace root or explicit Board directory. A Workspace stores its Board at `<DIR>/.orbit/board`. | `orbit init ~/src/acme` |
 | `--global` | Create or reuse the opt-in global Board at `~/.orbit`. It is the last discovery fallback and is never created implicitly. Conflicts with positional `DIR` and `--dir`/`ORBIT_DIR`. | `orbit init --global` |
 | `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents without a prompt: `none`, `all`, `auto`, or a comma-separated client list. | `orbit init --agents all` |
@@ -163,7 +163,7 @@ orbit init --global           # create the global Board at ~/.orbit
 **Choose by scenario**
 
 - **A normal product repository:** run `orbit init` at the repository root. The Board is `./.orbit`, shared by every linked worktree, and IDs use the repository folder name.
-- **A shared workspace:** create a dedicated folder, run `orbit init` inside it, then run `orbit link ~/src/acme/.orbit` from each member repository. Use `orbit init ~/src/acme/.orbit` when you are not already in that folder.
+- **A multi-repository Workspace:** run `orbit init ~/src/acme` or `orbit init` at its non-Git root. Repositories inside discover `<workspace>/.orbit/board` automatically; repositories outside it can `orbit link ~/src/acme`.
 - **A one-off or CI setup:** use `--print` first, then `--agents none` when the machine should not receive editor configuration. Pass `--slug` when IDs must be predictable.
 - **A global fallback:** use `--global` only when you intentionally want one Board available when no project-local Board resolves. Discovery does not create it.
 - **Joining an existing Board:** use `orbit link DIR`; do not run `init` again. A second local Board in the same working tree is refused.
@@ -173,7 +173,7 @@ orbit init --global           # create the global Board at ~/.orbit
 
 | Parameter | Use it when | Example |
 | --- | --- | --- |
-| `--dir PATH` / `ORBIT_DIR` | You need the global DIR override for one command or shell. Positional `DIR` wins over this in `init`. | `orbit --dir ~/src/acme/.orbit init` |
+| `--dir PATH` / `ORBIT_DIR` | Override discovery with a Workspace root or explicit Board directory. Positional `DIR` wins for `init`. | `orbit --dir ~/src/acme init` |
 | `--no-agents` | You want the same result as `--agents none` without spelling the selector. | `orbit init --no-agents` |
 | `--hooks` | You also want the Claude Code SessionStart hook. | `orbit init --agents claude --hooks` |
 | `--portable-mcp` | Generated MCP entries should call bare `orbit` instead of an absolute binary path. | `orbit init --portable-mcp` |
@@ -368,7 +368,15 @@ The board is real Git history on an orphan branch, checked out in the Orbit fold
     └── orb-a7b2c9.md                   # append-only thread
 ```
 
-Inside a Git working tree, `.orbit` is a worktree of the project repository on the `orbit` branch; the path is written to `.git/info/exclude`, so it never appears in code diffs. Outside every working tree, `DIR` is its own Git repository on the same branch. Both modes expose the same files and CLI contract. A shared workspace runs `orbit init` once in its folder and each repository joins with `orbit link <DIR>`.
+Inside a Git working tree, `.orbit` is a worktree of the project repository on the `orbit` branch; the path is written to `.git/info/exclude`, so it never appears in code diffs. Outside every working tree, a Workspace root stores its Board at `.orbit/board` as an independent Git repository and reserves `.orbit/cache` separately. Child repositories discover that Board across their Git boundary. Both modes expose the same Board files and CLI contract.
+
+```text
+<workspace>/
+├── api/                         # child Git repository; no orbit link needed
+└── .orbit/
+    ├── board/                   # versioned Board on its own orbit branch
+    └── cache/                   # separate, rebuildable catalog data
+```
 
 Tasks are Markdown with YAML frontmatter:
 
@@ -571,7 +579,7 @@ SubTasks are one level deep. If a ticket needs its own breakdown, flatten it int
 
 ## Task-ID slugs
 
-A Board has one slug that prefixes its Task IDs. `orbit init` derives it from the Orbit folder: a folder named `.orbit` uses its parent's name, any other folder uses its own name, and `orbit init --global` uses `orb` with a warning. Pass `--slug` to choose it explicitly:
+A Board has one slug that prefixes its Task IDs. `orbit init` derives it from the repository or Workspace root name; `orbit init --global` uses `orb` with a warning. Pass `--slug` to choose it explicitly:
 
 ```bash
 orbit init --slug teramigo
@@ -593,12 +601,13 @@ Migration keeps each random suffix (`orb-32fdfd` → `atlas-32fdfd`, `orb-32fdfd
 
 ## Multi-repository workspaces
 
-A **Workspace** is one Board plus every repository linked to it. Create the Board once in a dedicated folder, then join each repository. Cross-repository dependencies share one graph, and every Git worktree resolves the same Board.
+A **Workspace** is an ordinary, non-Git folder containing repositories and one Board. Child repositories discover the Board by walking above their Git boundary; repositories outside the Workspace can link explicitly. Cross-repository dependencies share one graph, and every Git worktree resolves the same Board.
 
 ```mermaid
 flowchart LR
     subgraph Workspace["Shared workspace · ~/src/acme"]
-        BOARD[("shared Board<br/>~/src/acme/.orbit")]
+        BOARD[("Workspace Board<br/>~/src/acme/.orbit/board")]
+        CACHE["catalog cache<br/>~/src/acme/.orbit/cache"]
         API["api repository"]
         WEB["web repository"]
         INFRA["infra repository"]
@@ -609,9 +618,9 @@ flowchart LR
         LOCAL[("local Board<br/>.orbit")]
     end
 
-    API -.->|orbit link ~/src/acme/.orbit| BOARD
-    WEB -.->|orbit link ~/src/acme/.orbit| BOARD
-    INFRA -.->|orbit link ~/src/acme/.orbit| BOARD
+    API -.->|discover across Git boundary| BOARD
+    WEB -.->|discover across Git boundary| BOARD
+    INFRA -.->|discover across Git boundary| BOARD
     SOLO --> LOCAL
 
     classDef board fill:#f0fdf4,stroke:#15803d,color:#052e16
@@ -621,21 +630,23 @@ flowchart LR
 ```
 
 ```bash
-# Create the shared workspace and its independent Board.
+# Initialize the Workspace root and its internal Board.
 mkdir -p ~/src/acme && cd ~/src/acme
-orbit init                     # Board at ~/src/acme/.orbit
+orbit init                     # Board at ~/src/acme/.orbit/board
 
-# In each related repository: join the same Board.
-orbit link ~/src/acme/.orbit
+# From a child repository, use it without a per-repository link.
+cd ~/src/acme/api
+orbit list
 
-# One-off command against the shared Board from anywhere.
-orbit --dir ~/src/acme/.orbit list
+# An outside repository can join the Workspace explicitly.
+orbit link ~/src/acme
+orbit --dir ~/src/acme list
 
 # Return this repository to its own Board.
 orbit unlink
 ```
 
-`orbit init` only creates the Board; it does not clone or link repositories. Linking does not delete a repository's own Board; it shadows it and prints a warning.
+`orbit init` only creates the Workspace Board; it does not clone repositories. A child-local Board is reported as `AMBIGUOUS_BOARD` during discovery and blocks Workspace initialization if it exists first. Unknown entries in `.orbit` prevent initialization rather than being overwritten. The catalog cache is never stored in the Board repository.
 
 Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link, then the nearest `.orbit` walking up to the repository root (or to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`, then the legacy hidden layout with a warning, then `~/.orbit` if it exists. An explicit override wins for one command:
 
@@ -782,7 +793,7 @@ Exit codes are `0` for success, `1` for a domain failure, and `2` for a usage er
 
 ```bash
 orbit mcp
-orbit --dir ~/src/acme/.orbit mcp   # serve a shared Board
+orbit --dir ~/src/acme mcp         # serve a Workspace Board
 ```
 
 MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent` and `type`; `update` accepts `type`; `checkpoint` records the active handoff state on a claimed task; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`.
@@ -802,15 +813,15 @@ The snapshot is ordered by task ID, carries `schema_version` (currently `2`), an
 
 ## Agent setup
 
-`orbit init` creates the Board in `./.orbit`. It asks once, in a terminal, whether to wire the harnesses it detects; without a terminal it writes no agent files and prints the next step. On the first MCP setup it also asks whether generated configs should use an absolute path (the default) or the portable `orbit` command, which requires Orbit on the editor's `PATH`. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
+`orbit init` creates a repository-local Board in `./.orbit` or a Workspace Board in `<workspace>/.orbit/board`. It asks once, in a terminal, whether to wire the harnesses it detects; without a terminal it writes no agent files and prints the next step. On the first MCP setup it also asks whether generated configs should use an absolute path (the default) or the portable `orbit` command, which requires Orbit on the editor's `PATH`. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
 
 ```bash
-orbit init                    # Board; asks about agents in a terminal
+orbit init                    # repo Board, or Workspace Board outside Git
 orbit init --agents all       # wire every supported harness
 orbit init --agents none      # Board only; no agent files
 orbit init --print            # preview without writing
 orbit init --portable-mcp     # MCP command `orbit`; editor PATH must find it
-orbit init ~/src/acme-board   # create a Board
+orbit init ~/src/acme          # create a Workspace Board
 orbit init --global           # global Board at ~/.orbit
 ```
 

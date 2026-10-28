@@ -11,17 +11,19 @@ task as a Markdown file on a dedicated Git branch and serves it through this CLI
 Writes are serialized by one lock and published atomically, so several agents
 can share a Board without a database server.
 
-Run `orbit init` once per repository, then let agents take work with
+Run `orbit init` once per repository or Workspace root, then let agents take work
+with
 `orbit ready --claim`, hold it with `orbit heartbeat`, record a handoff with
 `orbit checkpoint`, and finish it with `orbit done`. Every command accepts --json
 and then prints exactly one JSON object on stdout.
 
 Board discovery order: --dir or ORBIT_DIR, then the repository link, then the
-nearest .orbit, then the main checkout's .orbit, then a legacy Board, then
-~/.orbit when it already exists.
+containing Workspace's .orbit/board, then the nearest repository .orbit, then
+the main checkout's .orbit, then a legacy Board, then ~/.orbit when it exists.
 
-For work that spans repositories, create a Board in a dedicated folder with
-`orbit init <DIR>`, then link each repository with `orbit link <DIR>`.";
+For repositories inside one Workspace, run `orbit init <WORKSPACE>` once; child
+repositories discover the Board without per-repository links. Repositories
+outside it can join with `orbit link <WORKSPACE>`.";
 
 pub const ROOT_EXAMPLES: &str = "\
 Typical agent loop:
@@ -42,23 +44,30 @@ Change a Board's Task-ID prefix:
   orbit slug migrate atlas --dry-run";
 
 pub const INIT_LONG: &str = "\
-Creates or reuses the Board in the Orbit folder, DIR. DIR defaults to ./.orbit
-and may be positional or supplied through --dir/ORBIT_DIR. Inside a Git working
-tree, DIR is a worktree of that repository on the orbit branch and the path is
-written to .git/info/exclude; outside one, DIR is its own Git repository on the
-same branch. The storage mode and data lock live inside DIR.
+Creates or reuses a Board. In a Git working tree, the default Board directory is
+./.orbit, a worktree on the orbit branch. Outside a Git working tree, the current
+directory is a Workspace root and the Board is <WORKSPACE>/.orbit/board. The
+catalog cache is reserved at <WORKSPACE>/.orbit/cache. A positional path or
+--dir/ORBIT_DIR can name a Workspace root; an explicit Board directory remains
+accepted for existing Boards.
+
+Inside a Workspace, child repositories find the Workspace Board across their Git
+boundary and need no `orbit link`. Repositories outside it can link the Workspace
+root. An existing child Board or an unrecognized .orbit layout is reported; init
+does not shadow or discard it. A legacy Board directly at <WORKSPACE>/.orbit
+remains available with `--dir <WORKSPACE>/.orbit`; back it up and migrate it to
+<WORKSPACE>/.orbit/board before Workspace initialization.
 
 --global targets ~/.orbit in repository mode. It conflicts with a positional DIR
 and with --dir/ORBIT_DIR. Init refuses to create a second repository-local Board:
 a link, an ancestor .orbit, the main checkout's .orbit, or a legacy Board is
 reported before anything is written. --global and the ~/.orbit fallback are
-exempt. init never links a repository; use `orbit link DIR` to join a shared
-Board.
+exempt.
 
-The slug comes from DIR: its own folder name, or the parent name when DIR is
-named .orbit. ~/.orbit and --global use orb with a warning. Pass --slug to choose
-it explicitly. Re-running preserves the stored prefix; an empty Board can change
-it, and a populated Board returns SLUG_LOCKED pointing at `orbit slug migrate`.
+The slug comes from the Workspace or Board directory name. ~/.orbit and --global
+use orb with a warning. Pass --slug to choose it explicitly. Re-running preserves
+the stored prefix; an empty Board can change it, and a populated Board returns
+SLUG_LOCKED pointing at `orbit slug migrate`.
 
 Init then detects installed coding-agent harnesses (Claude Code, Cursor, Codex,
 OpenCode, and the mattpocock bridge) and writes only the integrations that apply.
@@ -84,11 +93,11 @@ Board path; they rely on discovery or on --dir/ORBIT_DIR.";
 
 pub const INIT_EXAMPLES: &str = "\
 Examples:
-  # Create or reuse ./.orbit in this directory
+  # Create a repository-local .orbit, or a Workspace Board outside Git
   orbit init
 
-  # Create a Board in a specific folder
-  orbit init ~/src/acme/.orbit
+  # Create a Workspace Board for child repositories
+  orbit init ~/src/acme
 
   # Create the global Board at ~/.orbit
   orbit init --global
@@ -109,9 +118,10 @@ Examples:
   orbit init --mcp-bin /usr/local/bin/orbit";
 
 pub const LINK_LONG: &str = "\
-Writes a repository-local pointer to an existing Board. PATH is the Orbit folder
-(DIR), usually ending in .orbit. Legacy workspace roots containing board/ and
-legacy board roots are accepted with a LEGACY_LAYOUT warning. Task commands in
+Writes a repository-local pointer to an existing Board. PATH can be a Workspace
+root (the Board is at <WORKSPACE>/.orbit/board) or a Board directory. Legacy
+workspace roots containing board/ and legacy board roots are accepted with a
+LEGACY_LAYOUT warning. Task commands in
 this repository then read and write that Board, including from all of its Git
 worktrees. Existing harness configurations are refreshed unless --no-refresh is
 passed.
@@ -122,14 +132,14 @@ LINK_NOT_FOUND; the pointer is not repaired automatically.";
 
 pub const LINK_EXAMPLES: &str = "\
 Examples:
-  # Share one product Board from a second repository
-  orbit link ~/src/acme/.orbit
-
-  # Join a legacy workspace root
+  # Share a Workspace Board from an outside repository
   orbit link ~/src/acme
 
+  # Link directly to a Board directory
+  orbit link ~/src/acme/.orbit/board
+
   # Link without rewriting agent configuration
-  orbit link ~/src/acme/.orbit --no-refresh";
+  orbit link ~/src/acme --no-refresh";
 
 pub const UNLINK_LONG: &str = "\
 Removes the shared-Board pointer and refreshes agent configuration to use this

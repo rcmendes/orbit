@@ -1,13 +1,11 @@
 # Issue tracker: Orbit
 
-Issues and specs for this repo live in the Orbit board. A Board is Markdown on the
-orphan `orbit` branch, checked out in the Orbit folder. In the default layout
-that folder is `.orbit`, and every worktree of this repository shares the main
-checkout's `.orbit`; a repository linked to a shared Board uses that Board
-instead. Tasks are Markdown files with YAML frontmatter and are served by the
-`orbit` CLI. For a workspace that spans repositories, run `orbit init` once in
-the workspace folder and join each repository with
-`orbit link <workspace>/.orbit`.
+Issues and specs for this repo live in the Orbit Board. A Board is Markdown on
+the orphan `orbit` branch, checked out in an Orbit folder. A repository-local
+Board is `.orbit`; every worktree shares it. A Workspace Board is
+`<workspace>/.orbit/board` and its separate rebuildable catalog cache is
+`<workspace>/.orbit/cache`. Tasks are Markdown files with YAML frontmatter and
+are served by the `orbit` CLI.
 
 For the full command reference, examples, and usage scenarios, see
 [../commands.md](../commands.md).
@@ -17,16 +15,18 @@ diagrams, see [../ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Board discovery
 
-Every command resolves the Board in this order: `--dir`/`ORBIT_DIR`, then the
-repository link, then the nearest `.orbit` walking up to the repository root (or
-to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`,
-then the legacy hidden layout with a warning, then `~/.orbit` if it exists. In
-practice:
+Every command resolves the Board in this order: `--dir`/`ORBIT_DIR`, repository
+link, containing Workspace Board (walking above child Git roots), nearest
+repository `.orbit`, main checkout `.orbit`, legacy hidden layout, then existing
+`~/.orbit`. The Workspace root is the user-facing path for initialization and
+overrides. Repositories inside it need no per-repository link; repositories
+outside it can join explicitly. In practice:
 
 ```bash
 mkdir -p <WORKSPACE> && cd <WORKSPACE>
-orbit init                       # create <WORKSPACE>/.orbit for a multi-repository workspace
-orbit link <WORKSPACE>/.orbit    # join it from a repository
+orbit init <WORKSPACE>           # create <WORKSPACE>/.orbit/board
+orbit --dir <WORKSPACE> list     # use that root as an override
+orbit link <WORKSPACE>           # join it from an outside repository
 orbit unlink                     # return to this repository's own Board
 orbit --dir <DIR> list           # override the link for one command
 ```
@@ -34,16 +34,20 @@ orbit --dir <DIR> list           # override the link for one command
 | Goal | Command |
 | --- | --- |
 | Create a project-local Board | `orbit init` |
-| Create a Board in a specific folder | `orbit init <DIR>` |
+| Initialize a Workspace Board | `orbit init <WORKSPACE>` |
 | Create the machine-wide fallback | `orbit init --global` |
 | Join an existing Board | `orbit link <DIR>` |
 | Move a legacy Board | `orbit doctor --migrate` |
 
-A `link` warning about a shadowed Board means the repository still has its own
-Board on disk; linking did not delete it. A missing linked Board fails with
-`LINK_NOT_FOUND`; re-link or restore the Board. A legacy `.git/orbit/board` or
-`<workspace>/board` still resolves with a warning; run `orbit doctor --migrate`
-to move it to `.orbit`.
+A child-local Board that competes with its Workspace Board is reported as
+`AMBIGUOUS_BOARD`; commands keep using the Workspace Board and do not delete the
+local copy. Workspace initialization refuses to shadow an existing child Board
+or conflicting `.orbit` contents. A missing linked Board fails with
+`LINK_NOT_FOUND`; re-link or restore it. Legacy `.git/orbit/board` and
+`<workspace>/board` layouts continue to resolve with a warning and can be
+migrated with `orbit doctor --migrate`. A legacy Board directly at
+`<workspace>/.orbit` is reported during Workspace init; keep using its explicit
+Board path or migrate it to `<workspace>/.orbit/board` before retrying.
 
 ## Vocabulary
 

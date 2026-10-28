@@ -1,6 +1,6 @@
 ---
 title: Add orbit github status and diagnostics
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -10,8 +10,11 @@ depends_on:
 - orbit-ytwjhm.z30hsp
 parent: orbit-ytwjhm
 area: cli
+claimed_by: impl-v8vgqe
+claimed_at: 2026-10-28T15:39:34.116849Z
+lease_until: 2026-10-28T16:09:34.116849Z
 created_at: 2026-10-28T15:23:57.647591Z
-updated_at: 2026-10-28T15:23:57.647591Z
+updated_at: 2026-10-28T15:39:34.116849Z
 ---
 
 ## Goal

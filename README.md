@@ -649,6 +649,12 @@ orbit unlink
 orbit workspace refresh
 orbit workspace status
 orbit workspace exclude acme/legacy
+
+# Build and browse the separate, local Remote Issue catalog.
+orbit workspace issues refresh
+orbit workspace issues list --repo acme/api --state open --label bug
+orbit workspace issues list --text authentication --unlinked
+orbit workspace issues inspect acme/api#42
 ```
 
 `orbit init` only creates the Workspace Board; it does not clone repositories. A child-local Board is reported as `AMBIGUOUS_BOARD` during discovery and blocks Workspace initialization if it exists first. Unknown entries in `.orbit` prevent initialization rather than being overwritten. The catalog cache is never stored in the Board repository.
@@ -665,6 +671,16 @@ poll or scan for new folders. Inaccessible repositories are reported as
 inaccessible on first discovery and stale after they were previously accessible;
 repository directories absent from a refresh are reported as removed. Their
 cached data is retained. Discovery does not create Orbit Tasks or GitHub Issues.
+
+`orbit workspace issues refresh` reconciles repository discovery and explicitly
+fetches all open and closed Issues for included repositories. Pull requests are
+excluded. Summary rows (identity, title, state, labels, Issue Fields, URL, and
+timestamps) are stored in `<workspace>/.orbit/cache/issues.json`, separate from
+the versioned Board. Issue bodies and comments are fetched only by `inspect`.
+Per-repository errors mark the retained snapshot stale; other repositories still
+refresh. `list` supports repository, state, labels, title text, and linked or
+unlinked filters. Remote Issues are not Tasks: they never appear in `orbit list`,
+`orbit ready`, claims, or Task export. Import is a separate, explicit workflow.
 
 Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link, then the nearest `.orbit` walking up to the repository root (or to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`, then the legacy hidden layout with a warning, then `~/.orbit` if it exists. An explicit override wins for one command:
 
@@ -805,16 +821,16 @@ Exit codes are `0` for success, `1` for a domain failure, and `2` for a usage er
 
 ### MCP
 
-`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 14 tools:
+`orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 17 tools:
 
-`ready` · `list` · `get` · `create` · `update` · `claim` · `release` · `heartbeat` · `checkpoint` · `finish` · `link` · `delete` · `label` · `comment`
+`ready` · `list` · `get` · `create` · `update` · `claim` · `release` · `heartbeat` · `checkpoint` · `finish` · `link` · `delete` · `label` · `comment` · `issue_refresh` · `issue_list` · `issue_inspect`
 
 ```bash
 orbit mcp
 orbit --dir ~/src/acme mcp         # serve a Workspace Board
 ```
 
-MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent` and `type`; `update` accepts `type`; `checkpoint` records the active handoff state on a claimed task; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`.
+MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent` and `type`; `update` accepts `type`; `checkpoint` records the active handoff state on a claimed task; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`. The three `issue_*` tools refresh and browse the Workspace Remote Issue catalog without importing or claiming those Issues.
 
 Editors launch the server from their MCP configuration. `orbit setup` writes project-level configs for Claude, Cursor, Codex, and OpenCode by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. `--scope user` writes the harness's user-level locations instead. Generated configs record no Board path; discovery starts from the project directory, and `--dir`/`ORBIT_DIR` covers an editor that launches elsewhere. Use `--no-mcp` for instructions only, or `--portable-mcp` to write the bare `orbit` command instead; the editor or agent that launches the MCP server must then find Orbit on its `PATH`. A repair without `--portable-mcp` returns MCP entries to the absolute-path default.
 

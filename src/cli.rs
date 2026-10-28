@@ -847,6 +847,54 @@ pub struct WorkspaceArgs {
     pub command: WorkspaceCommand,
 }
 
+#[derive(Debug, Args)]
+pub struct WorkspaceIssuesArgs {
+    #[command(subcommand)]
+    pub command: WorkspaceIssuesCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceIssuesCommand {
+    /// Refresh every included repository's local Remote Issue snapshot.
+    #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
+    Refresh,
+    /// List cached Remote Issues without fetching their bodies or comments.
+    #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
+    List(WorkspaceIssuesListArgs),
+    /// Fetch one Remote Issue's body and comments from GitHub.
+    #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
+    Inspect(WorkspaceIssueInspectArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceIssuesListArgs {
+    /// Filter by OWNER/REPO.
+    #[arg(long, value_name = "OWNER/REPO")]
+    pub repo: Option<String>,
+    /// Filter by GitHub state.
+    #[arg(long, value_parser = ["open", "closed"])]
+    pub state: Option<String>,
+    /// Require each label. Repeat to require more than one label.
+    #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
+    pub label: Vec<String>,
+    /// Case-insensitive text search in issue titles.
+    #[arg(long, value_name = "TEXT")]
+    pub text: Option<String>,
+    /// Show only Issues linked to Orbit Tasks.
+    #[arg(long, conflicts_with = "unlinked")]
+    pub linked: bool,
+    /// Show only Issues without an Orbit Task link.
+    #[arg(long)]
+    pub unlinked: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceIssueInspectArgs {
+    /// Stable GitHub identity: OWNER/REPO#NUMBER.
+    #[arg(value_name = "OWNER/REPO#NUMBER")]
+    pub identity: String,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceCommand {
     /// Show the last explicitly refreshed repository catalog.
@@ -861,6 +909,9 @@ pub enum WorkspaceCommand {
     /// Exclude an organization-owned repository from the Workspace.
     #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
     Exclude(WorkspaceRepositoryArgs),
+    /// Browse the local Remote Issue catalog; refresh is explicit.
+    #[command(long_about = help::WORKSPACE_ISSUES_LONG, after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
+    Issues(WorkspaceIssuesArgs),
 }
 
 #[derive(Debug, Args)]

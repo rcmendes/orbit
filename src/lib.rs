@@ -9,6 +9,7 @@ pub mod git;
 pub mod github;
 pub mod graph;
 pub mod help;
+pub mod issue_catalog;
 pub mod legacy;
 pub mod lock;
 pub mod mcp;

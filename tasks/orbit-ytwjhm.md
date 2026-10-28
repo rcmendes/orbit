@@ -1,12 +1,15 @@
 ---
 title: GitHub integration UX hardening
-status: todo
+status: in_progress
 type: epic
 priority: 2
 labels:
 - enhancement
+claimed_by: rodrigomendes
+claimed_at: 2026-10-28T16:48:23.120787Z
+lease_until: 2026-10-28T17:18:23.120787Z
 created_at: 2026-10-28T15:23:33.240523Z
-updated_at: 2026-10-28T15:23:33.240523Z
+updated_at: 2026-10-28T16:48:23.120787Z
 ---
 
 ## Goal

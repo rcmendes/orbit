@@ -129,7 +129,7 @@ impl GitHubClient for GhCliClient {
 
     fn validate_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
         let query = format!(
-            "organization(login:\"{org}\"){{ issueFields(first:100) {{ nodes {{ ... on IssueField {{ id name }} }} }} }}"
+            "organization(login:\"{org}\"){{ issueFields(first:100) {{ nodes {{ ... on IssueFieldDate {{ id name }} ... on IssueFieldMultiSelect {{ id name }} ... on IssueFieldNumber {{ id name }} ... on IssueFieldSingleSelect {{ id name }} ... on IssueFieldText {{ id name }} }} }} }}"
         );
         let output = gh_api(&["graphql", "-f", &format!("query={query}")])?;
         let response: GraphQlFieldsResponse = serde_json::from_slice(&output).map_err(|error| {
@@ -176,7 +176,7 @@ impl GitHubClient for GhCliClient {
 
     fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
         validate_org_admin(org)?;
-        let query = "query($org: String!) { organization(login: $org) { id issueFields(first: 100) { nodes { ... on IssueField { id name } } } } }";
+        let query = "query($org: String!) { organization(login: $org) { id issueFields(first: 100) { nodes { ... on IssueFieldDate { id name } ... on IssueFieldMultiSelect { id name } ... on IssueFieldNumber { id name } ... on IssueFieldSingleSelect { id name } ... on IssueFieldText { id name } } } } }";
         let output = gh_api(&[
             "graphql",
             "-f",
@@ -417,8 +417,13 @@ fn create_issue_field(
             .join(", ");
         format!(", options: [{options}]")
     });
+    let id_fragment = match data_type {
+        "SINGLE_SELECT" => "... on IssueFieldSingleSelect { id }",
+        "TEXT" => "... on IssueFieldText { id }",
+        _ => "... on IssueFieldSingleSelect { id } ... on IssueFieldText { id }",
+    };
     let query = format!(
-        "mutation {{ createIssueField(input: {{ ownerId: {organization_id}, name: {name}, dataType: {data_type}{options} }}) {{ issueField {{ id }} }} }}"
+        "mutation {{ createIssueField(input: {{ ownerId: {organization_id}, name: {name}, dataType: {data_type}{options} }}) {{ issueField {{ {id_fragment} }} }} }}"
     );
     let output = gh_api(&["graphql", "-f", &format!("query={query}")]).map_err(|error| {
         OrbitError::new(

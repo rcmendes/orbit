@@ -664,11 +664,12 @@ orbit github sync orb-a7b2c9 # preview only
 orbit github sync orb-a7b2c9 --apply
 ```
 
-For a personal-account `origin`, `connect` reports the basic-mode setup path
-without changing the Board. Configure `[github]` with `mode = "basic"` and the
+For a personal-account `origin`, `connect` reports the exact `[github]` entries
+to add or merge into the Board's `config.toml`, without changing the Board.
+Preserve other linked repositories. Set `mode = "basic"` and include the
 repository name as described below before creating or syncing Issues.
 
-`orbit github connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports next steps; configure `mode = "basic"` manually to use personal-repository sync. Use `orbit github connect --json` for machine-readable status.
+`orbit github connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports the exact basic-mode `[github]` entries to add or merge into the Board's `config.toml`, preserving other linked repositories. Use `orbit github connect --json` for machine-readable status, including the same guidance in `remediation` and `next_actions`.
 
 Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
 
@@ -695,11 +696,12 @@ orbit github sync orb-a7b2c9 --apply
 See [the GitHub sync guide](./docs/github-sync.md) for required permissions and
 the fields Orbit creates.
 
-For personal-account repositories, `connect` reports the manual basic-mode
-setup rather than changing the Board. Basic mode syncs titles, bodies, labels,
-and open/closed state without Issue Fields. `area` and `verification` sync and
-structured Triage require full mode; basic-mode Triage supports labels only.
-See [docs/github-sync.md](./docs/github-sync.md) for limitations and upgrade steps.
+For personal-account repositories, `connect` reports the exact manual basic-mode
+settings rather than changing the Board. Basic mode syncs titles, bodies,
+labels, and open/closed state without Issue Fields. `area` and `verification`
+sync and structured Triage require full mode; basic-mode Triage supports labels
+only. See [docs/github-sync.md](./docs/github-sync.md) for limitations and
+upgrade steps.
 
 ## Triage, labels, and comments
 

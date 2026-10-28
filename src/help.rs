@@ -840,7 +840,9 @@ area and verification values; run setup after editing config.toml. Basic mode
 supports personal repositories without setup, but cannot sync area or
 verification. Triage in basic mode supports labels only. `orbit github connect`
 checks the current origin and configures organization-owned repositories; for a
-personal-account origin, it leaves the Board unchanged and reports next steps.
+personal-account origin, it leaves the Board unchanged and reports the exact
+`config.toml` entries to add or merge for basic mode, preserving other linked
+repositories.
 
 `orbit github setup` resolves existing fields by default. Creating missing
 fields is opt-in with `--create-fields` and requires organization administrator

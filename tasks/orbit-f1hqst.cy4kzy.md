@@ -1,6 +1,6 @@
 ---
 title: Import Remote Issues into Linked Tasks
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -10,8 +10,11 @@ depends_on:
 - orbit-f1hqst.a2xpf8
 parent: orbit-f1hqst
 area: cli
+claimed_by: rodrigomendes
+claimed_at: 2026-10-28T23:33:30.350013Z
+lease_until: 2026-10-29T00:03:30.350013Z
 created_at: 2026-10-28T22:48:01.175045Z
-updated_at: 2026-10-28T22:48:45.046530Z
+updated_at: 2026-10-28T23:33:30.350013Z
 ---
 
 ## Goal

@@ -1,6 +1,6 @@
 ---
 title: Document Matt Pocock compatibility boundary and agent-brief handoff
-status: todo
+status: in_progress
 type: task
 priority: 2
 labels:
@@ -8,8 +8,11 @@ labels:
 - ready-for-agent
 parent: orbit-dkyngc
 area: docs
+claimed_by: implement-dkyngc-z1wgx4
+claimed_at: 2026-10-28T15:31:03.193550Z
+lease_until: 2026-10-28T16:01:03.193550Z
 created_at: 2026-10-28T15:20:07.774349Z
-updated_at: 2026-10-28T15:20:07.774349Z
+updated_at: 2026-10-28T15:31:03.193550Z
 ---
 
 ## Goal

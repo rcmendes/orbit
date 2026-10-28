@@ -807,7 +807,7 @@ pub enum TriageCommand {
         #[arg(value_name = "TASK")]
         task: String,
     },
-    /// Validate a proposal JSON file and preview Orbit metadata changes.
+    /// Validate and review a proposal JSON file or stdin without writing to GitHub.
     #[command(after_long_help = help::TRIAGE_REVIEW_EXAMPLES)]
     Review(TriageReviewArgs),
     /// Apply an approved proposal to Orbit (not GitHub).
@@ -819,6 +819,7 @@ pub enum TriageCommand {
 pub struct TriageReviewArgs {
     #[arg(value_name = "TASK")]
     pub task: String,
+    /// Proposal JSON path, or `-` to read from stdin.
     #[arg(long, value_name = "PATH")]
     pub proposal_file: PathBuf,
 }

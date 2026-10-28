@@ -171,6 +171,83 @@ fn triage_review_previews_proposed_metadata_without_applying() {
 }
 
 #[test]
+fn triage_review_reads_proposal_from_stdin_without_applying_in_json_mode() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    let id = adopt_linked(&repo, &fixture);
+    let before = repo.read_task(&id);
+
+    let (status, review) = repo.json_with_stdin(
+        &[
+            "triage",
+            "review",
+            id.as_str(),
+            "--proposal-file",
+            "-",
+            "--json",
+        ],
+        r#"{"area":"cli","labels_add":["bug"],"labels_remove":["needs-triage"]}"#,
+    );
+
+    assert_eq!(status, 0, "{review}");
+    assert_eq!(review["data"]["changes"]["area"]["to"], "cli");
+    assert_eq!(review["data"]["changes"]["labels"]["add"], json!(["bug"]));
+    assert_eq!(repo.read_task(&id), before);
+}
+
+#[test]
+fn triage_review_renders_field_diff_and_does_not_prompt_without_a_tty() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    let id = adopt_linked(&repo, &fixture);
+    let proposal = repo.path().join("proposal.json");
+    fs::write(
+        &proposal,
+        r#"{
+  "area": "cli",
+  "verification": "cargo test triage",
+  "labels_add": ["bug"],
+  "labels_remove": ["needs-triage"]
+}"#,
+    )
+    .unwrap();
+    let before = repo.read_task(&id);
+    let github_before = fs::read(&fixture).unwrap();
+
+    let output = repo.orbit(&[
+        "triage",
+        "review",
+        id.as_str(),
+        "--proposal-file",
+        proposal.to_str().unwrap(),
+    ]);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let preview = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !preview.contains("Apply these Orbit changes?"),
+        "non-TTY review must not prompt: {preview}"
+    );
+    assert!(preview.contains("Area: (unset) -> cli"), "{preview}");
+    assert!(
+        preview.contains("Verification: (unset) -> cargo test triage"),
+        "{preview}"
+    );
+    assert!(preview.contains("Labels added: bug"), "{preview}");
+    assert!(
+        preview.contains("Labels removed: needs-triage"),
+        "{preview}"
+    );
+    assert_eq!(repo.read_task(&id), before);
+    assert_eq!(fs::read(&fixture).unwrap(), github_before);
+}
+
+#[test]
 fn triage_review_rejects_non_canonical_labels() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);

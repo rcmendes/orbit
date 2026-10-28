@@ -1,6 +1,6 @@
 ---
 title: Import Remote Issues into Linked Tasks
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -15,11 +15,8 @@ checkpoint:
   progress: Remote Issue import implementation is running in workspace-import; catalog prerequisite is merged.
   next: Review, merge, close ticket.
 area: cli
-claimed_by: rodrigomendes
-claimed_at: 2026-10-28T23:33:30.350013Z
-lease_until: 2026-10-29T00:14:40.194136Z
 created_at: 2026-10-28T22:48:01.175045Z
-updated_at: 2026-10-28T23:44:40.194136Z
+updated_at: 2026-10-28T23:50:04.386360Z
 ---
 
 ## Goal

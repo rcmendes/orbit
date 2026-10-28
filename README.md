@@ -644,9 +644,27 @@ orbit --dir ~/src/acme list
 
 # Return this repository to its own Board.
 orbit unlink
+
+# Explicitly discover and inspect direct child GitHub repositories.
+orbit workspace refresh
+orbit workspace status
+orbit workspace exclude acme/legacy
 ```
 
 `orbit init` only creates the Workspace Board; it does not clone repositories. A child-local Board is reported as `AMBIGUOUS_BOARD` during discovery and blocks Workspace initialization if it exists first. Unknown entries in `.orbit` prevent initialization rather than being overwritten. The catalog cache is never stored in the Board repository.
+
+`orbit workspace refresh` scans direct child directories and checks their
+GitHub `origin` repositories against the organization configured in
+`[github].organization`. Use `orbit workspace include OWNER/REPO` and
+`orbit workspace exclude OWNER/REPO` to set explicit overrides; the latest
+include or exclude command replaces the opposite override for that repository.
+When at least one repository is explicitly included, the include list acts as
+an allowlist; exclusions always take precedence.
+`orbit workspace status` only reports the last explicit refresh. It does not
+poll or scan for new folders. Inaccessible repositories are reported as
+inaccessible on first discovery and stale after they were previously accessible;
+repository directories absent from a refresh are reported as removed. Their
+cached data is retained. Discovery does not create Orbit Tasks or GitHub Issues.
 
 Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link, then the nearest `.orbit` walking up to the repository root (or to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`, then the legacy hidden layout with a warning, then `~/.orbit` if it exists. An explicit override wins for one command:
 

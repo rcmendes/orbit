@@ -140,7 +140,10 @@ _Avoid_: Default board, user board, central board
 
 **Workspace cache**:
 The reserved, rebuildable local data directory at `<workspace>/.orbit/cache`.
-It is separate from the versioned Board at `<workspace>/.orbit/board`.
+It stores the last explicitly refreshed Workspace repository inventory at
+`repositories.json` and is separate from the versioned Board at
+`<workspace>/.orbit/board`. Repository status is a snapshot: `orbit workspace
+status` does not poll or rescan; `orbit workspace refresh` updates it.
 _Avoid_: Board, task store
 
 **Legacy layout**:

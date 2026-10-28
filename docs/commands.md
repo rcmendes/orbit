@@ -43,6 +43,7 @@ outside Git and a repository-local Board inside Git. See
 | Goal | Command |
 | --- | --- |
 | Set up a repository or workspace | `orbit init`, `orbit link`, `orbit unlink` |
+| Discover Workspace repositories | `orbit workspace refresh`, `orbit workspace status` |
 | File a new ticket | `orbit add` |
 | Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend` |
 | Triage incoming work | `orbit label add/remove/list` |
@@ -191,6 +192,36 @@ The Board is at `~/src/acme/.orbit/board`; the rebuildable catalog cache is
 reserved separately at `~/src/acme/.orbit/cache`. `orbit init` does not clone
 repositories. A child-local Board or conflicting `.orbit` content is reported
 instead of being shadowed or discarded.
+
+### `orbit workspace` — discover Workspace repositories
+
+Set `[github].organization` on the Workspace Board, for example by running
+`orbit github connect` from an organization-owned child repository. Then refresh
+the catalog explicitly:
+
+```bash
+orbit workspace refresh
+orbit workspace status
+orbit workspace include acme/api
+orbit workspace exclude acme/legacy
+```
+
+`refresh` scans only direct child directories. It classifies GitHub origins by
+organization, checks access with the configured GitHub client, and saves the
+latest repository inventory at `<workspace>/.orbit/cache/repositories.json`.
+Non-Git directories, repositories without an origin, unsupported origins, and
+unsupported owners are reported separately. An inaccessible repository is
+marked `inaccessible` until it was previously accessible; after that it is
+`stale` while access is unavailable. A repository directory no longer found
+during refresh is marked `removed`. These states do not delete cached data.
+
+`status` reads the last catalog only. It does not inspect Git directories or
+contact GitHub, so a newly cloned child repository appears after the next
+explicit `refresh`. `workspace.include` and `workspace.exclude` store overrides
+in the Workspace Board configuration; selecting one removes the opposite
+override. A non-empty include list is an allowlist, and exclusions always take
+precedence. Full mode remains limited to the configured organization.
+Discovery does not create Tasks or GitHub Issues.
 
 ### `orbit link` — reuse a Board from another repository
 

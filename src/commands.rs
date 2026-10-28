@@ -93,6 +93,15 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 crate::github::commands::run(board, args)
             })
         }
+        Command::Workspace(args) => {
+            if matches!(args.command, crate::cli::WorkspaceCommand::Status) {
+                with_board_read_only(dir.as_deref(), |board| crate::workspace::run(board, args))
+            } else {
+                with_board(dir.as_deref(), true, |board| {
+                    crate::workspace::run(board, args)
+                })
+            }
+        }
         Command::Triage(args) => with_board(dir.as_deref(), true, |board| {
             crate::triage::commands::run(board, args, json)
         }),

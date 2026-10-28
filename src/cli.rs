@@ -145,6 +145,10 @@ pub enum Command {
     #[command(name = "github", long_about = help::GITHUB_LONG, after_long_help = help::GITHUB_EXAMPLES)]
     GitHub(GitHubArgs),
 
+    /// Discover and manage repositories in a Workspace.
+    #[command(long_about = help::WORKSPACE_LONG, after_long_help = help::WORKSPACE_EXAMPLES)]
+    Workspace(WorkspaceArgs),
+
     /// Review and apply agent triage proposals for GitHub-linked Tasks.
     #[command(long_about = help::TRIAGE_LONG, after_long_help = help::TRIAGE_EXAMPLES)]
     Triage(TriageArgs),
@@ -835,6 +839,34 @@ pub struct TriageApplyArgs {
 pub struct GitHubArgs {
     #[command(subcommand)]
     pub command: GitHubCommand,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceArgs {
+    #[command(subcommand)]
+    pub command: WorkspaceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceCommand {
+    /// Show the last explicitly refreshed repository catalog.
+    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
+    Status,
+    /// Discover direct child repositories and check GitHub access.
+    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
+    Refresh,
+    /// Include an organization-owned repository in the Workspace.
+    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
+    Include(WorkspaceRepositoryArgs),
+    /// Exclude an organization-owned repository from the Workspace.
+    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
+    Exclude(WorkspaceRepositoryArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceRepositoryArgs {
+    #[arg(value_name = "OWNER/REPO")]
+    pub repository: String,
 }
 
 #[derive(Debug, Subcommand)]

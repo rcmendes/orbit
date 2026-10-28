@@ -1,7 +1,9 @@
 <!-- BEGIN ORBIT INTEGRATION (managed by orbit setup) -->
 ## Orbit task tracking
 
-Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
+Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
+
+From any child repository in a Workspace, these commands resolve the shared Workspace Board across the Git boundary. Tasks, dependencies, and claims are shared across its repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.

@@ -133,7 +133,7 @@ flowchart LR
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
-| Application | `src/commands.rs`, `src/migrate.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. GitHub commands provide read-only status diagnostics and explicit Issue synchronization; `doctor` includes GitHub health checks when configured. Prefix migration plans, validates, and applies the one-commit rewrite. |
+| Application | `src/commands.rs`, `src/migrate.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. GitHub commands provide read-only status diagnostics and export previews, explicit Issue creation, and Issue synchronization; `doctor` includes GitHub health checks when configured. Prefix migration plans, validates, and applies the one-commit rewrite. |
 | Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
@@ -457,11 +457,11 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 
 | Family | Commands | Effect |
 | --- | --- | --- |
-| Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks. |
+| Bootstrap | `init`, `link`, `unlink`, `setup`, `workspace setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks, or reconcile selected harnesses across Workspace repositories. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `workspace status`, `workspace issues list/inspect/import` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; GitHub status and Workspace catalog views read current snapshots/details. Issue import previews selected records; only `--apply` writes Linked Tasks to the Board, never to GitHub. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `github create` preview, `workspace status`, `workspace issues list/inspect/import` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; GitHub status and create previews, plus Workspace catalog views, do not write to GitHub. Issue import previews selected records; only `--apply` writes Linked Tasks to the Board. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
-| Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude`, `workspace issues refresh`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly synchronize GitHub Issues, discover Workspace repositories and store overrides, refresh Remote Issue summaries, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
+| Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude`, `workspace issues refresh`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly create or synchronize GitHub Issues, discover Workspace repositories and store overrides, refresh Remote Issue summaries, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Board layouts and initialization
 
@@ -481,6 +481,43 @@ the live body and comments. `import` explicitly previews selected catalog
 identities, then optionally creates Linked Tasks or links Local Tasks without
 overwriting Orbit fields. Duplicate checks use stable identity and import does
 not write to GitHub. Only applied imports enter the Task graph.
+
+`workspace setup` consumes that snapshot rather than rescanning or contacting
+GitHub. It installs managed, native harness integrations into included direct
+child repositories, while `AGENTS.md` and `CLAUDE.md` at the Workspace root give
+agents a parent-level entry point. Harness selection is persisted in
+`[workspace].agent_harnesses`, so the next explicit setup reconciles newly
+discovered repositories. Matt Pocock skills use an independent detector and
+receive tracker and triage-label guides without entering the harness selection.
+
+```mermaid
+sequenceDiagram
+    actor Dev as Developer
+    participant CLI as orbit workspace setup
+    participant Board as Workspace Board
+    participant Cache as repositories.json
+    participant Setup as setup generators
+    participant Repo as Child repositories
+
+    Dev->>CLI: workspace setup --print or --agents all
+    CLI->>Board: resolve Workspace root and saved harness choice
+    CLI->>Cache: read last explicitly refreshed repository set
+    CLI->>CLI: filter included direct child Git repositories
+    CLI->>Repo: detect harnesses and Matt skills
+    CLI->>Setup: plan root entry points and child integrations
+    alt Preview
+        Setup-->>Dev: file plans, collisions, no writes
+    else Apply
+        Setup->>Repo: merge managed instructions and MCP entries
+        Setup->>Board: persist selected harnesses for later reconciliation
+        Setup-->>Dev: changed files and warnings
+    end
+```
+
+`src/workspace.rs` coordinates catalog selection and per-repository plans;
+`src/setup.rs` owns harness detection and managed-file generation. Generated MCP
+configurations contain no Board path: each child resolves the Workspace Board
+through ordinary Orbit discovery across its Git boundary.
 
 ```mermaid
 flowchart LR

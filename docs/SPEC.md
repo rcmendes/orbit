@@ -375,6 +375,34 @@ their cached data. JSON `data.repositories` entries include `repository`, `path`
 `last_refreshed_at`, and arrays for non-Git directories, missing origins, and
 unsupported origins.
 
+### Workspace agent reconciliation
+
+`orbit workspace setup [--agents auto|all|none|ask|LIST] [--print]` reconciles
+agent configuration against the last refreshed catalog; it does not scan Git or
+contact GitHub. The target set is the discovered, included direct child
+repositories whose local directories remain Git repositories. Harness detection
+is the union across that set. A TTY prompts for selection by default; otherwise
+detected harnesses are selected. `--agents all` selects exactly Claude Code,
+Cursor, Codex, and OpenCode. Matt Pocock skills are detected independently and
+are not harness choices.
+
+An applied selection is stored in the Workspace Board's `[workspace]`
+`agent_harnesses` setting and reused by later `workspace setup` runs, including
+after `workspace refresh` discovers additional repositories. `--print` previews
+the root and child file plans without writing files or changing the selection.
+Selected child repositories receive their native managed instructions and MCP
+entries; MCP configuration stores the Orbit executable, not a Board path. The
+Workspace root receives managed `AGENTS.md` and `CLAUDE.md` entry points.
+Hand-authored text outside Orbit markers is preserved; incompatible managed
+markers and configuration collisions are reported rather than overwritten.
+
+When Matt Pocock skills are detected, setup maintains managed Orbit tracker and
+triage-label guidance at the Workspace or child-repository root where the skills
+are installed. A hand-written guide without Orbit markers is left unchanged and
+reported. `orbit workspace setup --remove` removes managed content from the
+Workspace root and all currently discovered direct child repositories, including
+excluded ones; it does not change Tasks, source files, or GitHub.
+
 ### Slugs
 
 A Board has one slug. It is resolved from `DIR` when the Board is created; an empty Board can change it with `--slug`:
@@ -538,6 +566,15 @@ structure, including provider `mode`, field applicability, `next_action`, and
 `next_command`. In basic mode, organization Issue Fields are not applicable and
 the status check only requires the `repo` scope.
 
+`orbit github create TASK...` previews selected Local Tasks without writing.
+`--apply` creates one GitHub Issue for each eligible selected Task, then stores
+the confirmed `owner/repo#number` link and sync baseline on that Task. A linked
+Task is rejected and directs the user to sync; done and cancelled Tasks require
+`--include-terminal` and create closed Issues. Each batch result reports success
+or failure independently. Repository Boards infer a destination only when one
+repository is linked; Workspace Boards use the last refreshed included-repository
+catalog and require `--repo OWNER/REPO` when multiple repositories are included.
+
 `--agents` accepts `none`, `all`, or a comma-separated list of client names. Without it, `init` asks in a TTY and otherwise writes no agent files while explaining the `orbit setup` hint in its report; `--print` never prompts. `--agents none` is the non-interactive "Board only" choice.
 
 `TYPE` is one of `task`, `epic`, `spike`, `chore`, or `decision`. `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` is shorthand for `--label repo:NAME`.
@@ -545,7 +582,7 @@ the status check only requires the `repo` scope.
 ### Milestones
 
 - M0: core CLI, JSON contract, global lock, atomic writes, auto-commit, and tests. Implemented.
-- M1: `setup` recipes, `prime --hook-json`, Claude hooks, skill files, and the mattpocock bridge. Implemented.
+- M1: `setup` recipes, `prime --hook-json`, Claude hooks, skill files, the mattpocock bridge, and Workspace agent reconciliation. Implemented.
 - M2: `orbit mcp` over stdio, `orbit://tasks/{id}` resources, and project-local MCP configs. Implemented.
 - M3: packaging and release automation. Implemented.
 - M4: labels, comments, hold labels, and triage integration. Implemented.
@@ -608,7 +645,7 @@ the status check only requires the `repo` scope.
 - `setup --hooks` installs Claude Code's SessionStart hook, recording the absolute binary path. `--remove` recognizes both the absolute and legacy bare command forms.
 - `init --agents all` and `setup` refuse to record a binary under npm's `_npx` cache or a temporary directory (`EPHEMERAL_BIN`); use `orbit setup --portable-mcp` for a portable command.
 - `setup` writes project-local MCP configs for Claude, Cursor, Codex, and OpenCode by default, recording the absolute path of the running Orbit binary; `--no-mcp` skips them, `--portable-mcp` writes the bare `orbit` command, and `--mcp-bin PATH` overrides the recorded command. `mattpocock` has no MCP client and ignores explicit MCP options with a warning. OpenCode uses the V2 `mcp.servers.orbit` shape with `type: local` and a command array, and no `enabled` flag.
-- `setup mattpocock` leaves an existing `docs/agents/issue-tracker.md` without Orbit's managed marker unchanged and reports it as `skipped`; `--check` treats a custom doc as installed, `--remove` does not delete it, and agent refresh still recognizes it. Files with the marker update and remove normally.
+- `setup mattpocock` manages `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md` (or their user-scope equivalents). Hand-written guides without Orbit's marker are reported as `skipped` and left unchanged; managed sections update and remove normally.
 - Generated MCP configs are machine-specific. A config whose command is a bare `orbit` is portable but requires the editor's `PATH` to contain Orbit, so a repair without `--portable-mcp` restores the absolute-path default.
 - `setup --remove` always removes MCP configs, but only entries that look like Orbit's; a foreign `orbit` server is left in place with a warning. OpenCode setup migrates a legacy `mcp.orbit` entry to `mcp.servers.orbit` without duplicating the server; removal clears both forms and preserves unrelated servers.
 - No config command; `config.toml` is hand-edited.
@@ -703,7 +740,7 @@ Warnings and `doctor` findings use a separate namespace: `LEGACY_LAYOUT`, `AMBIG
 
 CLI + `orbit prime` is the primary interface. `prime` prints ~1k tokens: workflow rules, agent identity, ready tasks, close candidates, stale claims, and counts. `prime --hook-json` emits Claude Code's SessionStart envelope with the same text as `additionalContext`. The Claude hook records the resolved binary path, and `doctor` reports when `orbit` is not that binary on `PATH`.
 
-`orbit init` creates the Board only; it writes harness files when the TTY prompt is accepted or `--agents` names clients. `orbit setup` writes one harness explicitly. Project scope (`--scope project`, the default) writes repository-level files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and mattpocock (`docs/agents/issue-tracker.md`). User scope (`--scope user`) writes the same managed content at the harness's user-level locations. `init` selects harnesses by detection or `--agents`; `setup` selects one explicitly named client. Orbit-managed sections and files use markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries. Generated configs record the Orbit binary but not the Board path, so moving `DIR` does not stale them; a managed config that still contains an absolute Board path is reported by `doctor` as `ABSOLUTE_BOARD_PATH`. MCP entries use an absolute binary path by default, or the portable `orbit` command with `--portable-mcp`; the portable form requires the editor's `PATH`. A hand-written `docs/agents/issue-tracker.md` without the marker is reported as `skipped` and left untouched, while `--check` still treats the integration as installed.
+`orbit init` creates the Board only; it writes harness files when the TTY prompt is accepted or `--agents` names clients. `orbit setup` writes one harness explicitly. Project scope (`--scope project`, the default) writes repository-level files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and mattpocock (`docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`). User scope (`--scope user`) writes the same managed content at the harness's user-level locations. `init` selects harnesses by detection or `--agents`; `setup` selects one explicitly named client. Orbit-managed sections and files use markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries. Generated configs record the Orbit binary but not the Board path, so moving `DIR` does not stale them; a managed config that still contains an absolute Board path is reported by `doctor` as `ABSOLUTE_BOARD_PATH`. MCP entries use an absolute binary path by default, or the portable `orbit` command with `--portable-mcp`; the portable form requires the editor's `PATH`. Hand-written Matt Pocock guides without the marker are reported as `skipped` and left untouched.
 
 MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 17 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `checkpoint`, `finish`, `link`, `delete`, `label`, `comment`, `issue_refresh`, `issue_list`, `issue_inspect`. The Workspace Issue tools refresh and browse cached Remote Issue summaries, inspect an Issue body and comments on demand, and never import or claim catalog entries. `create` accepts `parent` to make a SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint` records the claim holder's handoff; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature or repository. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
 
@@ -711,7 +748,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **M0 — walking skeleton.** Board init, add/show/list/ready/claim/release/heartbeat/done/cancel/reopen/update/depend/undepend/delete/prime/doctor/sync, JSON contract, global lock, atomic writes, auto-commit, tests. No setup, MCP, or packaging.
 
-**M1 — agent setup.** `setup` recipes, `prime --hook-json`, Claude hooks, skill files, mattpocock bridge. Implemented: one command writes managed instructions for Claude, Cursor, Codex, and OpenCode, with idempotent updates and clean removal.
+**M1 — agent setup.** `setup` recipes, `prime --hook-json`, Claude hooks, skill files, mattpocock bridge, and Workspace agent reconciliation. Implemented: repository setup writes managed instructions for Claude, Cursor, Codex, and OpenCode, while Workspace setup reconciles those harnesses across discovered child repositories and separately maintains Matt Pocock guidance.
 
 **M2 — MCP.** `orbit mcp` over stdio with the original 13 tools, `orbit://tasks/{id}` resources, project-local MCP configs generated by `setup` (opt out with `--no-mcp`), and protocol-level tests against the CLI. Implemented.
 
@@ -721,7 +758,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **M5 — one-command onboarding.** Idempotent `init`, harness detection and selection, shared-Board `link`/`unlink`, absolute-binary hooks, and `setup --check`. Implemented; v0.8.1 makes `init` pure and moves wiring behind the prompt or `setup`.
 
-**M6 — workspaces, SubTasks, and export.** Workspaces now use a DIR plus `link`; the former `orbit workspace <folder>` creation command was removed in v0.8.1. The current `orbit workspace` commands manage repository discovery only. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
+**M6 — workspaces, SubTasks, export, and Remote Issues.** Workspaces now use a DIR plus `link`; the former `orbit workspace <folder>` creation command was removed in v0.8.1. The current `orbit workspace` commands manage repository discovery, reconcile agent integrations, and refresh or browse the separate Remote Issue catalog. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
 
 **v0.5.0 — structural Type.** Metadata-only `type`, `tree` family view, close candidates, parent progress fields, and label/type exclusions. Implemented.
 

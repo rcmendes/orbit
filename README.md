@@ -649,6 +649,8 @@ orbit unlink
 orbit workspace refresh
 orbit workspace status
 orbit workspace exclude acme/legacy
+orbit workspace setup --print
+orbit workspace setup --agents all
 
 # Build and browse the separate, local Remote Issue catalog.
 orbit workspace issues refresh
@@ -673,6 +675,15 @@ poll or scan for new folders. Inaccessible repositories are reported as
 inaccessible on first discovery and stale after they were previously accessible;
 repository directories absent from a refresh are reported as removed. Their
 cached data is retained. Discovery does not create Orbit Tasks or GitHub Issues.
+
+`orbit workspace setup` uses the last refreshed catalog to preview and reconcile
+agent integrations in included child repositories. It supports Claude Code,
+Cursor, Codex, and OpenCode; the selected harnesses are saved on the Workspace
+Board and reused when a later refresh discovers new repositories. The Workspace
+root also gets managed `AGENTS.md` and `CLAUDE.md` entry points. Matt Pocock
+skills are detected separately and receive their Orbit tracker and triage-label
+guidance without appearing in `--agents` selection. Use
+`orbit workspace setup --remove` to remove only Orbit-managed content.
 
 `orbit workspace issues refresh` reconciles repository discovery and explicitly
 fetches all open and closed Issues for included repositories. Pull requests are
@@ -717,6 +728,7 @@ orbit github status
 orbit add "First GitHub task" -p 1
 # Copy the Task ID printed by `orbit add` and replace orb-a7b2c9 below.
 orbit github create orb-a7b2c9
+orbit github create orb-a7b2c9 --apply
 orbit github sync orb-a7b2c9 # preview only
 orbit github sync orb-a7b2c9 --apply
 ```
@@ -734,6 +746,7 @@ Run `orbit github status` for a read-only diagnostic of the authenticated accoun
 # Personal repository: [github] mode = "basic" + repositories in config.toml.
 orbit github repo link alice/widget
 orbit github create orb-a7b2c9 --repo alice/widget
+orbit github create orb-a7b2c9 --repo alice/widget --apply
 
 # Connect an organization-owned repository from its checkout:
 orbit github connect
@@ -745,9 +758,20 @@ orbit github setup
 orbit github setup --create-fields # create missing fields (organization admin required)
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
-orbit github create orb-a7b2c9 # automatically uses the only linked repository
-orbit github sync orb-a7b2c9 --apply
+orbit github sync orb-a7b2c9 --apply # publish changes to the adopted Issue
+orbit add "A new local task"        # use its printed ID below
+orbit github create orb-d4e5f6     # preview; automatically uses the only linked repository
+orbit github create orb-d4e5f6 --apply
 ```
+
+`github create` accepts one or more Task IDs and previews the destination,
+Issue title/body, labels, Orbit status, and mapped open/closed state without
+writing. Pass `--apply` to create Issues and link each Task only after GitHub
+confirms creation. A batch reports each Task's result independently; linked Tasks
+are rejected on retry and should use `orbit github sync`. Done and cancelled
+Tasks require `--include-terminal`. From a Workspace Board, the sole included
+repository is inferred from `orbit workspace refresh`; when more than one is
+included, pass `--repo OWNER/REPO`.
 
 `orbit github setup` does not create fields unless `--create-fields` is passed.
 See [the GitHub sync guide](./docs/github-sync.md) for required permissions and
@@ -901,7 +925,7 @@ orbit setup all --remove     # remove only Orbit-managed content
 
 Generated configs record the Orbit binary but not the Board path, so moving the Orbit folder does not leave them stale. MCP entries use an absolute binary path by default; `--portable-mcp` writes `orbit` instead, which only works when the editor's `PATH` resolves it. `doctor` reports an older config that still contains an absolute Board path.
 
-A hand-written tracker guide is respected. If `docs/agents/issue-tracker.md` exists without Orbit's managed marker, `orbit setup mattpocock` reports it as `skipped` and leaves it untouched; `--check` treats the custom doc as installed, and `--remove` does not delete it. Tracker files Orbit wrote continue to update and remove normally.
+A hand-written Matt Pocock guide is respected. If `docs/agents/issue-tracker.md` or `docs/agents/triage-labels.md` exists without Orbit's managed marker, setup reports it as `skipped` and leaves it untouched; `--remove` does not delete it. Workspace setup detects the skills separately and maintains both guides automatically when possible.
 
 CI runs `orbit setup opencode --no-mcp --check` on every push and pull request, so the checked-in `AGENTS.md` managed block cannot drift from the generator. `--no-mcp` keeps the machine-local `opencode.json` out of the check.
 
@@ -925,7 +949,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
 | **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `github status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
-| **Maintain** | `doctor` · `sync` · `github` · `slug` · `mcp` |
+| **Maintain** | `doctor` · `sync` · `workspace` · `github` · `slug` · `mcp` |
 
 Every command explains its own semantics:
 

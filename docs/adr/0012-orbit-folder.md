@@ -249,8 +249,9 @@ own resolution scope; a second `.orbit` in the same working tree returns
   DIR. The only user-level Board is the opt-in `~/.orbit` fallback.
 - **ADR 0008:** replaced. The former `orbit workspace <folder>` creation
   command and `<workspace>/board` layout are removed; `init DIR` creates the
-  current Board layout. The newer `orbit workspace status|refresh|include|exclude`
-  commands manage repository discovery only and do not create a Workspace.
+  current Board layout. The newer `orbit workspace status|refresh|include|exclude|setup|issues`
+  commands manage repository discovery, agent reconciliation, and the Remote
+  Issue catalog; they do not create a Workspace.
 
 ## Workspace-root path extension
 

@@ -36,6 +36,7 @@ orbit --dir <DIR> list           # override the link for one command
 | Create a project-local Board | `orbit init` |
 | Initialize a Workspace Board | `orbit init <WORKSPACE>` |
 | Refresh or inspect its repository catalog | `orbit workspace refresh`, `orbit workspace status` |
+| Reconcile agent integrations across child repositories | `orbit workspace setup` |
 | Override repository discovery | `orbit workspace include OWNER/REPO`, `orbit workspace exclude OWNER/REPO` |
 | Browse and import Workspace Remote Issues | `orbit workspace issues refresh/list/inspect/import` |
 | Create the machine-wide fallback | `orbit init --global` |
@@ -48,6 +49,8 @@ The separate Issue catalog keeps imported work out of the Task graph until an
 explicit `workspace issues import` preview is applied. Import creates a Linked
 Task or links a selected Local Task; duplicate links are checked by repository
 and Issue number.
+`workspace setup` uses that snapshot, saves the selected harnesses on the
+Workspace Board, and reuses them when a later refresh discovers child repos.
 
 A child-local Board that competes with its Workspace Board is reported as
 `AMBIGUOUS_BOARD`; commands keep using the Workspace Board and do not delete the

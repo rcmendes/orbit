@@ -928,9 +928,46 @@ pub enum WorkspaceCommand {
     /// Exclude an organization-owned repository from the Workspace.
     #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
     Exclude(WorkspaceRepositoryArgs),
+    /// Preview, install, or remove managed agent integrations in child repositories.
+    #[command(
+        long_about = help::WORKSPACE_SETUP_LONG,
+        after_long_help = help::WORKSPACE_EXAMPLES
+    )]
+    Setup(WorkspaceSetupArgs),
     /// Browse the local Remote Issue catalog; refresh is explicit.
     #[command(long_about = help::WORKSPACE_ISSUES_LONG, after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
     Issues(WorkspaceIssuesArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceSetupArgs {
+    /// Harnesses to configure: auto, all, none, ask, or a comma-separated list.
+    #[arg(long, value_name = "SELECTOR", conflicts_with = "remove")]
+    pub agents: Option<String>,
+
+    /// Install the Claude Code SessionStart hook in selected repositories.
+    #[arg(long)]
+    pub hooks: bool,
+
+    /// Skip MCP configuration and install instructions only.
+    #[arg(long, conflicts_with_all = ["portable_mcp", "mcp_bin"])]
+    pub no_mcp: bool,
+
+    /// Write MCP configs with the portable `orbit` command instead of an absolute path.
+    #[arg(long, conflicts_with = "mcp_bin")]
+    pub portable_mcp: bool,
+
+    /// Orbit executable to record in MCP configs.
+    #[arg(long = "mcp-bin", value_name = "PATH")]
+    pub mcp_bin: Option<PathBuf>,
+
+    /// Preview all changes without writing files or saving the selection.
+    #[arg(long, conflicts_with = "remove")]
+    pub print: bool,
+
+    /// Remove only Orbit-managed Workspace and child-repository integrations.
+    #[arg(long, conflicts_with = "print")]
+    pub remove: bool,
 }
 
 #[derive(Debug, Args)]
@@ -956,7 +993,7 @@ pub enum GitHubCommand {
     /// Adopt an existing GitHub Issue for a Task.
     #[command(after_long_help = help::GITHUB_ADOPT_EXAMPLES)]
     Adopt(GitHubAdoptArgs),
-    /// Create a GitHub Issue for a linked Task.
+    /// Preview or create GitHub Issues for selected Local Tasks.
     #[command(after_long_help = help::GITHUB_CREATE_EXAMPLES)]
     Create(GitHubCreateArgs),
     /// Preview or apply bidirectional sync for linked Tasks.
@@ -1010,10 +1047,25 @@ pub struct GitHubAdoptArgs {
 
 #[derive(Debug, Args)]
 pub struct GitHubCreateArgs {
-    #[arg(value_name = "TASK")]
-    pub task: String,
-    #[arg(long, value_name = "OWNER/REPO")]
+    #[arg(
+        value_name = "TASK",
+        required = true,
+        num_args = 1..,
+        help = "One or more Local Task IDs to export"
+    )]
+    pub tasks: Vec<String>,
+    #[arg(
+        long,
+        value_name = "OWNER/REPO",
+        help = "Choose an included repository (inferred only when one is available)"
+    )]
     pub repo: Option<String>,
+    /// Create Issues and link Tasks. Without this flag, show a read-only preview.
+    #[arg(long)]
+    pub apply: bool,
+    /// Include done and cancelled Tasks in the export.
+    #[arg(long)]
+    pub include_terminal: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]

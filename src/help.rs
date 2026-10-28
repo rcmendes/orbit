@@ -861,7 +861,10 @@ and scopes, linked repositories, Issue Fields when applicable, pending changes,
 conflicts, unsupported relationships, and the next recommended action. `orbit
 doctor` also checks GitHub configuration when the provider is enabled. GitHub sync
 requires Orbit 0.9.0 or newer; default release builds include the
-`github-provider` capability.";
+`github-provider` capability. `github create` previews one or more Local Tasks by
+default. Pass `--apply` to create Issues and persist their links; done and cancelled
+Tasks also require `--include-terminal`. Workspace Boards infer the destination
+from the included repository catalog when exactly one repository is available.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
@@ -873,7 +876,10 @@ Examples:
   orbit github setup
   orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
   orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
-  orbit github create orb-a7b2c9
+  orbit github create orb-a7b2c9                 # preview only
+  orbit github create orb-a7b2c9 --apply
+  orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
+  orbit github create orb-d4e5f6 --include-terminal --apply
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
 
@@ -888,6 +894,21 @@ folders. Full mode uses the organization in `[github].organization`.
 Repository inclusion and exclusion are stored in the Workspace Board. Excluding
 a repository does not delete its cached catalog data. Discovery never creates
 Orbit Tasks or GitHub Issues.
+
+`setup` operates on the last explicitly refreshed catalog. It detects Claude
+Code, Cursor, Codex, and OpenCode across included child repositories, previews
+with `--print`, and writes their native instructions and MCP entries in each
+selected repository. The chosen harnesses are saved in the Workspace Board for
+later setup runs after discovery finds new repositories. Workspace-level
+`AGENTS.md` and `CLAUDE.md` entry points are maintained separately. Matt
+Pocock skills are detected independently; when present, setup maintains their
+Orbit tracker and triage-label guidance without adding them to the harness
+selection.
+
+`issues` reads the separate Workspace Remote Issue catalog: refresh fetches
+open and closed Issue summaries for included repositories, list filters the local
+snapshot, and inspect fetches one Issue's body and comments. Remote Issues are
+not Tasks and are never claimable.
 ";
 
 pub const WORKSPACE_EXAMPLES: &str = "\
@@ -895,7 +916,24 @@ Examples:
   orbit workspace refresh
   orbit workspace status
   orbit workspace exclude acme/legacy
-  orbit workspace include acme/service";
+  orbit workspace include acme/service
+  orbit workspace setup --print
+  orbit workspace setup --agents all
+  orbit workspace setup --remove";
+
+pub const WORKSPACE_SETUP_LONG: &str = "\
+Reconcile coding-agent integrations across the currently discovered Workspace repositories.
+
+Setup uses the last explicit `orbit workspace refresh`; it does not poll GitHub
+or scan for newly cloned repositories. It detects Claude Code, Cursor, Codex,
+and OpenCode across included child repositories, and saves an applied selection
+for later reconciliations. Use `--print` to preview without writing. The
+Workspace root receives managed `AGENTS.md` and `CLAUDE.md` entry points.
+
+Matt Pocock skills are detected separately. If present, setup maintains Orbit
+tracker and triage-label guidance without adding the plugin to harness selection.
+Existing hand-written content is preserved; conflicting configuration is
+reported instead of overwritten.";
 
 pub const WORKSPACE_ISSUES_LONG: &str = "\
 Browse and explicitly import the Workspace's rebuildable Remote Issue catalog. Refresh first to
@@ -972,7 +1010,9 @@ Examples:
 pub const GITHUB_CREATE_EXAMPLES: &str = "\
 Examples:
   orbit github create orb-a7b2c9
-  orbit github create orb-a7b2c9 --repo acme/widget";
+  orbit github create orb-a7b2c9 --apply
+  orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
+  orbit github create orb-d4e5f6 --include-terminal --apply";
 
 pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\
 Examples:

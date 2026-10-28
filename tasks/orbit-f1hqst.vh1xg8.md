@@ -1,6 +1,6 @@
 ---
 title: Set up coding agents across Workspace repositories
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -11,8 +11,11 @@ depends_on:
 - orbit-f1hqst.r02zj4
 parent: orbit-f1hqst
 area: setup
+claimed_by: rodrigomendes
+claimed_at: 2026-10-28T23:20:47.097557Z
+lease_until: 2026-10-28T23:50:47.097557Z
 created_at: 2026-10-28T22:47:34.547399Z
-updated_at: 2026-10-28T22:48:45.219604Z
+updated_at: 2026-10-28T23:20:47.097557Z
 ---
 
 ## Goal

@@ -1,6 +1,6 @@
 ---
 title: Add opt-in GitHub Issue Field creation
-status: todo
+status: in_progress
 type: task
 priority: 2
 labels:
@@ -10,8 +10,11 @@ depends_on:
 - orbit-ytwjhm.z30hsp
 parent: orbit-ytwjhm
 area: setup
+claimed_by: impl-q567ya
+claimed_at: 2026-10-28T15:39:34.186238Z
+lease_until: 2026-10-28T16:09:34.186238Z
 created_at: 2026-10-28T15:23:57.708934Z
-updated_at: 2026-10-28T15:23:57.708934Z
+updated_at: 2026-10-28T15:39:34.186238Z
 ---
 
 ## Goal

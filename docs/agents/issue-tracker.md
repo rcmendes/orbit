@@ -167,6 +167,24 @@ are free-form strings, comments are per-task threads, and blocking edges are
 `--depends-on`. Put parent context and acceptance criteria in the body; use labels
 for state and category, and comments for triage notes.
 
+## When a skill runs triage
+
+Orbit is the tracker. Matt Pocock's engineering skills own the triage state
+machine: gathering context, verifying the claim, grilling, writing the agent
+brief, and maintaining `.out-of-scope/`.
+
+`orbit triage` is a deterministic metadata primitive for a GitHub-linked Task.
+It sets `area`, task-level `verification`, and the canonical labels in
+[`triage-labels.md`](./triage-labels.md). It does not verify a claim, grill,
+write a brief, or update `.out-of-scope/`. The commands are in
+[`triage-workflow.md`](./triage-workflow.md).
+
+Before you implement a `ready-for-agent` ticket, read the agent brief. The
+template is in [`agent-brief.md`](./agent-brief.md).
+
+Wayfinder map membership is the parent edge. `wayfinder:<map-id>` stays a
+filter; the commands stay in [Wayfinding operations](#wayfinding-operations).
+
 ## Triage operations
 
 - **Unlabeled:** `orbit list --unlabeled --json`

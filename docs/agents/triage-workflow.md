@@ -1,20 +1,25 @@
 # Agent Triage workflow
 
-Reusable workflow for reviewing **GitHub-linked** Orbit Tasks and proposing metadata
-updates. Orbit stays local-first: triage writes the Board first; GitHub is updated only
-through explicit sync.
+`orbit triage` writes metadata on a **GitHub-linked** Task: `area`, task-level
+`verification`, and canonical labels. It is not Matt Pocock's triage skill.
+The split is in [Compatibility boundary](#compatibility-boundary).
+
+Orbit stays local-first: these commands write the Board first. GitHub changes
+only when you sync explicitly.
 
 ## Scope
 
-Triage may propose changes to:
+A proposal may change:
 
 - `area` (controlled values from [`project-guidance.md`](./project-guidance.md))
-- Task-level `verification`
+- Task-level `verification` (stored text; the command does not run it)
 - Canonical triage/category labels: `needs-triage`, `needs-info`, `ready-for-agent`,
   `ready-for-human`, `wontfix`, `bug`, `enhancement`
 
-Triage does **not**:
+`orbit triage` does **not**:
 
+- Gather context, verify a claim, or grill
+- Write an agent brief ([`agent-brief.md`](./agent-brief.md)) or maintain `.out-of-scope/`
 - Adopt or import GitHub Issues (use `orbit github adopt`)
 - Change GitHub-owned title, body, or open/closed state
 - Add arbitrary labels
@@ -23,7 +28,27 @@ Triage does **not**:
 When evidence is insufficient, record `uncertainty` in the proposal and leave metadata
 unchanged.
 
-## Steps for agents
+## Compatibility boundary
+
+Orbit is the tracker. Matt Pocock's engineering skills own the triage state
+machine:
+
+- Gather context from the ticket and the codebase
+- Verify the claim
+- Grill when the request is underspecified
+- Write the agent brief ([`agent-brief.md`](./agent-brief.md))
+- Record rejected enhancements in `.out-of-scope/`
+
+`orbit triage` is the metadata step those skills can call. Given a proposal, it
+previews or writes `area`, `verification`, and canonical labels on a linked
+Task. It does not decide whether a claim is true, interview anyone, compose a
+brief, or create `.out-of-scope/` files.
+
+Wayfinder map membership is a parent edge. Filtering still uses
+`wayfinder:<map-id>` as documented in [`issue-tracker.md`](./issue-tracker.md);
+this page does not change those commands.
+
+## Commands
 
 1. **Context** — load current metadata, allowed areas, canonical labels, and project guidance:
 
@@ -91,4 +116,4 @@ Forbidden proposal keys (GitHub-owned): `title`, `body`, `status`, `state`.
 | `TRIAGE_APPROVAL_REQUIRED` | `apply` without `--approve` |
 | `TRIAGE_INVALID_PROPOSAL` | Invalid JSON, forbidden fields, or non-canonical labels |
 
-See also [`triage-labels.md`](./triage-labels.md) and [`issue-tracker.md`](./issue-tracker.md).
+See also [`agent-brief.md`](./agent-brief.md), [`triage-labels.md`](./triage-labels.md), and [`issue-tracker.md`](./issue-tracker.md).

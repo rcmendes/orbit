@@ -1,12 +1,15 @@
 ---
 title: Harden Matt Pocock skill compatibility
-status: todo
+status: in_progress
 type: epic
 priority: 2
 labels:
 - enhancement
+claimed_by: implement-dkyngc
+claimed_at: 2026-10-28T15:52:00.511733Z
+lease_until: 2026-10-28T16:22:00.511733Z
 created_at: 2026-10-28T15:19:56.555280Z
-updated_at: 2026-10-28T15:19:56.555280Z
+updated_at: 2026-10-28T15:52:00.511733Z
 ---
 
 ## Goal

@@ -11,15 +11,15 @@ depends_on:
 parent: orbit-ytwjhm
 checkpoint:
   by: impl-q567ya
-  at: 2026-10-28T15:48:29.398658Z
-  progress: Implemented opt-in create-fields API path with admin preflight, field creation/reuse, fixture persistence, CLI docs/help, and tests. Full test suite passing; preparing integration merge.
-  next: Review final diff, commit, merge latest integrate/orbit-ytwjhm, and verify.
+  at: 2026-10-28T15:52:32.338615Z
+  progress: Implementation commit 61e3ec6 is complete; merged integrate/orbit-ytwjhm (a43eac8) into the ticket branch in merge commit 92bba7a, resolved conflicts retaining basic-mode updates, and post-merge full suite passed (379 tests). Ticket remains in progress pending the integration merger.
+  next: Integration merger to merge ticket branch into integrate/orbit-ytwjhm; do not close ticket before that merge.
 area: setup
 claimed_by: impl-q567ya
 claimed_at: 2026-10-28T15:39:34.186238Z
-lease_until: 2026-10-28T16:18:29.368389Z
+lease_until: 2026-10-28T16:22:32.307946Z
 created_at: 2026-10-28T15:23:57.708934Z
-updated_at: 2026-10-28T15:48:29.398658Z
+updated_at: 2026-10-28T15:52:32.338615Z
 ---
 
 ## Goal

@@ -17,6 +17,8 @@ fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
             depends_on: dependencies,
             parent: None,
             waiting_on: None,
+            area: None,
+            verification: None,
             claim: None,
             stray_claim_times: None,
             created_at: now,

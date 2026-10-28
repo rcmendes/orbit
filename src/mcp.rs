@@ -146,7 +146,9 @@ fn tool_definitions() -> Vec<Value> {
                 "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
                 "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
                 "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
-                "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." }
+                "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
+                "areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Only tasks with any of these work areas." },
+                "exclude_areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Exclude tasks with any of these work areas." }
             }),
             &[],
         ),
@@ -166,6 +168,8 @@ fn tool_definitions() -> Vec<Value> {
                 "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
                 "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
                 "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
+                "areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Only tasks with any of these work areas." },
+                "exclude_areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Exclude tasks with any of these work areas." },
                 "all": { "type": "boolean", "description": "Include done and cancelled tasks." }
             }),
             &[],
@@ -187,13 +191,15 @@ fn tool_definitions() -> Vec<Value> {
                 "depends_on": { "type": "array", "items": { "type": "string" } },
                 "parent": { "type": "string", "description": "Create a SubTask under this Parent Task." },
                 "waiting_on": { "type": "string", "description": "External blocker." },
+                "area": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"], "description": "Stable work area classification." },
+                "verification": { "type": "string", "description": "Concise checks or commands for agents." },
                 "body": { "type": "string", "description": "Markdown body and acceptance criteria." }
             }),
             &["title"],
         ),
         tool(
             "update",
-            "Change a task's title, body, priority, or external wait. Does not change status.",
+            "Change a task's title, body, priority, area, verification, or external wait. Does not change status.",
             json!({
                 "id": { "type": "string" },
                 "title": { "type": "string" },
@@ -201,7 +207,11 @@ fn tool_definitions() -> Vec<Value> {
                 "type": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"], "description": "New work shape." },
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
                 "waiting_on": { "type": "string" },
-                "clear_waiting": { "type": "boolean" }
+                "clear_waiting": { "type": "boolean" },
+                "area": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] },
+                "clear_area": { "type": "boolean" },
+                "verification": { "type": "string" },
+                "clear_verification": { "type": "boolean" }
             }),
             &["id"],
         ),
@@ -380,6 +390,18 @@ fn dispatch_tool(
     {
         return tool_invalid("`waiting_on` and `clear_waiting` are mutually exclusive");
     }
+    if name == "update"
+        && arguments.get("area").is_some()
+        && bool_arg(arguments, "clear_area")
+    {
+        return tool_invalid("`area` and `clear_area` are mutually exclusive");
+    }
+    if name == "update"
+        && arguments.get("verification").is_some()
+        && bool_arg(arguments, "clear_verification")
+    {
+        return tool_invalid("`verification` and `clear_verification` are mutually exclusive");
+    }
     if name == "create"
         && let Some(depends_on) = arguments.get("depends_on")
         && !depends_on.is_array()
@@ -419,7 +441,7 @@ fn dispatch_tool(
     {
         return tool_invalid("`exclude_labels` must be an array of strings");
     }
-    for key in ["types", "exclude_types"] {
+    for key in ["types", "exclude_types", "areas", "exclude_areas"] {
         if arguments.get(key).is_some_and(|value| !value.is_array()) {
             return tool_invalid(format!("`{key}` must be an array of strings"));
         }
@@ -483,6 +505,24 @@ fn dispatch_tool(
                     };
                     args.push("--exclude-type".to_string());
                     args.push(task_type.to_string());
+                }
+            }
+            if let Some(areas) = arguments.get("areas").and_then(Value::as_array) {
+                for area in areas {
+                    let Some(area) = area.as_str() else {
+                        return tool_invalid("`areas` must be an array of strings");
+                    };
+                    args.push("--area".to_string());
+                    args.push(area.to_string());
+                }
+            }
+            if let Some(areas) = arguments.get("exclude_areas").and_then(Value::as_array) {
+                for area in areas {
+                    let Some(area) = area.as_str() else {
+                        return tool_invalid("`exclude_areas` must be an array of strings");
+                    };
+                    args.push("--exclude-area".to_string());
+                    args.push(area.to_string());
                 }
             }
         }
@@ -551,6 +591,24 @@ fn dispatch_tool(
                     args.push(task_type.to_string());
                 }
             }
+            if let Some(areas) = arguments.get("areas").and_then(Value::as_array) {
+                for area in areas {
+                    let Some(area) = area.as_str() else {
+                        return tool_invalid("`areas` must be an array of strings");
+                    };
+                    args.push("--area".to_string());
+                    args.push(area.to_string());
+                }
+            }
+            if let Some(areas) = arguments.get("exclude_areas").and_then(Value::as_array) {
+                for area in areas {
+                    let Some(area) = area.as_str() else {
+                        return tool_invalid("`exclude_areas` must be an array of strings");
+                    };
+                    args.push("--exclude-area".to_string());
+                    args.push(area.to_string());
+                }
+            }
             if bool_arg(arguments, "waiting") {
                 args.push("--waiting".to_string());
             }
@@ -605,6 +663,14 @@ fn dispatch_tool(
                 args.push("--waiting-on".to_string());
                 args.push(waiting_on);
             }
+            if let Some(area) = optional_str(arguments, "area") {
+                args.push("--area".to_string());
+                args.push(area);
+            }
+            if let Some(verification) = optional_str(arguments, "verification") {
+                args.push("--verification".to_string());
+                args.push(verification);
+            }
             if let Some(body) = optional_str(arguments, "body") {
                 args.push("--body".to_string());
                 args.push(body);
@@ -638,6 +704,20 @@ fn dispatch_tool(
             }
             if bool_arg(arguments, "clear_waiting") {
                 args.push("--clear-waiting".to_string());
+            }
+            if let Some(area) = optional_str(arguments, "area") {
+                args.push("--area".to_string());
+                args.push(area);
+            }
+            if bool_arg(arguments, "clear_area") {
+                args.push("--clear-area".to_string());
+            }
+            if let Some(verification) = optional_str(arguments, "verification") {
+                args.push("--verification".to_string());
+                args.push(verification);
+            }
+            if bool_arg(arguments, "clear_verification") {
+                args.push("--clear-verification".to_string());
             }
         }
         "claim" => {

@@ -457,7 +457,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 
 | Family | Commands | Effect |
 | --- | --- | --- |
-| Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks. |
+| Bootstrap | `init`, `link`, `unlink`, `setup`, `workspace setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks, or reconcile selected harnesses across Workspace repositories. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
 | Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `github create` preview, `workspace status`, `workspace issues list/inspect` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; `github status` diagnoses provider health and `github create` previews selected Task exports without changing the Board or GitHub; Workspace status and Issue listing read their local snapshots. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
@@ -479,6 +479,43 @@ that inventory and stores paginated Issue summaries separately at
 `.orbit/cache/issues.json`; per-repository errors retain the last successful
 snapshot. `workspace issues list` reads cached summaries, while `inspect` fetches
 the live body and comments. These catalog entries never enter the Task graph.
+
+`workspace setup` consumes that snapshot rather than rescanning or contacting
+GitHub. It installs managed, native harness integrations into included direct
+child repositories, while `AGENTS.md` and `CLAUDE.md` at the Workspace root give
+agents a parent-level entry point. Harness selection is persisted in
+`[workspace].agent_harnesses`, so the next explicit setup reconciles newly
+discovered repositories. Matt Pocock skills use an independent detector and
+receive tracker and triage-label guides without entering the harness selection.
+
+```mermaid
+sequenceDiagram
+    actor Dev as Developer
+    participant CLI as orbit workspace setup
+    participant Board as Workspace Board
+    participant Cache as repositories.json
+    participant Setup as setup generators
+    participant Repo as Child repositories
+
+    Dev->>CLI: workspace setup --print or --agents all
+    CLI->>Board: resolve Workspace root and saved harness choice
+    CLI->>Cache: read last explicitly refreshed repository set
+    CLI->>CLI: filter included direct child Git repositories
+    CLI->>Repo: detect harnesses and Matt skills
+    CLI->>Setup: plan root entry points and child integrations
+    alt Preview
+        Setup-->>Dev: file plans, collisions, no writes
+    else Apply
+        Setup->>Repo: merge managed instructions and MCP entries
+        Setup->>Board: persist selected harnesses for later reconciliation
+        Setup-->>Dev: changed files and warnings
+    end
+```
+
+`src/workspace.rs` coordinates catalog selection and per-repository plans;
+`src/setup.rs` owns harness detection and managed-file generation. Generated MCP
+configurations contain no Board path: each child resolves the Workspace Board
+through ordinary Orbit discovery across its Git boundary.
 
 ```mermaid
 flowchart LR

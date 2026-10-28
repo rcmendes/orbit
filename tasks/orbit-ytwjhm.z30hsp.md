@@ -1,6 +1,6 @@
 ---
 title: Add orbit github connect setup wizard
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -13,11 +13,8 @@ checkpoint:
   progress: Implemented fixture-backed orbit github connect for origin parsing, gh auth and repository discovery, organization field validation, safe config updates, and personal-account remediation. Integration suite and full cargo test pass.
   next: Review diffs/docs, commit, then merge latest integrate/orbit-ytwjhm into this ticket branch and verify.
 area: setup
-claimed_by: impl-z30hsp
-claimed_at: 2026-10-28T15:27:21.046648Z
-lease_until: 2026-10-28T15:57:44.638850Z
 created_at: 2026-10-28T15:23:46.720999Z
-updated_at: 2026-10-28T15:33:43.711001Z
+updated_at: 2026-10-28T15:36:29.707918Z
 ---
 
 ## Goal

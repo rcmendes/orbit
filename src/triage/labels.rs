@@ -64,3 +64,16 @@ pub fn validate_label_list(labels: &[String], field: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CANONICAL_TRIAGE_LABELS, CATEGORY_ROLES, STATE_ROLES};
+
+    #[test]
+    fn canonical_triage_labels_are_state_roles_then_category_roles() {
+        let mut expected = Vec::with_capacity(STATE_ROLES.len() + CATEGORY_ROLES.len());
+        expected.extend_from_slice(STATE_ROLES);
+        expected.extend_from_slice(CATEGORY_ROLES);
+        assert_eq!(CANONICAL_TRIAGE_LABELS, expected.as_slice());
+    }
+}

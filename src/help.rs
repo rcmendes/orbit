@@ -878,6 +878,8 @@ labels. It never rewrites GitHub-owned title, body, or open/closed state, and it
 verification commands. After `triage apply --approve`, publish changes with `orbit github sync`.
 
 Agents draft a proposal JSON file, run `triage review` for a preview, then `triage apply --approve`.
+`orbit triage` rejects a proposal whose resulting labels contain more than one state role or more
+than one category role, with `TRIAGE_INVALID_PROPOSAL`.
 When evidence is insufficient, record `uncertainty` and leave metadata unchanged.";
 
 pub const TRIAGE_EXAMPLES: &str = "\

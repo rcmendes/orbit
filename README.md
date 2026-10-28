@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.8.2`](https://github.com/rcmendes/orbit/releases/tag/v0.8.2) is the latest release. It adds a numbered `orbit init` onboarding report, clearer harness and MCP prompts, and a more precise product description. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.8.2`](https://github.com/rcmendes/orbit/releases/tag/v0.8.2) is the latest release. The upcoming v0.9.0 release adds the GitHub Issue provider (`orbit github`) and Triage review (`orbit triage`) to the default binaries and installers. GitHub sync requires Orbit v0.9.0 or newer. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -647,6 +647,27 @@ ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 
 Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Sync is explicit, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. See [docs/github-sync.md](./docs/github-sync.md).
 
+GitHub sync and Triage require Orbit **v0.9.0 or newer**. The v0.9.0 default
+release binaries, shell/PowerShell installers, and npm package include both
+commands. For an organization-owned repository with Issue Fields ready, start
+with a fresh Board and the GitHub CLI authenticated:
+
+```bash
+orbit init
+gh auth login
+orbit github connect
+orbit github status
+orbit add "First GitHub task" -p 1
+# Copy the Task ID printed by `orbit add` and replace orb-a7b2c9 below.
+orbit github create orb-a7b2c9
+orbit github sync orb-a7b2c9 # preview only
+orbit github sync orb-a7b2c9 --apply
+```
+
+For a personal-account `origin`, `connect` reports the basic-mode setup path
+without changing the Board. Configure `[github]` with `mode = "basic"` and the
+repository name as described below before creating or syncing Issues.
+
 `orbit github connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports next steps; configure `mode = "basic"` manually to use personal-repository sync. Use `orbit github connect --json` for machine-readable status.
 
 Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
@@ -674,8 +695,10 @@ orbit github sync orb-a7b2c9 --apply
 See [the GitHub sync guide](./docs/github-sync.md) for required permissions and
 the fields Orbit creates.
 
-Basic mode syncs titles, bodies, labels, and open/closed state without Issue
-Fields. `area` and `verification` sync and structured Triage require full mode.
+For personal-account repositories, `connect` reports the manual basic-mode
+setup rather than changing the Board. Basic mode syncs titles, bodies, labels,
+and open/closed state without Issue Fields. `area` and `verification` sync and
+structured Triage require full mode; basic-mode Triage supports labels only.
 See [docs/github-sync.md](./docs/github-sync.md) for limitations and upgrade steps.
 
 ## Triage, labels, and comments

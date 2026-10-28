@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The upcoming v0.9.0 release includes `orbit github` and `orbit triage` in the default binaries, shell/PowerShell installers, and npm package. GitHub sync requires Orbit v0.9.0 or newer; personal-account repositories use basic mode, which syncs labels and GitHub-owned fields but does not sync `area` or `verification`.
+- Expanded the artifact onboarding smoke on Linux, macOS, and Windows to exercise GitHub connect/status, adopt/create, sync preview/apply, and Triage review/apply with the local fixture client and no network access. Added a clear upgrade error for configured GitHub Boards loaded by builds without the default `github-provider` capability.
 - Added claim checkpoints. `orbit checkpoint <id> --progress ... [--next ...] [--blocker ...]` records the claim holder's latest handoff state in the Task's frontmatter; later calls can update one field or clear the next action/blocker. The record survives `release`, `claim --steal`, and `reopen`, appears in `show`/`ready`/`list`/`prime`, MCP `get`, and `export`, and never changes readiness or claim eligibility. A done or cancelled Task keeps it as archived history (`checkpoint_archived: true`) but refuses new checkpoints. Exposed over MCP as `checkpoint`; not synchronized to external issue trackers.
 - Updated the README, command guide, specification, architecture, glossary, tracker guide, ADR 0013, CLI/MCP help, generated agent guidance, and integration tests for checkpoints.
 

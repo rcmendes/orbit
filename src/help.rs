@@ -847,7 +847,9 @@ fields is opt-in with `--create-fields` and requires organization administrator
 access. Run `orbit github status` for a read-only health report of authentication
 and scopes, linked repositories, Issue Fields when applicable, pending changes,
 conflicts, unsupported relationships, and the next recommended action. `orbit
-doctor` also checks GitHub configuration when the provider is enabled.";
+doctor` also checks GitHub configuration when the provider is enabled. GitHub sync
+requires Orbit 0.9.0 or newer; default release builds include the
+`github-provider` capability.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:

@@ -140,6 +140,16 @@ impl Config {
         let config: Config = toml::from_str(&content)
             .map_err(|error| OrbitError::config(format!("invalid {}: {error}", path.display())))?;
         config.validate()?;
+        #[cfg(not(feature = "github-provider"))]
+        if config.github.is_enabled() {
+            return Err(OrbitError::new(
+                code::GITHUB_UNSUPPORTED,
+                format!(
+                    "this Orbit binary does not include GitHub sync support; upgrade to Orbit {} or newer, or reinstall/build with the default `github-provider` feature",
+                    crate::github::config::MIN_GITHUB_VERSION
+                ),
+            ));
+        }
         Ok(config)
     }
 

@@ -2,6 +2,35 @@
 
 Orbit can link a Board to one or more GitHub repositories and keep durable Tasks aligned with GitHub Issues through explicit sync. Orbit remains local-first: the Board is updated first; GitHub changes are published only when you run sync with `--apply`.
 
+GitHub sync requires Orbit **v0.9.0 or newer**. That release includes `orbit
+github` and `orbit triage` in its default binaries, shell/PowerShell installers,
+and npm package. If a binary built without the optional `github-provider`
+capability loads a configured Board, it stops with an upgrade message instead
+of silently ignoring the GitHub integration.
+
+## Quick start
+
+For an organization-owned repository with Issue Fields ready, create a fresh
+Board in the repository checkout and authenticate GitHub CLI:
+
+```bash
+orbit init
+gh auth login
+orbit github connect
+orbit github status
+orbit add "First GitHub task" -p 1
+# Copy the ID printed by `orbit add` and replace orb-a7b2c9 below.
+orbit github create orb-a7b2c9
+orbit github sync orb-a7b2c9        # inspect the plan; writes nothing
+orbit github sync orb-a7b2c9 --apply
+```
+
+`connect` detects the checkout's `origin`. Organization-owned repositories
+configure full mode when their Issue Fields are ready. For personal-account
+repositories, it leaves the Board unchanged and reports the basic-mode steps;
+append the [basic-mode configuration](#basic-mode-personal-repositories) before
+creating or syncing Issues. Basic mode does not sync `area` or `verification`.
+
 ## Provider modes
 
 Orbit supports two modes. Existing configuration defaults to `full`, so existing

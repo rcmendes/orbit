@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{OrbitError, Result};
 
+/// First Orbit release that includes the GitHub provider in its default binary.
+pub const MIN_GITHUB_VERSION: &str = "0.9.0";
+
 /// Board-level GitHub provider configuration (`config.toml` `[github]` section).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GitHubConfig {

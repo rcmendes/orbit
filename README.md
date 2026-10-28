@@ -901,7 +901,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
 | **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `github status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
-| **Maintain** | `doctor` · `sync` · `github` · `slug` · `mcp` |
+| **Maintain** | `doctor` · `sync` · `github` · `slug` · `workspace migrate` · `mcp` |
 
 Every command explains its own semantics:
 
@@ -926,6 +926,7 @@ The full guide — when to use each command, end-to-end scenarios, and a common-
 | Heartbeats are uncommitted | `orbit sync` commits lease-only changes. |
 | The Task-ID prefix must change | Preview with `orbit slug migrate <slug> --dry-run`, then apply. Live claims require `--force`; external old-ID links still break. |
 | The Board is missing | `orbit init` creates one; a missing linked Board returns `LINK_NOT_FOUND`. |
+| Existing Workspace or child Boards need combining | Preview with `orbit workspace migrate --dry-run`, then apply; sources stay as backups. |
 | The Board is in the old hidden layout | It keeps working with a `LEGACY_LAYOUT` warning. Run `orbit doctor --migrate` to move it to `.orbit`; the migration is resumable. |
 | A writer is busy | `LOCKED` is retryable. Retry after a short backoff. |
 

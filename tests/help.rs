@@ -76,3 +76,24 @@ fn init_and_setup_explain_the_portable_mcp_choice() {
         assert!(help.contains(example), "{name}: {help}");
     }
 }
+
+#[test]
+fn workspace_setup_help_explains_selection_and_reconciliation() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"))
+        .args(["workspace", "setup", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("--agents"), "{help}");
+    assert!(help.contains("--print"), "{help}");
+    assert!(help.contains("--remove"), "{help}");
+    assert!(
+        help.contains("Matt Pocock skills are detected separately"),
+        "{help}"
+    );
+    assert!(
+        help.contains("orbit workspace setup --agents all"),
+        "{help}"
+    );
+}

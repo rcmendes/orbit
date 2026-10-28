@@ -344,6 +344,48 @@ pub fn install(root: &Path, options: InstallOptions) -> Result<CommandOutput> {
     Ok(output)
 }
 
+/// Install or remove only the Workspace-level agent instruction entry points.
+/// These files are guidance inherited by child repositories; the Workspace
+/// root does not need harness MCP configuration of its own.
+pub fn workspace_guidance(root: &Path, print: bool, remove: bool) -> Result<CommandOutput> {
+    let mut plan = BTreeMap::new();
+    for relative in ["AGENTS.md", "CLAUDE.md"] {
+        if remove {
+            plan_section_remove(root, relative, &mut plan)?;
+        } else {
+            plan_section(root, relative, &workflow_section(), &mut plan)?;
+        }
+    }
+    let files = if print {
+        plan.into_values().collect::<Vec<_>>()
+    } else {
+        apply_plan(plan)?
+    };
+    let file_values = files
+        .iter()
+        .map(|file| {
+            let mut value = json!({
+                "path": file.relative.to_string_lossy(),
+                "action": file.action,
+            });
+            if print && let Some(content) = &file.content {
+                value["content"] = json!(content);
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+    let human = render_human(root, print, &files, SetupScope::Project);
+    Ok(CommandOutput::new(
+        json!({
+            "root": root.to_string_lossy(),
+            "scope": SetupScope::Project.name(),
+            "preview": print,
+            "files": file_values,
+        }),
+        human,
+    ))
+}
+
 pub fn refresh(root: &Path) -> Result<CommandOutput> {
     let clients = configured_clients(root);
     if clients.is_empty() {
@@ -458,7 +500,9 @@ fn configured_clients(root: &Path) -> Vec<SetupClient> {
     if contains("opencode.json", "\"orbit\"") {
         clients.push(SetupClient::Opencode);
     }
-    if root.join("docs/agents/issue-tracker.md").is_file() {
+    if root.join("docs/agents/issue-tracker.md").is_file()
+        || root.join("docs/agents/triage-labels.md").is_file()
+    {
         clients.push(SetupClient::Mattpocock);
     }
 
@@ -610,6 +654,30 @@ pub fn detect(root: &Path) -> Vec<SetupClient> {
             SetupClient::All => false,
         })
         .collect()
+}
+
+/// Detect only coding-agent harnesses. Matt Pocock skills are a separate
+/// compatibility integration and must not participate in harness selection.
+pub fn detect_harnesses(root: &Path) -> Vec<SetupClient> {
+    detect(root)
+        .into_iter()
+        .filter(|client| {
+            matches!(
+                client,
+                SetupClient::Claude
+                    | SetupClient::Cursor
+                    | SetupClient::Codex
+                    | SetupClient::Opencode
+            )
+        })
+        .collect()
+}
+
+/// Detect the Matt Pocock skills plugin without inferring it from generic
+/// documentation directories or from an existing Orbit tracker guide.
+pub fn detects_mattpocock_skills(root: &Path) -> bool {
+    let skill = ".agents/skills/setup-matt-pocock-skills";
+    root.join(skill).is_dir() || home_dir().is_some_and(|home| home.join(skill).is_dir())
 }
 
 pub fn parse_agents(selector: &str, root: &Path) -> Result<Vec<SetupClient>> {
@@ -791,6 +859,29 @@ fn prompt_agents(
     prompt: &mut impl Write,
 ) -> Result<Vec<SetupClient>> {
     let all = SetupClient::all();
+    prompt_agents_from(&all, detected, input, prompt)
+}
+
+/// Prompt for the four agent harnesses supported by Workspace integration.
+pub fn prompt_workspace_harnesses(detected: &[SetupClient]) -> Result<Vec<SetupClient>> {
+    let all = [
+        SetupClient::Claude,
+        SetupClient::Cursor,
+        SetupClient::Codex,
+        SetupClient::Opencode,
+    ];
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let mut prompt = std::io::stderr();
+    prompt_agents_from(&all, detected, &mut input, &mut prompt)
+}
+
+fn prompt_agents_from(
+    all: &[SetupClient],
+    detected: &[SetupClient],
+    input: &mut impl BufRead,
+    prompt: &mut impl Write,
+) -> Result<Vec<SetupClient>> {
     writeln!(
         prompt,
         "Orbit can wire its task workflow into these coding agents:"
@@ -830,7 +921,7 @@ fn prompt_agents(
             return Ok(detected.to_vec());
         }
         if answer.eq_ignore_ascii_case("a") || answer.eq_ignore_ascii_case("all") {
-            return Ok(all);
+            return Ok(all.to_vec());
         }
         if answer.eq_ignore_ascii_case("none") {
             return Ok(Vec::new());
@@ -847,7 +938,8 @@ fn prompt_agents(
                 .ok()
                 .and_then(|number| number.checked_sub(1))
                 .and_then(|index| all.get(index).copied())
-                .or_else(|| SetupClient::from_name(token));
+                .or_else(|| SetupClient::from_name(token))
+                .filter(|client| all.contains(client));
             match client {
                 Some(client) => {
                     if !selected.contains(&client) {
@@ -914,6 +1006,7 @@ struct ClientPaths {
     mcp_json: Option<(&'static str, McpJsonKind)>,
     mcp_toml: Option<&'static str>,
     tracker: Option<&'static str>,
+    triage_labels: Option<&'static str>,
 }
 
 fn client_paths(client: SetupClient, scope: SetupScope) -> ClientPaths {
@@ -970,6 +1063,11 @@ fn client_paths(client: SetupClient, scope: SetupScope) -> ClientPaths {
             } else {
                 "docs/agents/issue-tracker.md"
             }),
+            triage_labels: Some(if user {
+                ".agents/triage-labels.md"
+            } else {
+                "docs/agents/triage-labels.md"
+            }),
             ..ClientPaths::default()
         },
         SetupClient::All => unreachable!("All is expanded before planning"),
@@ -1013,6 +1111,14 @@ fn plan_install(
     if let Some(tracker) = paths.tracker {
         plan_section_unless_custom(root, tracker, &mattpocock_section(), plan)?;
     }
+    if let Some(triage_labels) = paths.triage_labels {
+        plan_section_unless_custom(
+            root,
+            triage_labels,
+            &mattpocock_triage_labels_section(),
+            plan,
+        )?;
+    }
     if options.hooks
         && let Some(hooks) = paths.hooks
     {
@@ -1055,6 +1161,9 @@ fn plan_remove(
     }
     if let Some(tracker) = paths.tracker {
         plan_section_remove(root, tracker, plan)?;
+    }
+    if let Some(triage_labels) = paths.triage_labels {
+        plan_section_remove(root, triage_labels, plan)?;
     }
     if let Some(hooks) = paths.hooks {
         plan_claude_hooks(root, hooks, None, true, plan)?;
@@ -2061,7 +2170,9 @@ fn workflow_section() -> String {
         "{BEGIN_MARKER}
 ## Orbit task tracking
 
-Orbit is the task tracker for this repository. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
+Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
+
+From any child repository in a Workspace, these commands resolve the shared Workspace Board across the Git boundary. Tasks, dependencies, and claims are shared across its repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
@@ -2136,6 +2247,31 @@ We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdo
 - Never edit task frontmatter directly; that bypasses dependency validation, leases, and the write lock.
 - Use `orbit show <ID>` to read acceptance criteria.
 - `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
+{END_MARKER}"
+    )
+}
+
+fn mattpocock_triage_labels_section() -> String {
+    format!(
+        "{BEGIN_MARKER}
+# Orbit triage labels
+
+Use these canonical labels with Orbit Tasks:
+
+| Role | Label | Meaning |
+| --- | --- | --- |
+| Needs maintainer review | `needs-triage` | Not yet evaluated |
+| Needs reporter input | `needs-info` | Waiting for more information |
+| Agent-ready | `ready-for-agent` | Specified and available to an agent |
+| Human work | `ready-for-human` | Requires human implementation |
+| Won't fix | `wontfix` | Abandoned; also cancel the Task |
+| Bug | `bug` | Something is broken |
+| Enhancement | `enhancement` | New feature or improvement |
+
+`needs-triage`, `needs-info`, and `ready-for-human` are hold labels. They keep
+Tasks out of `orbit ready` until removed. `ready-for-agent`, `bug`, and
+`enhancement` do not block readiness. `wontfix` is a label plus a terminal
+status; use `orbit cancel <ID> --by <agent>`.
 {END_MARKER}"
     )
 }

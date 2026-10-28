@@ -922,6 +922,21 @@ folders. Full mode uses the organization in `[github].organization`.
 Repository inclusion and exclusion are stored in the Workspace Board. Excluding
 a repository does not delete its cached catalog data. Discovery never creates
 Orbit Tasks or GitHub Issues.
+
+`setup` operates on the last explicitly refreshed catalog. It detects Claude
+Code, Cursor, Codex, and OpenCode across included child repositories, previews
+with `--print`, and writes their native instructions and MCP entries in each
+selected repository. The chosen harnesses are saved in the Workspace Board for
+later setup runs after discovery finds new repositories. Workspace-level
+`AGENTS.md` and `CLAUDE.md` entry points are maintained separately. Matt
+Pocock skills are detected independently; when present, setup maintains their
+Orbit tracker and triage-label guidance without adding them to the harness
+selection.
+
+`issues` reads the separate Workspace Remote Issue catalog: refresh fetches
+open and closed Issue summaries for included repositories, list filters the local
+snapshot, and inspect fetches one Issue's body and comments. Remote Issues are
+not Tasks and are never claimable.
 ";
 
 pub const WORKSPACE_EXAMPLES: &str = "\
@@ -929,7 +944,24 @@ Examples:
   orbit workspace refresh
   orbit workspace status
   orbit workspace exclude acme/legacy
-  orbit workspace include acme/service";
+  orbit workspace include acme/service
+  orbit workspace setup --print
+  orbit workspace setup --agents all
+  orbit workspace setup --remove";
+
+pub const WORKSPACE_SETUP_LONG: &str = "\
+Reconcile coding-agent integrations across the currently discovered Workspace repositories.
+
+Setup uses the last explicit `orbit workspace refresh`; it does not poll GitHub
+or scan for newly cloned repositories. It detects Claude Code, Cursor, Codex,
+and OpenCode across included child repositories, and saves an applied selection
+for later reconciliations. Use `--print` to preview without writing. The
+Workspace root receives managed `AGENTS.md` and `CLAUDE.md` entry points.
+
+Matt Pocock skills are detected separately. If present, setup maintains Orbit
+tracker and triage-label guidance without adding the plugin to harness selection.
+Existing hand-written content is preserved; conflicting configuration is
+reported instead of overwritten.";
 
 pub const WORKSPACE_ISSUES_LONG: &str = "\
 Browse the Workspace's rebuildable Remote Issue catalog. Refresh first to

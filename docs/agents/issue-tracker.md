@@ -37,6 +37,7 @@ orbit --dir <DIR> list           # override the link for one command
 | Initialize a Workspace Board | `orbit init <WORKSPACE>` |
 | Consolidate existing Workspace and child Boards | `orbit workspace migrate --dry-run`, then `orbit workspace migrate` |
 | Refresh or inspect its repository catalog | `orbit workspace refresh`, `orbit workspace status` |
+| Reconcile agent integrations across child repositories | `orbit workspace setup` |
 | Override repository discovery | `orbit workspace include OWNER/REPO`, `orbit workspace exclude OWNER/REPO` |
 | Create the machine-wide fallback | `orbit init --global` |
 | Join an existing Board | `orbit link <DIR>` |
@@ -44,6 +45,8 @@ orbit --dir <DIR> list           # override the link for one command
 
 Workspace repository discovery is explicit: `status` reads the last refresh,
 and `refresh` scans direct children without importing GitHub Issues as Tasks.
+`workspace setup` uses that snapshot, saves the selected harnesses on the
+Workspace Board, and reuses them when a later refresh discovers child repos.
 
 A child-local Board that competes with its Workspace Board is reported as
 `AMBIGUOUS_BOARD`; commands keep using the Workspace Board and do not delete the

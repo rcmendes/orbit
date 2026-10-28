@@ -129,9 +129,9 @@ impl GitHubClient for GhCliClient {
 
     fn validate_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
         let query = format!(
-            "organization(login:\"{org}\"){{ issueFields(first:100) {{ nodes {{ ... on IssueFieldDate {{ id name }} ... on IssueFieldMultiSelect {{ id name }} ... on IssueFieldNumber {{ id name }} ... on IssueFieldSingleSelect {{ id name }} ... on IssueFieldText {{ id name }} }} }} }}"
+            "query {{ organization(login:\"{org}\"){{ issueFields(first:100) {{ nodes {{ ... on IssueFieldDate {{ id name }} ... on IssueFieldMultiSelect {{ id name }} ... on IssueFieldNumber {{ id name }} ... on IssueFieldSingleSelect {{ id name }} ... on IssueFieldText {{ id name }} }} }} }} }}"
         );
-        let output = gh_api(&["graphql", "-f", &format!("query={query}")])?;
+        let output = gh_api(&["api", "graphql", "-f", &format!("query={query}")])?;
         let response: GraphQlFieldsResponse = serde_json::from_slice(&output).map_err(|error| {
             OrbitError::new(
                 code::GITHUB_SETUP_INCOMPLETE,
@@ -178,6 +178,7 @@ impl GitHubClient for GhCliClient {
         validate_org_admin(org)?;
         let query = "query($org: String!) { organization(login: $org) { id issueFields(first: 100) { nodes { ... on IssueFieldDate { id name } ... on IssueFieldMultiSelect { id name } ... on IssueFieldNumber { id name } ... on IssueFieldSingleSelect { id name } ... on IssueFieldText { id name } } } } }";
         let output = gh_api(&[
+            "api",
             "graphql",
             "-f",
             &format!("query={query}"),
@@ -425,7 +426,7 @@ fn create_issue_field(
     let query = format!(
         "mutation {{ createIssueField(input: {{ ownerId: {organization_id}, name: {name}, dataType: {data_type}{options} }}) {{ issueField {{ {id_fragment} }} }} }}"
     );
-    let output = gh_api(&["graphql", "-f", &format!("query={query}")]).map_err(|error| {
+    let output = gh_api(&["api", "graphql", "-f", &format!("query={query}")]).map_err(|error| {
         OrbitError::new(
             code::GITHUB_SETUP_INCOMPLETE,
             format!(

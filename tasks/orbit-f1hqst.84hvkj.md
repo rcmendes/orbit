@@ -1,6 +1,6 @@
 ---
 title: Add Workspace-root initialization and Board discovery
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -8,8 +8,11 @@ labels:
 - ready-for-agent
 parent: orbit-f1hqst
 area: board
+claimed_by: rodrigomendes
+claimed_at: 2026-10-28T22:50:33.806362Z
+lease_until: 2026-10-28T23:20:33.806362Z
 created_at: 2026-10-28T22:47:09.472535Z
-updated_at: 2026-10-28T22:47:09.472535Z
+updated_at: 2026-10-28T22:50:33.806362Z
 ---
 
 ## Goal

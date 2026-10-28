@@ -1,6 +1,6 @@
 # Orbit Architecture
 
-Status: describes v0.8.2, including the Orbit folder (`DIR`, default `.orbit`), user-scoped agent setup, and legacy layout migration. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
+Status: describes v0.8.2 and unreleased behavior, including the Orbit folder (`DIR`, default `.orbit`), user-scoped agent setup, legacy layout migration, and GitHub provider diagnostics. [`SPEC.md`](./SPEC.md) is canonical for behavior and the JSON contract; [`GLOSSARY.md`](./GLOSSARY.md) defines the vocabulary. This document visualizes that design and maps it to the Rust modules.
 
 The short version: Orbit is one binary, two front doors (the JSON CLI and the MCP stdio server), and no daemon. A board command resolves a Board, takes a lock, rebuilds the task graph from Markdown, applies one transition, publishes files atomically, and optionally commits to an orphan Git branch.
 
@@ -27,6 +27,7 @@ flowchart LR
         CMD["Command handlers<br/>src/commands.rs"]
         PRIME["prime context"]
         DOCTOR["doctor and sync"]
+        GITHUB["GitHub provider<br/>src/github/commands.rs"]
         MIGRATE["Slug migration<br/>src/migrate.rs"]
         SETUP["Harness setup<br/>src/setup.rs"]
     end
@@ -73,6 +74,7 @@ flowchart LR
     CLI --> ENVELOPE
     CMD --> PRIME
     CMD --> DOCTOR
+    CMD --> GITHUB
     CMD --> MIGRATE
     CMD --> SETUP
     CMD --> Domain
@@ -119,7 +121,7 @@ flowchart LR
 
     class DEV,AGENT,MCPC,HOOK actor
     class CLI,MCP,ENVELOPE iface
-    class CMD,PRIME,DOCTOR,SETUP app
+    class CMD,PRIME,DOCTOR,GITHUB,SETUP app
     class BOARD,SLUG,GRAPH,MODEL,TRANSITIONS,COMMENTS domain
     class LOCK,ATOMIC,GIT,ERRORS durable
     class BRANCH,ORBITFOLDER,STANDALONE,LINKPTR,LOCKFILE,TASKFILES,COMMENTFILES,CONFIGFILE store
@@ -131,7 +133,7 @@ flowchart LR
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
-| Application | `src/commands.rs`, `src/migrate.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. Prefix migration plans, validates, and applies the one-commit rewrite. |
+| Application | `src/commands.rs`, `src/migrate.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. GitHub commands provide read-only status diagnostics and explicit Issue synchronization; `doctor` includes GitHub health checks when configured. Prefix migration plans, validates, and applies the one-commit rewrite. |
 | Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
@@ -452,9 +454,9 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | --- | --- | --- |
 | Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; `github status` diagnoses provider health without changing the Board or GitHub. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
-| Maintenance | `doctor`, `sync`, `slug`, `mcp` | Check integrity, commit heartbeat-only changes, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
+| Maintenance | `doctor`, `sync`, `github`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly synchronize GitHub Issues, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Board layouts and initialization
 

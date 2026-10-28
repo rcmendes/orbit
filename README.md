@@ -841,9 +841,9 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | --- | --- |
 | **Set up** | `init` · `link` · `unlink` · `setup` |
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
-| **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` |
+| **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `github status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
-| **Maintain** | `doctor` · `sync` · `slug` · `mcp` |
+| **Maintain** | `doctor` · `sync` · `github` · `slug` · `mcp` |
 
 Every command explains its own semantics:
 

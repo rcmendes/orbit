@@ -18,3 +18,4 @@ pub mod setup;
 pub mod slug;
 pub mod task;
 pub mod transition;
+pub mod triage;

@@ -140,6 +140,10 @@ pub enum Command {
     /// Link GitHub repositories and synchronize Issues with Tasks.
     #[command(name = "github", long_about = help::GITHUB_LONG, after_long_help = help::GITHUB_EXAMPLES)]
     GitHub(GitHubArgs),
+
+    /// Review and apply agent triage proposals for GitHub-linked Tasks.
+    #[command(long_about = help::TRIAGE_LONG, after_long_help = help::TRIAGE_EXAMPLES)]
+    Triage(TriageArgs),
 }
 
 #[derive(Debug, Args)]
@@ -753,6 +757,47 @@ pub struct SetupArgs {
     /// Remove Orbit-managed sections, files, and hooks.
     #[arg(long)]
     pub remove: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TriageArgs {
+    #[command(subcommand)]
+    pub command: TriageCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TriageCommand {
+    /// Load task context, project guidance, and allowed triage fields.
+    #[command(after_long_help = help::TRIAGE_CONTEXT_EXAMPLES)]
+    Context {
+        #[arg(value_name = "TASK")]
+        task: String,
+    },
+    /// Validate a proposal JSON file and preview Orbit metadata changes.
+    #[command(after_long_help = help::TRIAGE_REVIEW_EXAMPLES)]
+    Review(TriageReviewArgs),
+    /// Apply an approved proposal to Orbit (not GitHub).
+    #[command(after_long_help = help::TRIAGE_APPLY_EXAMPLES)]
+    Apply(TriageApplyArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TriageReviewArgs {
+    #[arg(value_name = "TASK")]
+    pub task: String,
+    #[arg(long, value_name = "PATH")]
+    pub proposal_file: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct TriageApplyArgs {
+    #[arg(value_name = "TASK")]
+    pub task: String,
+    #[arg(long, value_name = "PATH")]
+    pub proposal_file: PathBuf,
+    /// Required after reviewing the preview; writes Orbit metadata only.
+    #[arg(long)]
+    pub approve: bool,
 }
 
 #[derive(Debug, Args)]

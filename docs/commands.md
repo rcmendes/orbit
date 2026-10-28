@@ -59,6 +59,7 @@ the multi-repository model.
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
 | Recover or maintain the board | `orbit doctor`, `orbit sync` |
 | Link GitHub Issues (optional) | `orbit github` — see [github-sync.md](./github-sync.md) |
+| Triage linked Tasks | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
 
 ## Set up a Board
 
@@ -769,6 +770,20 @@ orbit github setup
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
+```
+
+### `orbit triage` — agent review and apply
+
+Reviews GitHub-linked Tasks only. Agents draft a proposal JSON file, preview changes
+with `review`, apply approved metadata to Orbit with `apply --approve`, then publish
+with `orbit github sync`. Does not modify GitHub-owned title, body, or status. See
+[agents/triage-workflow.md](./agents/triage-workflow.md).
+
+```bash
+orbit triage context orb-a7b2c9 --json
+orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
+orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json
+orbit github sync orb-a7b2c9 --direction push --apply
 ```
 
 ## Scenarios

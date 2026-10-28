@@ -18,15 +18,15 @@ depends_on:
 parent: orbit-ytwjhm
 checkpoint:
   by: impl-ryfxx0
-  at: 2026-10-28T16:31:51.649631Z
-  progress: Implemented default GitHub-provider capability, upgrade error/test, release metadata verification, fixture-driven cross-platform smoke, and release/version/basic-mode docs. cargo test --all, no-default capability tests, release smoke, dist plan/generate check, and setup check pass; checking/committing then merging latest integration.
-  next: Commit reviewed changes, merge latest integrate/orbit-ytwjhm, resolve conflicts preserving feature, rerun verification, then close task.
+  at: 2026-10-28T16:32:56.716763Z
+  progress: 'Implementation and docs are committed (47fd12b + afb5630); verified broad tests, no-default capability checks, artifact smoke, dist metadata, and setup template. Final action: merge latest integrate/orbit-ytwjhm, resolve conflicts if any, then rerun checks.'
+  next: Merge latest integration branch into ticket branch; preserve both changes and verify clean status before reporting.
 area: release
 claimed_by: impl-ryfxx0
 claimed_at: 2026-10-28T16:21:24.532555Z
-lease_until: 2026-10-28T17:01:51.640390Z
+lease_until: 2026-10-28T17:02:48.542612Z
 created_at: 2026-10-28T15:24:14.709930Z
-updated_at: 2026-10-28T16:31:51.649631Z
+updated_at: 2026-10-28T16:32:56.716763Z
 ---
 
 ## Goal

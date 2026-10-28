@@ -11,15 +11,15 @@ depends_on:
 parent: orbit-f1hqst
 checkpoint:
   by: rodrigomendes
-  at: 2026-10-28T23:30:06.517317Z
-  progress: Implemented the persistent Remote Issue catalog, CLI/MCP browse and inspect commands, per-repository failure retention, and fixture-backed tests; full tests and clippy pass.
-  next: Commit implementation and docs, review docs after commit, then merge latest integration tip.
+  at: 2026-10-28T23:31:24.691693Z
+  progress: Committed catalog implementation and docs (9707cb5, 5e8c908); full tests and clippy pass. Merged current integration tip 4fe3bbd; ticket remains open/in progress.
+  next: Ready for review; do not close ticket.
 area: board
 claimed_by: rodrigomendes
 claimed_at: 2026-10-28T23:20:52.206844Z
-lease_until: 2026-10-29T00:00:06.452805Z
+lease_until: 2026-10-29T00:01:24.658374Z
 created_at: 2026-10-28T22:47:50.427118Z
-updated_at: 2026-10-28T23:30:06.517317Z
+updated_at: 2026-10-28T23:31:24.691693Z
 ---
 
 ## Goal

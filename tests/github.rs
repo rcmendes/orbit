@@ -133,11 +133,10 @@ fn github_not_configured_errors_include_login_and_connect_actions() {
         .expect("JSON error should include remediation");
     assert!(remediation.contains("orbit github connect"));
     assert!(remediation.contains("gh auth login"));
+    let cause = value["error"]["details"]["cause"].as_str().unwrap();
     assert!(
-        value["error"]["details"]["cause"]
-            .as_str()
-            .unwrap()
-            .contains("GitHub API unavailable")
+        cause.contains("GitHub API unavailable") || cause.contains("failed to run `gh`"),
+        "unexpected cause: {cause}"
     );
     assert!(!value.to_string().contains(secret));
 

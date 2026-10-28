@@ -806,8 +806,7 @@ the `gh` CLI, and organization Issue Fields. Full setup and semantics are in
 [github-sync.md](./github-sync.md).
 
 ```bash
-orbit github repo link acme/widget
-orbit github setup
+orbit github connect
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan

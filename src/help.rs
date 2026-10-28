@@ -836,15 +836,24 @@ number. Sync is explicit, detects field-level conflicts, and never maps GitHub
 assignees to Orbit claims.
 
 Organization-level Issue Fields carry Orbit-owned area and verification values.
-Run setup after editing config.toml.";
+Run `orbit github connect` to detect the origin repository, check `gh` access,
+validate those fields, and configure the Board without editing config.toml.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
-  orbit github repo link acme/widget
-  orbit github setup
+  orbit github connect
+  orbit github connect --json
   orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
+
+pub const GITHUB_CONNECT_EXAMPLES: &str = "\
+Examples:
+  # Detect origin, authenticate with gh, and configure an organization-owned repo
+  orbit github connect
+
+  # Inspect the detected owner, fields, and next action as JSON
+  orbit github connect --json";
 
 pub const GITHUB_SETUP_EXAMPLES: &str = "\
 Examples:

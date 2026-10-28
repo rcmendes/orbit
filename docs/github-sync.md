@@ -20,6 +20,10 @@ verification_name = "Verification"
 
 Run `orbit github setup` to resolve and store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to check configuration without writing ids.
 
+For a new Board, run `orbit github connect` from a checkout with a GitHub `origin`. It checks `gh auth status`, verifies repository access, detects whether the owner is an organization or a personal account, validates the organization fields, and writes the `[github]` organization, repository link, and field ids. It preserves other Board configuration and is safe to rerun. Use `orbit github connect --json` to inspect `owner_type`, `organization`, `repository`, `field_status`, `next_action`, and whether configuration changed.
+
+The current Issue Fields integration requires an organization-owned repository. For a personal-account repository, connect leaves configuration unchanged and reports these options: use an organization-owned repository, use `orbit github basic` when personal-account basic mode is available, or cancel. Missing `gh` authentication, repository access, or Issue Fields is reported with a remediation action.
+
 ## Link repositories
 
 Repositories are linked explicitly; Orbit does not bulk-import an entire repository.

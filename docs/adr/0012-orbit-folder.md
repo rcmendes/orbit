@@ -285,7 +285,10 @@ changing the Board's contents or Git storage model:
   stores paginated open and closed Issue summaries at
   `<workspace>/.orbit/cache/issues.json`. Pull requests are excluded; per-repo
   failures retain the prior snapshot. `list` filters cached summaries and
-  `inspect` fetches body/comments on demand. Remote Issues remain outside the
+  `inspect` fetches body/comments on demand. Explicit `import` previews selected
+  identities and then creates Linked Tasks or links selected Local Tasks when
+  applied; it preserves Orbit values on links, skips duplicate identities by
+  repository/number, and never writes to GitHub. Remote Issues remain outside the
   Task graph until explicitly imported.
 
 This path extension keeps Workspace metadata/cache out of the Board's Git

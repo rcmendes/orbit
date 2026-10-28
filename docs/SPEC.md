@@ -318,6 +318,33 @@ A repository owns one local Board. A child Repository inside a Workspace discove
 
 A Workspace is a normal folder, not a Git repository. Run `orbit init <workspace-root>` to create `<workspace-root>/.orbit/board` and reserve `<workspace-root>/.orbit/cache`. Repositories inside the Workspace discover the Board automatically, including across their Git boundary. Repositories outside it can join with `orbit link <workspace-root>`. `orbit init` does not clone repositories.
 
+### Workspace repository discovery
+
+`orbit workspace refresh` explicitly scans direct child directories of the
+Workspace. It considers only direct child Git repositories, reads their GitHub
+`origin` remotes, and checks repository access. Full mode uses the single
+`[github].organization` configured on the Workspace Board. It never creates
+Tasks or GitHub Issues. The rebuildable snapshot is stored at
+`<workspace>/.orbit/cache/repositories.json`.
+
+`orbit workspace status` reads only that snapshot: it does not scan directories
+or contact GitHub. New child repositories therefore appear after the next
+explicit refresh. `orbit workspace include OWNER/REPO` and `exclude OWNER/REPO`
+persist overrides in the Workspace Board's `[workspace]` config. A non-empty
+include list is an allowlist; exclusions take precedence, and the two override
+lists cannot contain the same repository.
+
+The status snapshot reports included and excluded repositories, first-time
+access failures (`inaccessible`), previously cached but unavailable repositories
+(`stale`), repositories no longer present (`removed`), unsupported owners,
+non-Git child directories, missing origins, and unsupported origin URLs. Stale
+and removed repository entries are retained; discovery does not detach or delete
+their cached data. JSON `data.repositories` entries include `repository`, `path`,
+`discovered`, `status`, `included`, `cached`, `origin`, `error`, and
+`last_checked_at`. The top-level data includes the configured `organization`,
+`last_refreshed_at`, and arrays for non-Git directories, missing origins, and
+unsupported origins.
+
 ### Slugs
 
 A Board has one slug. It is resolved from `DIR` when the Board is created; an empty Board can change it with `--slug`:
@@ -664,7 +691,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **M5 — one-command onboarding.** Idempotent `init`, harness detection and selection, shared-Board `link`/`unlink`, absolute-binary hooks, and `setup --check`. Implemented; v0.8.1 makes `init` pure and moves wiring behind the prompt or `setup`.
 
-**M6 — workspaces, SubTasks, and export.** Workspaces now use a DIR plus `link`; the standalone `orbit workspace` command was removed in v0.8.1. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
+**M6 — workspaces, SubTasks, and export.** Workspaces now use a DIR plus `link`; the former `orbit workspace <folder>` creation command was removed in v0.8.1. The current `orbit workspace` commands manage repository discovery only. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
 
 **v0.5.0 — structural Type.** Metadata-only `type`, `tree` family view, close candidates, parent progress fields, and label/type exclusions. Implemented.
 

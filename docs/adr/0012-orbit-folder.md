@@ -247,8 +247,10 @@ own resolution scope; a second `.orbit` in the same working tree returns
   short-lived bootstrap lock.
 - **ADR 0006:** the link pointer and absolute target remain, but the target is
   DIR. The only user-level Board is the opt-in `~/.orbit` fallback.
-- **ADR 0008:** replaced. There is no `orbit workspace` and no
-  `<workspace>/board`; a workspace is a DIR plus the repositories linked to it.
+- **ADR 0008:** replaced. The former `orbit workspace <folder>` creation
+  command and `<workspace>/board` layout are removed; `init DIR` creates the
+  current Board layout. The newer `orbit workspace status|refresh|include|exclude`
+  commands manage repository discovery only and do not create a Workspace.
 
 ## Workspace-root path extension
 
@@ -272,6 +274,13 @@ changing the Board's contents or Git storage model:
   `.orbit` entry. A Board directly at `<workspace>/.orbit` is a legacy layout;
   initialization reports its explicit `--dir` compatibility path and refuses to
   move or shadow it under the new path.
+- `orbit workspace refresh` scans direct child Git repositories, reads GitHub
+  `origin` remotes, and checks access within the organization in
+  `[github].organization`. It writes the rebuildable inventory to
+  `<workspace>/.orbit/cache/repositories.json`; `orbit workspace status` reads
+  only that last explicit snapshot. Include/exclude overrides live in
+  `[workspace]` on the Board and do not create Tasks or Issues. Unavailable and
+  removed repository entries stay cached until explicit detachment.
 
 This path extension keeps Workspace metadata/cache out of the Board's Git
 repository, preserves child-local data, and makes the Workspace root the stable

@@ -877,6 +877,26 @@ Examples:
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
 
+pub const WORKSPACE_LONG: &str = "\
+Manage repositories that belong to the current Workspace.
+
+`refresh` explicitly scans direct child directories, reads GitHub origins,
+checks repository access, and updates the local Workspace catalog. `status` is
+read-only and reports the last refresh; it does not poll GitHub or scan for new
+folders. Full mode uses the organization in `[github].organization`.
+
+Repository inclusion and exclusion are stored in the Workspace Board. Excluding
+a repository does not delete its cached catalog data. Discovery never creates
+Orbit Tasks or GitHub Issues.
+";
+
+pub const WORKSPACE_EXAMPLES: &str = "\
+Examples:
+  orbit workspace refresh
+  orbit workspace status
+  orbit workspace exclude acme/legacy
+  orbit workspace include acme/service";
+
 pub const GITHUB_STATUS_EXAMPLES: &str = "\
 Examples:
   # Check GitHub configuration and the next recommended action

@@ -459,15 +459,22 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | --- | --- | --- |
 | Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; `github status` diagnoses provider health without changing the Board or GitHub. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `workspace status` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; `github status` diagnoses provider health without changing the Board or GitHub; `workspace status` reports the last repository refresh without scanning or polling. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
-| Maintenance | `doctor`, `sync`, `github`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly synchronize GitHub Issues, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
+| Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly synchronize GitHub Issues, discover Workspace repositories and store overrides, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Board layouts and initialization
 
 ### Topology
 
 A Workspace is an ordinary, non-Git folder containing repositories and one Board. Its Board is the standalone repository at `<workspace>/.orbit/board`; the rebuildable catalog cache is separate at `<workspace>/.orbit/cache`. Child repositories discover the Workspace Board by walking above their Git boundary and need no link. Repositories outside the Workspace can link its root; the link pointer remains in each Repository's Git common directory. The repository-local Board remains `<repository>/.orbit`, and the global Board at `~/.orbit` is the last discovery fallback.
+
+`src/workspace.rs` owns the explicit repository inventory. `workspace refresh`
+scans one level of child directories and validates GitHub `origin` ownership and
+access against `[github].organization`; the resulting snapshot is outside the
+Board Git repository. `workspace status` reads that snapshot without network or
+filesystem discovery. Stale and removed entries remain in the cache, and the
+command never imports Issues as Tasks.
 
 ```mermaid
 flowchart LR

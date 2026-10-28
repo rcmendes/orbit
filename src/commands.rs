@@ -84,7 +84,14 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Doctor(args) => crate::doctor::run(dir.as_deref(), args),
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
         Command::GitHub(args) => {
-            if matches!(&args.command, crate::cli::GitHubCommand::Status) {
+            if matches!(
+                &args.command,
+                crate::cli::GitHubCommand::Status
+                    | crate::cli::GitHubCommand::Create(crate::cli::GitHubCreateArgs {
+                        apply: false,
+                        ..
+                    })
+            ) {
                 return with_board_read_only(dir.as_deref(), |board| {
                     crate::github::commands::run(board, args)
                 });

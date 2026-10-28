@@ -872,7 +872,8 @@ orbit github setup
 orbit github setup --create-fields       # explicitly create missing org Issue Fields
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42  # legacy form
-orbit github create orb-a7b2c9                 # uses the only linked repository
+orbit github create orb-a7b2c9                 # preview only; uses the only linked repository
+orbit github create orb-a7b2c9 --apply         # create and link after review
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
 ```

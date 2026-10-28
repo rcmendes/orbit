@@ -523,15 +523,22 @@ fn basic_mode_rejects_create_when_task_has_structured_metadata() {
             id.as_str(),
             "--repo",
             "personal/widget",
+            "--apply",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
-    assert!(value["error"]["message"].as_str().unwrap().contains("area"));
+    assert_eq!(status, 0);
+    assert_eq!(value["data"]["failure_count"], 1);
+    assert_eq!(value["data"]["tasks"][0]["success"], false);
     assert!(
-        value["error"]["message"]
+        value["data"]["tasks"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("area")
+    );
+    assert!(
+        value["data"]["tasks"][0]["error"]
             .as_str()
             .unwrap()
             .contains("verification")
@@ -554,17 +561,21 @@ fn basic_mode_creates_personal_repository_issue_without_setup() {
             id.as_str(),
             "--repo",
             "personal/widget",
+            "--apply",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(created["data"]["issue"]["title"], "Personal issue");
     assert_eq!(
-        created["data"]["issue"]["labels"],
+        created["data"]["tasks"][0]["issue"]["title"],
+        "Personal issue"
+    );
+    assert_eq!(
+        created["data"]["tasks"][0]["issue"]["labels"],
         serde_json::json!(["bug"])
     );
-    assert!(created["data"]["issue"]["area"].is_null());
-    assert!(created["data"]["issue"]["verification"].is_null());
+    assert!(created["data"]["tasks"][0]["issue"]["area"].is_null());
+    assert!(created["data"]["tasks"][0]["issue"]["verification"].is_null());
 }
 
 #[test]
@@ -1133,7 +1144,7 @@ fn github_adopt_rejects_malformed_urls_and_mismatched_identifiers() {
 }
 
 #[test]
-fn github_create_defaults_to_only_linked_repository() {
+fn github_create_applies_to_only_linked_repository() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
     let repo = TestRepo::new();
@@ -1142,10 +1153,195 @@ fn github_create_defaults_to_only_linked_repository() {
     let id = repo.add("Create issue", &[]);
 
     let created = repo.ok_json_with_env(
+        &["github", "create", id.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(created["data"]["tasks"][0]["github"]["repo"], "acme/widget");
+}
+
+#[test]
+fn github_create_previews_issue_without_writing_until_apply() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    let id = repo.add(
+        "Preview issue",
+        &["--label", "bug", "--body", "Description for GitHub"],
+    );
+    let task_before = repo.read_task(&id);
+    let fixture_before = fs::read(&fixture).unwrap();
+
+    let preview = repo.ok_json_with_env(
         &["github", "create", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(created["data"]["github"]["repo"], "acme/widget");
+
+    assert_eq!(preview["data"]["apply_required"], true);
+    assert_eq!(preview["data"]["count"], 1);
+    assert_eq!(preview["data"]["preview_count"], 1);
+    assert!(preview["data"]["success_count"].is_null());
+    assert_eq!(preview["data"]["tasks"][0]["task"], id);
+    assert_eq!(preview["data"]["tasks"][0]["repository"], "acme/widget");
+    assert_eq!(preview["data"]["tasks"][0]["title"], "Preview issue");
+    assert_eq!(preview["data"]["tasks"][0]["labels"][0], "bug");
+    assert_eq!(fs::read(&fixture).unwrap(), fixture_before);
+    assert_eq!(repo.read_task(&id), task_before);
+
+    let human = repo.orbit_with_env(
+        &["github", "create", &id],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(human.status.success());
+    let human = String::from_utf8_lossy(&human.stdout);
+    for expected in [
+        "acme/widget",
+        "Preview issue",
+        "Description for GitHub",
+        "Labels: bug",
+        "Task status: todo",
+        "GitHub Issue state: open",
+        "Apply with --apply",
+    ] {
+        assert!(human.contains(expected), "missing {expected:?} in {human}");
+    }
+}
+
+#[test]
+fn github_create_batches_report_partial_failures_and_persist_successful_links() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    data["create_failures"] = serde_json::json!({
+        "acme/widget#Will fail": "fixture rejected this Issue"
+    });
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    let created = repo.add("Will succeed", &["--label", "enhancement"]);
+    let failed = repo.add("Will fail", &[]);
+
+    let result = repo.ok_json_with_env(
+        &["github", "create", &created, &failed, "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+
+    assert_eq!(result["data"]["success_count"], 1);
+    assert_eq!(result["data"]["failure_count"], 1);
+    assert_eq!(result["data"]["tasks"][0]["success"], true);
+    assert_eq!(
+        result["data"]["tasks"][0]["issue"]["labels"][0],
+        "enhancement"
+    );
+    assert_eq!(result["data"]["tasks"][1]["success"], false);
+    assert_eq!(
+        result["data"]["tasks"][1]["error"],
+        "fixture rejected this Issue"
+    );
+
+    let created_task = repo.read_task(&created);
+    assert!(created_task.contains("repo: acme/widget"));
+    assert!(created_task.contains("last_sync:"));
+    assert!(!repo.read_task(&failed).contains("github:"));
+    let fixture: serde_json::Value = serde_json::from_slice(&fs::read(fixture).unwrap()).unwrap();
+    assert_eq!(fixture["issues"].as_object().unwrap().len(), 2);
+}
+
+#[test]
+fn github_create_includes_configured_issue_fields_in_the_created_issue() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    set_configured_issue_field_ids(&repo);
+    let id = repo.add(
+        "Issue with fields",
+        &["--area", "cli", "--verification", "cargo test"],
+    );
+
+    let result = repo.ok_json_with_env(
+        &["github", "create", &id, "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+
+    assert_eq!(result["data"]["success_count"], 1);
+    assert_eq!(result["data"]["tasks"][0]["area"], "cli");
+    assert_eq!(result["data"]["tasks"][0]["verification"], "cargo test");
+    assert_eq!(result["data"]["tasks"][0]["issue"]["area"], "cli");
+    assert_eq!(
+        result["data"]["tasks"][0]["issue"]["verification"],
+        "cargo test"
+    );
+}
+
+#[test]
+fn github_create_requires_terminal_opt_in_and_closes_opted_in_tasks() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    let id = repo.add("Terminal export", &[]);
+    repo.ok_json(&["done", &id, "--by", "test", "--json"]);
+
+    let refused = repo.ok_json_with_env(
+        &["github", "create", &id, "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(refused["data"]["failure_count"], 1);
+    assert!(
+        refused["data"]["tasks"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("--include-terminal")
+    );
+    let before: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(before["issues"].as_object().unwrap().len(), 1);
+
+    let result = repo.ok_json_with_env(
+        &[
+            "github",
+            "create",
+            &id,
+            "--include-terminal",
+            "--apply",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(result["data"]["success_count"], 1);
+    assert_eq!(result["data"]["tasks"][0]["issue"]["state"], "closed");
+    assert!(repo.read_task(&id).contains("repo: acme/widget"));
+    let task = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(task["data"]["status"], "done");
+}
+
+#[test]
+fn github_create_retry_rejects_already_linked_task_without_duplicate_issue() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    let id = repo.add("Create once", &[]);
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    let first = repo.ok_json_with_env(&["github", "create", &id, "--apply", "--json"], &env);
+    assert_eq!(first["data"]["success_count"], 1);
+    let second = repo.ok_json_with_env(&["github", "create", &id, "--apply", "--json"], &env);
+    assert_eq!(second["data"]["failure_count"], 1);
+    assert!(
+        second["data"]["tasks"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("orbit github sync")
+    );
+    let fixture: serde_json::Value = serde_json::from_slice(&fs::read(fixture).unwrap()).unwrap();
+    assert_eq!(fixture["issues"].as_object().unwrap().len(), 2);
 }
 
 #[test]
@@ -1179,11 +1375,12 @@ fn github_create_requires_repo_when_selection_is_ambiguous_or_missing() {
             id.as_str(),
             "--repo",
             "acme/other",
+            "--apply",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(created["data"]["github"]["repo"], "acme/other");
+    assert_eq!(created["data"]["tasks"][0]["github"]["repo"], "acme/other");
 }
 
 #[test]

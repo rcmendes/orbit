@@ -36,6 +36,8 @@ pub struct CreateIssueInput {
     pub labels: Vec<String>,
     pub area: Option<String>,
     pub verification: Option<String>,
+    pub organization: Option<String>,
+    pub issue_fields: IssueFieldConfig,
 }
 
 pub struct UpdateIssueInput {
@@ -234,18 +236,54 @@ impl GitHubClient for GhCliClient {
     }
 
     fn create_issue(&self, repo: &str, input: &CreateIssueInput) -> Result<IssueSnapshot> {
-        if input.area.is_some() || input.verification.is_some() {
-            return Err(OrbitError::new(
-                code::GITHUB_SETUP_INCOMPLETE,
-                "issue field values require `orbit github setup` before create/sync",
-            ));
-        }
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "title": input.title,
             "body": input.body,
             "labels": input.labels,
-        })
-        .to_string();
+        });
+        let mut field_values = Vec::new();
+        if input.area.is_some() || input.verification.is_some() {
+            if input.area.is_some() && input.issue_fields.area_id.is_none()
+                || input.verification.is_some() && input.issue_fields.verification_id.is_none()
+            {
+                return Err(OrbitError::new(
+                    code::GITHUB_SETUP_INCOMPLETE,
+                    "issue field values require resolved ids from `orbit github setup`",
+                ));
+            }
+            let org = input
+                .organization
+                .as_deref()
+                .filter(|org| !org.is_empty())
+                .ok_or_else(|| {
+                    OrbitError::new(
+                        code::GITHUB_SETUP_INCOMPLETE,
+                        "issue field values require `github.organization` and `orbit github setup`",
+                    )
+                })?;
+            let fields = list_rest_issue_fields(org)?;
+            if let Some(area) = input.area.as_deref() {
+                let field_id = rest_issue_field_id(&fields, &input.issue_fields.area_name).ok_or_else(|| {
+                    OrbitError::new(
+                        code::GITHUB_SETUP_INCOMPLETE,
+                        format!("organization `{org}` is missing Issue Field `{}`; run `orbit github setup`", input.issue_fields.area_name),
+                    )
+                })?;
+                field_values.push(serde_json::json!({ "field_id": field_id, "value": area }));
+            }
+            if let Some(verification) = input.verification.as_deref() {
+                let field_id = rest_issue_field_id(&fields, &input.issue_fields.verification_name).ok_or_else(|| {
+                    OrbitError::new(
+                        code::GITHUB_SETUP_INCOMPLETE,
+                        format!("organization `{org}` is missing Issue Field `{}`; run `orbit github setup`", input.issue_fields.verification_name),
+                    )
+                })?;
+                field_values
+                    .push(serde_json::json!({ "field_id": field_id, "value": verification }));
+            }
+            payload["issue_field_values"] = serde_json::Value::Array(field_values);
+        }
+        let payload = payload.to_string();
         let path = format!("/repos/{repo}/issues");
         let output = gh_api_with_input(
             &["api", &path, "-X", "POST", "--input", "-"],
@@ -293,6 +331,30 @@ impl GitHubClient for GhCliClient {
         )?;
         parse_rest_issue(repo, &output)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct RestIssueField {
+    id: u64,
+    name: String,
+}
+
+fn list_rest_issue_fields(org: &str) -> Result<Vec<RestIssueField>> {
+    let path = format!("/orgs/{org}/issue-fields");
+    let output = gh_api(&["api", &path])?;
+    serde_json::from_slice(&output).map_err(|error| {
+        OrbitError::new(
+            code::GITHUB_SETUP_INCOMPLETE,
+            format!("invalid GitHub organization Issue Fields response: {error}"),
+        )
+    })
+}
+
+fn rest_issue_field_id(fields: &[RestIssueField], name: &str) -> Option<u64> {
+    fields
+        .iter()
+        .find(|field| field.name.eq_ignore_ascii_case(name))
+        .map(|field| field.id)
 }
 
 fn validate_org_admin(org: &str) -> Result<()> {
@@ -584,6 +646,8 @@ struct FixtureStore {
     created_fields: Vec<serde_json::Value>,
     #[serde(default)]
     issues: HashMap<String, IssueSnapshot>,
+    #[serde(default)]
+    create_failures: HashMap<String, String>,
     #[serde(skip)]
     fixture_path: PathBuf,
 }
@@ -754,6 +818,16 @@ impl GitHubClient for FixtureClient {
 
     fn create_issue(&self, repo: &str, input: &CreateIssueInput) -> Result<IssueSnapshot> {
         let mut store = self.store.lock().expect("fixture lock");
+        if let Some(message) = store
+            .create_failures
+            .get(&format!("{repo}#{}", input.title))
+            .or_else(|| store.create_failures.get(repo))
+        {
+            return Err(OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                message.clone(),
+            ));
+        }
         let number = store.issues.len() as u64 + 1;
         let snapshot = IssueSnapshot {
             repo: repo.to_string(),
@@ -773,6 +847,7 @@ impl GitHubClient for FixtureClient {
         store
             .issues
             .insert(format!("{repo}#{number}"), snapshot.clone());
+        persist_fixture(&store)?;
         Ok(snapshot)
     }
 
@@ -809,8 +884,17 @@ impl GitHubClient for FixtureClient {
         }
         issue.updated_at = Utc::now();
         store.issues.insert(key, issue.clone());
+        persist_fixture(&store)?;
         Ok(issue)
     }
+}
+
+fn persist_fixture(store: &FixtureStore) -> Result<()> {
+    let serialized = serde_json::to_vec_pretty(store).map_err(|error| {
+        OrbitError::config(format!("could not serialize GitHub fixture: {error}"))
+    })?;
+    std::fs::write(&store.fixture_path, serialized)
+        .map_err(|error| OrbitError::io("write GitHub fixture", error))
 }
 
 fn fixture_created_field_id(name: &str, area: bool) -> String {

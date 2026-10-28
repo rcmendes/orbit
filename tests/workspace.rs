@@ -180,6 +180,45 @@ fn refresh_discovers_direct_github_children_and_reports_repository_states() {
 }
 
 #[test]
+fn github_create_infers_the_single_included_workspace_repository() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    let github_fixture = repo.home().join("github.json");
+    std::fs::write(
+        &github_fixture,
+        json!({
+            "repositories": { "acme/api": { "owner_type": "Organization" } },
+            "issues": {}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+    let task = repo.ok_json_in(&workspace, &["add", "Workspace export", "--json"]);
+    let id = task["data"]["id"].as_str().unwrap();
+
+    let (status, result) = run_workspace(
+        &repo,
+        &workspace,
+        &["github", "create", id, "--apply"],
+        &github_fixture,
+    );
+
+    assert_eq!(status, 0, "{result}");
+    assert_eq!(result["data"]["tasks"][0]["repository"], "acme/api");
+    assert_eq!(result["data"]["tasks"][0]["success"], true);
+    let task = repo.ok_json_in(&workspace, &["show", id, "--json"]);
+    assert_eq!(task["data"]["github"]["repo"], "acme/api");
+}
+
+#[test]
 fn refresh_marks_missing_repositories_removed_and_finds_new_children_explicitly() {
     let repo = TestRepo::new();
     let (_workspace_dir, workspace) = init_workspace(&repo);

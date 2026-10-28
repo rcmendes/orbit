@@ -27,9 +27,11 @@ orbit github sync orb-a7b2c9 --apply
 
 `connect` detects the checkout's `origin`. Organization-owned repositories
 configure full mode when their Issue Fields are ready. For personal-account
-repositories, it leaves the Board unchanged and reports the basic-mode steps;
-append the [basic-mode configuration](#basic-mode-personal-repositories) before
-creating or syncing Issues. Basic mode does not sync `area` or `verification`.
+repositories, it leaves the Board unchanged and reports the exact `[github]`
+entries to add or merge into the Board's `config.toml`, preserving other linked
+repositories; apply the
+[basic-mode configuration](#basic-mode-personal-repositories) before creating
+or syncing Issues. Basic mode does not sync `area` or `verification`.
 
 ## Provider modes
 
@@ -101,12 +103,16 @@ create and push sync can publish `area` and `verification`.
 `orbit github connect` reads the current checkout's GitHub `origin`, checks
 authentication and access, and detects whether the owner is an organization or a
 personal account. For a personal-account repository it leaves configuration
-unchanged and reports next steps; manually configure basic mode to use it. For
-an organization repository, it validates and stores the repository and Issue
-Field configuration. Missing authentication, repository access, or fields are
-reported with remediation actions. JSON output includes `owner_type`,
-`organization`, `repository`, `field_status`, `next_action`, and whether the
-configuration changed.
+unchanged and reports the exact `[github]` entries for the Board's `config.toml`
+to configure basic mode; merge them with existing settings and preserve other
+linked repositories. For an organization repository, it validates and
+stores the repository and Issue Field configuration. Missing authentication,
+repository access, or fields are reported with remediation actions. JSON output
+includes `owner_type`, `organization`, `repository`, `field_status`,
+`next_action`, and whether the configuration changed. For a personal-account
+origin, it also includes `next_actions` and `remediation` with those entries and
+a link to the basic-mode setup instructions; human output shows the same
+guidance. No configuration is changed by this response.
 
 For manual full-mode configuration, run `orbit github setup` to resolve and
 store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to

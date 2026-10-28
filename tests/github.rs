@@ -754,9 +754,30 @@ fn github_connect_personal_owner_reports_choices_without_changing_config() {
         result["data"]["next_action"],
         "choose_personal_account_path"
     );
-    assert_eq!(result["data"]["next_actions"].as_array().unwrap().len(), 3);
+    let remediation = result["data"]["remediation"]
+        .as_str()
+        .expect("personal-account guidance should include remediation");
+    assert!(remediation.contains("config.toml"));
+    assert!(remediation.contains("preserve any other linked repositories"));
+    assert!(remediation.contains("mode = \"basic\""));
+    assert!(remediation.contains("repositories = [\"riley/widget\"]"));
+    assert!(remediation.contains("orbit github status"));
+    assert!(remediation.contains("docs/github-sync.md#basic-mode-personal-repositories"));
+    assert!(!remediation.contains("orbit github basic"));
+    let next_actions = result["data"]["next_actions"].as_array().unwrap();
+    assert_eq!(next_actions.len(), 3);
+    assert!(next_actions[1].as_str().unwrap().contains(remediation));
     let config = fs::read_to_string(repo.board_path().join("config.toml")).unwrap();
     assert!(!config.contains("[github]"));
+
+    let human = repo.orbit_with_env(
+        &["github", "connect"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(human.status.success());
+    let human = String::from_utf8_lossy(&human.stdout);
+    assert!(human.contains(remediation));
+    assert!(!human.contains("orbit github basic"));
 }
 
 #[test]
@@ -1464,4 +1485,58 @@ fn github_status_handles_basic_mode_without_issue_fields() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(doctor["data"]["healthy"], true);
+}
+
+#[test]
+fn github_status_and_doctor_report_the_same_missing_scopes_in_each_mode() {
+    for (mode, scopes, expected_missing) in [
+        ("full", "'repo'", "read:org"),
+        ("basic", "'read:org'", "repo"),
+    ] {
+        let fixture_dir = tempfile::tempdir().unwrap();
+        let fixture = write_status_fixture(&fixture_dir);
+        let mut data: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+        data["auth_message"] = serde_json::json!(format!(
+            "Logged in to github.com account agent (keyring)\nToken scopes: {scopes}"
+        ));
+        fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+
+        let repo = TestRepo::new();
+        repo.init();
+        if mode == "basic" {
+            write_basic_github_config(&repo);
+        } else {
+            write_github_config(&repo);
+        }
+
+        let status = repo.ok_json_with_env(
+            &["github", "status", "--json"],
+            &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+        );
+        assert_eq!(
+            status["data"]["auth"]["missing_scopes"],
+            serde_json::json!([expected_missing]),
+            "status should apply the {mode} mode scope rules"
+        );
+
+        let (exit, doctor) = repo.json_with_env(
+            &["doctor", "--json"],
+            &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+        );
+        assert_eq!(exit, 1);
+        let issue = doctor["data"]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|issue| issue["code"] == "GITHUB_SCOPES_MISSING")
+            .unwrap_or_else(|| panic!("doctor should report the missing scope in {mode} mode"));
+        assert!(
+            issue["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected_missing),
+            "doctor should report {expected_missing} in {mode} mode: {issue}"
+        );
+    }
 }

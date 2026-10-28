@@ -54,20 +54,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     } else {
         auth.scopes.clone()
     };
-    let required_scopes: &[&str] = if basic_mode {
-        &["repo"]
-    } else {
-        &["read:org", "repo"]
-    };
-    let missing_scopes: Vec<_> = if scopes.is_empty() {
-        Vec::new()
-    } else {
-        required_scopes
-            .iter()
-            .filter(|required| !scopes.iter().any(|scope| scope == **required))
-            .copied()
-            .collect()
-    };
+    let (required_scopes, missing_scopes) = github_scope_status(basic_mode, &scopes);
 
     let mut issues = Vec::<Value>::new();
     if !configured {
@@ -436,6 +423,31 @@ pub(crate) fn parse_auth_scopes(message: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn github_scope_status(
+    basic_mode: bool,
+    scopes: &[String],
+) -> (&'static [&'static str], Vec<&'static str>) {
+    const BASIC_REQUIRED_SCOPES: &[&str] = &["repo"];
+    const FULL_REQUIRED_SCOPES: &[&str] = &["read:org", "repo"];
+
+    let required_scopes = if basic_mode {
+        BASIC_REQUIRED_SCOPES
+    } else {
+        FULL_REQUIRED_SCOPES
+    };
+    let missing_scopes = if scopes.is_empty() {
+        Vec::new()
+    } else {
+        required_scopes
+            .iter()
+            .filter(|required| !scopes.iter().any(|scope| scope == **required))
+            .copied()
+            .collect()
+    };
+
+    (required_scopes, missing_scopes)
+}
+
 pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     let github = &board.config.github;
     if !github.is_enabled() {
@@ -466,24 +478,16 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     } else {
         auth.scopes
     };
-    if !scopes.is_empty() {
-        let required_scopes: &[&str] = if github.mode.is_basic() {
-            &["repo"]
-        } else {
-            &["read:org", "repo"]
-        };
-        let missing: Vec<_> = required_scopes
-            .iter()
-            .filter(|required| !scopes.iter().any(|scope| scope == **required))
-            .copied()
-            .collect();
-        if !missing.is_empty() {
-            issues.push(crate::graph::Issue::new(
-                "GITHUB_SCOPES_MISSING",
-                None,
-                format!("GitHub token is missing scopes: {}", missing.join(", ")),
-            ));
-        }
+    let (_, missing_scopes) = github_scope_status(github.mode.is_basic(), &scopes);
+    if !missing_scopes.is_empty() {
+        issues.push(crate::graph::Issue::new(
+            "GITHUB_SCOPES_MISSING",
+            None,
+            format!(
+                "GitHub token is missing scopes: {}",
+                missing_scopes.join(", ")
+            ),
+        ));
     }
     if !github.mode.is_basic() && github.organization.is_none() {
         issues.push(crate::graph::Issue::new(
@@ -760,6 +764,9 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
     };
 
     if repository.owner_type.eq_ignore_ascii_case("user") {
+        let remediation = format!(
+            "To use `{repo}` in basic mode, edit the Board's `config.toml` and add or merge these settings (preserve any other linked repositories):\n\n[github]\nmode = \"basic\"\nrepositories = [\"{repo}\"]\n\nThen run `orbit github status`. See `docs/github-sync.md#basic-mode-personal-repositories`."
+        );
         return Ok(connect_blocked(
             json!({
                 "repository": repo,
@@ -769,12 +776,13 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
                 "next_action": "choose_personal_account_path",
                 "next_actions": [
                     "Use an organization-owned GitHub repository to enable Issue Fields.",
-                    "Use `orbit github basic` when personal-account basic mode is available.",
+                    remediation,
                     "Cancel and leave this Board unchanged."
                 ],
+                "remediation": remediation,
             }),
             format!(
-                "`{repo}` is owned by a personal account. Organization Issue Fields are unavailable; use an organization-owned repository, use basic mode when available, or cancel. No configuration was changed."
+                "`{repo}` is owned by a personal account. Organization Issue Fields are unavailable.\n{remediation}\nNo configuration was changed."
             ),
         ));
     }

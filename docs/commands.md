@@ -808,7 +808,9 @@ the `gh` CLI, and organization Issue Fields. Full setup and semantics are in
 ```bash
 orbit github repo link acme/widget
 orbit github setup
-orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
+orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
+orbit github adopt orb-a7b2c9 --repo acme/widget --number 42  # legacy form
+orbit github create orb-a7b2c9                 # uses the only linked repository
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
 ```

@@ -118,9 +118,10 @@ fn cmd_repo_unlink(board: &Board, args: GitHubRepoLinkArgs) -> Result<crate::out
 }
 
 fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::CommandOutput> {
-    board.config.github.require_linked_repo(&args.repo)?;
+    let (repo, number) = resolve_adopt_identifier(&args)?;
+    board.config.github.require_linked_repo(&repo)?;
     let client = client_from_env()?;
-    let issue = client.get_issue(&args.repo, args.number)?;
+    let issue = client.get_issue(&repo, number)?;
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let task = graph.get(&args.task)?.clone();
     if task.github_link().is_some() {
@@ -130,12 +131,12 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
         )));
     }
     let mut task = task;
-    task.front.github = Some(GitHubLink::new(args.repo.clone(), args.number));
+    task.front.github = Some(GitHubLink::new(repo.clone(), number));
     task.front.updated_at = Utc::now();
     apply_issue_to_task(&mut task, &issue)?;
     validate_orbit_metadata(&task)?;
     persist_task(board, &task, &format!("orbit: github adopt {}", task.id))?;
-    let human = format!("Adopted {}/#{} for {}", args.repo, args.number, task.id);
+    let human = format!("Adopted {repo}/#{number} for {}", task.id);
     Ok(crate::output::CommandOutput::new(
         json!({ "task": task.id, "github": task.front.github, "issue": issue }),
         human,
@@ -151,9 +152,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             args.task
         )));
     }
-    let repo = args
-        .repo
-        .ok_or_else(|| OrbitError::invalid_argument("--repo is required when creating an issue"))?;
+    let repo = select_create_repo(&board.config.github, args.repo.as_deref())?;
     board.config.github.require_linked_repo(&repo)?;
     let client = client_from_env()?;
     let issue = client.create_issue(
@@ -175,6 +174,91 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         json!({ "task": task.id, "github": task.front.github, "issue": issue }),
         format!("Created {}/#{} for {}", repo, issue.number, task.id),
     ))
+}
+
+fn resolve_adopt_identifier(args: &GitHubAdoptArgs) -> Result<(String, u64)> {
+    if let Some(url) = args.issue_url.as_deref() {
+        let (repo, number) = parse_issue_url(url)?;
+        if let Some(input_repo) = args.repo.as_deref() {
+            let input_repo = crate::github::GitHubConfig::normalize_repo(input_repo)?;
+            if !input_repo.eq_ignore_ascii_case(&repo) {
+                return Err(OrbitError::invalid_argument(format!(
+                    "repository `{input_repo}` does not match the repository `{repo}` in the GitHub Issue URL"
+                )));
+            }
+        }
+        if let Some(input_number) = args.number
+            && input_number != number
+        {
+            return Err(OrbitError::invalid_argument(format!(
+                "issue number {input_number} does not match issue number {number} in the GitHub Issue URL"
+            )));
+        }
+        return Ok((repo, number));
+    }
+
+    match (args.repo.as_deref(), args.number) {
+        (Some(repo), Some(number)) => {
+            Ok((crate::github::GitHubConfig::normalize_repo(repo)?, number))
+        }
+        _ => Err(OrbitError::invalid_argument(
+            "provide a GitHub Issue URL, or both --repo OWNER/REPO and --number NUMBER (example: `orbit github adopt TASK https://github.com/acme/widget/issues/42`)",
+        )),
+    }
+}
+
+fn parse_issue_url(url: &str) -> Result<(String, u64)> {
+    let invalid = || {
+        OrbitError::invalid_argument(format!(
+            "invalid GitHub Issue URL `{url}`; expected `https://github.com/OWNER/REPO/issues/NUMBER`"
+        ))
+    };
+    let (scheme, address) = url.split_once("://").ok_or_else(invalid)?;
+    if !scheme.eq_ignore_ascii_case("https") {
+        return Err(invalid());
+    }
+    let (host, path) = address.split_once('/').ok_or_else(invalid)?;
+    if !host.eq_ignore_ascii_case("github.com")
+        || path
+            .chars()
+            .any(|character| character.is_whitespace() || matches!(character, '?' | '#' | '\\'))
+    {
+        return Err(invalid());
+    }
+    let parts: Vec<_> = path.split('/').collect();
+    let parts = if parts.last() == Some(&"") {
+        &parts[..parts.len() - 1]
+    } else {
+        &parts[..]
+    };
+    if parts.len() != 4 || parts[2] != "issues" {
+        return Err(invalid());
+    }
+    let repo = crate::github::GitHubConfig::normalize_repo(&format!("{}/{}", parts[0], parts[1]))
+        .map_err(|_| invalid())?;
+    let number = parts[3].parse::<u64>().map_err(|_| invalid())?;
+    if number == 0 {
+        return Err(invalid());
+    }
+    Ok((repo, number))
+}
+
+fn select_create_repo(
+    config: &crate::github::GitHubConfig,
+    requested: Option<&str>,
+) -> Result<String> {
+    if let Some(repo) = requested {
+        return crate::github::GitHubConfig::normalize_repo(repo);
+    }
+    match config.repositories.as_slice() {
+        [repo] => crate::github::GitHubConfig::normalize_repo(repo),
+        [] => Err(OrbitError::invalid_argument(
+            "no GitHub repository is linked; link one with `orbit github repo link OWNER/REPO`, then create without --repo or pass --repo OWNER/REPO",
+        )),
+        _ => Err(OrbitError::invalid_argument(
+            "multiple GitHub repositories are linked; choose one with --repo OWNER/REPO",
+        )),
+    }
 }
 
 fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::CommandOutput> {

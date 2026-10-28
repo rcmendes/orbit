@@ -889,10 +889,15 @@ pub struct GitHubRepoLinkArgs {
 pub struct GitHubAdoptArgs {
     #[arg(value_name = "TASK")]
     pub task: String,
+    /// Standard GitHub Issue URL, for example https://github.com/acme/widget/issues/42.
+    #[arg(value_name = "GITHUB_ISSUE_URL")]
+    pub issue_url: Option<String>,
+    /// Repository for the legacy --repo/--number form, or to confirm the URL.
     #[arg(long, value_name = "OWNER/REPO")]
-    pub repo: String,
+    pub repo: Option<String>,
+    /// Issue number for the legacy --repo/--number form, or to confirm the URL.
     #[arg(long)]
-    pub number: u64,
+    pub number: Option<u64>,
 }
 
 #[derive(Debug, Args)]

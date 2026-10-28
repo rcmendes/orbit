@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.3 - 2026-10-28
+
+- Fixed live GitHub GraphQL calls to use `gh api graphql` and a complete query document. Organization Issue Field discovery and creation now work against the real GitHub API; the previous release only worked through the local fixture client.
+
 ## 0.9.2 - 2026-10-28
 
 - Fixed live GitHub organization Issue Field discovery. GitHub exposes the `IssueFields` union with concrete field types, so `orbit github setup` and `orbit github setup --create-fields` now query those concrete types instead of the non-existent `IssueField` type. This is required for organization-backed setup against the current GitHub GraphQL API.

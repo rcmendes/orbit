@@ -7,12 +7,17 @@ labels:
 - enhancement
 - ready-for-agent
 parent: orbit-ytwjhm
+checkpoint:
+  by: impl-2c9xqh
+  at: 2026-10-28T15:34:20.124428Z
+  progress: Implemented explicit GitHub basic mode, personal-repository create/adopt/sync behavior, structured-metadata rejection, and Triage label-only capability; focused GitHub tests pass.
+  next: Finish targeted Triage verification, run requested checks, inspect docs and diff, commit, then merge latest integrate/orbit-ytwjhm into the ticket branch.
 area: cli
 claimed_by: impl-2c9xqh
 claimed_at: 2026-10-28T15:27:21.098653Z
-lease_until: 2026-10-28T15:57:55.069241Z
+lease_until: 2026-10-28T16:04:20.096859Z
 created_at: 2026-10-28T15:23:46.609777Z
-updated_at: 2026-10-28T15:27:55.069241Z
+updated_at: 2026-10-28T15:34:20.124428Z
 ---
 
 ## Goal

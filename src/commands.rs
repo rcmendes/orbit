@@ -80,6 +80,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             .map(|()| crate::output::CommandOutput::new(Value::Null, "").with_silent()),
         Command::Doctor(args) => crate::doctor::run(dir.as_deref(), args),
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
+        Command::GitHub(args) => {
+            with_board(dir.as_deref(), true, |board| crate::github::commands::run(board, args))
+        }
     }
 }
 
@@ -981,6 +984,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
             waiting_on,
             area,
             verification,
+            github: None,
             claim: None,
             stray_claim_times: None,
             created_at: now,

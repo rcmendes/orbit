@@ -467,6 +467,7 @@ mod tests {
                 waiting_on: Some("vendor".to_string()),
                 area: None,
                 verification: None,
+                github: None,
                 stray_claim_times: None,
                 claim: lease_until.map(|lease_until| Claim {
                     holder: "alice".to_string(),

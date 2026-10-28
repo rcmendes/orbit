@@ -6,6 +6,7 @@ pub mod comment;
 pub mod doctor;
 pub mod error;
 pub mod git;
+pub mod github;
 pub mod graph;
 pub mod help;
 pub mod legacy;

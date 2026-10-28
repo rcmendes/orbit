@@ -41,6 +41,11 @@ pub mod code {
     pub const NOT_A_REPOSITORY: &str = "NOT_A_REPOSITORY";
     pub const LINK_NOT_FOUND: &str = "LINK_NOT_FOUND";
     pub const EPHEMERAL_BIN: &str = "EPHEMERAL_BIN";
+    pub const GITHUB_NOT_CONFIGURED: &str = "GITHUB_NOT_CONFIGURED";
+    pub const GITHUB_REPO_NOT_LINKED: &str = "GITHUB_REPO_NOT_LINKED";
+    pub const GITHUB_ISSUE_CONFLICT: &str = "GITHUB_ISSUE_CONFLICT";
+    pub const GITHUB_SETUP_INCOMPLETE: &str = "GITHUB_SETUP_INCOMPLETE";
+    pub const GITHUB_UNSUPPORTED_RELATIONSHIP: &str = "GITHUB_UNSUPPORTED_RELATIONSHIP";
 }
 
 #[derive(Debug, Clone)]

@@ -397,11 +397,12 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
     if targets.is_empty() {
         return Ok(crate::output::CommandOutput::new(
             json!({ "tasks": [], "count": 0 }),
-            "No linked Tasks to sync".to_string(),
+            "No linked Tasks to sync (nothing was written).".to_string(),
         ));
     }
 
     let mut plans = Vec::new();
+    let mut human_plans = Vec::new();
     for id in &targets {
         let task = graph.get(id)?;
         let link = task
@@ -415,6 +416,7 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
             &issue,
             direction,
         );
+        human_plans.push(format_sync_preview(task, &link, &plan));
         let relationship = relationships::plan_relationship_sync(task, &link, &issue, &[], &[]);
         plans.push(json!({
             "task": id,
@@ -436,12 +438,89 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
     let human = if args.apply {
         format!("Applied GitHub sync for {} task(s)", targets.len())
     } else {
-        format!("Planned GitHub sync for {} task(s)", targets.len())
+        format!(
+            "GitHub sync preview (dry run; nothing was written)\n{}",
+            human_plans.join("\n")
+        )
     };
     Ok(crate::output::CommandOutput::new(
         json!({ "tasks": plans, "count": plans.len(), "apply": args.apply }),
         human,
     ))
+}
+
+fn format_sync_preview(task: &Task, link: &GitHubLink, plan: &SyncPlan) -> String {
+    let mut output = format!(
+        "\nTask: {} — {}\nIssue: {}#{}\n",
+        task.id, task.front.title, link.repo, link.number
+    );
+
+    let mut pulls = Vec::new();
+    push_preview_field(&mut pulls, "title", &plan.apply_title);
+    push_preview_field(&mut pulls, "body", &plan.apply_body);
+    push_preview_field(&mut pulls, "status", &plan.apply_status);
+    push_preview_field(&mut pulls, "labels", &plan.apply_labels);
+    push_preview_field(&mut pulls, "area", &plan.apply_area);
+    push_preview_field(&mut pulls, "verification", &plan.apply_verification);
+    output.push_str("Pull into Orbit:\n");
+    append_preview_fields(&mut output, &pulls);
+
+    let mut pushes = Vec::new();
+    push_preview_field(&mut pushes, "labels", &plan.push_labels);
+    push_preview_field(&mut pushes, "area", &plan.push_area);
+    push_preview_field(&mut pushes, "verification", &plan.push_verification);
+    push_preview_field(&mut pushes, "state", &plan.push_state);
+    output.push_str("Push to GitHub:\n");
+    append_preview_fields(&mut output, &pushes);
+
+    output.push_str("Conflicts:\n");
+    if plan.conflicts.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        for conflict in &plan.conflicts {
+            output.push_str(&format!(
+                "  - {}: Orbit = {}; GitHub = {}\n",
+                conflict.field,
+                format_preview_value(&conflict.orbit_value),
+                format_preview_value(&conflict.github_value),
+            ));
+        }
+    }
+
+    if plan.is_noop() && !plan.has_conflicts() {
+        output.push_str("No changes needed.\n");
+    }
+    for warning in &plan.warnings {
+        output.push_str(&format!("Warning: {warning}\n"));
+    }
+    output
+}
+
+fn push_preview_field<T: serde::Serialize>(
+    fields: &mut Vec<String>,
+    name: &str,
+    value: &Option<T>,
+) {
+    if let Some(value) = value {
+        fields.push(format!(
+            "  - {name}: {}\n",
+            format_preview_value(&json!(value))
+        ));
+    }
+}
+
+fn append_preview_fields(output: &mut String, fields: &[String]) {
+    if fields.is_empty() {
+        output.push_str("  (none)\n");
+    } else {
+        for field in fields {
+            output.push_str(field);
+        }
+    }
+}
+
+fn format_preview_value(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "<unprintable>".to_string())
 }
 
 fn apply_plan(

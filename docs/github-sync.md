@@ -48,6 +48,13 @@ Preview (default):
 orbit github sync <task-id>
 ```
 
+The default preview is human-readable and does not write to Orbit or GitHub. It
+shows each linked Task and Issue, the fields planned to be pulled into Orbit or
+pushed to GitHub, and any conflicts with both competing values. Empty plans say
+that no linked Tasks were found; a linked Task with no pending changes is marked
+**No changes needed**. Use `--json` for the existing machine-readable plan and
+conflict details.
+
 Apply changes:
 
 ```bash

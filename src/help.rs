@@ -838,10 +838,15 @@ assignees to Orbit claims.
 Organization-level Issue Fields carry Orbit-owned area and verification values.
 Run `orbit github connect` to detect the origin repository, check `gh` access,
 validate those fields, and configure the Board without requiring manual
-`config.toml` edits.";
+`config.toml` edits. Run `orbit github status` for a read-only health report of
+authentication and scopes, linked repositories, Issue Fields, pending changes,
+conflicts, and unsupported relationships. `orbit doctor` also checks GitHub
+configuration when the provider is enabled.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
+  orbit github status
+  orbit github status --json
   orbit github connect
   orbit github connect --json
   orbit github repo link acme/widget
@@ -851,6 +856,14 @@ Examples:
   orbit github create orb-a7b2c9
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
+
+pub const GITHUB_STATUS_EXAMPLES: &str = "\
+Examples:
+  # Check GitHub configuration and the next recommended action
+  orbit github status
+
+  # Read the same diagnostic fields as JSON
+  orbit github status --json";
 
 pub const GITHUB_CONNECT_EXAMPLES: &str = "\
 Examples:

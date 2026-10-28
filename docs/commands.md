@@ -803,13 +803,19 @@ orbit sync
 Connects the current checkout's origin repository, adopts or creates Issues, and
 runs bidirectional sync with conflict detection. `orbit github connect` writes
 the `[github]` configuration for an organization-owned repository. Existing
-integrations can also link repositories explicitly. Other GitHub commands
-require that configuration, the `gh` CLI, and organization Issue Fields. Full
-setup and semantics are in
+integrations can also link repositories explicitly. `orbit github status` is a
+read-only diagnostic that reports authentication and scopes, linked repositories,
+Issue Field configuration/resolution, linked Task count, pending pull/push
+changes, conflicts, unsupported relationships, and the next recommended action.
+`orbit doctor` checks GitHub configuration only when the provider is enabled.
+Other GitHub commands require that configuration, the `gh` CLI, and organization
+Issue Fields. Full setup and semantics are in
 [github-sync.md](./github-sync.md).
 
 ```bash
 orbit github connect
+orbit github status
+orbit github status --json
 orbit github repo link acme/widget
 orbit github setup
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42

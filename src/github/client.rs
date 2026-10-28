@@ -18,6 +18,8 @@ pub struct FieldSetup {
 pub struct AuthStatus {
     pub authenticated: bool,
     pub message: String,
+    pub username: Option<String>,
+    pub scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,10 +90,14 @@ impl GitHubClient for GhCliClient {
                 })
                 .trim()
                 .to_string(),
+                username: None,
+                scopes: Vec::new(),
             },
             Err(error) => AuthStatus {
                 authenticated: false,
                 message: format!("could not run `gh auth status`: {error}"),
+                username: None,
+                scopes: Vec::new(),
             },
         }
     }
@@ -136,28 +142,30 @@ impl GitHubClient for GhCliClient {
             )
         })?;
         let nodes = response.data.organization.issue_fields.nodes;
-        let area_id = find_field_id(&nodes, &fields.area_name).ok_or_else(|| {
-            OrbitError::new(
+        let area_id = find_field_id(&nodes, &fields.area_name);
+        let verification_id = find_field_id(&nodes, &fields.verification_name);
+        let mut missing = Vec::new();
+        if area_id.is_none() {
+            missing.push(format!(
+                "organization `{org}` is missing Issue Field `{}`",
+                fields.area_name
+            ));
+        }
+        if verification_id.is_none() {
+            missing.push(format!(
+                "organization `{org}` is missing Issue Field `{}`",
+                fields.verification_name
+            ));
+        }
+        if !missing.is_empty() {
+            return Err(OrbitError::new(
                 code::GITHUB_SETUP_INCOMPLETE,
-                format!(
-                    "organization `{org}` is missing Issue Field `{}`",
-                    fields.area_name
-                ),
-            )
-        })?;
-        let verification_id =
-            find_field_id(&nodes, &fields.verification_name).ok_or_else(|| {
-                OrbitError::new(
-                    code::GITHUB_SETUP_INCOMPLETE,
-                    format!(
-                        "organization `{org}` is missing Issue Field `{}`",
-                        fields.verification_name
-                    ),
-                )
-            })?;
+                missing.join("; "),
+            ));
+        }
         Ok(FieldSetup {
-            area_id,
-            verification_id,
+            area_id: area_id.expect("missing Area field was reported"),
+            verification_id: verification_id.expect("missing Verification field was reported"),
         })
     }
 
@@ -357,6 +365,10 @@ struct FixtureStore {
     #[serde(default)]
     auth_message: String,
     #[serde(default)]
+    auth_username: Option<String>,
+    #[serde(default)]
+    auth_scopes: Vec<String>,
+    #[serde(default)]
     repositories: HashMap<String, FixtureRepository>,
     #[serde(default)]
     org_fields: HashMap<String, String>,
@@ -402,6 +414,8 @@ impl GitHubClient for FixtureClient {
         AuthStatus {
             authenticated: store.authenticated,
             message: store.auth_message.clone(),
+            username: store.auth_username.clone(),
+            scopes: store.auth_scopes.clone(),
         }
     }
 
@@ -432,29 +446,30 @@ impl GitHubClient for FixtureClient {
         let store = self.store.lock().expect("fixture lock");
         let area_key = format!("{org}/{}", fields.area_name);
         let verification_key = format!("{org}/{}", fields.verification_name);
+        let area_id = store.org_fields.get(&area_key).cloned();
+        let verification_id = store.org_fields.get(&verification_key).cloned();
+        let mut missing = Vec::new();
+        if area_id.is_none() {
+            missing.push(format!(
+                "organization `{org}` is missing Issue Field `{}`",
+                fields.area_name
+            ));
+        }
+        if verification_id.is_none() {
+            missing.push(format!(
+                "organization `{org}` is missing Issue Field `{}`",
+                fields.verification_name
+            ));
+        }
+        if !missing.is_empty() {
+            return Err(OrbitError::new(
+                code::GITHUB_SETUP_INCOMPLETE,
+                missing.join("; "),
+            ));
+        }
         Ok(FieldSetup {
-            area_id: store.org_fields.get(&area_key).cloned().ok_or_else(|| {
-                OrbitError::new(
-                    code::GITHUB_SETUP_INCOMPLETE,
-                    format!(
-                        "organization `{org}` is missing Issue Field `{}`",
-                        fields.area_name
-                    ),
-                )
-            })?,
-            verification_id: store
-                .org_fields
-                .get(&verification_key)
-                .cloned()
-                .ok_or_else(|| {
-                    OrbitError::new(
-                        code::GITHUB_SETUP_INCOMPLETE,
-                        format!(
-                            "organization `{org}` is missing Issue Field `{}`",
-                            fields.verification_name
-                        ),
-                    )
-                })?,
+            area_id: area_id.expect("missing Area field was reported"),
+            verification_id: verification_id.expect("missing Verification field was reported"),
         })
     }
 

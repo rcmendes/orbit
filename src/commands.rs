@@ -84,7 +84,14 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Doctor(args) => crate::doctor::run(dir.as_deref(), args),
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
         Command::GitHub(args) => {
-            with_board(dir.as_deref(), true, |board| crate::github::commands::run(board, args))
+            if matches!(&args.command, crate::cli::GitHubCommand::Status) {
+                return with_board_read_only(dir.as_deref(), |board| {
+                    crate::github::commands::run(board, args)
+                });
+            }
+            with_board(dir.as_deref(), true, |board| {
+                crate::github::commands::run(board, args)
+            })
         }
         Command::Triage(args) => {
             with_board(dir.as_deref(), true, |board| crate::triage::commands::run(board, args))
@@ -102,6 +109,29 @@ where
     } else {
         board.lock_shared()?
     };
+    let mut output = f(&board)?;
+    output.warnings.extend(board.warnings.iter().cloned());
+    Ok(output)
+}
+
+/// Resolve and read a Board without `Board::discover`'s orphan-worktree repair.
+/// Read-only diagnostics must not repair storage as a side effect of discovery.
+fn with_board_read_only<F>(
+    dir: Option<&Path>,
+    f: F,
+) -> Result<crate::output::CommandOutput>
+where
+    F: FnOnce(&Board) -> Result<crate::output::CommandOutput>,
+{
+    let discovery = Board::discovery(dir);
+    if let Some(error) = discovery.error {
+        return Err(error);
+    }
+    let Some(root) = discovery.root else {
+        return Err(OrbitError::board_not_found());
+    };
+    let board = Board::at_root(root, discovery.warnings)?;
+    let _lock = board.lock_shared()?;
     let mut output = f(&board)?;
     output.warnings.extend(board.warnings.iter().cloned());
     Ok(output)

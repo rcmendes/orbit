@@ -649,9 +649,12 @@ Boards can link GitHub repositories and map Tasks to Issues by repository and is
 
 Connect an organization-owned repository from its checkout with `orbit github connect`. The guided command checks `gh` authentication and repository access, validates the organization Issue Fields, and writes the Board configuration. Use `orbit github connect --json` for machine-readable status. Personal-account repositories receive next-step choices and are not configured in Issue Fields mode.
 
+Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, resolved Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
+
 ```bash
 # Connect an organization-owned repository, or manage an existing integration:
 orbit github connect
+orbit github status --json
 orbit github repo link acme/widget
 orbit github setup
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42

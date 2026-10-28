@@ -24,6 +24,33 @@ To connect a Board, run `orbit github connect` from a checkout with a GitHub `or
 
 The current Issue Fields integration requires an organization-owned repository. For a personal-account repository, connect leaves configuration unchanged and reports these options: use an organization-owned repository, use `orbit github basic` when personal-account basic mode is available, or cancel. Missing `gh` authentication, repository access, or Issue Fields is reported with a remediation action.
 
+## Diagnose the integration
+
+`orbit github status` checks the current `gh` authentication identity and scopes,
+configured organization, linked repository access, and whether the configured
+Area and Verification Issue Fields are present and their stored ids are current.
+It also loads linked Tasks and previews their sync plans to count pending pull and
+push changes and detect conflicts. Cross-repository SubTask and dependency links
+are reported as unsupported. The command is read-only: it does not change Board
+configuration, Tasks, GitHub Issues, or the fixture used by integration tests.
+
+Use `--json` for the stable diagnostic structure. `data.pending.pull` and
+`data.pending.push` count field changes; `pull_tasks` and `push_tasks` identify the
+affected Tasks and counts. `data.conflicts` and `data.conflict_details` report
+conflicts, while `data.unsupported_relationships` and `data.unsupported_details`
+report relationships Orbit cannot synchronize. `data.next_action` recommends the
+next step, and `data.next_command` supplies an executable command when one applies.
+`data.auth.scopes_known` distinguishes an unreported scope list from an empty one.
+When the GitHub provider is configured,
+`orbit doctor` also reports authentication, repository access, and Issue Field
+configuration problems alongside normal Board diagnostics.
+
+```bash
+orbit github status
+orbit github status --json
+orbit doctor --json
+```
+
 ## Link repositories
 
 Repositories are linked explicitly; Orbit does not bulk-import an entire repository.

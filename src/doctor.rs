@@ -180,6 +180,9 @@ fn diagnose(
         }
         None => 0,
     };
+    if let Some(board) = &board {
+        issues.extend(crate::github::commands::doctor_issues(board));
+    }
 
     let healthy = issues.is_empty();
     let discovery_json = discovery_json(&discovery);

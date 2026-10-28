@@ -807,7 +807,7 @@ pub enum TriageCommand {
         #[arg(value_name = "TASK")]
         task: String,
     },
-    /// Validate a proposal JSON file and preview Orbit metadata changes.
+    /// Validate and review a proposal JSON file or stdin without writing to GitHub.
     #[command(after_long_help = help::TRIAGE_REVIEW_EXAMPLES)]
     Review(TriageReviewArgs),
     /// Apply an approved proposal to Orbit (not GitHub).
@@ -819,6 +819,7 @@ pub enum TriageCommand {
 pub struct TriageReviewArgs {
     #[arg(value_name = "TASK")]
     pub task: String,
+    /// Proposal JSON path, or `-` to read from stdin.
     #[arg(long, value_name = "PATH")]
     pub proposal_file: PathBuf,
 }
@@ -842,7 +843,13 @@ pub struct GitHubArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum GitHubCommand {
-    /// Validate org Issue Fields and persist their ids in config.toml.
+    /// Report GitHub integration health without changing the Board or GitHub.
+    #[command(after_long_help = help::GITHUB_STATUS_EXAMPLES)]
+    Status,
+    /// Detect the origin repository and configure GitHub for this Board.
+    #[command(after_long_help = help::GITHUB_CONNECT_EXAMPLES)]
+    Connect,
+    /// Validate org Issue Fields, optionally create missing fields, and persist their ids.
     #[command(after_long_help = help::GITHUB_SETUP_EXAMPLES)]
     Setup(GitHubSetupArgs),
     /// Manage explicitly linked GitHub repositories.
@@ -875,8 +882,11 @@ pub enum GitHubRepoCommand {
 #[derive(Debug, Args)]
 pub struct GitHubSetupArgs {
     /// Validate configuration without writing field ids.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "create_fields")]
     pub validate_only: bool,
+    /// Create missing organization Issue Fields (requires organization admin access).
+    #[arg(long)]
+    pub create_fields: bool,
 }
 
 #[derive(Debug, Args)]
@@ -889,10 +899,15 @@ pub struct GitHubRepoLinkArgs {
 pub struct GitHubAdoptArgs {
     #[arg(value_name = "TASK")]
     pub task: String,
+    /// Standard GitHub Issue URL, for example https://github.com/acme/widget/issues/42.
+    #[arg(value_name = "GITHUB_ISSUE_URL")]
+    pub issue_url: Option<String>,
+    /// Repository for the legacy --repo/--number form, or to confirm the URL.
     #[arg(long, value_name = "OWNER/REPO")]
-    pub repo: String,
+    pub repo: Option<String>,
+    /// Issue number for the legacy --repo/--number form, or to confirm the URL.
     #[arg(long)]
-    pub number: u64,
+    pub number: Option<u64>,
 }
 
 #[derive(Debug, Args)]

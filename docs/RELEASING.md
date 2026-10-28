@@ -60,7 +60,7 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
    gh workflow run "Install smoke" --ref v0.8.2
    ```
 
-   A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, `orbit init --agents auto` to wire the detected harnesses, `orbit add`, `orbit ready`, and a real MCP initialize/tools-list handshake through the generated agent command. A red run means the published artifacts are broken even though the release exists.
+    A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, onboarding, `orbit github`/`orbit triage` help, and a fixture-backed GitHub flow (connect, status, adopt/create, sync preview/apply, and Triage review/apply) without network access, plus a real MCP initialize/tools-list handshake. A red run means the published artifacts are broken even though the release exists.
 
 ## Packaging checks
 
@@ -71,7 +71,16 @@ cargo build --release
 ORBIT_BIN="$PWD/target/release/orbit" bash scripts/onboarding-smoke.sh
 ```
 
-Both scripts run in a temporary Git repository with a temporary `HOME`/`USERPROFILE`, create a project-local `.claude` marker so at least Claude is always detected, and never read or write the developer's real agent configuration. They must stay in sync with the documented quick start; do not add a second smoke sequence.
+Both scripts run in a temporary Git repository with a temporary `HOME`/`USERPROFILE`, create a project-local `.claude` marker so at least Claude is always detected, and never read or write the developer's real agent configuration. They must stay in sync with the documented quick start; do not add a second smoke sequence. GitHub operations use `ORBIT_GITHUB_FIXTURE`; never remove that fixture or let the release smoke contact GitHub.
+
+The release defaults to the Cargo `github-provider` feature. Keep that feature
+in `[features].default` so cargo-dist archives, installers, and the binary
+bundled by npm all include the provider. CI also checks the public CLI help in
+the archived binaries. A build with `--no-default-features` may omit the
+provider; it must fail clearly when it loads an enabled `[github]` Board and
+direct users to Orbit v0.9.0 or newer. Do not bump the package version as part
+of feature integration; the release owner chooses the tag/version when cutting
+the release.
 
 ## npm notes
 

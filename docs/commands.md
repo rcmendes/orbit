@@ -800,29 +800,61 @@ orbit sync
 
 ### `orbit github` — GitHub Issue provider
 
-Links explicitly configured repositories, adopts or creates Issues, and runs
-bidirectional sync with conflict detection. Requires `[github]` in `config.toml`,
-the `gh` CLI, and organization Issue Fields. Full setup and semantics are in
-[github-sync.md](./github-sync.md).
+GitHub sync and Triage require Orbit 0.9.0 or newer. Default release builds
+include the provider; a build without the `github-provider` capability reports
+`GITHUB_UNSUPPORTED` when it loads a Board with active `[github]` configuration.
+
+Connects the current checkout's origin repository, adopts or creates Issues, and
+runs bidirectional sync with conflict detection. `orbit github connect` checks
+`gh` authentication and repository access. For an organization-owned repository,
+it validates Issue Fields and writes `[github]` configuration. For a personal
+repository, it leaves configuration unchanged and reports the exact settings to
+configure basic mode: add `[github]`, `mode = "basic"`, and the repository to
+the Board's `config.toml` or merge them into an existing section while
+preserving other linked repositories; the response includes those exact entries
+and links to the setup guide. Existing integrations can link repositories
+explicitly. Sync requires the `gh` CLI and `[github]` in
+`config.toml`; full mode uses organization Issue Fields, while basic mode limits
+Triage to labels. `orbit github status` is a read-only diagnostic that reports
+authentication and scopes, linked repositories, Issue Field configuration when
+applicable, linked Task count, pending changes, conflicts, unsupported
+relationships, and a recommended next action. `orbit doctor` checks GitHub
+configuration when the provider is enabled. See [github-sync.md](./github-sync.md).
 
 ```bash
+orbit github connect
+orbit github status
+orbit github status --json
 orbit github repo link acme/widget
 orbit github setup
-orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
+orbit github setup --create-fields       # explicitly create missing org Issue Fields
+orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
+orbit github adopt orb-a7b2c9 --repo acme/widget --number 42  # legacy form
+orbit github create orb-a7b2c9                 # uses the only linked repository
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
 ```
 
+`orbit github setup` only resolves existing fields and stores their ids. Creating
+missing fields requires the explicit `--create-fields` option and organization
+administrator access. See [github-sync.md](./github-sync.md) for field types,
+permissions, and remediation.
+
 ### `orbit triage` — agent review and apply
 
-Reviews GitHub-linked Tasks only. Agents draft a proposal JSON file, preview changes
-with `review`, apply approved metadata to Orbit with `apply --approve`, then publish
-with `orbit github sync`. Does not modify GitHub-owned title, body, or status. See
+Reviews GitHub-linked Tasks only. Review displays field-by-field changes and, when a
+proposal file is used with stdin and stdout connected to terminals, prompts for
+explicit approval or cancellation. Non-TTY and `--json` reviews only preview; they
+never prompt or apply. `--proposal-file -` reads a proposal from stdin. Applying
+changes Orbit only; it does not modify GitHub-owned title, body, or status. Publish
+with an explicit `orbit github sync`. See
 [agents/triage-workflow.md](./agents/triage-workflow.md).
 
 ```bash
 orbit triage context orb-a7b2c9 --json
+orbit triage review orb-a7b2c9 --proposal-file proposal.json
 orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
+orbit triage review orb-a7b2c9 --proposal-file - --json < proposal.json
 orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json
 orbit github sync orb-a7b2c9 --direction push --apply
 ```

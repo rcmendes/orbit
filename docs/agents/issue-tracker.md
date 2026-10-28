@@ -180,7 +180,8 @@ for state and category, and comments for triage notes.
 - **Comments:** `orbit comment add <ID> --by <agent> --body ...`; read with
   `orbit comment list <ID>` or `orbit show <ID> --json`.
 
-For GitHub-linked Tasks, use the structured workflow in
+GitHub sync and Triage require Orbit 0.9.0 or newer. For GitHub-linked Tasks,
+use the structured workflow in
 [`triage-workflow.md`](./triage-workflow.md): `orbit triage context`, `review`, and
 `apply --approve`, then `orbit github sync --direction push --apply`.
 

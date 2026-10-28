@@ -20,6 +20,11 @@ Triage does **not**:
 - Add arbitrary labels
 - Run verification commands
 
+In GitHub basic mode, Triage supports label changes only. `area` and
+`verification` require full mode with organization Issue Fields; basic-mode
+context reports them as unavailable, and review/apply reject proposals that
+change either field.
+
 When evidence is insufficient, record `uncertainty` in the proposal and leave metadata
 unchanged.
 
@@ -51,19 +56,33 @@ unchanged.
    }
    ```
 
-3. **Review** — validate and preview without writing:
+3. **Review** — validate and display the proposal. Interactive review shows a field-by-field diff
+   for `area`, `verification`, and label additions/removals when a proposal file is used and both
+   stdin and stdout are terminals:
 
    ```bash
-   orbit triage review <ID> --proposal-file proposal.json --json
+   orbit triage review <ID> --proposal-file proposal.json
    ```
 
-4. **Apply** — requires explicit approval; updates Orbit only:
+   The command asks for explicit confirmation. Enter `y` or `yes` to apply; any cancel response or
+   end of input leaves the Board unchanged. If either stream is not a terminal, review prints the
+   diff and exits without prompting or applying. `--json` also remains non-interactive and
+   preserves the JSON preview output. A proposal can instead be read from stdin with
+   `--proposal-file -`:
+
+   ```bash
+   orbit triage review <ID> --proposal-file - --json < proposal.json
+   ```
+
+4. **Apply** — the explicit non-interactive alternative requires `--approve`; it updates Orbit
+   only:
 
    ```bash
    orbit triage apply <ID> --proposal-file proposal.json --approve --json
    ```
 
-5. **Sync to GitHub** — publish Orbit-owned fields and labels:
+5. **Sync to GitHub** — review and apply do not write to GitHub. Publish Orbit-owned fields and
+   labels only with an explicit sync:
 
    ```bash
    orbit github sync <ID> --direction push --apply
@@ -87,8 +106,13 @@ Forbidden proposal keys (GitHub-owned): `title`, `body`, `status`, `state`.
 
 | Code | Meaning |
 | --- | --- |
-| `TRIAGE_NOT_LINKED` | Task has no GitHub link |
-| `TRIAGE_APPROVAL_REQUIRED` | `apply` without `--approve` |
-| `TRIAGE_INVALID_PROPOSAL` | Invalid JSON, forbidden fields, or non-canonical labels |
+| `TRIAGE_NOT_LINKED` | Task has no GitHub link; adopt the intended Issue with `orbit github adopt <task-id> <issue-url>`. |
+| `TRIAGE_APPROVAL_REQUIRED` | `apply` was run without `--approve`; review the proposal, then rerun the reported command with `--approve`. |
+| `TRIAGE_INVALID_PROPOSAL` | The proposal is invalid; the error identifies the cause and directs you to edit the JSON and review it again. |
+
+Human errors include a `Next:` action. JSON keeps the existing error envelope and
+adds `cause`, `remediation`, and Task/proposal-file context to `error.details`.
+Do not add GitHub-owned fields (`title`, `body`, `status`, or `state`) to a
+proposal. Only use the supported metadata fields above and canonical labels.
 
 See also [`triage-labels.md`](./triage-labels.md) and [`issue-tracker.md`](./issue-tracker.md).

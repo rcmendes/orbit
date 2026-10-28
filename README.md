@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.8.2`](https://github.com/rcmendes/orbit/releases/tag/v0.8.2) is the latest release. It adds a numbered `orbit init` onboarding report, clearer harness and MCP prompts, and a more precise product description. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.8.2`](https://github.com/rcmendes/orbit/releases/tag/v0.8.2) is the latest release. The upcoming v0.9.0 release adds the GitHub Issue provider (`orbit github`) and Triage review (`orbit triage`) to the default binaries and installers. GitHub sync requires Orbit v0.9.0 or newer. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -647,13 +647,61 @@ ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 
 Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Sync is explicit, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. See [docs/github-sync.md](./docs/github-sync.md).
 
+GitHub sync and Triage require Orbit **v0.9.0 or newer**. The v0.9.0 default
+release binaries, shell/PowerShell installers, and npm package include both
+commands. For an organization-owned repository with Issue Fields ready, start
+with a fresh Board and the GitHub CLI authenticated:
+
 ```bash
-# config.toml: [github] organization + repositories, then:
-orbit github repo link acme/widget
-orbit github setup
-orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
+orbit init
+gh auth login
+orbit github connect
+orbit github status
+orbit add "First GitHub task" -p 1
+# Copy the Task ID printed by `orbit add` and replace orb-a7b2c9 below.
+orbit github create orb-a7b2c9
+orbit github sync orb-a7b2c9 # preview only
 orbit github sync orb-a7b2c9 --apply
 ```
+
+For a personal-account `origin`, `connect` reports the exact `[github]` entries
+to add or merge into the Board's `config.toml`, without changing the Board.
+Preserve other linked repositories. Set `mode = "basic"` and include the
+repository name as described below before creating or syncing Issues.
+
+`orbit github connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports the exact basic-mode `[github]` entries to add or merge into the Board's `config.toml`, preserving other linked repositories. Use `orbit github connect --json` for machine-readable status, including the same guidance in `remediation` and `next_actions`.
+
+Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
+
+```bash
+# Personal repository: [github] mode = "basic" + repositories in config.toml.
+orbit github repo link alice/widget
+orbit github create orb-a7b2c9 --repo alice/widget
+
+# Connect an organization-owned repository from its checkout:
+orbit github connect
+orbit github status --json
+
+# Or configure organization mode manually:
+orbit github repo link acme/widget
+orbit github setup
+orbit github setup --create-fields # create missing fields (organization admin required)
+orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
+orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
+orbit github create orb-a7b2c9 # automatically uses the only linked repository
+orbit github sync orb-a7b2c9 --apply
+```
+
+`orbit github setup` does not create fields unless `--create-fields` is passed.
+See [the GitHub sync guide](./docs/github-sync.md) for required permissions and
+the fields Orbit creates.
+
+For personal-account repositories, `connect` reports the exact manual basic-mode
+settings rather than changing the Board. Basic mode syncs titles, bodies,
+labels, and open/closed state without Issue Fields. `area` and `verification`
+sync and structured Triage require full mode; basic-mode Triage supports labels
+only. See [docs/github-sync.md](./docs/github-sync.md) for limitations and
+upgrade steps.
 
 ## Triage, labels, and comments
 
@@ -818,9 +866,9 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | --- | --- |
 | **Set up** | `init` · `link` · `unlink` · `setup` |
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
-| **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` |
+| **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `github status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
-| **Maintain** | `doctor` · `sync` · `slug` · `mcp` |
+| **Maintain** | `doctor` · `sync` · `github` · `slug` · `mcp` |
 
 Every command explains its own semantics:
 
@@ -914,6 +962,7 @@ See [RELEASING.md](./docs/RELEASING.md) for the release process, supported targe
 | [Command guide](./docs/commands.md) | Every command, when to use it, scenarios, and error recovery |
 | [Architecture](./docs/ARCHITECTURE.md) | Component map, board resolution, domain model, state machine, readiness gate, command flow, sequence diagrams |
 | [Specification](./docs/SPEC.md) | Canonical behavior, task format, config, command rules, JSON contract, concurrency, testing, distribution |
+| [GitHub sync](./docs/github-sync.md) | Basic and full GitHub modes, sync behavior, limitations, and upgrade path |
 | [Glossary](./docs/GLOSSARY.md) | Canonical vocabulary and the words Orbit avoids |
 | [Issue tracker guide](./docs/agents/issue-tracker.md) | How agents should use the board in this repository |
 | [Triage labels](./docs/agents/triage-labels.md) | The five canonical triage roles and category labels |

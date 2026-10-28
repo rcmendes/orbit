@@ -835,21 +835,59 @@ Task can map one-to-one to a GitHub Issue identified by repository and issue
 number. Sync is explicit, detects field-level conflicts, and never maps GitHub
 assignees to Orbit claims.
 
-Organization-level Issue Fields carry Orbit-owned area and verification values.
-Run setup after editing config.toml.";
+Full mode (the default) uses organization-level Issue Fields for Orbit-owned
+area and verification values; run setup after editing config.toml. Basic mode
+supports personal repositories without setup, but cannot sync area or
+verification. Triage in basic mode supports labels only. `orbit github connect`
+checks the current origin and configures organization-owned repositories; for a
+personal-account origin, it leaves the Board unchanged and reports the exact
+`config.toml` entries to add or merge for basic mode, preserving other linked
+repositories.
+
+`orbit github setup` resolves existing fields by default. Creating missing
+fields is opt-in with `--create-fields` and requires organization administrator
+access. Run `orbit github status` for a read-only health report of authentication
+and scopes, linked repositories, Issue Fields when applicable, pending changes,
+conflicts, unsupported relationships, and the next recommended action. `orbit
+doctor` also checks GitHub configuration when the provider is enabled. GitHub sync
+requires Orbit 0.9.0 or newer; default release builds include the
+`github-provider` capability.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
+  orbit github status
+  orbit github status --json
+  orbit github connect
+  orbit github connect --json
   orbit github repo link acme/widget
   orbit github setup
+  orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
   orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
+  orbit github create orb-a7b2c9
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
+
+pub const GITHUB_STATUS_EXAMPLES: &str = "\
+Examples:
+  # Check GitHub configuration and the next recommended action
+  orbit github status
+
+  # Read the same diagnostic fields as JSON
+  orbit github status --json";
+
+pub const GITHUB_CONNECT_EXAMPLES: &str = "\
+Examples:
+  # Detect origin, authenticate with gh, and configure an organization-owned repo
+  orbit github connect
+
+  # Inspect the detected owner, fields, and next action as JSON
+  orbit github connect --json";
 
 pub const GITHUB_SETUP_EXAMPLES: &str = "\
 Examples:
   orbit github setup --validate-only
-  orbit github setup";
+  orbit github setup
+  orbit github setup --create-fields";
 
 pub const GITHUB_REPO_LINK_EXAMPLES: &str = "\
 Examples:
@@ -859,10 +897,12 @@ Examples:
 
 pub const GITHUB_ADOPT_EXAMPLES: &str = "\
 Examples:
+  orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
   orbit github adopt orb-a7b2c9 --repo acme/widget --number 42";
 
 pub const GITHUB_CREATE_EXAMPLES: &str = "\
 Examples:
+  orbit github create orb-a7b2c9
   orbit github create orb-a7b2c9 --repo acme/widget";
 
 pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\
@@ -874,16 +914,26 @@ pub const TRIAGE_LONG: &str = "\
 Review GitHub-linked Tasks and apply approved metadata changes on the Orbit Board first.
 
 Triage only touches Orbit-owned `area`, task-level `verification`, and canonical triage/category
-labels. It never rewrites GitHub-owned title, body, or open/closed state, and it does not run
-verification commands. After `triage apply --approve`, publish changes with `orbit github sync`.
+labels. In GitHub basic mode, it supports labels only. It never rewrites GitHub-owned title, body,
+or open/closed state, and it does not run verification commands. After approving a review or
+`triage apply --approve`, publish changes with `orbit github sync`.
 
-Agents draft a proposal JSON file, run `triage review` for a preview, then `triage apply --approve`.
-When evidence is insufficient, record `uncertainty` and leave metadata unchanged.";
+Agents draft a proposal JSON file and run `triage review` to see a field-by-field preview. With a
+proposal file and both stdin and stdout connected to a terminal, review prompts for explicit
+approval or cancellation; only `y` or `yes` applies changes. Without both terminals, review only
+prints the preview and never waits for input. `--json` remains non-interactive, and
+`--proposal-file -` reads JSON from stdin.
+
+Review and apply change the Orbit Board only. GitHub is unchanged until an explicit
+`orbit github sync` command. When evidence is insufficient, record `uncertainty` and leave
+metadata unchanged.";
 
 pub const TRIAGE_EXAMPLES: &str = "\
 Examples:
   orbit triage context orb-a7b2c9 --json
+  orbit triage review orb-a7b2c9 --proposal-file proposal.json
   orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
+  orbit triage review orb-a7b2c9 --proposal-file - --json < proposal.json
   orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json";
 
 pub const TRIAGE_CONTEXT_EXAMPLES: &str = "\
@@ -892,7 +942,9 @@ Examples:
 
 pub const TRIAGE_REVIEW_EXAMPLES: &str = "\
 Examples:
-  orbit triage review orb-a7b2c9 --proposal-file proposal.json --json";
+  orbit triage review orb-a7b2c9 --proposal-file proposal.json
+  orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
+  orbit triage review orb-a7b2c9 --proposal-file - --json < proposal.json";
 
 pub const TRIAGE_APPLY_EXAMPLES: &str = "\
 Examples:

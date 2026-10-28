@@ -964,7 +964,7 @@ Existing hand-written content is preserved; conflicting configuration is
 reported instead of overwritten.";
 
 pub const WORKSPACE_ISSUES_LONG: &str = "\
-Browse the Workspace's rebuildable Remote Issue catalog. Refresh first to
+Browse and explicitly import the Workspace's rebuildable Remote Issue catalog. Refresh first to
 reconcile direct child repositories and cache each included repository's open
 and closed Issues. Pull requests are excluded. Refresh performs GitHub reads
 only, never creates Tasks, and retains the last snapshot for repositories that
@@ -972,14 +972,35 @@ fail. List filters cached summaries without fetching issue bodies or comments;
 inspect fetches those details from GitHub on demand.
 
 Remote Issues stay catalog-only and never appear in `orbit list` or `orbit ready`
-until a separate import operation creates a Linked Task.";
+until selected with `import`. Import previews one or more explicit identities;
+`--apply` creates Linked Tasks or links selected Local Tasks. Use repeatable
+`--link OWNER/REPO#NUMBER=TASK` options to choose existing Tasks. Linking
+preserves Orbit fields and reports differences. Already-linked Issues and Tasks
+are skipped as duplicates, identified only by repository and Issue number.
+Import reads GitHub Issue details but never writes to GitHub.";
 
 pub const WORKSPACE_ISSUES_EXAMPLES: &str = "\
 Examples:
   orbit workspace issues refresh
   orbit workspace issues list --repo acme/api --state open --label bug
   orbit workspace issues list --text authentication --unlinked
-  orbit workspace issues inspect acme/api#42";
+  orbit workspace issues inspect acme/api#42
+  orbit workspace issues import acme/api#42 acme/web#8
+  orbit workspace issues import acme/api#42 --link acme/api#42=orb-a7b2c9 --apply";
+
+pub const WORKSPACE_ISSUE_IMPORT_LONG: &str = "\
+Import only the explicitly selected Remote Issues. The default is a preview;
+review creates, links, terminal status mappings, skipped duplicates, and errors
+before rerunning with --apply. Import reads GitHub Issue details but never writes
+to GitHub.
+
+By default, each selected Issue creates a Linked Task with Issue fields and stable
+owner/repo#number identity. Repeat --link OWNER/REPO#NUMBER=TASK to link an Issue
+to a specific Local Task instead. Existing Orbit values are preserved, and the
+preview reports differences before the link is applied. Already-linked Issues
+and Tasks are skipped as duplicates using repository and Issue number, not title.
+
+Closed Issues map to done, or cancelled when labeled wontfix.";
 
 pub const GITHUB_STATUS_EXAMPLES: &str = "\
 Examples:

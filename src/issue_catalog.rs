@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -6,11 +6,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::board::Board;
-use crate::cli::{WorkspaceIssueInspectArgs, WorkspaceIssuesCommand, WorkspaceIssuesListArgs};
+use crate::cli::{
+    WorkspaceIssueInspectArgs, WorkspaceIssuesCommand, WorkspaceIssuesImportArgs,
+    WorkspaceIssuesListArgs,
+};
 use crate::error::{OrbitError, Result};
 use crate::github::client::{IssueCatalogItem, IssueComment, client_from_env};
 use crate::github::model::IssueState;
 use crate::graph::{Graph, LoadMode};
+use crate::task::{self, Status, Task, TaskArea, TaskFrontmatter, TaskType};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct IssueCatalog {
@@ -45,6 +49,7 @@ pub fn run(board: &Board, command: WorkspaceIssuesCommand) -> Result<crate::outp
         WorkspaceIssuesCommand::Refresh => refresh(board, &workspace),
         WorkspaceIssuesCommand::List(args) => list(board, &workspace, args),
         WorkspaceIssuesCommand::Inspect(args) => inspect(board, &workspace, args),
+        WorkspaceIssuesCommand::Import(args) => import(board, &workspace, args),
     }
 }
 
@@ -292,6 +297,402 @@ fn inspect(
         data,
         format!("Inspected {}", args.identity),
     ))
+}
+
+#[derive(Debug, Clone)]
+struct PreparedIssue {
+    issue: crate::github::model::IssueSnapshot,
+    labels: Vec<String>,
+    area: Option<TaskArea>,
+    verification: Option<String>,
+    status: Status,
+}
+
+enum ImportAction {
+    Create(PreparedIssue),
+    Link(PreparedIssue, Box<Task>),
+}
+
+struct ImportCandidate {
+    identity: String,
+    action: ImportAction,
+}
+
+fn import(
+    board: &Board,
+    workspace: &Path,
+    args: WorkspaceIssuesImportArgs,
+) -> Result<crate::output::CommandOutput> {
+    let catalog = load(&cache_path(workspace))?;
+    let graph = Graph::load(board, LoadMode::Strict)?.0;
+    let mappings = parse_link_mappings(&args.link, &args.identities)?;
+    let included = crate::workspace::included_repositories(workspace)?
+        .into_iter()
+        .map(|repository| repository.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    let client = client_from_env()?;
+
+    let mut linked_issues = BTreeMap::new();
+    for task in graph.iter() {
+        if let Some(link) = task.github_link() {
+            linked_issues.insert(
+                format!("{}#{}", link.repo.to_ascii_lowercase(), link.number),
+                task.id.clone(),
+            );
+        }
+    }
+
+    let mut candidates = Vec::new();
+    let mut creates = Vec::new();
+    let mut links = Vec::new();
+    let mut terminal_tasks = Vec::new();
+    let mut skipped_duplicates = Vec::new();
+    let mut errors = Vec::new();
+    let mut seen_issues = BTreeSet::new();
+    let mut seen_tasks = HashSet::new();
+
+    for raw_identity in &args.identities {
+        let (repository, number) = match parse_identity(raw_identity) {
+            Ok(identity) => identity,
+            Err(error) => {
+                errors.push(json!({"identity": raw_identity, "message": error.message}));
+                continue;
+            }
+        };
+        let identity = format!("{repository}#{number}");
+        if !seen_issues.insert(identity.clone()) {
+            skipped_duplicates.push(json!({
+                "identity": identity,
+                "reason": "issue_selected_more_than_once",
+            }));
+            continue;
+        }
+        if !included.contains(&repository) {
+            errors.push(json!({
+                "identity": identity,
+                "message": "repository is not currently discovered and included in this Workspace",
+            }));
+            continue;
+        }
+        let Some(cached) = catalog.repositories.get(&repository) else {
+            errors.push(json!({
+                "identity": identity,
+                "message": "Remote Issue is not in the local catalog; refresh the Workspace Issue catalog first",
+            }));
+            continue;
+        };
+        if !cached.issues.iter().any(|issue| issue.number == number) {
+            errors.push(json!({
+                "identity": identity,
+                "message": "Remote Issue is not in the local catalog; refresh the Workspace Issue catalog first",
+            }));
+            continue;
+        }
+        if let Some(task) = linked_issues.get(&identity) {
+            skipped_duplicates.push(json!({
+                "identity": identity,
+                "reason": "issue_already_linked",
+                "task": task,
+            }));
+            continue;
+        }
+
+        let existing_task = if let Some(task_id) = mappings.get(&identity) {
+            let Some(task) = graph.tasks.get(task_id) else {
+                errors.push(json!({
+                    "identity": identity,
+                    "task": task_id,
+                    "message": format!("Local Task `{task_id}` does not exist"),
+                }));
+                continue;
+            };
+            if let Some(link) = task.github_link() {
+                skipped_duplicates.push(json!({
+                    "identity": identity,
+                    "reason": "task_already_linked",
+                    "task": task_id,
+                    "linked_identity": format!("{}#{}", link.repo, link.number),
+                }));
+                continue;
+            }
+            if !seen_tasks.insert(task_id.clone()) {
+                skipped_duplicates.push(json!({
+                    "identity": identity,
+                    "reason": "task_selected_more_than_once",
+                    "task": task_id,
+                }));
+                continue;
+            }
+            Some(task.clone())
+        } else {
+            None
+        };
+
+        let issue = match client.get_issue(&repository, number) {
+            Ok(issue) => issue,
+            Err(error) => {
+                errors.push(json!({"identity": identity, "message": error.message}));
+                continue;
+            }
+        };
+        let prepared = match prepare_issue(issue) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                errors.push(json!({"identity": identity, "message": error.message}));
+                continue;
+            }
+        };
+
+        match existing_task {
+            Some(task) => {
+                let differences = task_issue_differences(&task, &prepared);
+                links.push(json!({
+                    "identity": identity,
+                    "task": task.id,
+                    "status": task.front.status,
+                    "remote_status": prepared.status,
+                    "differences": differences,
+                }));
+                if task.front.status.is_terminal() {
+                    terminal_tasks.push(json!({
+                        "identity": identity,
+                        "task": task.id,
+                        "status": task.front.status,
+                    }));
+                }
+                candidates.push(ImportCandidate {
+                    identity,
+                    action: ImportAction::Link(prepared, Box::new(task)),
+                });
+            }
+            None => {
+                creates.push(json!({
+                    "identity": identity,
+                    "title": prepared.issue.title,
+                    "status": prepared.status,
+                    "terminal": prepared.status.is_terminal(),
+                    "url": format!("https://github.com/{repository}/issues/{number}"),
+                }));
+                if prepared.status.is_terminal() {
+                    terminal_tasks.push(json!({
+                        "identity": identity,
+                        "status": prepared.status,
+                    }));
+                }
+                candidates.push(ImportCandidate {
+                    identity,
+                    action: ImportAction::Create(prepared),
+                });
+            }
+        }
+    }
+
+    let mut imported = Vec::new();
+    if args.apply {
+        let mut reserved_ids = graph.tasks.keys().cloned().collect::<HashSet<_>>();
+        let mut writes = Vec::new();
+        for candidate in candidates {
+            let (task, created) = match candidate.action {
+                ImportAction::Create(prepared) => {
+                    let task = create_linked_task(board, &prepared, &mut reserved_ids)?;
+                    (task, true)
+                }
+                ImportAction::Link(prepared, task) => {
+                    let mut task = *task;
+                    task.front.updated_at = Utc::now();
+                    task.front.github = Some(crate::github::GitHubLink::new(
+                        prepared.issue.repo.to_ascii_lowercase(),
+                        prepared.issue.number,
+                    ));
+                    let baseline = {
+                        let link = task.front.github.as_ref().expect("link was set");
+                        crate::github::sync::baseline_from(
+                            crate::github::sync::OrbitSyncView { task: &task, link },
+                            &prepared.issue,
+                        )
+                    };
+                    task.front.github.as_mut().expect("link was set").last_sync = Some(baseline);
+                    (task, false)
+                }
+            };
+            let path = board.task_path(&task.id);
+            let rendered = task::render_task(&task)?;
+            writes.push((path, rendered, task.clone(), created, candidate.identity));
+        }
+
+        for (path, rendered, task, created, identity) in &writes {
+            crate::atomic::write_atomic(path, rendered.as_bytes(), !created)?;
+            imported.push(json!({
+                "identity": identity,
+                "task": task.id,
+                "action": if *created { "created" } else { "linked" },
+                "status": task.front.status,
+            }));
+        }
+        if !writes.is_empty() {
+            board.commit("orbit: import Workspace Remote Issues", false)?;
+        }
+    }
+
+    let data = json!({
+        "apply": args.apply,
+        "creates": creates,
+        "links": links,
+        "terminal_tasks": terminal_tasks,
+        "skipped_duplicates": skipped_duplicates,
+        "errors": errors,
+        "imported": imported,
+    });
+    let summary = if args.apply {
+        format!(
+            "Imported {} Remote Issue(s); GitHub was not changed",
+            data["imported"].as_array().map_or(0, Vec::len)
+        )
+    } else {
+        format!(
+            "Remote Issue import preview: {} create(s), {} link(s), {} duplicate(s), {} error(s); nothing was written",
+            data["creates"].as_array().map_or(0, Vec::len),
+            data["links"].as_array().map_or(0, Vec::len),
+            data["skipped_duplicates"].as_array().map_or(0, Vec::len),
+            data["errors"].as_array().map_or(0, Vec::len),
+        )
+    };
+    Ok(crate::output::CommandOutput::new(data, summary))
+}
+
+fn parse_link_mappings(
+    mappings: &[String],
+    identities: &[String],
+) -> Result<BTreeMap<String, String>> {
+    let selected = identities
+        .iter()
+        .filter_map(|identity| parse_identity(identity).ok())
+        .map(|(repository, number)| format!("{repository}#{number}"))
+        .collect::<BTreeSet<_>>();
+    let mut parsed = BTreeMap::new();
+    for mapping in mappings {
+        let (identity, task) = mapping.split_once('=').ok_or_else(|| {
+            OrbitError::invalid_argument("--link must use OWNER/REPO#NUMBER=TASK")
+        })?;
+        let (repository, number) = parse_identity(identity)?;
+        let identity = format!("{repository}#{number}");
+        let task = task.trim();
+        if task.is_empty() {
+            return Err(OrbitError::invalid_argument(
+                "--link task ID must not be empty",
+            ));
+        }
+        if !selected.contains(&identity) {
+            return Err(OrbitError::invalid_argument(format!(
+                "--link identity `{identity}` is not in the selected import batch"
+            )));
+        }
+        if parsed.insert(identity.clone(), task.to_string()).is_some() {
+            return Err(OrbitError::invalid_argument(format!(
+                "multiple --link mappings were provided for `{identity}`"
+            )));
+        }
+    }
+    Ok(parsed)
+}
+
+fn prepare_issue(issue: crate::github::model::IssueSnapshot) -> Result<PreparedIssue> {
+    if issue.title.trim().is_empty() {
+        return Err(OrbitError::invalid_argument(
+            "GitHub Issue title must not be empty",
+        ));
+    }
+    let mut labels = Vec::with_capacity(issue.labels.len());
+    for label in &issue.labels {
+        let label = task::normalize_label(label)?;
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    labels.sort();
+    let area = issue
+        .area
+        .as_deref()
+        .map(crate::github::fields::parse_area)
+        .transpose()?;
+    let verification = task::normalize_verification(issue.verification.clone())?;
+    let status = crate::github::status::status_from_issue(issue.state, &issue.labels);
+    Ok(PreparedIssue {
+        issue,
+        labels,
+        area,
+        verification,
+        status,
+    })
+}
+
+fn task_issue_differences(task: &Task, prepared: &PreparedIssue) -> Vec<serde_json::Value> {
+    let issue = &prepared.issue;
+    let local_area = task.front.area.map(|area| area.as_str().to_string());
+    let fields = [
+        ("title", json!(task.front.title), json!(issue.title)),
+        ("body", json!(task.body), json!(issue.body)),
+        ("labels", json!(task.front.labels), json!(issue.labels)),
+        ("status", json!(task.front.status), json!(prepared.status)),
+        ("area", json!(local_area), json!(issue.area)),
+        (
+            "verification",
+            json!(task.front.verification),
+            json!(issue.verification),
+        ),
+    ];
+    fields
+        .into_iter()
+        .filter(|(_, local, remote)| local != remote)
+        .map(|(field, orbit, github)| json!({"field": field, "orbit": orbit, "github": github}))
+        .collect()
+}
+
+fn create_linked_task(
+    board: &Board,
+    prepared: &PreparedIssue,
+    reserved_ids: &mut HashSet<String>,
+) -> Result<Task> {
+    let id = loop {
+        let id = task::generate_id(&board.config.id.prefix, board.config.id.length);
+        if reserved_ids.insert(id.clone()) && !board.task_path(&id).exists() {
+            break id;
+        }
+    };
+    let now = Utc::now();
+    let mut task = Task {
+        id,
+        front: TaskFrontmatter {
+            title: prepared.issue.title.trim().to_string(),
+            status: prepared.status,
+            task_type: TaskType::Task,
+            priority: board.config.board.default_priority,
+            labels: prepared.labels.clone(),
+            depends_on: Vec::new(),
+            parent: None,
+            waiting_on: None,
+            checkpoint: None,
+            area: prepared.area,
+            verification: prepared.verification.clone(),
+            github: Some(crate::github::GitHubLink::new(
+                prepared.issue.repo.to_ascii_lowercase(),
+                prepared.issue.number,
+            )),
+            claim: None,
+            stray_claim_times: None,
+            created_at: now,
+            updated_at: now,
+            extra: BTreeMap::new(),
+        },
+        body: prepared.issue.body.clone(),
+    };
+    let link = task.front.github.as_ref().expect("link was set");
+    task.front.github.as_mut().expect("link was set").last_sync =
+        Some(crate::github::sync::baseline_from(
+            crate::github::sync::OrbitSyncView { task: &task, link },
+            &prepared.issue,
+        ));
+    Ok(task)
 }
 
 fn parse_identity(identity: &str) -> Result<(String, u64)> {

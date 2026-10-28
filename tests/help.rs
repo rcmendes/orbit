@@ -78,6 +78,20 @@ fn init_and_setup_explain_the_portable_mcp_choice() {
 }
 
 #[test]
+fn workspace_issue_import_help_explains_review_apply_and_existing_task_links() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"))
+        .args(["workspace", "issues", "import", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("--apply"), "{help}");
+    assert!(help.contains("--link"), "{help}");
+    assert!(help.contains("default is a preview"), "{help}");
+    assert!(help.contains("acme/api#42=orb-a7b2c9"), "{help}");
+}
+
+#[test]
 fn workspace_setup_help_explains_selection_and_reconciliation() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"))
         .args(["workspace", "setup", "--help"])

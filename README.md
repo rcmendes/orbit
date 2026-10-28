@@ -657,6 +657,8 @@ orbit workspace issues refresh
 orbit workspace issues list --repo acme/api --state open --label bug
 orbit workspace issues list --text authentication --unlinked
 orbit workspace issues inspect acme/api#42
+orbit workspace issues import acme/api#42 acme/web#8
+orbit workspace issues import acme/api#42 --link acme/api#42=orb-a7b2c9 --apply
 ```
 
 `orbit init` only creates the Workspace Board; it does not clone repositories. A child-local Board is reported as `AMBIGUOUS_BOARD` during discovery and blocks Workspace initialization if it exists first. Once the Workspace Board exists, `init` reuses it while child Boards remain as backups. Unknown entries in `.orbit` prevent initialization rather than being overwritten; the `workspace-migration.lock` entry is managed by the migration command. The catalog cache is never stored in the Board repository.
@@ -709,11 +711,21 @@ guidance without appearing in `--agents` selection. Use
 fetches all open and closed Issues for included repositories. Pull requests are
 excluded. Summary rows (identity, title, state, labels, Issue Fields, URL, and
 timestamps) are stored in `<workspace>/.orbit/cache/issues.json`, separate from
-the versioned Board. Issue bodies and comments are fetched only by `inspect`.
+the versioned Board. Issue bodies and comments are fetched by `inspect`; import
+fetches Issue details to preview and apply selected imports.
 Per-repository errors mark the retained snapshot stale; other repositories still
 refresh. `list` supports repository, state, labels, title text, and linked or
 unlinked filters. Remote Issues are not Tasks: they never appear in `orbit list`,
 `orbit ready`, claims, or Task export. Import is a separate, explicit workflow.
+
+`orbit workspace issues import OWNER/REPO#NUMBER...` previews a selected Issue
+or batch; it does not select the whole catalog. Add `--apply` only after review.
+New Linked Tasks copy Issue fields and map closed Issues to `done`, or `cancelled`
+when labeled `wontfix`. Repeat `--link OWNER/REPO#NUMBER=TASK` to link existing
+Local Tasks instead. Orbit fields are preserved and differences are shown in the
+preview. Already-linked Issues and Tasks are skipped by repository and Issue
+number, never by title. Import does not write to GitHub; imported Tasks participate
+in normal dependency, hold-label, readiness, and claim rules.
 
 Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link, then the nearest `.orbit` walking up to the repository root (or to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`, then the legacy hidden layout with a warning, then `~/.orbit` if it exists. An explicit override wins for one command:
 

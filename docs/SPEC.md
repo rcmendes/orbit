@@ -380,6 +380,20 @@ whether an Issue is linked to a Task. Catalog entries are never Tasks and are
 excluded from task listing, readiness, claims, and Task export until explicitly
 imported.
 
+`orbit workspace issues import OWNER/REPO#NUMBER...` accepts only selected
+identities from discovered, included repositories. The default is a read-only
+preview; `--apply` creates Linked Tasks or attaches Issues to explicitly mapped
+Local Tasks with repeatable `--link OWNER/REPO#NUMBER=TASK`. New Tasks copy Issue
+title, body, labels, and configured fields, store stable repository/number
+provenance and a sync baseline, and map closed Issues to `done` or `cancelled`
+when labeled `wontfix`. Linking an existing Task preserves all Orbit values and
+previews differences before confirmation. An Issue already linked to another
+Task or a Task already linked to another Issue is skipped as a duplicate, matched
+by repository and Issue number rather than title. Batch preview includes creates,
+links, terminal Tasks, skipped duplicates, and per-Issue errors. Import reads
+GitHub details but never writes to GitHub. Imported Tasks use ordinary readiness,
+dependency, hold-label, and claim behavior.
+
 The status snapshot reports included and excluded repositories, first-time
 access failures (`inaccessible`), previously cached but unavailable repositories
 (`stale`), repositories no longer present (`removed`), unsupported owners,
@@ -774,7 +788,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **M5 — one-command onboarding.** Idempotent `init`, harness detection and selection, shared-Board `link`/`unlink`, absolute-binary hooks, and `setup --check`. Implemented; v0.8.1 makes `init` pure and moves wiring behind the prompt or `setup`.
 
-**M6 — workspaces, SubTasks, export, and Remote Issues.** Workspaces now use a DIR plus `link`; the former `orbit workspace <folder>` creation command was removed in v0.8.1. The current `orbit workspace` commands manage repository discovery, reconcile agent integrations, and refresh or browse the separate Remote Issue catalog. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
+**M6 — workspaces, SubTasks, export, and Remote Issues.** Workspaces now use a DIR plus `link`; the former `orbit workspace <folder>` creation command was removed in v0.8.1. The current `orbit workspace` commands manage repository discovery, reconcile agent integrations, and refresh, browse, or explicitly import selected records from the separate Remote Issue catalog. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
 
 **v0.5.0 — structural Type.** Metadata-only `type`, `tree` family view, close candidates, parent progress fields, and label/type exclusions. Implemented.
 

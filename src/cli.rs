@@ -879,6 +879,12 @@ pub enum WorkspaceIssuesCommand {
     /// Fetch one Remote Issue's body and comments from GitHub.
     #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
     Inspect(WorkspaceIssueInspectArgs),
+    /// Preview selected Remote Issues or explicitly apply their import.
+    #[command(
+        long_about = help::WORKSPACE_ISSUE_IMPORT_LONG,
+        after_long_help = help::WORKSPACE_ISSUES_EXAMPLES
+    )]
+    Import(WorkspaceIssuesImportArgs),
 }
 
 #[derive(Debug, Args)]
@@ -908,6 +914,19 @@ pub struct WorkspaceIssueInspectArgs {
     /// Stable GitHub identity: OWNER/REPO#NUMBER.
     #[arg(value_name = "OWNER/REPO#NUMBER")]
     pub identity: String,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceIssuesImportArgs {
+    /// Explicit Remote Issue identities to review; repeat for a batch.
+    #[arg(value_name = "OWNER/REPO#NUMBER", required = true, num_args = 1..)]
+    pub identities: Vec<String>,
+    /// Link this selected Issue to a specific Local Task. Repeat as IDENTITY=TASK.
+    #[arg(long, value_name = "OWNER/REPO#NUMBER=TASK", action = clap::ArgAction::Append)]
+    pub link: Vec<String>,
+    /// Apply the reviewed selection to the Orbit Board. GitHub is never written.
+    #[arg(long)]
+    pub apply: bool,
 }
 
 #[derive(Debug, Subcommand)]

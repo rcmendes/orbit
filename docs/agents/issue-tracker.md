@@ -39,12 +39,17 @@ orbit --dir <DIR> list           # override the link for one command
 | Refresh or inspect its repository catalog | `orbit workspace refresh`, `orbit workspace status` |
 | Reconcile agent integrations across child repositories | `orbit workspace setup` |
 | Override repository discovery | `orbit workspace include OWNER/REPO`, `orbit workspace exclude OWNER/REPO` |
+| Browse and import Workspace Remote Issues | `orbit workspace issues refresh/list/inspect/import` |
 | Create the machine-wide fallback | `orbit init --global` |
 | Join an existing Board | `orbit link <DIR>` |
 | Move a legacy Board | `orbit doctor --migrate` |
 
 Workspace repository discovery is explicit: `status` reads the last refresh,
 and `refresh` scans direct children without importing GitHub Issues as Tasks.
+The separate Issue catalog keeps imported work out of the Task graph until an
+explicit `workspace issues import` preview is applied. Import creates a Linked
+Task or links a selected Local Task; duplicate links are checked by repository
+and Issue number.
 `workspace setup` uses that snapshot, saves the selected harnesses on the
 Workspace Board, and reuses them when a later refresh discovers child repos.
 

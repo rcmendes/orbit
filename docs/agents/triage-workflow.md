@@ -20,7 +20,8 @@ A proposal may change:
 
 - Gather context, verify a claim, or grill
 - Write an agent brief ([`agent-brief.md`](./agent-brief.md)) or maintain `.out-of-scope/`
-- Adopt or import GitHub Issues (use `orbit github adopt`)
+- Adopt or import GitHub Issues (use `orbit github adopt` or the Workspace
+  `orbit workspace issues import` preview/apply workflow)
 - Change GitHub-owned title, body, or open/closed state
 - Add arbitrary labels
 - Run verification commands

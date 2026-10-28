@@ -47,8 +47,8 @@ outside Git and a repository-local Board inside Git. See
 | Set up a repository or workspace | `orbit init`, `orbit link`, `orbit unlink` |
 | Merge existing Workspace and child Boards | `orbit workspace migrate` |
 | Discover Workspace repositories | `orbit workspace refresh`, `orbit workspace status` |
+| Browse/import Workspace Remote Issues | `orbit workspace issues refresh`, `list`, `inspect`, `import` |
 | Set up agents across Workspace repositories | `orbit workspace setup` |
-| Browse Workspace Remote Issues | `orbit workspace issues refresh`, `list`, `inspect` |
 | File a new ticket | `orbit add` |
 | Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend` |
 | Triage incoming work | `orbit label add/remove/list` |
@@ -249,17 +249,19 @@ orbit workspace include acme/api
 orbit workspace exclude acme/legacy
 ```
 
-### `orbit workspace issues` — browse Remote Issues
+### `orbit workspace issues` — browse and import Remote Issues
 
 Refresh the Workspace's rebuildable GitHub Issue cache, filter cached summaries,
-or inspect one Issue's live body and comments. This catalog is separate from the
-Board and never creates Tasks.
+inspect one Issue's live body and comments, or explicitly import selected Issues
+as Linked Tasks. Catalog entries remain outside the Task graph until import.
 
 ```bash
 orbit workspace issues refresh
 orbit workspace issues list [--repo OWNER/REPO] [--state open|closed]
   [--label LABEL]... [--text TEXT] [--linked|--unlinked]
 orbit workspace issues inspect OWNER/REPO#NUMBER
+orbit workspace issues import OWNER/REPO#NUMBER [OWNER/REPO#NUMBER]...
+  [--link OWNER/REPO#NUMBER=TASK]... [--apply]
 ```
 
 `orbit workspace issues refresh` also refreshes the repository inventory, then
@@ -284,6 +286,14 @@ in the Workspace Board configuration; selecting one removes the opposite
 override. A non-empty include list is an allowlist, and exclusions always take
 precedence. Full mode remains limited to the configured organization.
 Discovery does not create Tasks or GitHub Issues.
+
+Import requires explicit identities from discovered, included repositories and
+fetches Issue details for the preview. Preview is read-only; `--apply` creates new
+Linked Tasks or links specific Local Tasks. `--link IDENTITY=TASK` mappings keep
+the Task's Orbit values and show field differences before confirmation. Duplicate
+Issue links and already-linked Tasks are skipped by stable repository/number
+identity. Closed Issues map to `done`, or `cancelled` when labeled `wontfix`.
+Import never writes to GitHub, and only selected identities are processed.
 
 ### `orbit workspace setup` — reconcile child-repository agents
 

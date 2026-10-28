@@ -36,6 +36,9 @@ orbit workspace issues refresh
 orbit workspace issues list --repo acme/api --state open --label bug
 orbit workspace issues list --text authentication --unlinked
 orbit workspace issues inspect acme/api#42
+orbit workspace issues import acme/api#42
+orbit workspace issues import acme/api#42 acme/web#8 --apply
+orbit workspace issues import acme/api#42 --link acme/api#42=orb-a7b2c9 --apply
 ```
 
 Refresh explicitly reconciles direct child repositories, then paginates through
@@ -49,6 +52,20 @@ snapshot as stale. Listing reads cached summaries only; inspect fetches the issu
 body and comments from GitHub on demand. Catalog refresh performs no GitHub writes
 and creates no Orbit Tasks. Catalog entries remain absent from `orbit list`,
 `orbit ready`, claims, and Task export until explicitly imported.
+
+Import accepts one or more explicit `OWNER/REPO#NUMBER` identities; it never
+selects the whole catalog. Without `--apply`, it previews the Linked Tasks to
+create, Local Tasks to link, terminal status mappings, duplicates, and errors.
+Add `--apply` after reviewing the selection. New Tasks copy the Issue title,
+body, labels, and configured fields, keep the stable repository/number identity,
+and map closed Issues to `done` or `cancelled` when the `wontfix` label applies.
+Repeat `--link OWNER/REPO#NUMBER=TASK` to pair a selected Issue with a specific
+Local Task. Orbit values remain unchanged; the preview lists field differences
+before confirmation. An Issue already linked elsewhere, or a Task already linked
+to another Issue, is reported as a skipped duplicate. Matching uses repository
+and Issue number, never title. Import fetches Issue details but performs no GitHub
+writes; imported Tasks follow normal readiness, dependency, hold-label, and claim
+rules.
 
 `connect` detects the checkout's `origin`. Organization-owned repositories
 configure full mode when their Issue Fields are ready. For personal-account

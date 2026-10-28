@@ -56,9 +56,9 @@ unchanged.
    }
    ```
 
-3. **Review** — validate and preview without writing. Interactive review shows a field-by-field
-   diff for `area`, `verification`, and label additions/removals when a proposal file is used and
-   both stdin and stdout are terminals:
+3. **Review** — validate and display the proposal. Interactive review shows a field-by-field diff
+   for `area`, `verification`, and label additions/removals when a proposal file is used and both
+   stdin and stdout are terminals:
 
    ```bash
    orbit triage review <ID> --proposal-file proposal.json

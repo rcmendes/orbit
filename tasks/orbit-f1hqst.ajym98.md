@@ -9,12 +9,17 @@ labels:
 depends_on:
 - orbit-f1hqst.84hvkj
 parent: orbit-f1hqst
+checkpoint:
+  by: rodrigomendes
+  at: 2026-10-28T23:33:49.788801Z
+  progress: Board migration implementation is running in workspace-migrate; init and repo discovery are merged.
+  next: Review migration results, merge, and close ticket.
 area: board
 claimed_by: rodrigomendes
 claimed_at: 2026-10-28T23:10:02.537995Z
 lease_until: 2026-10-29T00:03:44.160334Z
 created_at: 2026-10-28T22:47:25.015063Z
-updated_at: 2026-10-28T23:33:44.160334Z
+updated_at: 2026-10-28T23:33:49.788801Z
 ---
 
 ## Goal

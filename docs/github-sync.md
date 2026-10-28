@@ -73,10 +73,13 @@ orbit github repo list
 
 ## Adopt or create Issues
 
-- **Adopt** an existing Issue: `orbit github adopt <task-id> --repo acme-corp/widget --number 42`
-- **Create** an Issue for a Task: `orbit github create <task-id> --repo acme-corp/widget`
+- **Adopt** an existing Issue from its URL: `orbit github adopt <task-id> https://github.com/acme-corp/widget/issues/42`
+- **Adopt** an Issue with the legacy form: `orbit github adopt <task-id> --repo acme-corp/widget --number 42`
+- **Create** an Issue for a Task: `orbit github create <task-id>` when exactly one repository is linked, or pass `--repo acme-corp/widget` to select one explicitly.
 
-Issue identity is always `owner/repo` plus issue number. Titles and bodies are not used as identifiers.
+When using a URL, Orbit reads `owner/repo` and the issue number from the standard GitHub Issue URL. Optional `--repo` or `--number` values can confirm the URL; if provided, they must match it. Without a URL, both legacy options are required. Titles and bodies are not used as identifiers.
+
+When creating an Issue, Orbit selects the only linked repository automatically. If zero or multiple repositories are linked, pass `--repo OWNER/REPO` after linking the repository. An explicit `--repo` must name a linked repository.
 
 ## Sync behavior
 

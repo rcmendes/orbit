@@ -58,9 +58,9 @@ create and push sync can publish `area` and `verification`.
 
 - GitHub CLI (`gh`) authenticated for the repositories you link.
 - Organization-level Issue Fields only when using full mode.
-- A `[github]` section in `<DIR>/config.toml`:
+- A `[github]` section in `<DIR>/config.toml`; choose either the basic or full configuration above.
 
-See [Provider modes](#provider-modes) for the full-mode configuration.
+See [Provider modes](#provider-modes) for both configurations and the full-mode setup steps.
 
 ## Link repositories
 

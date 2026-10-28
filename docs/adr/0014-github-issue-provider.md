@@ -9,7 +9,7 @@ Orbit needs explicit, multi-repository synchronization with GitHub Issues while 
 - Boards opt in through `config.toml` `[github]` and explicitly linked repositories. The default `full` mode uses an organization for Issue Fields and resolved ids after `orbit github setup`; `basic` mode supports repositories without Issue Fields.
 - Each durable Task links to at most one GitHub Issue, identified by `owner/repo` and issue number stored in task frontmatter (`github.repo`, `github.number`, optional `last_sync` baseline).
 - The `gh` CLI is the transport; tests use `ORBIT_GITHUB_FIXTURE` with an in-memory client.
-- GitHub is authoritative for title, body, and open/closed state. Organization Issue Fields carry Orbit `area` and `verification`. Labels merge both ways with field-level conflict detection using the stored baseline.
+- GitHub is authoritative for title and body; open/closed state syncs with Orbit status. In full mode, organization Issue Fields carry Orbit `area` and `verification`. Labels merge both ways with field-level conflict detection using the stored baseline.
 - GitHub assignees are never mapped to Orbit claims. Parent/SubTask and dependency edges map to sub-issues and blocked-by relationships only within the same repository; cross-repository relationships are reported, not silently flattened.
 
 ## Consequences

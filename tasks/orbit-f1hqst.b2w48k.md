@@ -1,6 +1,6 @@
 ---
 title: Make Orbit authoritative for Linked Task synchronization
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -11,8 +11,11 @@ depends_on:
 - orbit-f1hqst.a07zbd
 parent: orbit-f1hqst
 area: cli
+claimed_by: rodrigomendes
+claimed_at: 2026-10-28T23:50:10.759851Z
+lease_until: 2026-10-29T00:20:10.759851Z
 created_at: 2026-10-28T22:48:16.365154Z
-updated_at: 2026-10-28T22:48:45.272008Z
+updated_at: 2026-10-28T23:50:10.759851Z
 ---
 
 ## Goal

@@ -26,6 +26,30 @@ orbit github sync orb-a7b2c9        # inspect the plan; writes nothing
 orbit github sync orb-a7b2c9 --apply
 ```
 
+## Workspace Remote Issue catalog
+
+A Workspace can keep a local catalog of Remote Issues without importing them as
+claimable Tasks. From the Workspace root or a child repository, run:
+
+```bash
+orbit workspace issues refresh
+orbit workspace issues list --repo acme/api --state open --label bug
+orbit workspace issues list --text authentication --unlinked
+orbit workspace issues inspect acme/api#42
+```
+
+Refresh explicitly reconciles direct child repositories, then paginates through
+all open and closed GitHub Issues for included repositories. Pull requests are
+excluded. The rebuildable summary cache is stored at
+`<workspace>/.orbit/cache/issues.json`, separate from the Workspace Board. The
+cache stores stable identities, labels, timestamps, URLs, and GitHub Issue Field
+values (including Area and Verification when configured).
+Repository failures are reported independently and preserve the previous local
+snapshot as stale. Listing reads cached summaries only; inspect fetches the issue
+body and comments from GitHub on demand. Catalog refresh performs no GitHub writes
+and creates no Orbit Tasks. Catalog entries remain absent from `orbit list`,
+`orbit ready`, claims, and Task export until explicitly imported.
+
 `connect` detects the checkout's `origin`. Organization-owned repositories
 configure full mode when their Issue Fields are ready. For personal-account
 repositories, it leaves the Board unchanged and reports the exact `[github]`

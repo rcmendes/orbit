@@ -44,6 +44,7 @@ outside Git and a repository-local Board inside Git. See
 | --- | --- |
 | Set up a repository or workspace | `orbit init`, `orbit link`, `orbit unlink` |
 | Discover Workspace repositories | `orbit workspace refresh`, `orbit workspace status` |
+| Browse Workspace Remote Issues | `orbit workspace issues refresh`, `list`, `inspect` |
 | File a new ticket | `orbit add` |
 | Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend` |
 | Triage incoming work | `orbit label add/remove/list` |
@@ -206,7 +207,20 @@ orbit workspace include acme/api
 orbit workspace exclude acme/legacy
 ```
 
-`refresh` scans only direct child directories. It classifies GitHub origins by
+### `orbit workspace issues` — browse Remote Issues
+
+Refresh the Workspace's rebuildable GitHub Issue cache, filter cached summaries,
+or inspect one Issue's live body and comments. This catalog is separate from the
+Board and never creates Tasks.
+
+```bash
+orbit workspace issues refresh
+orbit workspace issues list [--repo OWNER/REPO] [--state open|closed]
+  [--label LABEL]... [--text TEXT] [--linked|--unlinked]
+orbit workspace issues inspect OWNER/REPO#NUMBER
+```
+
+`orbit workspace refresh` scans only direct child directories. It classifies GitHub origins by
 organization, checks access with the configured GitHub client, and saves the
 latest repository inventory at `<workspace>/.orbit/cache/repositories.json`.
 Non-Git directories, repositories without an origin, unsupported origins, and
@@ -215,13 +229,19 @@ marked `inaccessible` until it was previously accessible; after that it is
 `stale` while access is unavailable. A repository directory no longer found
 during refresh is marked `removed`. These states do not delete cached data.
 
-`status` reads the last catalog only. It does not inspect Git directories or
+`orbit workspace status` reads the last repository catalog only. It does not inspect Git directories or
 contact GitHub, so a newly cloned child repository appears after the next
 explicit `refresh`. `workspace.include` and `workspace.exclude` store overrides
 in the Workspace Board configuration; selecting one removes the opposite
 override. A non-empty include list is an allowlist, and exclusions always take
 precedence. Full mode remains limited to the configured organization.
 Discovery does not create Tasks or GitHub Issues.
+
+`orbit workspace issues refresh` also refreshes the repository inventory, then
+fetches every included repository's paginated open/closed Issue summaries. It
+stores Issue Fields without bodies or comments in `issues.json`; list filters the
+cache, and inspect fetches a full Issue and its comments on demand. Per-repository
+errors are reported without replacing that repository's last successful snapshot.
 
 ### `orbit link` — reuse a Board from another repository
 
@@ -358,7 +378,7 @@ normally.
 
 ### `orbit mcp` — expose the Board to an MCP client
 
-Runs the Model Context Protocol server over stdio with 14 tools and the
+Runs the Model Context Protocol server over stdio with 17 tools and the
 `orbit://tasks/{id}` resource. Editors launch it from their MCP configuration.
 `create` accepts `parent` and `type`; `update` accepts `type`; `checkpoint`
 records the claim holder's handoff; `list` and `ready` accept `parent`, `repo`,

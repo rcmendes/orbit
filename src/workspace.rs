@@ -119,10 +119,11 @@ pub fn run(board: &Board, args: WorkspaceArgs) -> Result<crate::output::CommandO
         WorkspaceCommand::Refresh => refresh(board, &workspace),
         WorkspaceCommand::Include(args) => set_override(board, &args.repository, true),
         WorkspaceCommand::Exclude(args) => set_override(board, &args.repository, false),
+        WorkspaceCommand::Issues(args) => crate::issue_catalog::run(board, args.command),
     }
 }
 
-fn workspace_root(board: &Board) -> Result<PathBuf> {
+pub(crate) fn workspace_root(board: &Board) -> Result<PathBuf> {
     let orbit = board.root.parent();
     if board.root.file_name().is_some_and(|name| name == "board")
         && orbit
@@ -136,6 +137,16 @@ fn workspace_root(board: &Board) -> Result<PathBuf> {
     Err(OrbitError::invalid_argument(
         "`orbit workspace` requires a Workspace Board at `<workspace>/.orbit/board`",
     ))
+}
+
+pub(crate) fn included_repositories(workspace: &Path) -> Result<Vec<String>> {
+    let catalog = load_catalog(&catalog_path(workspace))?;
+    Ok(catalog
+        .repositories
+        .values()
+        .filter(|entry| entry.included && entry.status != RepositoryStatus::Removed)
+        .map(|entry| entry.repository.clone())
+        .collect())
 }
 
 fn catalog_path(workspace: &Path) -> PathBuf {
@@ -255,7 +266,7 @@ fn status(workspace: &Path) -> Result<crate::output::CommandOutput> {
     Ok(crate::output::CommandOutput::new(data, lines.join("\n")))
 }
 
-fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::CommandOutput> {
+pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::CommandOutput> {
     if board.config.github.mode.is_basic() {
         return Err(OrbitError::invalid_argument(
             "Workspace repository discovery requires GitHub full mode and one configured organization",

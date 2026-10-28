@@ -13,7 +13,14 @@ struct McpClient {
 
 impl McpClient {
     fn start(repo: &TestRepo) -> Self {
-        let mut command = repo.orbit_command(&["mcp"]);
+        Self::start_with(repo, &["mcp"], &[])
+    }
+
+    fn start_with(repo: &TestRepo, args: &[&str], envs: &[(&str, &str)]) -> Self {
+        let mut command = repo.orbit_command(args);
+        for (key, value) in envs {
+            command.env(key, value);
+        }
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -115,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 14);
+    assert_eq!(names.len(), 17);
     for expected in [
         "ready",
         "list",
@@ -131,6 +138,9 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "delete",
         "label",
         "comment",
+        "issue_refresh",
+        "issue_list",
+        "issue_inspect",
     ] {
         assert!(names.contains(&expected), "{expected}");
     }
@@ -140,6 +150,63 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
 
     let unknown = client.request(4, "not/a/method", json!({}));
     assert_eq!(unknown["error"]["code"], -32601);
+}
+
+#[test]
+fn remote_issue_catalog_is_available_over_mcp() {
+    let repo = TestRepo::new();
+    let workspace_dir = tempfile::tempdir().unwrap();
+    let workspace = workspace_dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    repo.init_at(&workspace);
+    let config = workspace.join(".orbit/board/config.toml");
+    let mut contents = std::fs::read_to_string(&config).unwrap();
+    contents.push_str("\n[github]\norganization = \"acme\"\n");
+    std::fs::write(config, contents).unwrap();
+
+    let child = workspace.join("api");
+    std::fs::create_dir_all(&child).unwrap();
+    for args in [
+        &(["init", "-q"][..]),
+        &(["config", "user.name", "Test"][..]),
+        &(["config", "user.email", "test@example.com"][..]),
+        &(["commit", "--allow-empty", "-q", "-m", "init"][..]),
+        &(["remote", "add", "origin", "https://github.com/acme/api.git"][..]),
+    ] {
+        let output = repo.git_in(&child, args);
+        assert!(output.status.success(), "git {args:?} failed");
+    }
+    let fixture = repo.home().join("github.json");
+    std::fs::write(
+        &fixture,
+        json!({
+            "repositories": { "acme/api": { "owner_type": "Organization" } },
+            "catalog_issues": { "acme/api": [{ "number": 42, "title": "MCP catalog issue", "state": "closed", "labels": ["bug"] }] },
+            "issue_details": { "acme/api#42": { "body": "Loaded by inspect" } },
+            "issue_comments": { "acme/api#42": [{ "id": 8, "body": "MCP comment", "author": "alice", "created_at": "2026-01-01T00:00:00Z" }] }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let dir_arg = workspace.to_str().unwrap().to_string();
+    let fixture_arg = fixture.to_str().unwrap().to_string();
+    let args = ["--dir", &dir_arg, "mcp"];
+    let envs = [("ORBIT_GITHUB_FIXTURE", fixture_arg.as_str())];
+    let mut client = McpClient::start_with(&repo, &args, &envs);
+    initialize(&mut client);
+
+    let refreshed = tool_envelope(&client.call(30, "issue_refresh", json!({})));
+    assert_eq!(refreshed["ok"], true, "{refreshed}");
+    let listed = tool_envelope(&client.call(
+        31,
+        "issue_list",
+        json!({ "repo": "acme/api", "state": "closed", "labels": ["bug"], "linked": "unlinked" }),
+    ));
+    assert_eq!(listed["data"]["issues"][0]["identity"], "acme/api#42");
+    let inspected =
+        tool_envelope(&client.call(32, "issue_inspect", json!({ "identity": "acme/api#42" })));
+    assert_eq!(inspected["data"]["body"], "Loaded by inspect");
+    assert_eq!(inspected["data"]["comments"][0]["body"], "MCP comment");
 }
 
 #[test]

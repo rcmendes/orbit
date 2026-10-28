@@ -161,6 +161,13 @@ Issues (not pull requests); per-repository failures retain the previous snapshot
 and mark it stale.
 _Avoid_: Board, Task list, GitHub mirror
 
+**Linked Task**:
+A Task paired with one GitHub Issue by stable `owner/repo#number` identity. A
+new import copies the Issue fields; linking an existing Local Task preserves its
+Orbit values and previews differences. Orbit owns the Task's editable fields and
+lifecycle, while GitHub remains unchanged until an explicit sync writes it.
+_Avoid_: Remote Issue, mirrored Issue
+
 **Legacy layout**:
 A Board from before the current path contract: the hidden worktree at
 `<git-common-dir>/orbit/board`, a shared `<workspace>/board`, a Board directly at

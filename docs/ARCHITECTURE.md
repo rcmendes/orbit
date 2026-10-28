@@ -459,7 +459,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | --- | --- | --- |
 | Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `workspace status`, `workspace issues list/inspect` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; `github status` diagnoses provider health without changing the Board or GitHub; Workspace status and Issue listing read their local snapshots. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `workspace status`, `workspace issues list/inspect/import` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; GitHub status and Workspace catalog views read current snapshots/details. Issue import previews selected records; only `--apply` writes Linked Tasks to the Board, never to GitHub. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
 | Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude`, `workspace issues refresh`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly synchronize GitHub Issues, discover Workspace repositories and store overrides, refresh Remote Issue summaries, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
@@ -473,12 +473,14 @@ A Workspace is an ordinary, non-Git folder containing repositories and one Board
 scans one level of child directories and validates GitHub `origin` ownership and
 access against `[github].organization`; the resulting snapshot is outside the
 Board Git repository. `workspace status` reads that snapshot without network or
-filesystem discovery. Stale and removed entries remain in the cache, and the
-command never imports Issues as Tasks. `workspace issues refresh` reconciles
-that inventory and stores paginated Issue summaries separately at
+filesystem discovery. Stale and removed entries remain in the cache.
+`workspace issues refresh` reconciles that inventory and stores paginated Issue summaries separately at
 `.orbit/cache/issues.json`; per-repository errors retain the last successful
 snapshot. `workspace issues list` reads cached summaries, while `inspect` fetches
-the live body and comments. These catalog entries never enter the Task graph.
+the live body and comments. `import` explicitly previews selected catalog
+identities, then optionally creates Linked Tasks or links Local Tasks without
+overwriting Orbit fields. Duplicate checks use stable identity and import does
+not write to GitHub. Only applied imports enter the Task graph.
 
 ```mermaid
 flowchart LR

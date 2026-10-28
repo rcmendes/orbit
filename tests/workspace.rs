@@ -2,6 +2,7 @@ mod common;
 
 use common::TestRepo;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn init_workspace(repo: &TestRepo) -> (tempfile::TempDir, PathBuf) {
@@ -428,6 +429,381 @@ fn issue_catalog_stays_outside_tasks_until_a_task_is_explicitly_linked() {
     );
     assert_eq!(unlinked["data"]["count"], 1);
     assert_eq!(unlinked["data"]["issues"][0]["identity"], "acme/api#2");
+}
+
+#[test]
+fn workspace_issue_import_previews_then_creates_a_linked_task_without_writing_github() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    let github_fixture = repo.home().join("github.json");
+    let issue_fixture = json!({
+        "repositories": { "acme/api": { "owner_type": "Organization" } },
+        "catalog_issues": {
+            "acme/api": [{
+                "number": 17,
+                "title": "Repair import",
+                "state": "open",
+                "labels": ["bug", "needs-triage"],
+                "html_url": "https://github.com/acme/api/issues/17",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-02-01T00:00:00Z",
+                "area": "cli",
+                "verification": "cargo test"
+            }]
+        },
+        "issue_details": { "acme/api#17": { "body": "Issue description" } }
+    });
+    std::fs::write(&github_fixture, issue_fixture.to_string()).unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+
+    let (status, preview) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "import", "acme/api#17"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{preview}");
+    assert_eq!(preview["data"]["apply"], false);
+    assert_eq!(preview["data"]["creates"][0]["identity"], "acme/api#17");
+    assert_eq!(preview["data"]["creates"][0]["status"], "todo");
+    assert_eq!(preview["data"]["links"].as_array().unwrap().len(), 0);
+    assert_eq!(preview["data"]["errors"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        repo.ok_json_in(
+            &workspace,
+            &[
+                "--dir",
+                workspace.to_str().unwrap(),
+                "list",
+                "--all",
+                "--json"
+            ]
+        )["data"]["tasks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let before_apply = std::fs::read(&github_fixture).unwrap();
+    let (status, applied) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "import", "acme/api#17", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{applied}");
+    assert_eq!(applied["data"]["imported"][0]["identity"], "acme/api#17");
+    let task_id = applied["data"]["imported"][0]["task"].as_str().unwrap();
+    let task = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "show",
+            task_id,
+            "--json",
+        ],
+    );
+    assert_eq!(task["data"]["title"], "Repair import");
+    assert_eq!(task["data"]["body"], "Issue description");
+    assert_eq!(task["data"]["labels"], json!(["bug", "needs-triage"]));
+    assert_eq!(task["data"]["area"], "cli");
+    assert_eq!(task["data"]["verification"], "cargo test");
+    assert_eq!(task["data"]["github"]["repo"], "acme/api");
+    assert_eq!(task["data"]["github"]["number"], 17);
+    assert!(task["data"]["github"]["last_sync"].is_object());
+    let held_ready = repo.ok_json_in(
+        &workspace,
+        &["--dir", workspace.to_str().unwrap(), "ready", "--json"],
+    );
+    assert_eq!(held_ready["data"]["count"], 0);
+    assert_eq!(std::fs::read(&github_fixture).unwrap(), before_apply);
+}
+
+#[test]
+fn workspace_issue_import_links_local_tasks_without_overwriting_and_skips_both_duplicate_directions()
+ {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    let github_fixture = repo.home().join("github.json");
+    let issue_fixture = json!({
+        "repositories": { "acme/api": { "owner_type": "Organization" } },
+        "catalog_issues": {
+            "acme/api": [
+                { "number": 10, "title": "Remote title", "state": "open", "labels": ["remote-label"], "updated_at": "2026-02-01T00:00:00Z" },
+                { "number": 11, "title": "Other issue", "state": "open", "labels": [], "updated_at": "2026-02-02T00:00:00Z" }
+            ]
+        },
+        "issue_details": {
+            "acme/api#10": { "body": "Remote body" },
+            "acme/api#11": { "body": "Other body" }
+        }
+    });
+    std::fs::write(&github_fixture, issue_fixture.to_string()).unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+    let local = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "add",
+            "Local title",
+            "--body",
+            "Local body",
+            "--label",
+            "local-label",
+            "--json",
+        ],
+    );
+    let task_id = local["data"]["id"].as_str().unwrap();
+    let mapping = format!("acme/api#10={task_id}");
+    let preview_args = [
+        "workspace",
+        "issues",
+        "import",
+        "acme/api#10",
+        "--link",
+        &mapping,
+    ];
+    let (status, preview) = run_workspace(&repo, &workspace, &preview_args, &github_fixture);
+    assert_eq!(status, 0, "{preview}");
+    assert_eq!(preview["data"]["links"][0]["task"], task_id);
+    let difference_fields = preview["data"]["links"][0]["differences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|difference| difference["field"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(difference_fields.contains(&"title"));
+    assert!(difference_fields.contains(&"body"));
+    assert!(difference_fields.contains(&"labels"));
+
+    let link_args = [
+        "workspace",
+        "issues",
+        "import",
+        "acme/api#10",
+        "--link",
+        &mapping,
+        "--apply",
+    ];
+    let (status, linked) = run_workspace(&repo, &workspace, &link_args, &github_fixture);
+    assert_eq!(status, 0, "{linked}");
+    assert_eq!(linked["data"]["imported"][0]["action"], "linked");
+    let still_local = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "show",
+            task_id,
+            "--json",
+        ],
+    );
+    assert_eq!(still_local["data"]["title"], "Local title");
+    assert_eq!(still_local["data"]["body"], "Local body");
+    assert_eq!(still_local["data"]["labels"], json!(["local-label"]));
+    assert_eq!(still_local["data"]["github"]["number"], 10);
+
+    let (status, task_duplicate) = run_workspace(
+        &repo,
+        &workspace,
+        &[
+            "workspace",
+            "issues",
+            "import",
+            "acme/api#11",
+            "--link",
+            &format!("acme/api#11={task_id}"),
+        ],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{task_duplicate}");
+    assert_eq!(
+        task_duplicate["data"]["skipped_duplicates"][0]["reason"],
+        "task_already_linked"
+    );
+
+    let (status, issue_duplicate) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "import", "acme/api#10"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{issue_duplicate}");
+    assert_eq!(
+        issue_duplicate["data"]["skipped_duplicates"][0]["reason"],
+        "issue_already_linked"
+    );
+}
+
+#[test]
+fn workspace_issue_import_reviews_and_applies_explicit_batches_with_terminal_mappings() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    child_repo(&repo, &workspace, "web", "https://github.com/acme/web.git");
+    let github_fixture = repo.home().join("github.json");
+    let issue_fixture = json!({
+        "repositories": {
+            "acme/api": { "owner_type": "Organization" },
+            "acme/web": { "owner_type": "Organization" }
+        },
+        "catalog_issues": {
+            "acme/api": [
+                { "number": 1, "title": "Open issue", "state": "open", "labels": [], "updated_at": "2026-02-01T00:00:00Z" },
+                { "number": 2, "title": "Open issue", "state": "closed", "labels": [], "updated_at": "2026-02-02T00:00:00Z" },
+                { "number": 4, "title": "Claimable issue", "state": "open", "labels": [], "updated_at": "2026-02-04T00:00:00Z" }
+            ],
+            "acme/web": [
+                { "number": 3, "title": "Won't fix", "state": "closed", "labels": ["wontfix"], "updated_at": "2026-02-03T00:00:00Z" }
+            ]
+        }
+    });
+    std::fs::write(&github_fixture, issue_fixture.to_string()).unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+
+    let local = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "add",
+            "Keep local task",
+            "--body",
+            "Local values stay authoritative",
+            "--label",
+            "needs-triage",
+            "--json",
+        ],
+    );
+    let local_task = local["data"]["id"].as_str().unwrap();
+    let link_mapping = format!("acme/api#1={local_task}");
+
+    let selection = [
+        "acme/api#1",
+        "acme/api#2",
+        "acme/web#3",
+        "acme/api#1",
+        "acme/api#99",
+        "acme/api#4",
+    ];
+    let mut preview_args = vec!["workspace", "issues", "import"];
+    preview_args.extend(selection);
+    preview_args.extend(["--link", &link_mapping]);
+    let (status, preview) = run_workspace(&repo, &workspace, &preview_args, &github_fixture);
+    assert_eq!(status, 0, "{preview}");
+    assert_eq!(preview["data"]["creates"].as_array().unwrap().len(), 3);
+    assert_eq!(preview["data"]["links"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        preview["data"]["terminal_tasks"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        preview["data"]["skipped_duplicates"][0]["reason"],
+        "issue_selected_more_than_once"
+    );
+    assert_eq!(preview["data"]["errors"][0]["identity"], "acme/api#99");
+    assert_eq!(preview["data"]["creates"][0]["status"], "done");
+    assert_eq!(preview["data"]["creates"][1]["status"], "cancelled");
+    assert_eq!(
+        repo.ok_json_in(
+            &workspace,
+            &[
+                "--dir",
+                workspace.to_str().unwrap(),
+                "list",
+                "--all",
+                "--json"
+            ]
+        )["data"]["tasks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let mut apply_args = vec!["workspace", "issues", "import"];
+    apply_args.extend(selection);
+    apply_args.extend(["--link", &link_mapping]);
+    apply_args.push("--apply");
+    let (status, applied) = run_workspace(&repo, &workspace, &apply_args, &github_fixture);
+    assert_eq!(status, 0, "{applied}");
+    assert_eq!(applied["data"]["imported"].as_array().unwrap().len(), 4);
+    let tasks = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "list",
+            "--all",
+            "--json",
+        ],
+    );
+    let statuses = tasks["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["status"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(statuses, BTreeSet::from(["todo", "done", "cancelled"]));
+    let local_after = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "show",
+            local_task,
+            "--json",
+        ],
+    );
+    assert_eq!(local_after["data"]["title"], "Keep local task");
+    assert_eq!(
+        local_after["data"]["body"],
+        "Local values stay authoritative"
+    );
+    assert_eq!(local_after["data"]["github"]["number"], 1);
+    let ready = repo.ok_json_in(
+        &workspace,
+        &["--dir", workspace.to_str().unwrap(), "ready", "--json"],
+    );
+    assert_eq!(ready["data"]["count"], 1);
+    assert_eq!(ready["data"]["tasks"][0]["title"], "Claimable issue");
+    let claim = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "ready",
+            "--claim",
+            "--by",
+            "test-agent",
+            "--json",
+        ],
+    );
+    assert_eq!(claim["data"]["title"], "Claimable issue");
+    assert_eq!(claim["data"]["status"], "in_progress");
 }
 
 #[test]

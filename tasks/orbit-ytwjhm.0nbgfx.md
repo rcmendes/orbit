@@ -1,6 +1,6 @@
 ---
 title: Accept GitHub Issue URLs and default repository selection
-status: in_progress
+status: done
 type: task
 priority: 2
 labels:
@@ -13,11 +13,8 @@ checkpoint:
   progress: Verified ticket branch and integration base; identified CLI args, GitHub command handlers, config selection, integration test harness, and docs. Implementing CLI-level tests at the public command seam for both adopt forms and repository selection.
   next: Add failing GitHub CLI integration tests, implement parsing/default selection, then update docs and verify.
 area: cli
-claimed_by: impl-0nbgfx
-claimed_at: 2026-10-28T15:27:21.151559Z
-lease_until: 2026-10-28T16:03:14.115394Z
 created_at: 2026-10-28T15:23:46.658254Z
-updated_at: 2026-10-28T15:33:14.115394Z
+updated_at: 2026-10-28T15:34:08.247236Z
 ---
 
 ## Goal

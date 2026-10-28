@@ -1,6 +1,6 @@
 ---
 title: Enforce canonical triage label invariants
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -8,8 +8,11 @@ labels:
 - ready-for-agent
 parent: orbit-dkyngc
 area: cli
+claimed_by: impl-z30hsp
+claimed_at: 2026-10-28T15:27:06.679988Z
+lease_until: 2026-10-28T15:57:06.679988Z
 created_at: 2026-10-28T15:20:07.717389Z
-updated_at: 2026-10-28T15:20:07.717389Z
+updated_at: 2026-10-28T15:27:06.679988Z
 ---
 
 ## Goal

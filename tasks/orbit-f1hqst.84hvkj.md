@@ -1,6 +1,6 @@
 ---
 title: Add Workspace-root initialization and Board discovery
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -13,11 +13,8 @@ checkpoint:
   progress: Created integration/workspace-issue-catalog; TDD implementation running in worktree workspace-init.
   next: Review and merge init ticket, then advance ready frontier.
 area: board
-claimed_by: rodrigomendes
-claimed_at: 2026-10-28T22:50:33.806362Z
-lease_until: 2026-10-28T23:30:34.542097Z
 created_at: 2026-10-28T22:47:09.472535Z
-updated_at: 2026-10-28T23:00:39.033041Z
+updated_at: 2026-10-28T23:09:56.434183Z
 ---
 
 ## Goal

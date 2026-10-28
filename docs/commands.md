@@ -801,16 +801,18 @@ orbit sync
 ### `orbit github` — GitHub Issue provider
 
 Connects the current checkout's origin repository, adopts or creates Issues, and
-runs bidirectional sync with conflict detection. `orbit github connect` writes
-the `[github]` configuration for an organization-owned repository. Existing
-integrations can also link repositories explicitly. `orbit github status` is a
-read-only diagnostic that reports authentication and scopes, linked repositories,
-Issue Field configuration/resolution, linked Task count, pending pull/push
-changes, conflicts, unsupported relationships, and the next recommended action.
-`orbit doctor` checks GitHub configuration only when the provider is enabled.
-Other GitHub commands require that configuration, the `gh` CLI, and organization
-Issue Fields. Full setup and semantics are in
-[github-sync.md](./github-sync.md).
+runs bidirectional sync with conflict detection. `orbit github connect` checks
+`gh` authentication and repository access. For an organization-owned repository,
+it validates Issue Fields and writes `[github]` configuration. For a personal
+repository, it leaves configuration unchanged and reports next steps; manually
+configure `mode = "basic"` to use personal-repository sync. Existing integrations
+can link repositories explicitly. Sync requires the `gh` CLI and `[github]` in
+`config.toml`; full mode uses organization Issue Fields, while basic mode limits
+Triage to labels. `orbit github status` is a read-only diagnostic that reports
+authentication and scopes, linked repositories, Issue Field configuration when
+applicable, linked Task count, pending changes, conflicts, unsupported
+relationships, and a recommended next action. `orbit doctor` checks GitHub
+configuration when the provider is enabled. See [github-sync.md](./github-sync.md).
 
 ```bash
 orbit github connect
@@ -818,12 +820,18 @@ orbit github status
 orbit github status --json
 orbit github repo link acme/widget
 orbit github setup
+orbit github setup --create-fields       # explicitly create missing org Issue Fields
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42  # legacy form
 orbit github create orb-a7b2c9                 # uses the only linked repository
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
 ```
+
+`orbit github setup` only resolves existing fields and stores their ids. Creating
+missing fields requires the explicit `--create-fields` option and organization
+administrator access. See [github-sync.md](./github-sync.md) for field types,
+permissions, and remediation.
 
 ### `orbit triage` — agent review and apply
 

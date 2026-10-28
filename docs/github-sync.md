@@ -2,14 +2,26 @@
 
 Orbit can link a Board to one or more GitHub repositories and keep durable Tasks aligned with GitHub Issues through explicit sync. Orbit remains local-first: the Board is updated first; GitHub changes are published only when you run sync with `--apply`.
 
-## Prerequisites
+## Provider modes
 
-- GitHub CLI (`gh`) authenticated for the organization and repositories you link.
-- Organization-level Issue Fields named **Area** and **Verification** (names are configurable under `[github.issue_fields]`).
-- An organization-owned GitHub repository. `orbit github connect` detects it from the current checkout's `origin`, validates the setup, and writes `[github]` automatically. To configure the Board manually instead, add:
+Orbit supports two modes. Existing configuration defaults to `full`, so existing
+organization setups keep their current behavior.
+
+### Full mode (organization Issue Fields)
+
+- Requires organization-level Issue Fields named **Area** and **Verification** (names are configurable under `[github.issue_fields]`).
+- Run `orbit github setup` to resolve and store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to check configuration without writing ids.
+- Full mode syncs Orbit `area` and `verification` through those organization Issue Fields.
+
+Connect an organization-owned repository from its checkout with `orbit github
+connect`. It checks `gh auth status` and repository access, validates the
+organization fields, and writes the `[github]` configuration. It preserves other
+Board settings and is safe to rerun. Use `orbit github connect --json` for
+machine-readable status. To configure the Board manually, use:
 
 ```toml
 [github]
+mode = "full" # optional; full is the default
 organization = "acme-corp"
 repositories = ["acme-corp/widget"]
 
@@ -18,21 +30,70 @@ area_name = "Area"
 verification_name = "Verification"
 ```
 
-For manual configuration, run `orbit github setup` to resolve and store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to check configuration without writing ids.
+For manual configuration, run `orbit github setup` to resolve existing Issue Fields and store their GraphQL ids. This default command does not create fields. Use `orbit github setup --validate-only` to check configuration without writing ids.
 
-To connect a Board, run `orbit github connect` from a checkout with a GitHub `origin`. It checks `gh auth status`, verifies repository access, detects whether the owner is an organization or a personal account, validates the organization fields, and writes the `[github]` organization, repository link, and field ids. It preserves other Board configuration and is safe to rerun. Use `orbit github connect --json` to inspect `owner_type`, `organization`, `repository`, `field_status`, `next_action`, and whether configuration changed.
+To let Orbit create missing fields, explicitly run `orbit github setup --create-fields`. It creates **Area** as a single-select field with `board`, `cli`, `mcp`, `setup`, `docs`, and `release` options, and **Verification** as a text field. Existing fields with those names are reused and are not changed. Before creating anything, Orbit verifies that the authenticated `gh` user has an active organization administrator membership. If the membership check fails, refresh the `read:org` scope with `gh auth refresh --hostname github.com --scopes read:org`. If field creation is denied, confirm that `gh` is authenticated as an organization administrator with permission to create organization Issue Fields. An administrator can also create the fields in GitHub and rerun the default `orbit github setup` to store their ids.
 
-The current Issue Fields integration requires an organization-owned repository. For a personal-account repository, connect leaves configuration unchanged and reports these options: use an organization-owned repository, use `orbit github basic` when personal-account basic mode is available, or cancel. Missing `gh` authentication, repository access, or Issue Fields is reported with a remediation action.
+### Basic mode (personal repositories)
+
+Basic mode supports personal repositories without organization Issue Fields or
+`orbit github setup`:
+
+```toml
+[github]
+mode = "basic"
+repositories = ["alice/widget"]
+```
+
+Link repositories, adopt or create Issues, and sync GitHub-owned title, body,
+open/closed state, and labels. Title, body, and state flow from GitHub to Orbit;
+labels merge in both directions, and Orbit status changes can open or close an
+Issue. GitHub assignees remain informational and are never mapped to Orbit
+claims.
+
+Basic mode does **not** support organization Issue Fields: `area` and
+`verification` are neither imported from GitHub nor pushed to GitHub. Create
+and push sync fail with a clear error when a Task has either value, rather than
+silently dropping it. Pull-only sync preserves Orbit's local values. Triage
+context reports these capabilities as unavailable; Triage review/apply may
+change labels, but proposals that change `area` or `verification` are rejected.
+`orbit github setup` is unavailable in basic mode. Do not set `organization`,
+custom Issue Field names, or Issue Field ids with `mode = "basic"`.
+
+To upgrade, change `mode` to `"full"`, configure `organization` and the field
+names, then run `orbit github setup`. Once the Issue Field ids are stored,
+create and push sync can publish `area` and `verification`.
+
+### Connect behavior and prerequisites
+
+- GitHub CLI (`gh`) authenticated for the repositories you link.
+- Organization-level Issue Fields only when using full mode.
+
+`orbit github connect` reads the current checkout's GitHub `origin`, checks
+authentication and access, and detects whether the owner is an organization or a
+personal account. For a personal-account repository it leaves configuration
+unchanged and reports next steps; manually configure basic mode to use it. For
+an organization repository, it validates and stores the repository and Issue
+Field configuration. Missing authentication, repository access, or fields are
+reported with remediation actions. JSON output includes `owner_type`,
+`organization`, `repository`, `field_status`, `next_action`, and whether the
+configuration changed.
+
+For manual full-mode configuration, run `orbit github setup` to resolve and
+store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to
+check configuration without writing ids.
 
 ## Diagnose the integration
 
 `orbit github status` checks the current `gh` authentication identity and scopes,
-configured organization, linked repository access, and whether the configured
-Area and Verification Issue Fields are present and their stored ids are current.
-It also loads linked Tasks and previews their sync plans to count pending pull and
-push changes and detect conflicts. Cross-repository SubTask and dependency links
-are reported as unsupported. The command is read-only: it does not change Board
-configuration, Tasks, GitHub Issues, or the fixture used by integration tests.
+linked repository access, and—when using full mode—the configured organization
+and whether its Area and Verification Issue Fields are present with current stored
+ids. It also loads linked Tasks and previews their sync plans to count pending
+pull and push changes and detect conflicts. Cross-repository SubTask and
+dependency links are reported as unsupported. The command is read-only: it does
+not change Board configuration, Tasks, GitHub Issues, or the fixture used by
+integration tests. In basic mode, it reports the `repo` scope, skips organization
+checks, and marks Area and Verification as not applicable.
 
 Use `--json` for the stable diagnostic structure. `data.pending.pull` and
 `data.pending.push` count field changes; `pull_tasks` and `push_tasks` identify the
@@ -97,9 +158,10 @@ Rules:
 
 | Field | Authority | Notes |
 | --- | --- | --- |
-| Title, body, open/closed | GitHub | Pulled on sync; closed + `wontfix` label → Orbit `cancelled` |
+| Title, body | GitHub | Pulled on sync |
+| Open/closed | GitHub + Orbit status | Pulled on sync; Orbit `done`/`cancelled` pushes closed/open state; closed + `wontfix` → Orbit `cancelled` |
 | Labels | Both | Merged; concurrent edits since last sync → conflict |
-| `area`, `verification` | Orbit (via Issue Fields) | Pushed to GitHub fields; concurrent edits → conflict |
+| `area`, `verification` | Orbit (via Issue Fields) | Full mode only; pushed to fields; concurrent edits → conflict; unavailable in basic mode |
 | Assignees | GitHub only | Never mapped to Orbit claims |
 | Claims, checkpoints, status while in progress | Orbit | Open GitHub Issues preserve `todo` / `in_progress` |
 
@@ -134,6 +196,6 @@ Controlled `area` values match `TaskArea`: `board`, `cli`, `mcp`, `setup`, `docs
 
 ## Testing
 
-Integration tests set `ORBIT_GITHUB_FIXTURE` to a JSON file with mock org fields and issues so CI does not call GitHub.
+Integration tests set `ORBIT_GITHUB_FIXTURE` to a JSON file with mock org fields and issues so CI does not call GitHub. Basic mode ignores Issue Field values in fixture Issues.
 
 See [ADR 0014](./adr/0014-github-issue-provider.md).

@@ -43,6 +43,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let github = &board.config.github;
     let configured = github.is_enabled();
+    let basic_mode = github.mode.is_basic();
 
     let username = auth
         .username
@@ -53,7 +54,11 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     } else {
         auth.scopes.clone()
     };
-    let required_scopes = ["read:org", "repo"];
+    let required_scopes: &[&str] = if basic_mode {
+        &["repo"]
+    } else {
+        &["read:org", "repo"]
+    };
     let missing_scopes: Vec<_> = if scopes.is_empty() {
         Vec::new()
     } else {
@@ -123,14 +128,14 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
         }));
     }
 
-    let area_id_configured = github.issue_fields.area_id.is_some();
-    let verification_id_configured = github.issue_fields.verification_id.is_some();
+    let area_id_configured = !basic_mode && github.issue_fields.area_id.is_some();
+    let verification_id_configured = !basic_mode && github.issue_fields.verification_id.is_some();
     let mut area_resolved = None;
     let mut verification_resolved = None;
     let mut area_matches = None;
     let mut verification_matches = None;
     let mut field_validation_failed = false;
-    if let Some(org) = github.organization.as_deref() {
+    if !basic_mode && let Some(org) = github.organization.as_deref() {
         if auth.authenticated {
             match client.validate_org_fields(org, &github.issue_fields) {
                 Ok(fields) => {
@@ -179,7 +184,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
                 }
             }
         }
-    } else if configured {
+    } else if configured && !basic_mode {
         issues.push(json!({
             "code": "GITHUB_SETUP_INCOMPLETE",
             "message": "github.organization is not set; run `orbit github connect`",
@@ -255,9 +260,16 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
             continue;
         }
         match client.get_issue(&link.repo, link.number) {
-            Ok(issue) => {
-                let plan =
-                    sync::plan_sync(OrbitSyncView { task, link }, &issue, SyncDirection::Both);
+            Ok(mut issue) => {
+                if basic_mode {
+                    omit_issue_fields(&mut issue);
+                }
+                let direction = if basic_mode {
+                    SyncDirection::Pull
+                } else {
+                    SyncDirection::Both
+                };
+                let plan = sync::plan_sync(OrbitSyncView { task, link }, &issue, direction);
                 let pull_count = count_pull_changes(&plan);
                 let push_count = count_push_changes(&plan);
                 if pull_count > 0 {
@@ -281,36 +293,40 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let fields = json!({
         "area": {
             "name": github.issue_fields.area_name,
-            "configured": area_id_configured,
+            "applicable": !basic_mode,
+            "configured": if basic_mode { Value::Null } else { json!(area_id_configured) },
             "resolved": area_resolved,
             "matches": area_matches,
         },
         "verification": {
             "name": github.issue_fields.verification_name,
-            "configured": verification_id_configured,
+            "applicable": !basic_mode,
+            "configured": if basic_mode { Value::Null } else { json!(verification_id_configured) },
             "resolved": verification_resolved,
             "matches": verification_matches,
         },
     });
+    let scope_refresh = if basic_mode {
+        "gh auth refresh --hostname github.com --scopes repo"
+    } else {
+        "gh auth refresh --hostname github.com --scopes read:org,repo"
+    };
     let next_action = if !auth.authenticated {
         "gh auth login".to_string()
     } else if !missing_scopes.is_empty() {
-        "gh auth refresh --hostname github.com --scopes read:org,repo".to_string()
-    } else if !configured || github.organization.is_none() {
+        scope_refresh.to_string()
+    } else if !configured || (!basic_mode && github.organization.is_none()) {
         "orbit github connect".to_string()
     } else if github.repositories.is_empty() {
         "orbit github repo link OWNER/REPO".to_string()
-    } else if field_validation_failed
-        && area_resolved.is_none()
-        && verification_resolved.is_none()
+    } else if field_validation_failed && area_resolved.is_none() && verification_resolved.is_none()
     {
-        "gh auth refresh --hostname github.com --scopes read:org,repo".to_string()
+        scope_refresh.to_string()
     } else if area_resolved == Some(false)
         || verification_resolved == Some(false)
         || area_matches == Some(false)
         || verification_matches == Some(false)
-        || !area_id_configured
-        || !verification_id_configured
+        || (!basic_mode && (!area_id_configured || !verification_id_configured))
     {
         "orbit github setup".to_string()
     } else if !unsupported.is_empty() {
@@ -333,11 +349,11 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
         "none".to_string()
     };
     let next_command = match next_action.as_str() {
-        "gh auth login"
-        | "orbit github connect"
-        | "orbit github setup"
-        | "gh auth refresh --hostname github.com --scopes read:org,repo"
-        | "orbit github sync" => Some(next_action.clone()),
+        "gh auth login" | "orbit github connect" | "orbit github setup" | "orbit github sync" => {
+            Some(next_action.clone())
+        }
+        "gh auth refresh --hostname github.com --scopes read:org,repo"
+        | "gh auth refresh --hostname github.com --scopes repo" => Some(next_action.clone()),
         "orbit github repo link OWNER/REPO" => {
             let repository = issues
                 .iter()
@@ -365,6 +381,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let data = json!({
         "configured": configured,
         "healthy": healthy,
+        "mode": if basic_mode { "basic" } else { "full" },
         "auth": {
             "authenticated": auth.authenticated,
             "username": username,
@@ -428,7 +445,7 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     let client = match client_from_env() {
         Ok(client) => client,
         Err(error) => {
-            issues.push(crate::graph::Issue::new(&error.code, None, error.message));
+            issues.push(crate::graph::Issue::new(error.code, None, error.message));
             return issues;
         }
     };
@@ -450,9 +467,15 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
         auth.scopes
     };
     if !scopes.is_empty() {
-        let missing: Vec<_> = ["read:org", "repo"]
-            .into_iter()
-            .filter(|required| !scopes.iter().any(|scope| scope == required))
+        let required_scopes: &[&str] = if github.mode.is_basic() {
+            &["repo"]
+        } else {
+            &["read:org", "repo"]
+        };
+        let missing: Vec<_> = required_scopes
+            .iter()
+            .filter(|required| !scopes.iter().any(|scope| scope == **required))
+            .copied()
             .collect();
         if !missing.is_empty() {
             issues.push(crate::graph::Issue::new(
@@ -462,7 +485,7 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
             ));
         }
     }
-    if github.organization.is_none() {
+    if !github.mode.is_basic() && github.organization.is_none() {
         issues.push(crate::graph::Issue::new(
             code::GITHUB_SETUP_INCOMPLETE,
             None,
@@ -479,7 +502,7 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     for repository in &github.repositories {
         if let Err(error) = client.repository_info(repository) {
             issues.push(crate::graph::Issue::new(
-                &error.code,
+                error.code,
                 None,
                 format!(
                     "GitHub repository `{repository}` is unavailable: {}",
@@ -488,8 +511,11 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
             ));
         }
     }
-    match github.organization.as_deref() {
-        Some(org) => match client.validate_org_fields(org, &github.issue_fields) {
+    if github.mode.is_basic() {
+        return issues;
+    }
+    if let Some(org) = github.organization.as_deref() {
+        match client.validate_org_fields(org, &github.issue_fields) {
             Ok(fields) => {
                 if github.issue_fields.area_id.as_deref() != Some(fields.area_id.as_str())
                     || github.issue_fields.verification_id.as_deref()
@@ -503,15 +529,14 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
                 }
             }
             Err(error) => issues.push(crate::graph::Issue::new(
-                &error.code,
+                error.code,
                 None,
                 format!(
                     "GitHub Issue Fields are not ready: {}; run `orbit github setup`",
                     error.message
                 ),
             )),
-        },
-        None => {}
+        }
     }
     issues
 }
@@ -596,7 +621,13 @@ fn render_status(data: &Value) -> String {
     ));
     output.push_str(&format!(
         "organization: {}\n",
-        data["organization"].as_str().unwrap_or("(not configured)")
+        data["organization"]
+            .as_str()
+            .unwrap_or(if data["mode"] == "basic" {
+                "(not applicable in basic mode)"
+            } else {
+                "(not configured)"
+            })
     ));
     if let Some(details) = data["conflict_details"].as_array() {
         for detail in details {
@@ -667,7 +698,9 @@ fn render_status(data: &Value) -> String {
             output.push_str(&format!(
                 "issue: [{}] {}\n",
                 issue["code"].as_str().unwrap_or("GITHUB_STATUS"),
-                issue["message"].as_str().unwrap_or("GitHub status check failed")
+                issue["message"]
+                    .as_str()
+                    .unwrap_or("GitHub status check failed")
             ));
         }
     }
@@ -675,6 +708,9 @@ fn render_status(data: &Value) -> String {
 }
 
 fn field_human_status(field: &Value) -> &'static str {
+    if field["applicable"] == false {
+        return "not applicable (basic mode)";
+    }
     match (field["configured"].as_bool(), field["resolved"].as_bool()) {
         (Some(true), Some(true)) if field["matches"] != false => "configured and resolved",
         (Some(true), Some(true)) => "resolved but stored id is stale",
@@ -892,7 +928,11 @@ fn require_github_section(board: &Board) -> Result<()> {
 fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::CommandOutput> {
     let org = board.config.github.require_organization()?;
     let client = client_from_env()?;
-    let setup = client.validate_org_fields(org, &board.config.github.issue_fields)?;
+    let setup = if args.create_fields {
+        client.create_org_fields(org, &board.config.github.issue_fields)?
+    } else {
+        client.validate_org_fields(org, &board.config.github.issue_fields)?
+    };
     if args.validate_only {
         return Ok(crate::output::CommandOutput::new(
             json!({
@@ -906,18 +946,31 @@ fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::Comm
     }
     let area_id = setup.area_id.clone();
     let verification_id = setup.verification_id.clone();
+    let created_fields_count = setup.created_fields.len();
     board.save_config("orbit: github setup", |config| {
         config.github.issue_fields.area_id = Some(setup.area_id);
         config.github.issue_fields.verification_id = Some(setup.verification_id);
         Ok(())
     })?;
+    let mut data = json!({
+        "organization": org,
+        "area_id": area_id,
+        "verification_id": verification_id,
+    });
+    if args.create_fields {
+        data["created_fields"] = json!(setup.created_fields);
+    }
     Ok(crate::output::CommandOutput::new(
-        json!({
-            "organization": org,
-            "area_id": area_id,
-            "verification_id": verification_id,
-        }),
-        format!("Stored GitHub Issue Field ids for `{org}`"),
+        data,
+        if args.create_fields {
+            if created_fields_count == 0 {
+                format!("GitHub Issue Fields already exist for `{org}`; ids stored")
+            } else {
+                format!("Created {created_fields_count} missing GitHub Issue Field(s) for `{org}` and stored ids")
+            }
+        } else {
+            format!("Stored GitHub Issue Field ids for `{org}`")
+        },
     ))
 }
 
@@ -951,7 +1004,10 @@ fn cmd_repo_link(board: &Board, args: GitHubRepoLinkArgs) -> Result<crate::outpu
     ))
 }
 
-fn cmd_repo_unlink(board: &Board, args: GitHubRepoLinkArgs) -> Result<crate::output::CommandOutput> {
+fn cmd_repo_unlink(
+    board: &Board,
+    args: GitHubRepoLinkArgs,
+) -> Result<crate::output::CommandOutput> {
     let repo = crate::github::GitHubConfig::normalize_repo(&args.repository)?;
     board.save_config("orbit: github repo unlink", |config| {
         if config.github.unlink_repo(&repo)? {
@@ -970,7 +1026,10 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
     let (repo, number) = resolve_adopt_identifier(&args)?;
     board.config.github.require_linked_repo(&repo)?;
     let client = client_from_env()?;
-    let issue = client.get_issue(&repo, number)?;
+    let mut issue = client.get_issue(&repo, number)?;
+    if board.config.github.mode.is_basic() {
+        omit_issue_fields(&mut issue);
+    }
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let task = graph.get(&args.task)?.clone();
     if task.github_link().is_some() {
@@ -982,7 +1041,7 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
     let mut task = task;
     task.front.github = Some(GitHubLink::new(repo.clone(), number));
     task.front.updated_at = Utc::now();
-    apply_issue_to_task(&mut task, &issue)?;
+    apply_issue_to_task(&mut task, &issue, !board.config.github.mode.is_basic())?;
     validate_orbit_metadata(&task)?;
     persist_task(board, &task, &format!("orbit: github adopt {}", task.id))?;
     let human = format!("Adopted {repo}/#{number} for {}", task.id);
@@ -1003,6 +1062,9 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
     }
     let repo = select_create_repo(&board.config.github, args.repo.as_deref())?;
     board.config.github.require_linked_repo(&repo)?;
+    if board.config.github.mode.is_basic() {
+        reject_basic_metadata(&task)?;
+    }
     let client = client_from_env()?;
     let issue = client.create_issue(
         &repo,
@@ -1143,12 +1205,14 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
             .ok_or_else(|| OrbitError::invalid_argument(format!("task {id} has no GitHub link")))?
             .clone();
         board.config.github.require_linked_repo(&link.repo)?;
-        let issue = client.get_issue(&link.repo, link.number)?;
-        let plan = sync::plan_sync(
-            OrbitSyncView { task, link: &link },
-            &issue,
-            direction,
-        );
+        if board.config.github.mode.is_basic() && direction != SyncDirection::Pull {
+            reject_basic_metadata(task)?;
+        }
+        let mut issue = client.get_issue(&link.repo, link.number)?;
+        if board.config.github.mode.is_basic() {
+            omit_issue_fields(&mut issue);
+        }
+        let plan = sync::plan_sync(OrbitSyncView { task, link: &link }, &issue, direction);
         human_plans.push(format_sync_preview(task, &link, &plan));
         let relationship = relationships::plan_relationship_sync(task, &link, &issue, &[], &[]);
         plans.push(json!({
@@ -1277,10 +1341,7 @@ fn apply_plan(
         task.front.labels = labels.clone();
     }
     if let Some(area) = &plan.apply_area {
-        task.front.area = area
-            .as_ref()
-            .map(|value| parse_area(value))
-            .transpose()?;
+        task.front.area = area.as_ref().map(|value| parse_area(value)).transpose()?;
     }
     if let Some(verification) = &plan.apply_verification {
         task.front.verification = verification.clone();
@@ -1308,19 +1369,44 @@ fn apply_plan(
     Ok(())
 }
 
-fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot) -> Result<()> {
+fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot, include_fields: bool) -> Result<()> {
     task.front.title = issue.title.clone();
     task.body = issue.body.clone();
     task.front.labels = issue.labels.clone();
-    task.front.area = issue
-        .area
-        .as_deref()
-        .map(parse_area)
-        .transpose()?;
-    task.front.verification = issue.verification.clone();
+    if include_fields {
+        task.front.area = issue.area.as_deref().map(parse_area).transpose()?;
+        task.front.verification = issue.verification.clone();
+    }
     task.front.status = crate::github::status::status_from_issue(issue.state, &issue.labels);
     set_baseline(task, issue);
     Ok(())
+}
+
+fn reject_basic_metadata(task: &Task) -> Result<()> {
+    let fields = [
+        task.front.area.map(|area| area.as_str().to_string()),
+        task.front.verification.clone(),
+    ];
+    let present: Vec<_> = ["area", "verification"]
+        .into_iter()
+        .zip(fields)
+        .filter_map(|(name, value)| value.map(|_| name))
+        .collect();
+    if present.is_empty() {
+        return Ok(());
+    }
+    Err(OrbitError::invalid_argument(format!(
+        "GitHub basic mode cannot sync task {} field(s): {}; remove them or use mode = `full` with organization Issue Fields",
+        task.id,
+        present.join(", ")
+    )))
+}
+
+fn omit_issue_fields(issue: &mut IssueSnapshot) {
+    // REST Issues for personal repositories do not expose organization Issue
+    // Fields. Ignore fixture/legacy values rather than importing them.
+    issue.area = None;
+    issue.verification = None;
 }
 
 fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {

@@ -1,17 +1,20 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{OrbitError, Result, code};
 use crate::github::config::IssueFieldConfig;
 use crate::github::model::{IssueSnapshot, IssueState};
 
+const AREA_FIELD_OPTIONS: [&str; 6] = ["board", "cli", "mcp", "setup", "docs", "release"];
+
 pub struct FieldSetup {
     pub area_id: String,
     pub verification_id: String,
+    pub created_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +57,8 @@ pub trait GitHubClient: Send + Sync {
         org: &str,
         fields: &IssueFieldConfig,
     ) -> Result<FieldSetup>;
+
+    fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup>;
 
     fn get_issue(&self, repo: &str, number: u64) -> Result<IssueSnapshot>;
 
@@ -166,6 +171,59 @@ impl GitHubClient for GhCliClient {
         Ok(FieldSetup {
             area_id: area_id.expect("missing Area field was reported"),
             verification_id: verification_id.expect("missing Verification field was reported"),
+            created_fields: Vec::new(),
+        })
+    }
+
+    fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
+        validate_org_admin(org)?;
+        let query = "query($org: String!) { organization(login: $org) { id issueFields(first: 100) { nodes { ... on IssueField { id name } } } } }";
+        let output = gh_api(&[
+            "graphql",
+            "-f",
+            &format!("query={query}"),
+            "-F",
+            &format!("org={org}"),
+        ])?;
+        let response: GraphQlSetupResponse = serde_json::from_slice(&output).map_err(|error| {
+            OrbitError::new(
+                code::GITHUB_SETUP_INCOMPLETE,
+                format!("invalid GitHub organization response: {error}"),
+            )
+        })?;
+        let organization = response.data.organization.ok_or_else(|| {
+            OrbitError::new(
+                code::GITHUB_SETUP_INCOMPLETE,
+                format!("GitHub organization `{org}` was not found or is not accessible"),
+            )
+        })?;
+        let mut area_id = find_field_id(&organization.issue_fields.nodes, &fields.area_name);
+        let mut verification_id =
+            find_field_id(&organization.issue_fields.nodes, &fields.verification_name);
+        let mut created_fields = Vec::new();
+        if area_id.is_none() {
+            area_id = Some(create_issue_field(
+                &organization.id,
+                &fields.area_name,
+                "SINGLE_SELECT",
+                Some(&AREA_FIELD_OPTIONS),
+            )?);
+            created_fields.push(fields.area_name.clone());
+        }
+        if verification_id.is_none() {
+            verification_id = Some(create_issue_field(
+                &organization.id,
+                &fields.verification_name,
+                "TEXT",
+                None,
+            )?);
+            created_fields.push(fields.verification_name.clone());
+        }
+        Ok(FieldSetup {
+            area_id: area_id.expect("Area field id was resolved or created"),
+            verification_id: verification_id
+                .expect("Verification field id was resolved or created"),
+            created_fields,
         })
     }
 
@@ -237,9 +295,66 @@ impl GitHubClient for GhCliClient {
     }
 }
 
+fn validate_org_admin(org: &str) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Membership {
+        role: String,
+        state: String,
+    }
+
+    if org.is_empty()
+        || !org
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(OrbitError::invalid_argument(
+            "github.organization must be a GitHub organization login containing only letters, numbers, and hyphens",
+        ));
+    }
+    let endpoint = format!("/user/memberships/orgs/{org}");
+    let output = gh_api(&["api", &endpoint]).map_err(|error| {
+        OrbitError::new(
+            code::GITHUB_SETUP_INCOMPLETE,
+            format!(
+                "could not verify organization administrator access for `{org}`: {}. Refresh `gh` with `gh auth refresh --hostname github.com --scopes read:org`, then retry; an organization administrator can create the fields in GitHub and run `orbit github setup`.",
+                error.message
+            ),
+        )
+    })?;
+    let membership: Membership = serde_json::from_slice(&output).map_err(|error| {
+        OrbitError::new(
+            code::GITHUB_SETUP_INCOMPLETE,
+            format!(
+                "could not verify organization administrator access for `{org}`: invalid membership response ({error}). Refresh `gh` with `gh auth refresh --hostname github.com --scopes read:org`, then retry."
+            ),
+        )
+    })?;
+    if membership.role != "admin" || membership.state != "active" {
+        return Err(missing_org_admin_permission(org));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct GraphQlFieldsResponse {
     data: GraphQlOrganization,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQlSetupResponse {
+    data: GraphQlSetupData,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQlSetupData {
+    organization: Option<GraphQlSetupOrganization>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQlSetupOrganization {
+    id: String,
+    #[serde(rename = "issueFields")]
+    issue_fields: GraphQlNodes,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,6 +384,92 @@ fn find_field_id(nodes: &[GraphQlIssueField], name: &str) -> Option<String> {
         .iter()
         .find(|node| node.name.eq_ignore_ascii_case(name))
         .map(|node| node.id.clone())
+}
+
+fn create_issue_field(
+    organization_id: &str,
+    name: &str,
+    data_type: &str,
+    options: Option<&[&str]>,
+) -> Result<String> {
+    let organization_id = serde_json::to_string(organization_id).map_err(|error| {
+        OrbitError::new(
+            code::GITHUB_SETUP_INCOMPLETE,
+            format!("could not encode GitHub organization id: {error}"),
+        )
+    })?;
+    let name = serde_json::to_string(name).map_err(|error| {
+        OrbitError::new(
+            code::GITHUB_SETUP_INCOMPLETE,
+            format!("could not encode GitHub Issue Field name: {error}"),
+        )
+    })?;
+    let options = options.map_or_else(String::new, |options| {
+        let options = options
+            .iter()
+            .enumerate()
+            .map(|(priority, name)| {
+                format!(
+                    "{{ name: {}, color: GRAY, priority: {priority} }}",
+                    serde_json::to_string(name).expect("static option name is valid JSON")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(", options: [{options}]")
+    });
+    let query = format!(
+        "mutation {{ createIssueField(input: {{ ownerId: {organization_id}, name: {name}, dataType: {data_type}{options} }}) {{ issueField {{ id }} }} }}"
+    );
+    let output = gh_api(&["graphql", "-f", &format!("query={query}")]).map_err(|error| {
+        OrbitError::new(
+            code::GITHUB_SETUP_INCOMPLETE,
+            format!(
+                "GitHub could not create Issue Field `{}`: {}. Confirm `gh` is authenticated as an organization administrator and can create organization Issue Fields, then retry `orbit github setup --create-fields`; alternatively create the fields in GitHub and run `orbit github setup`.",
+                name.trim_matches('"'),
+                error.message
+            ),
+        )
+    })?;
+    let response: GraphQlCreateFieldResponse =
+        serde_json::from_slice(&output).map_err(|error| {
+            OrbitError::new(
+                code::GITHUB_SETUP_INCOMPLETE,
+                format!("invalid GitHub Issue Field creation response: {error}"),
+            )
+        })?;
+    Ok(response.data.create_issue_field.issue_field.id)
+}
+
+fn missing_org_admin_permission(org: &str) -> OrbitError {
+    OrbitError::new(
+        code::GITHUB_SETUP_INCOMPLETE,
+        format!(
+            "creating GitHub Issue Fields for `{org}` requires organization administrator access. Ask an organization administrator to run `orbit github setup --create-fields`, or create the fields in GitHub and run `orbit github setup`."
+        ),
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQlCreateFieldResponse {
+    data: GraphQlCreateFieldData,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQlCreateFieldData {
+    #[serde(rename = "createIssueField")]
+    create_issue_field: GraphQlCreateFieldPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQlCreateFieldPayload {
+    #[serde(rename = "issueField")]
+    issue_field: GraphQlCreatedField,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQlCreatedField {
+    id: String,
 }
 
 fn gh_api(args: &[&str]) -> Result<Vec<u8>> {
@@ -358,12 +559,14 @@ fn parse_rest_issue(repo: &str, bytes: &[u8]) -> Result<IssueSnapshot> {
     })
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FixtureStore {
     #[serde(default = "fixture_authenticated")]
     authenticated: bool,
     #[serde(default)]
     auth_message: String,
+    #[serde(default = "fixture_organization_admin")]
+    organization_admin: bool,
     #[serde(default)]
     auth_username: Option<String>,
     #[serde(default)]
@@ -373,10 +576,14 @@ struct FixtureStore {
     #[serde(default)]
     org_fields: HashMap<String, String>,
     #[serde(default)]
+    created_fields: Vec<serde_json::Value>,
+    #[serde(default)]
     issues: HashMap<String, IssueSnapshot>,
+    #[serde(skip)]
+    fixture_path: PathBuf,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FixtureRepository {
     owner_type: String,
     #[serde(default = "fixture_accessible")]
@@ -388,6 +595,10 @@ fn fixture_authenticated() -> bool {
 }
 
 fn fixture_accessible() -> bool {
+    true
+}
+
+fn fixture_organization_admin() -> bool {
     true
 }
 
@@ -403,7 +614,10 @@ impl FixtureClient {
             OrbitError::config(format!("invalid github fixture: {error}"))
         })?;
         Ok(Self {
-            store: Arc::new(Mutex::new(store)),
+            store: Arc::new(Mutex::new(FixtureStore {
+                fixture_path: path.to_path_buf(),
+                ..store
+            })),
         })
     }
 }
@@ -470,7 +684,55 @@ impl GitHubClient for FixtureClient {
         Ok(FieldSetup {
             area_id: area_id.expect("missing Area field was reported"),
             verification_id: verification_id.expect("missing Verification field was reported"),
+            created_fields: Vec::new(),
         })
+    }
+
+    fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
+        let mut store = self.store.lock().expect("fixture lock");
+        if !store.organization_admin {
+            return Err(missing_org_admin_permission(org));
+        }
+        let mut created_fields = Vec::new();
+        let area_key = format!("{org}/{}", fields.area_name);
+        let area_id = if let Some(id) = store.org_fields.get(&area_key) {
+            id.clone()
+        } else {
+            let id = fixture_created_field_id(&fields.area_name, true);
+            store.org_fields.insert(area_key, id.clone());
+            store.created_fields.push(serde_json::json!({
+                "name": fields.area_name,
+                "data_type": "SINGLE_SELECT",
+                "options": AREA_FIELD_OPTIONS,
+            }));
+            created_fields.push(fields.area_name.clone());
+            id
+        };
+        let verification_key = format!("{org}/{}", fields.verification_name);
+        let verification_id = if let Some(id) = store.org_fields.get(&verification_key) {
+            id.clone()
+        } else {
+            let id = fixture_created_field_id(&fields.verification_name, false);
+            store.org_fields.insert(verification_key, id.clone());
+            store.created_fields.push(serde_json::json!({
+                "name": fields.verification_name,
+                "data_type": "TEXT",
+                "options": [],
+            }));
+            created_fields.push(fields.verification_name.clone());
+            id
+        };
+        let setup = FieldSetup {
+            area_id,
+            verification_id,
+            created_fields,
+        };
+        let serialized = serde_json::to_vec_pretty(&*store).map_err(|error| {
+            OrbitError::config(format!("could not serialize GitHub fixture: {error}"))
+        })?;
+        std::fs::write(&store.fixture_path, serialized)
+            .map_err(|error| OrbitError::io("write GitHub fixture", error))?;
+        Ok(setup)
     }
 
     fn get_issue(&self, repo: &str, number: u64) -> Result<IssueSnapshot> {
@@ -542,4 +804,23 @@ impl GitHubClient for FixtureClient {
         store.issues.insert(key, issue.clone());
         Ok(issue)
     }
+}
+
+fn fixture_created_field_id(name: &str, area: bool) -> String {
+    if area {
+        return "CREATED_AREA_ID".to_string();
+    }
+    if name.eq_ignore_ascii_case("Verification") {
+        return "CREATED_VERIFICATION_ID".to_string();
+    }
+    format!(
+        "CREATED_{}_ID",
+        name.chars()
+            .map(|character| if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            })
+            .collect::<String>()
+    )
 }

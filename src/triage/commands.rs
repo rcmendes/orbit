@@ -35,7 +35,9 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
         }
     }
 
-    let guidance_path_json = guidance_path.as_ref().map(|path| path.display().to_string());
+    let guidance_path_json = guidance_path
+        .as_ref()
+        .map(|path| path.display().to_string());
 
     let areas: Vec<&str> = TaskArea::all().iter().map(|area| area.as_str()).collect();
     let data = json!({
@@ -50,11 +52,14 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
         "project_guidance_path": guidance_path_json,
         "allowed_areas": areas,
         "canonical_labels": CANONICAL_TRIAGE_LABELS,
+        "metadata_capabilities": {
+            "area": !board.config.github.mode.is_basic(),
+            "verification": !board.config.github.mode.is_basic(),
+            "labels": true,
+        },
     });
-    let mut output = crate::output::CommandOutput::new(
-        data,
-        format!("Triage context for {id} (GitHub-linked)"),
-    );
+    let mut output =
+        crate::output::CommandOutput::new(data, format!("Triage context for {id} (GitHub-linked)"));
     output.warnings.extend(warnings);
     Ok(output)
 }
@@ -66,6 +71,7 @@ fn cmd_review(board: &Board, args: TriageReviewArgs) -> Result<crate::output::Co
     require_github_link(&task)?;
 
     let (changes, apply_ready) = proposal.build_preview(&task)?;
+    reject_basic_structured_changes(board, &changes)?;
     let data = json!({
         "id": task.id,
         "proposal": {
@@ -74,17 +80,18 @@ fn cmd_review(board: &Board, args: TriageReviewArgs) -> Result<crate::output::Co
         },
         "changes": changes,
         "apply_ready": apply_ready,
-        "sync_note": "After approval, run `orbit github sync <ID> --direction push --apply` to publish Orbit-owned fields and labels to GitHub.",
+        "sync_note": if board.config.github.mode.is_basic() {
+            "In basic mode, only labels can sync to GitHub; area and verification require full mode with organization Issue Fields."
+        } else {
+            "After approval, run `orbit github sync <ID> --direction push --apply` to publish Orbit-owned fields and labels to GitHub."
+        },
     });
     Ok(crate::output::CommandOutput::new(
         data,
         if apply_ready {
             format!("Reviewed triage proposal for {}", args.task)
         } else {
-            format!(
-                "Triage left {} unchanged due to uncertainty",
-                args.task
-            )
+            format!("Triage left {} unchanged due to uncertainty", args.task)
         },
     ))
 }
@@ -110,6 +117,7 @@ fn cmd_apply(board: &Board, args: TriageApplyArgs) -> Result<crate::output::Comm
     }
 
     let (changes, apply_ready) = proposal.build_preview(&task)?;
+    reject_basic_structured_changes(board, &changes)?;
     if !apply_ready {
         return Err(OrbitError::new(
             code::TRIAGE_INVALID_PROPOSAL,
@@ -147,10 +155,24 @@ fn cmd_apply(board: &Board, args: TriageApplyArgs) -> Result<crate::output::Comm
     ))
 }
 
+fn reject_basic_structured_changes(board: &Board, changes: &serde_json::Value) -> Result<()> {
+    if !board.config.github.mode.is_basic() {
+        return Ok(());
+    }
+    let has_structured_field = changes.as_object().is_some_and(|changes| {
+        changes.contains_key("area") || changes.contains_key("verification")
+    });
+    if has_structured_field {
+        return Err(OrbitError::invalid_argument(
+            "GitHub basic mode Triage supports labels only; area and verification require mode = `full` with organization Issue Fields",
+        ));
+    }
+    Ok(())
+}
+
 fn load_proposal(path: &PathBuf) -> Result<TriageProposal> {
-    let raw = fs::read_to_string(path).map_err(|error| {
-        OrbitError::io(format!("read proposal file {}", path.display()), error)
-    })?;
+    let raw = fs::read_to_string(path)
+        .map_err(|error| OrbitError::io(format!("read proposal file {}", path.display()), error))?;
     let mut proposal = TriageProposal::parse_json(&raw)?;
     proposal.normalize()?;
     Ok(proposal)

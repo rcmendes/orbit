@@ -835,13 +835,19 @@ Task can map one-to-one to a GitHub Issue identified by repository and issue
 number. Sync is explicit, detects field-level conflicts, and never maps GitHub
 assignees to Orbit claims.
 
-Organization-level Issue Fields carry Orbit-owned area and verification values.
-Run `orbit github connect` to detect the origin repository, check `gh` access,
-validate those fields, and configure the Board without requiring manual
-`config.toml` edits. Run `orbit github status` for a read-only health report of
-authentication and scopes, linked repositories, Issue Fields, pending changes,
-conflicts, and unsupported relationships. `orbit doctor` also checks GitHub
-configuration when the provider is enabled.";
+Full mode (the default) uses organization-level Issue Fields for Orbit-owned
+area and verification values; run setup after editing config.toml. Basic mode
+supports personal repositories without setup, but cannot sync area or
+verification. Triage in basic mode supports labels only. `orbit github connect`
+checks the current origin and configures organization-owned repositories; for a
+personal-account origin, it leaves the Board unchanged and reports next steps.
+
+`orbit github setup` resolves existing fields by default. Creating missing
+fields is opt-in with `--create-fields` and requires organization administrator
+access. Run `orbit github status` for a read-only health report of authentication
+and scopes, linked repositories, Issue Fields when applicable, pending changes,
+conflicts, unsupported relationships, and the next recommended action. `orbit
+doctor` also checks GitHub configuration when the provider is enabled.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
@@ -876,7 +882,8 @@ Examples:
 pub const GITHUB_SETUP_EXAMPLES: &str = "\
 Examples:
   orbit github setup --validate-only
-  orbit github setup";
+  orbit github setup
+  orbit github setup --create-fields";
 
 pub const GITHUB_REPO_LINK_EXAMPLES: &str = "\
 Examples:
@@ -903,8 +910,9 @@ pub const TRIAGE_LONG: &str = "\
 Review GitHub-linked Tasks and apply approved metadata changes on the Orbit Board first.
 
 Triage only touches Orbit-owned `area`, task-level `verification`, and canonical triage/category
-labels. It never rewrites GitHub-owned title, body, or open/closed state, and it does not run
-verification commands. After `triage apply --approve`, publish changes with `orbit github sync`.
+labels. In GitHub basic mode, it supports labels only. It never rewrites GitHub-owned title, body,
+or open/closed state, and it does not run verification commands. After `triage apply --approve`,
+publish changes with `orbit github sync`.
 
 Agents draft a proposal JSON file, run `triage review` for a preview, then `triage apply --approve`.
 When evidence is insufficient, record `uncertainty` and leave metadata unchanged.";

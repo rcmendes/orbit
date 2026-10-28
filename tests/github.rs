@@ -22,6 +22,13 @@ fn write_github_config_for_repositories(repo: &TestRepo, repositories: &[&str]) 
     fs::write(path, config).unwrap();
 }
 
+fn write_basic_github_config(repo: &TestRepo) {
+    let path = repo.board_path().join("config.toml");
+    let mut config = fs::read_to_string(&path).unwrap();
+    config.push_str("\n[github]\nmode = \"basic\"\nrepositories = [\"personal/widget\"]\n");
+    fs::write(path, config).unwrap();
+}
+
 fn write_fixture(dir: &TempDir) -> std::path::PathBuf {
     let path = dir.path().join("fixture.json");
     fs::write(
@@ -136,13 +143,7 @@ fn github_repo_link_and_adopt_use_fixture_client() {
     repo.init();
     write_github_config(&repo);
 
-    let link = repo.ok_json(&[
-        "github",
-        "repo",
-        "link",
-        "acme/widget",
-        "--json",
-    ]);
+    let link = repo.ok_json(&["github", "repo", "link", "acme/widget", "--json"]);
     assert_eq!(link["data"]["repository"], "acme/widget");
 
     let id = repo.add("Sync me", &[]);
@@ -184,6 +185,157 @@ fn github_setup_validate_only_reads_fixture_fields() {
 }
 
 #[test]
+fn github_setup_create_fields_creates_required_fields_and_reuses_them() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_dir.path().join("setup.json");
+    fs::write(
+        &fixture,
+        r#"{
+  "organization_admin": true,
+  "org_fields": {},
+  "issues": {}
+}"#,
+    )
+    .unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let setup = repo.ok_json_with_env(
+        &["github", "setup", "--create-fields", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(setup["data"]["area_id"], "CREATED_AREA_ID");
+    assert_eq!(setup["data"]["verification_id"], "CREATED_VERIFICATION_ID");
+
+    let created: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(created["created_fields"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        created["created_fields"][0]["options"],
+        serde_json::json!(["board", "cli", "mcp", "setup", "docs", "release"])
+    );
+    assert_eq!(created["created_fields"][0]["data_type"], "SINGLE_SELECT");
+    assert_eq!(created["created_fields"][1]["data_type"], "TEXT");
+
+    let again = repo.ok_json_with_env(
+        &["github", "setup", "--create-fields", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(again["data"]["area_id"], "CREATED_AREA_ID");
+    assert_eq!(again["data"]["verification_id"], "CREATED_VERIFICATION_ID");
+    let reused: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(reused["created_fields"].as_array().unwrap().len(), 2);
+
+    let config = fs::read_to_string(repo.board_path().join("config.toml")).unwrap();
+    assert!(config.contains("area_id = \"CREATED_AREA_ID\""));
+    assert!(config.contains("verification_id = \"CREATED_VERIFICATION_ID\""));
+}
+
+#[test]
+fn github_setup_create_fields_reuses_existing_fields_without_overwriting_them() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_dir.path().join("setup.json");
+    fs::write(
+        &fixture,
+        r#"{
+  "organization_admin": true,
+  "org_fields": { "acme/Area": "EXISTING_AREA_ID" },
+  "issues": {}
+}"#,
+    )
+    .unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let setup = repo.ok_json_with_env(
+        &["github", "setup", "--create-fields", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(setup["data"]["area_id"], "EXISTING_AREA_ID");
+    assert_eq!(setup["data"]["verification_id"], "CREATED_VERIFICATION_ID");
+
+    let fields: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(fields["org_fields"]["acme/Area"], "EXISTING_AREA_ID");
+    assert_eq!(fields["created_fields"].as_array().unwrap().len(), 1);
+    assert_eq!(fields["created_fields"][0]["name"], "Verification");
+}
+
+#[test]
+fn github_setup_create_fields_requires_organization_administration() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_dir.path().join("setup.json");
+    fs::write(
+        &fixture,
+        r#"{
+  "organization_admin": false,
+  "org_fields": {},
+  "issues": {}
+}"#,
+    )
+    .unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let (status, result) = repo.json_with_env(
+        &["github", "setup", "--create-fields", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_ne!(status, 0);
+    assert_eq!(result["error"]["code"], "GITHUB_SETUP_INCOMPLETE");
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("organization administrator")
+    );
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("create the fields in GitHub")
+    );
+    let unchanged: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(unchanged["created_fields"].is_null());
+}
+
+#[test]
+fn github_setup_without_create_fields_only_resolves_existing_fields() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_dir.path().join("setup.json");
+    fs::write(
+        &fixture,
+        r#"{
+  "organization_admin": false,
+  "org_fields": {
+    "acme/Area": "AREA_ID",
+    "acme/Verification": "VERIFICATION_ID"
+  },
+  "issues": {}
+}"#,
+    )
+    .unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let setup = repo.ok_json_with_env(
+        &["github", "setup", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(setup["data"]["area_id"], "AREA_ID");
+    assert_eq!(setup["data"]["verification_id"], "VERIFICATION_ID");
+    let config = fs::read_to_string(repo.board_path().join("config.toml")).unwrap();
+    assert!(config.contains("area_id = \"AREA_ID\""));
+    assert!(config.contains("verification_id = \"VERIFICATION_ID\""));
+    let unchanged: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(unchanged["created_fields"].is_null());
+}
+
+#[test]
 fn github_sync_dry_run_reports_assignee_warning() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
@@ -213,9 +365,182 @@ fn github_sync_dry_run_reports_assignee_warning() {
     let warnings = plan["data"]["tasks"][0]["plan"]["warnings"]
         .as_array()
         .unwrap();
-    assert!(warnings
-        .iter()
-        .any(|warning| warning.as_str().unwrap().contains("assignees")));
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("assignees"))
+    );
+}
+
+#[test]
+fn basic_mode_rejects_organization_issue_field_configuration() {
+    let repo = TestRepo::new();
+    repo.init();
+    let path = repo.board_path().join("config.toml");
+    let mut config = fs::read_to_string(&path).unwrap();
+    config.push_str(
+        "\n[github]\nmode = \"basic\"\norganization = \"acme\"\nrepositories = [\"acme/widget\"]\n",
+    );
+    fs::write(path, config).unwrap();
+
+    let (status, value) = repo.json(&["github", "repo", "list", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "CONFIG_ERROR");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("basic")
+    );
+}
+
+#[test]
+fn basic_mode_rejects_create_when_task_has_structured_metadata() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    write_basic_github_config(&repo);
+    let id = repo.add(
+        "Personal issue",
+        &["--area", "cli", "--verification", "cargo test"],
+    );
+
+    let (status, value) = repo.json_with_env(
+        &[
+            "github",
+            "create",
+            id.as_str(),
+            "--repo",
+            "personal/widget",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+    assert!(value["error"]["message"].as_str().unwrap().contains("area"));
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("verification")
+    );
+}
+
+#[test]
+fn basic_mode_creates_personal_repository_issue_without_setup() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    write_basic_github_config(&repo);
+    let id = repo.add("Personal issue", &["--label", "bug"]);
+
+    let created = repo.ok_json_with_env(
+        &[
+            "github",
+            "create",
+            id.as_str(),
+            "--repo",
+            "personal/widget",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(created["data"]["issue"]["title"], "Personal issue");
+    assert_eq!(
+        created["data"]["issue"]["labels"],
+        serde_json::json!(["bug"])
+    );
+    assert!(created["data"]["issue"]["area"].is_null());
+    assert!(created["data"]["issue"]["verification"].is_null());
+}
+
+#[test]
+fn basic_mode_does_not_run_issue_field_setup() {
+    let repo = TestRepo::new();
+    repo.init();
+    write_basic_github_config(&repo);
+
+    let (status, value) = repo.json(&["github", "setup", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unavailable in basic mode")
+    );
+}
+
+#[test]
+fn basic_mode_adopts_and_syncs_without_importing_issue_fields() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let fixture_content = fs::read_to_string(&fixture)
+        .unwrap()
+        .replace("acme/widget#42", "personal/widget#42")
+        .replace("acme/widget", "personal/widget");
+    fs::write(&fixture, fixture_content).unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_basic_github_config(&repo);
+    let id = repo.add("Local task", &[]);
+
+    let adopted = repo.ok_json_with_env(
+        &[
+            "github",
+            "adopt",
+            id.as_str(),
+            "--repo",
+            "personal/widget",
+            "--number",
+            "42",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(adopted["data"]["issue"]["area"].is_null());
+    assert!(adopted["data"]["issue"]["verification"].is_null());
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert!(show["data"]["area"].is_null());
+    assert!(show["data"]["verification"].is_null());
+
+    let sync = repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(sync["data"]["count"], 1);
+    assert!(sync["data"]["tasks"][0]["plan"]["apply_area"].is_null());
+    assert!(sync["data"]["tasks"][0]["plan"]["push_verification"].is_null());
+
+    repo.ok_json(&[
+        "update",
+        id.as_str(),
+        "--area",
+        "cli",
+        "--verification",
+        "cargo test",
+        "--json",
+    ]);
+    let (status, value) = repo.json_with_env(
+        &[
+            "github",
+            "sync",
+            id.as_str(),
+            "--direction",
+            "push",
+            "--apply",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("area"));
+    assert!(message.contains("verification"));
 }
 
 #[test]
@@ -778,15 +1103,17 @@ fn github_status_reports_unconfigured_and_missing_fields() {
 
     let mut fixture_data: serde_json::Value =
         serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
-    fixture_data["auth_message"] = serde_json::json!(
-        "Logged in to github.com account agent (keyring)\nToken scopes: 'repo'"
-    );
+    fixture_data["auth_message"] =
+        serde_json::json!("Logged in to github.com account agent (keyring)\nToken scopes: 'repo'");
     fs::write(&fixture, serde_json::to_vec_pretty(&fixture_data).unwrap()).unwrap();
     let missing_scope = repo.ok_json_with_env(
         &["github", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(missing_scope["data"]["auth"]["missing_scopes"][0], "read:org");
+    assert_eq!(
+        missing_scope["data"]["auth"]["missing_scopes"][0],
+        "read:org"
+    );
     assert_eq!(
         missing_scope["data"]["next_command"],
         "gh auth refresh --hostname github.com --scopes read:org,repo"
@@ -958,4 +1285,44 @@ fn github_status_does_not_repair_an_orphan_board_during_discovery() {
     assert_ne!(status, 0);
     assert_eq!(result["ok"], false);
     assert!(!repo.board_path().exists());
+}
+
+#[test]
+fn github_status_handles_basic_mode_without_issue_fields() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    data["repositories"] = serde_json::json!({
+        "personal/widget": { "owner_type": "User", "accessible": true }
+    });
+    data["auth_message"] =
+        serde_json::json!("Logged in to github.com account agent (keyring)\nToken scopes: 'repo'");
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+
+    let repo = TestRepo::new();
+    repo.init();
+    write_basic_github_config(&repo);
+
+    let status = repo.ok_json_with_env(
+        &["github", "status", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(status["data"]["configured"], true);
+    assert_eq!(status["data"]["mode"], "basic");
+    assert_eq!(status["data"]["fields"]["area"]["applicable"], false);
+    assert_eq!(
+        status["data"]["fields"]["area"]["configured"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        status["data"]["auth"]["missing_scopes"],
+        serde_json::json!([])
+    );
+    assert_eq!(status["data"]["next_action"], "none");
+
+    let doctor = repo.ok_json_with_env(
+        &["doctor", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(doctor["data"]["healthy"], true);
 }

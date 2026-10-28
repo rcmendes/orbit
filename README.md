@@ -647,21 +647,36 @@ ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 
 Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Sync is explicit, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. See [docs/github-sync.md](./docs/github-sync.md).
 
-Connect an organization-owned repository from its checkout with `orbit github connect`. The guided command checks `gh` authentication and repository access, validates the organization Issue Fields, and writes the Board configuration. Use `orbit github connect --json` for machine-readable status. Personal-account repositories receive next-step choices and are not configured in Issue Fields mode.
+`orbit github connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports next steps; configure `mode = "basic"` manually to use personal-repository sync. Use `orbit github connect --json` for machine-readable status.
 
-Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, resolved Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
+Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
 
 ```bash
-# Connect an organization-owned repository, or manage an existing integration:
+# Personal repository: [github] mode = "basic" + repositories in config.toml.
+orbit github repo link alice/widget
+orbit github create orb-a7b2c9 --repo alice/widget
+
+# Connect an organization-owned repository from its checkout:
 orbit github connect
 orbit github status --json
+
+# Or configure organization mode manually:
 orbit github repo link acme/widget
 orbit github setup
+orbit github setup --create-fields # create missing fields (organization admin required)
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
 orbit github create orb-a7b2c9 # automatically uses the only linked repository
 orbit github sync orb-a7b2c9 --apply
 ```
+
+`orbit github setup` does not create fields unless `--create-fields` is passed.
+See [the GitHub sync guide](./docs/github-sync.md) for required permissions and
+the fields Orbit creates.
+
+Basic mode syncs titles, bodies, labels, and open/closed state without Issue
+Fields. `area` and `verification` sync and structured Triage require full mode.
+See [docs/github-sync.md](./docs/github-sync.md) for limitations and upgrade steps.
 
 ## Triage, labels, and comments
 
@@ -922,6 +937,7 @@ See [RELEASING.md](./docs/RELEASING.md) for the release process, supported targe
 | [Command guide](./docs/commands.md) | Every command, when to use it, scenarios, and error recovery |
 | [Architecture](./docs/ARCHITECTURE.md) | Component map, board resolution, domain model, state machine, readiness gate, command flow, sequence diagrams |
 | [Specification](./docs/SPEC.md) | Canonical behavior, task format, config, command rules, JSON contract, concurrency, testing, distribution |
+| [GitHub sync](./docs/github-sync.md) | Basic and full GitHub modes, sync behavior, limitations, and upgrade path |
 | [Glossary](./docs/GLOSSARY.md) | Canonical vocabulary and the words Orbit avoids |
 | [Issue tracker guide](./docs/agents/issue-tracker.md) | How agents should use the board in this repository |
 | [Triage labels](./docs/agents/triage-labels.md) | The five canonical triage roles and category labels |

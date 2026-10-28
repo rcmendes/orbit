@@ -20,6 +20,11 @@ Triage does **not**:
 - Add arbitrary labels
 - Run verification commands
 
+In GitHub basic mode, Triage supports label changes only. `area` and
+`verification` require full mode with organization Issue Fields; basic-mode
+context reports them as unavailable, and review/apply reject proposals that
+change either field.
+
 When evidence is insufficient, record `uncertainty` in the proposal and leave metadata
 unchanged.
 

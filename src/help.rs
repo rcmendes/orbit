@@ -911,16 +911,25 @@ Review GitHub-linked Tasks and apply approved metadata changes on the Orbit Boar
 
 Triage only touches Orbit-owned `area`, task-level `verification`, and canonical triage/category
 labels. In GitHub basic mode, it supports labels only. It never rewrites GitHub-owned title, body,
-or open/closed state, and it does not run verification commands. After `triage apply --approve`,
-publish changes with `orbit github sync`.
+or open/closed state, and it does not run verification commands. After approving a review or
+`triage apply --approve`, publish changes with `orbit github sync`.
 
-Agents draft a proposal JSON file, run `triage review` for a preview, then `triage apply --approve`.
-When evidence is insufficient, record `uncertainty` and leave metadata unchanged.";
+Agents draft a proposal JSON file and run `triage review` to see a field-by-field preview. With a
+proposal file and both stdin and stdout connected to a terminal, review prompts for explicit
+approval or cancellation; only `y` or `yes` applies changes. Without both terminals, review only
+prints the preview and never waits for input. `--json` remains non-interactive, and
+`--proposal-file -` reads JSON from stdin.
+
+Review and apply change the Orbit Board only. GitHub is unchanged until an explicit
+`orbit github sync` command. When evidence is insufficient, record `uncertainty` and leave
+metadata unchanged.";
 
 pub const TRIAGE_EXAMPLES: &str = "\
 Examples:
   orbit triage context orb-a7b2c9 --json
+  orbit triage review orb-a7b2c9 --proposal-file proposal.json
   orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
+  orbit triage review orb-a7b2c9 --proposal-file - --json < proposal.json
   orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json";
 
 pub const TRIAGE_CONTEXT_EXAMPLES: &str = "\
@@ -929,7 +938,9 @@ Examples:
 
 pub const TRIAGE_REVIEW_EXAMPLES: &str = "\
 Examples:
-  orbit triage review orb-a7b2c9 --proposal-file proposal.json --json";
+  orbit triage review orb-a7b2c9 --proposal-file proposal.json
+  orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
+  orbit triage review orb-a7b2c9 --proposal-file - --json < proposal.json";
 
 pub const TRIAGE_APPLY_EXAMPLES: &str = "\
 Examples:

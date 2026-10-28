@@ -808,9 +808,9 @@ Connects the current checkout's origin repository, adopts or creates Issues, and
 runs bidirectional sync with conflict detection. `orbit github connect` checks
 `gh` authentication and repository access. For an organization-owned repository,
 it validates Issue Fields and writes `[github]` configuration. For a personal
-repository, it leaves configuration unchanged and reports next steps; manually
-configure basic mode by adding `[github]`, `mode = "basic"`, and the repository
-to the Board's `config.toml` or merging them into an existing section while
+repository, it leaves configuration unchanged and reports the exact settings to
+configure basic mode: add `[github]`, `mode = "basic"`, and the repository to
+the Board's `config.toml` or merge them into an existing section while
 preserving other linked repositories; the response includes those exact entries
 and links to the setup guide. Existing integrations can link repositories
 explicitly. Sync requires the `gh` CLI and `[github]` in

@@ -1,6 +1,6 @@
 ---
 title: Accept GitHub Issue URLs and default repository selection
-status: todo
+status: in_progress
 type: task
 priority: 2
 labels:
@@ -8,8 +8,11 @@ labels:
 - ready-for-agent
 parent: orbit-ytwjhm
 area: cli
+claimed_by: impl-0nbgfx
+claimed_at: 2026-10-28T15:27:21.151559Z
+lease_until: 2026-10-28T15:57:21.151559Z
 created_at: 2026-10-28T15:23:46.658254Z
-updated_at: 2026-10-28T15:23:46.658254Z
+updated_at: 2026-10-28T15:27:21.151559Z
 ---
 
 ## Goal

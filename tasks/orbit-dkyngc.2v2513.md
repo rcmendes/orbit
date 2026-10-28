@@ -1,6 +1,6 @@
 ---
 title: Enforce canonical triage label invariants
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -13,11 +13,8 @@ checkpoint:
   progress: Triage rejects proposals that would leave two state roles or two category roles, using the resulting label set. Valid transitions and area-only proposals still apply. Tests, docs, and changelog are on ticket/orbit-dkyngc.2v2513, which includes integrate/orbit-dkyngc.
   next: merge to integrate/orbit-dkyngc
 area: cli
-claimed_by: implement-dkyngc-2v2513
-claimed_at: 2026-10-28T15:30:52.959552Z
-lease_until: 2026-10-28T16:08:03.501572Z
 created_at: 2026-10-28T15:20:07.717389Z
-updated_at: 2026-10-28T15:38:03.527857Z
+updated_at: 2026-10-28T15:51:50.287139Z
 ---
 
 ## Goal

@@ -7,12 +7,17 @@ labels:
 - enhancement
 - ready-for-agent
 parent: orbit-ytwjhm
+checkpoint:
+  by: impl-0nbgfx
+  at: 2026-10-28T15:28:28.629628Z
+  progress: Verified ticket branch and integration base; identified CLI args, GitHub command handlers, config selection, integration test harness, and docs. Implementing CLI-level tests at the public command seam for both adopt forms and repository selection.
+  next: Add failing GitHub CLI integration tests, implement parsing/default selection, then update docs and verify.
 area: cli
 claimed_by: impl-0nbgfx
 claimed_at: 2026-10-28T15:27:21.151559Z
-lease_until: 2026-10-28T15:57:21.151559Z
+lease_until: 2026-10-28T15:57:55.237649Z
 created_at: 2026-10-28T15:23:46.658254Z
-updated_at: 2026-10-28T15:27:21.151559Z
+updated_at: 2026-10-28T15:28:28.629628Z
 ---
 
 ## Goal

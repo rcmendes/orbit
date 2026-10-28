@@ -800,9 +800,11 @@ orbit sync
 
 ### `orbit github` — GitHub Issue provider
 
-Links explicitly configured repositories, adopts or creates Issues, and runs
-bidirectional sync with conflict detection. Requires `[github]` in `config.toml`,
-the `gh` CLI, and organization Issue Fields. Full setup and semantics are in
+Connects the current checkout's origin repository, adopts or creates Issues, and
+runs bidirectional sync with conflict detection. `orbit github connect` writes
+the `[github]` configuration for an organization-owned repository; other GitHub
+commands require that configuration, the `gh` CLI, and organization Issue Fields.
+Full setup and semantics are in
 [github-sync.md](./github-sync.md).
 
 ```bash

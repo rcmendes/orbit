@@ -281,6 +281,12 @@ changing the Board's contents or Git storage model:
   only that last explicit snapshot. Include/exclude overrides live in
   `[workspace]` on the Board and do not create Tasks or Issues. Unavailable and
   removed repository entries stay cached until explicit detachment.
+- `orbit workspace issues refresh` reconciles the repository inventory and
+  stores paginated open and closed Issue summaries at
+  `<workspace>/.orbit/cache/issues.json`. Pull requests are excluded; per-repo
+  failures retain the prior snapshot. `list` filters cached summaries and
+  `inspect` fetches body/comments on demand. Remote Issues remain outside the
+  Task graph until explicitly imported.
 
 This path extension keeps Workspace metadata/cache out of the Board's Git
 repository, preserves child-local data, and makes the Workspace root the stable

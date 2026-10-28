@@ -847,6 +847,54 @@ pub struct WorkspaceArgs {
     pub command: WorkspaceCommand,
 }
 
+#[derive(Debug, Args)]
+pub struct WorkspaceIssuesArgs {
+    #[command(subcommand)]
+    pub command: WorkspaceIssuesCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceIssuesCommand {
+    /// Refresh every included repository's local Remote Issue snapshot.
+    #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
+    Refresh,
+    /// List cached Remote Issues without fetching their bodies or comments.
+    #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
+    List(WorkspaceIssuesListArgs),
+    /// Fetch one Remote Issue's body and comments from GitHub.
+    #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
+    Inspect(WorkspaceIssueInspectArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceIssuesListArgs {
+    /// Filter by OWNER/REPO.
+    #[arg(long, value_name = "OWNER/REPO")]
+    pub repo: Option<String>,
+    /// Filter by GitHub state.
+    #[arg(long, value_parser = ["open", "closed"])]
+    pub state: Option<String>,
+    /// Require each label. Repeat to require more than one label.
+    #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
+    pub label: Vec<String>,
+    /// Case-insensitive text search in issue titles.
+    #[arg(long, value_name = "TEXT")]
+    pub text: Option<String>,
+    /// Show only Issues linked to Orbit Tasks.
+    #[arg(long, conflicts_with = "unlinked")]
+    pub linked: bool,
+    /// Show only Issues without an Orbit Task link.
+    #[arg(long)]
+    pub unlinked: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceIssueInspectArgs {
+    /// Stable GitHub identity: OWNER/REPO#NUMBER.
+    #[arg(value_name = "OWNER/REPO#NUMBER")]
+    pub identity: String,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceCommand {
     /// Show the last explicitly refreshed repository catalog.
@@ -867,6 +915,9 @@ pub enum WorkspaceCommand {
         after_long_help = help::WORKSPACE_EXAMPLES
     )]
     Setup(WorkspaceSetupArgs),
+    /// Browse the local Remote Issue catalog; refresh is explicit.
+    #[command(long_about = help::WORKSPACE_ISSUES_LONG, after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
+    Issues(WorkspaceIssuesArgs),
 }
 
 #[derive(Debug, Args)]
@@ -923,7 +974,7 @@ pub enum GitHubCommand {
     /// Adopt an existing GitHub Issue for a Task.
     #[command(after_long_help = help::GITHUB_ADOPT_EXAMPLES)]
     Adopt(GitHubAdoptArgs),
-    /// Create a GitHub Issue for a linked Task.
+    /// Preview or create GitHub Issues for selected Local Tasks.
     #[command(after_long_help = help::GITHUB_CREATE_EXAMPLES)]
     Create(GitHubCreateArgs),
     /// Preview or apply bidirectional sync for linked Tasks.
@@ -977,10 +1028,25 @@ pub struct GitHubAdoptArgs {
 
 #[derive(Debug, Args)]
 pub struct GitHubCreateArgs {
-    #[arg(value_name = "TASK")]
-    pub task: String,
-    #[arg(long, value_name = "OWNER/REPO")]
+    #[arg(
+        value_name = "TASK",
+        required = true,
+        num_args = 1..,
+        help = "One or more Local Task IDs to export"
+    )]
+    pub tasks: Vec<String>,
+    #[arg(
+        long,
+        value_name = "OWNER/REPO",
+        help = "Choose an included repository (inferred only when one is available)"
+    )]
     pub repo: Option<String>,
+    /// Create Issues and link Tasks. Without this flag, show a read-only preview.
+    #[arg(long)]
+    pub apply: bool,
+    /// Include done and cancelled Tasks in the export.
+    #[arg(long)]
+    pub include_terminal: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]

@@ -779,9 +779,9 @@ Examples:
 
 pub const MCP_LONG: &str = "\
 Runs the Model Context Protocol server over stdio. Editors start this process from
-their MCP configuration, so it is rarely run by hand. It exposes 14 tools (ready,
+their MCP configuration, so it is rarely run by hand. It exposes 17 tools (ready,
 list, get, create, update, claim, release, heartbeat, checkpoint, finish, link,
-delete, label, comment) and the orbit://tasks/{id} Markdown resource, reusing the
+delete, label, comment, issue_refresh, issue_list, issue_inspect) and the orbit://tasks/{id} Markdown resource, reusing the
 CLI's lock, atomic writes, and auto-commit. `create` accepts `parent` to make a
 SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint`
 records the claim holder's handoff. `list` and `ready` accept `parent`, `repo`,
@@ -861,7 +861,10 @@ and scopes, linked repositories, Issue Fields when applicable, pending changes,
 conflicts, unsupported relationships, and the next recommended action. `orbit
 doctor` also checks GitHub configuration when the provider is enabled. GitHub sync
 requires Orbit 0.9.0 or newer; default release builds include the
-`github-provider` capability.";
+`github-provider` capability. `github create` previews one or more Local Tasks by
+default. Pass `--apply` to create Issues and persist their links; done and cancelled
+Tasks also require `--include-terminal`. Workspace Boards infer the destination
+from the included repository catalog when exactly one repository is available.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
@@ -873,7 +876,10 @@ Examples:
   orbit github setup
   orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
   orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
-  orbit github create orb-a7b2c9
+  orbit github create orb-a7b2c9                 # preview only
+  orbit github create orb-a7b2c9 --apply
+  orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
+  orbit github create orb-d4e5f6 --include-terminal --apply
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
 
@@ -898,6 +904,11 @@ later setup runs after discovery finds new repositories. Workspace-level
 Pocock skills are detected independently; when present, setup maintains their
 Orbit tracker and triage-label guidance without adding them to the harness
 selection.
+
+`issues` reads the separate Workspace Remote Issue catalog: refresh fetches
+open and closed Issue summaries for included repositories, list filters the local
+snapshot, and inspect fetches one Issue's body and comments. Remote Issues are
+not Tasks and are never claimable.
 ";
 
 pub const WORKSPACE_EXAMPLES: &str = "\
@@ -923,6 +934,24 @@ Matt Pocock skills are detected separately. If present, setup maintains Orbit
 tracker and triage-label guidance without adding the plugin to harness selection.
 Existing hand-written content is preserved; conflicting configuration is
 reported instead of overwritten.";
+
+pub const WORKSPACE_ISSUES_LONG: &str = "\
+Browse the Workspace's rebuildable Remote Issue catalog. Refresh first to
+reconcile direct child repositories and cache each included repository's open
+and closed Issues. Pull requests are excluded. Refresh performs GitHub reads
+only, never creates Tasks, and retains the last snapshot for repositories that
+fail. List filters cached summaries without fetching issue bodies or comments;
+inspect fetches those details from GitHub on demand.
+
+Remote Issues stay catalog-only and never appear in `orbit list` or `orbit ready`
+until a separate import operation creates a Linked Task.";
+
+pub const WORKSPACE_ISSUES_EXAMPLES: &str = "\
+Examples:
+  orbit workspace issues refresh
+  orbit workspace issues list --repo acme/api --state open --label bug
+  orbit workspace issues list --text authentication --unlinked
+  orbit workspace issues inspect acme/api#42";
 
 pub const GITHUB_STATUS_EXAMPLES: &str = "\
 Examples:
@@ -960,7 +989,9 @@ Examples:
 pub const GITHUB_CREATE_EXAMPLES: &str = "\
 Examples:
   orbit github create orb-a7b2c9
-  orbit github create orb-a7b2c9 --repo acme/widget";
+  orbit github create orb-a7b2c9 --apply
+  orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
+  orbit github create orb-d4e5f6 --include-terminal --apply";
 
 pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\
 Examples:

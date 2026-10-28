@@ -139,10 +139,11 @@ pub fn run(board: &Board, args: WorkspaceArgs) -> Result<crate::output::CommandO
         WorkspaceCommand::Include(args) => set_override(board, &args.repository, true),
         WorkspaceCommand::Exclude(args) => set_override(board, &args.repository, false),
         WorkspaceCommand::Setup(args) => setup(board, &workspace, args),
+        WorkspaceCommand::Issues(args) => crate::issue_catalog::run(board, args.command),
     }
 }
 
-fn workspace_root(board: &Board) -> Result<PathBuf> {
+pub(crate) fn workspace_root(board: &Board) -> Result<PathBuf> {
     let orbit = board.root.parent();
     if board.root.file_name().is_some_and(|name| name == "board")
         && orbit
@@ -463,11 +464,45 @@ fn parse_workspace_harnesses(
     }
 }
 
+pub(crate) fn included_repositories(workspace: &Path) -> Result<Vec<String>> {
+    let catalog = load_catalog(&catalog_path(workspace))?;
+    Ok(catalog
+        .repositories
+        .values()
+        .filter(|entry| entry.included && entry.status != RepositoryStatus::Removed)
+        .map(|entry| entry.repository.clone())
+        .collect())
+}
+
 fn catalog_path(workspace: &Path) -> PathBuf {
     workspace
         .join(".orbit")
         .join("cache")
         .join("repositories.json")
+}
+
+/// Return repositories available for issue creation from the Workspace catalog.
+/// `None` means that this Board is not a Workspace Board.
+pub(crate) fn export_repositories(board: &Board) -> Result<Option<Vec<String>>> {
+    let is_workspace = board.root.file_name().is_some_and(|name| name == "board")
+        && board
+            .root
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == ".orbit");
+    if !is_workspace {
+        return Ok(None);
+    }
+    let workspace = workspace_root(board)?;
+    let catalog = load_catalog(&catalog_path(&workspace))?;
+    Ok(Some(
+        catalog
+            .repositories
+            .values()
+            .filter(|entry| entry.included)
+            .map(|entry| entry.repository.clone())
+            .collect(),
+    ))
 }
 
 fn load_catalog(path: &Path) -> Result<RepositoryCatalog> {
@@ -556,7 +591,7 @@ fn status(workspace: &Path) -> Result<crate::output::CommandOutput> {
     Ok(crate::output::CommandOutput::new(data, lines.join("\n")))
 }
 
-fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::CommandOutput> {
+pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::CommandOutput> {
     if board.config.github.mode.is_basic() {
         return Err(OrbitError::invalid_argument(
             "Workspace repository discovery requires GitHub full mode and one configured organization",

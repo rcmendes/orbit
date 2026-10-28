@@ -180,6 +180,45 @@ fn refresh_discovers_direct_github_children_and_reports_repository_states() {
 }
 
 #[test]
+fn github_create_infers_the_single_included_workspace_repository() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    let github_fixture = repo.home().join("github.json");
+    std::fs::write(
+        &github_fixture,
+        json!({
+            "repositories": { "acme/api": { "owner_type": "Organization" } },
+            "issues": {}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+    let task = repo.ok_json_in(&workspace, &["add", "Workspace export", "--json"]);
+    let id = task["data"]["id"].as_str().unwrap();
+
+    let (status, result) = run_workspace(
+        &repo,
+        &workspace,
+        &["github", "create", id, "--apply"],
+        &github_fixture,
+    );
+
+    assert_eq!(status, 0, "{result}");
+    assert_eq!(result["data"]["tasks"][0]["repository"], "acme/api");
+    assert_eq!(result["data"]["tasks"][0]["success"], true);
+    let task = repo.ok_json_in(&workspace, &["show", id, "--json"]);
+    assert_eq!(task["data"]["github"]["repo"], "acme/api");
+}
+
+#[test]
 fn refresh_marks_missing_repositories_removed_and_finds_new_children_explicitly() {
     let repo = TestRepo::new();
     let (_workspace_dir, workspace) = init_workspace(&repo);
@@ -264,4 +303,230 @@ fn refresh_marks_missing_repositories_removed_and_finds_new_children_explicitly(
             .iter()
             .any(|repo| { repo["repository"] == "acme/new-api" && repo["status"] == "included" })
     );
+}
+
+#[test]
+fn issue_catalog_stays_outside_tasks_until_a_task_is_explicitly_linked() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    let github_fixture = repo.home().join("github.json");
+    let issue = |number, title: &str, state: &str, labels: &[&str]| {
+        json!({
+            "number": number,
+            "title": title,
+            "state": state,
+            "labels": labels,
+            "html_url": format!("https://github.com/acme/api/issues/{number}"),
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-02-01T00:00:00Z",
+            "body": "must not be in the catalog cache",
+            "area": "cli",
+            "verification": "cargo test",
+            "issue_fields": { "Area": "cli", "Verification": "cargo test", "Risk": 2 }
+        })
+    };
+    std::fs::write(
+        &github_fixture,
+        json!({
+            "repositories": { "acme/api": { "owner_type": "Organization" } },
+            "catalog_page_size": 1,
+            "catalog_issues": {
+                "acme/api": [
+                    issue(1, "Open catalog item", "open", &["bug"]),
+                    issue(2, "Closed catalog item", "closed", &["docs"]),
+                    { "number": 3, "title": "PR, not an issue", "state": "open", "labels": [], "pull_request": true }
+                ]
+            },
+            "issue_details": {
+                "acme/api#1": { "body": "Issue body loaded on inspect" }
+            },
+            "issue_comments": {
+                "acme/api#1": [{ "id": 7, "body": "A comment", "author": "alice", "created_at": "2026-02-01T00:00:00Z" }]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+    assert_eq!(refreshed["data"]["refreshed_count"], 1);
+
+    let (status, listed) = run_workspace(
+        &repo,
+        &workspace,
+        &[
+            "workspace",
+            "issues",
+            "list",
+            "--state",
+            "closed",
+            "--label",
+            "docs",
+        ],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{listed}");
+    assert_eq!(listed["data"]["count"], 1);
+    assert_eq!(listed["data"]["issues"][0]["identity"], "acme/api#2");
+    assert_eq!(listed["data"]["issues"][0]["issue_fields"]["Risk"], 2);
+    assert!(listed["data"]["issues"][0].get("body").is_none());
+
+    let cache = std::fs::read_to_string(workspace.join(".orbit/cache/issues.json")).unwrap();
+    assert!(!cache.contains("must not be in the catalog cache"));
+    assert!(!cache.contains("PR, not an issue"));
+
+    let (status, inspected) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "inspect", "acme/api#1"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{inspected}");
+    assert_eq!(inspected["data"]["body"], "Issue body loaded on inspect");
+    assert_eq!(inspected["data"]["comments"][0]["body"], "A comment");
+
+    let ready = repo.ok_json_in(
+        &workspace,
+        &["--dir", workspace.to_str().unwrap(), "ready", "--json"],
+    );
+    assert_eq!(ready["data"]["count"], 0);
+    let tasks = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "list",
+            "--all",
+            "--json",
+        ],
+    );
+    assert_eq!(tasks["data"]["tasks"].as_array().unwrap().len(), 0);
+
+    let (_, linked_repo) = run_workspace(
+        &repo,
+        &workspace,
+        &["github", "repo", "link", "acme/api"],
+        &github_fixture,
+    );
+    assert_eq!(linked_repo["ok"], true, "{linked_repo}");
+    let task = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "add",
+            "Linked catalog task",
+            "--json",
+        ],
+    );
+    let task_id = task["data"]["id"].as_str().unwrap();
+    let task_id_arg = task_id.to_string();
+    let (_, adopted) = run_workspace(
+        &repo,
+        &workspace,
+        &[
+            "github",
+            "adopt",
+            &task_id_arg,
+            "--repo",
+            "acme/api",
+            "--number",
+            "1",
+        ],
+        &github_fixture,
+    );
+    assert_eq!(adopted["ok"], true, "{adopted}");
+
+    let (_, linked) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "list", "--linked"],
+        &github_fixture,
+    );
+    assert_eq!(linked["data"]["count"], 1);
+    assert_eq!(linked["data"]["issues"][0]["identity"], "acme/api#1");
+    let (_, unlinked) = run_workspace(
+        &repo,
+        &workspace,
+        &[
+            "workspace",
+            "issues",
+            "list",
+            "--text",
+            "closed catalog",
+            "--unlinked",
+        ],
+        &github_fixture,
+    );
+    assert_eq!(unlinked["data"]["count"], 1);
+    assert_eq!(unlinked["data"]["issues"][0]["identity"], "acme/api#2");
+}
+
+#[test]
+fn issue_catalog_keeps_previous_snapshot_and_reports_partial_repository_failures() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    child_repo(&repo, &workspace, "web", "https://github.com/acme/web.git");
+    let github_fixture = repo.home().join("github.json");
+    let initial = json!({
+        "repositories": {
+            "acme/api": { "owner_type": "Organization" },
+            "acme/web": { "owner_type": "Organization" }
+        },
+        "catalog_issues": {
+            "acme/api": [{ "number": 1, "title": "Keep me", "state": "open", "labels": [] }],
+            "acme/web": [{ "number": 2, "title": "Web issue", "state": "open", "labels": [] }]
+        }
+    });
+    std::fs::write(&github_fixture, initial.to_string()).unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+
+    let mut failed_refresh = initial;
+    failed_refresh["catalog_errors"] = json!({ "acme/api": "fixture API unavailable" });
+    failed_refresh["catalog_issues"]["acme/web"] = json!([
+        { "number": 3, "title": "New web issue", "state": "closed", "labels": [] }
+    ]);
+    std::fs::write(&github_fixture, failed_refresh.to_string()).unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(
+        status, 0,
+        "a per-repository failure is partial success: {refreshed}"
+    );
+    assert_eq!(refreshed["data"]["errors"][0]["repository"], "acme/api");
+
+    let (_, listed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "list", "--repo", "acme/api"],
+        &github_fixture,
+    );
+    assert_eq!(listed["data"]["issues"][0]["title"], "Keep me");
+    assert_eq!(listed["data"]["repositories"][0]["stale"], true);
+
+    let (_, web) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "list", "--repo", "acme/web"],
+        &github_fixture,
+    );
+    assert_eq!(web["data"]["issues"][0]["title"], "New web issue");
 }

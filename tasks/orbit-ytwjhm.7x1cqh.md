@@ -1,6 +1,6 @@
 ---
 title: Add interactive human review for Triage proposals
-status: in_progress
+status: done
 type: task
 priority: 2
 labels:
@@ -15,11 +15,8 @@ checkpoint:
   progress: Implemented and committed interactive TTY-gated triage review, proposal stdin, docs/help, and tests. Full test suite passed (390 tests); merged latest integrate/orbit-ytwjhm (already up to date at 3912363).
   next: Integration owner must merge ticket branch into integration; keep ticket open until that merge completes.
 area: cli
-claimed_by: impl-7x1cqh
-claimed_at: 2026-10-28T16:06:52.411754Z
-lease_until: 2026-10-28T16:43:05.862425Z
 created_at: 2026-10-28T15:24:06.023440Z
-updated_at: 2026-10-28T16:15:14.638138Z
+updated_at: 2026-10-28T16:16:24.827819Z
 ---
 
 ## Goal

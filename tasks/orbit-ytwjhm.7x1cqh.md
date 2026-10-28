@@ -9,12 +9,17 @@ labels:
 depends_on:
 - orbit-ytwjhm.v8vgqe
 parent: orbit-ytwjhm
+checkpoint:
+  by: impl-7x1cqh
+  at: 2026-10-28T16:07:47.520052Z
+  progress: Verified ticket/base and read requirements. Implementing review around proposal parsing, preview rendering, TTY-gated approval, and Orbit-only apply.
+  next: Add failing tests for interactive rendering, cancel/approve, stdin proposal, and non-TTY/JSON behavior.
 area: cli
 claimed_by: impl-7x1cqh
 claimed_at: 2026-10-28T16:06:52.411754Z
-lease_until: 2026-10-28T16:36:52.411754Z
+lease_until: 2026-10-28T16:37:09.142522Z
 created_at: 2026-10-28T15:24:06.023440Z
-updated_at: 2026-10-28T16:06:52.411754Z
+updated_at: 2026-10-28T16:07:47.520052Z
 ---
 
 ## Goal

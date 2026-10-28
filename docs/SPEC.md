@@ -292,7 +292,7 @@ length = 6
 prefix = "orb-"
 ```
 
-`board.storage` is `worktree` or `repository` and records how `DIR` is backed by Git. A legacy Board without the field has its mode inferred from its location and is reported by `doctor` until migrated. `id.prefix` must contain only lowercase letters, digits, and dashes; a dot is reserved for the SubTask boundary. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`.
+`board.storage` is `worktree` or `repository` and records how `DIR` is backed by Git. A legacy Board without the field has its mode inferred from its location and is reported by `doctor` until migrated. `id.prefix` must contain only lowercase letters, digits, and dashes; a dot is reserved for the SubTask boundary. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`. Optional `id.accepted_prefixes` lists additional valid Task-ID prefixes retained when Boards with different slugs are consolidated; new Task IDs still use `id.prefix`.
 
 ## 5. Board lifecycle
 
@@ -312,11 +312,41 @@ A Board lives in the Orbit folder, `DIR`. In a Git working tree, the default is 
 
 `init` takes its target from the positional argument, then `--dir`/`ORBIT_DIR`. With no target it uses `./.orbit` inside Git, the current directory as a Workspace root outside Git, or a discovered Workspace root when invoked from a child Repository. `--global` is exclusive with a positional target and with `--dir`/`ORBIT_DIR` and means `~/.orbit`. `link` uses only its positional path; `--dir`/`ORBIT_DIR` never retarget the pointer written by `link`.
 
-A repository owns one local Board. A child Repository inside a Workspace discovers the Workspace Board by walking above its Git root and needs no `orbit link`. Workspace discovery takes precedence over a child-local Board and reports `AMBIGUOUS_BOARD`; `orbit init <workspace>` refuses to initialize when a child-local Board already exists. A second `.orbit` in the same working tree is refused because the `orbit` branch can be checked out by only one worktree.
+A repository owns one local Board. A child Repository inside a Workspace discovers the Workspace Board by walking above its Git root and needs no `orbit link`. Workspace discovery takes precedence over a child-local Board and reports `AMBIGUOUS_BOARD`; `orbit init <workspace>` refuses to create the first Workspace Board when a child-local Board already exists. After migration creates the Workspace Board, `init` reuses it and leaves child Boards untouched as backups. A second `.orbit` in the same working tree is refused because the `orbit` branch can be checked out by only one worktree.
 
 `orbit init --global` targets `~/.orbit` and creates a `repository`-mode Board unless it already exists, even when `~` happens to sit inside another Git working tree. The global Board is the last discovery fallback and is never created while resolving a command.
 
 A Workspace is a normal folder, not a Git repository. Run `orbit init <workspace-root>` to create `<workspace-root>/.orbit/board` and reserve `<workspace-root>/.orbit/cache`. Repositories inside the Workspace discover the Board automatically, including across their Git boundary. Repositories outside it can join with `orbit link <workspace-root>`. `orbit init` does not clone repositories.
+
+`orbit workspace migrate [WORKSPACE] [--dry-run|--resume]` consolidates an
+existing `<workspace>/.board` or `<workspace>/board` Board and Boards at child
+repository `.orbit` paths (or their legacy `<git-common-dir>/orbit/board` paths)
+into `<workspace>/.orbit/board`. It requires an ordinary non-Git Workspace root.
+If the Workspace Board exists, it is the destination. Otherwise, the command
+plans a new Board using the Workspace folder's derived slug and default settings.
+`--dry-run` validates and prints the plan without writing. Apply saves an atomic
+replay journal in `<workspace>/.orbit/workspace-migration-state.json` and
+serializes apply with `<workspace>/.orbit/workspace-migration.lock`. When it must
+create a Board, it builds it under
+`<workspace>/.orbit/.workspace-board-migration-stage`; it updates accepted source
+ID prefixes and copies each planned file under the Board lock, strictly validates
+the merged Task graph, commits the result, then atomically activates it at
+`<workspace>/.orbit/board`. This keeps child Boards active until the merged Board
+is valid. `--resume` replays that exact saved plan after
+interruption; it does not rescan or guess at a new mapping. Source Boards are
+never modified or removed and remain available as backups.
+
+The Workspace config is authoritative. Every differing source config setting is
+reported with both values. Task IDs are preserved unless they collide with a
+Workspace or earlier source ID. Source prefixes that differ from the Workspace
+prefix are added to `id.accepted_prefixes`, so they do not force an ID rewrite.
+Collision remaps update structured `parent` and `depends_on` fields and comment
+sidecar filenames/headers. Claims, Checkpoints, labels, metadata, and bodies transfer.
+GitHub Issue identity is strictly `owner/repo#number`: a duplicate link anywhere
+in the destination and sources stops the operation before it writes, for explicit
+user resolution. Title/body similarity is never used. After application, run
+`orbit doctor`; rollback guidance uses `git revert` on the reported single
+Workspace Board commit.
 
 ### Slugs
 

@@ -167,7 +167,7 @@ orbit init --global           # create the global Board at ~/.orbit
 - **A one-off or CI setup:** use `--print` first, then `--agents none` when the machine should not receive editor configuration. Pass `--slug` when IDs must be predictable.
 - **A global fallback:** use `--global` only when you intentionally want one Board available when no project-local Board resolves. Discovery does not create it.
 - **Joining an existing Board:** use `orbit link DIR`; do not run `init` again. A second local Board in the same working tree is refused.
-- **Moving a supported legacy Board:** run `orbit doctor --migrate`; `init` is not a migration command. A Board directly at `<workspace>/.orbit` remains available by explicit path and must be migrated to `<workspace>/.orbit/board` before Workspace initialization.
+- **Moving a supported legacy storage layout:** run `orbit doctor --migrate`; `init` is not a migration command. To consolidate a legacy Workspace Board and child-repository Boards, use `orbit workspace migrate`; it creates the Workspace Board only after merged data validates when no Board exists yet.
 
 **Supporting `init` options**
 
@@ -646,7 +646,29 @@ orbit --dir ~/src/acme list
 orbit unlink
 ```
 
-`orbit init` only creates the Workspace Board; it does not clone repositories. A child-local Board is reported as `AMBIGUOUS_BOARD` during discovery and blocks Workspace initialization if it exists first. Unknown entries in `.orbit` prevent initialization rather than being overwritten. The catalog cache is never stored in the Board repository.
+`orbit init` only creates the Workspace Board; it does not clone repositories. A child-local Board is reported as `AMBIGUOUS_BOARD` during discovery and blocks Workspace initialization if it exists first. Once the Workspace Board exists, `init` reuses it while child Boards remain as backups. Unknown entries in `.orbit` prevent initialization rather than being overwritten; the `workspace-migration.lock` entry is managed by the migration command. The catalog cache is never stored in the Board repository.
+
+If the Workspace already has a legacy `<workspace>/.board` or `<workspace>/board`
+Board, or its child repositories have local Boards, consolidate their work with
+`orbit workspace migrate`. The command can stage a Workspace Board when none
+exists and activates it only after validation, so child Boards are not shadowed
+early. If no Workspace Board exists, the command uses the Workspace folder's
+derived slug and standard Board defaults. Preview before applying, resolve
+duplicate GitHub Issue identities explicitly, and keep source Boards as backups:
+
+```bash
+orbit workspace migrate --dry-run
+orbit workspace migrate
+orbit doctor
+```
+
+The migration preserves Tasks, comments, claims, Checkpoints, and structured
+relationships. It remaps colliding Task IDs and references, records differing
+source ID prefixes as accepted legacy prefixes without changing the Workspace's
+primary prefix, retains Workspace configuration when source settings differ,
+and records the migration as one Board commit. A saved plan makes an interrupted apply resumable with
+`orbit workspace migrate --resume`; the apply report gives `git revert` rollback
+guidance.
 
 Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link, then the nearest `.orbit` walking up to the repository root (or to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`, then the legacy hidden layout with a warning, then `~/.orbit` if it exists. An explicit override wins for one command:
 

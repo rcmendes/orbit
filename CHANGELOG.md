@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added `orbit workspace migrate` to preview and consolidate legacy Workspace and child-repository Boards into `<workspace>/.orbit/board`. It preserves source Boards, Tasks, comments, claims, Checkpoints, and relationships; remaps only colliding IDs; retains source prefixes as accepted legacy prefixes; reports config differences; blocks duplicate GitHub Issue identities; and supports resumable application with validation and rollback guidance.
+
 ## 0.9.4 - 2026-10-28
 
 - Treat `admin:org` and `write:org` as satisfying the `read:org` requirement for full GitHub mode. Organization administrators no longer receive a false `GITHUB_SCOPES_MISSING` warning.

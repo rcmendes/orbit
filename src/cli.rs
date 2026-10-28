@@ -37,6 +37,10 @@ pub enum Command {
     #[command(long_about = help::LINK_LONG, after_long_help = help::LINK_EXAMPLES)]
     Link(LinkArgs),
 
+    /// Preview or migrate existing Boards into a Workspace Board.
+    #[command(long_about = help::WORKSPACE_LONG, after_long_help = help::WORKSPACE_EXAMPLES)]
+    Workspace(WorkspaceArgs),
+
     /// Return this repository to its own Board.
     #[command(long_about = help::UNLINK_LONG, after_long_help = help::UNLINK_EXAMPLES)]
     Unlink,
@@ -204,6 +208,34 @@ pub struct LinkArgs {
     /// Do not refresh existing agent configuration.
     #[arg(long = "no-refresh")]
     pub no_refresh: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceArgs {
+    #[command(subcommand)]
+    pub command: WorkspaceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceCommand {
+    /// Combine legacy Workspace and child-repository Boards into .orbit/board.
+    #[command(long_about = help::WORKSPACE_LONG, after_long_help = help::WORKSPACE_EXAMPLES)]
+    Migrate(WorkspaceMigrateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceMigrateArgs {
+    /// Workspace root. Defaults to the current directory.
+    #[arg(value_name = "WORKSPACE")]
+    pub workspace: Option<PathBuf>,
+
+    /// Preview the migration without changing the Workspace Board or sources.
+    #[arg(long, conflicts_with = "resume")]
+    pub dry_run: bool,
+
+    /// Resume an interrupted migration from its saved plan.
+    #[arg(long)]
+    pub resume: bool,
 }
 
 #[derive(Debug, Args)]

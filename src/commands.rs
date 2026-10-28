@@ -12,7 +12,7 @@ use crate::cli::{
     CommentCommand, CommentListArgs, DeleteArgs, DependArgs, DoneArgs, HeartbeatArgs, InitArgs,
     LabelArgs, LabelCommand, LabelMutationArgs, LinkArgs, ListArgs, PrimeArgs, ReadyArgs,
     ReleaseArgs, ReopenArgs, ShowArgs, SlugArgs, SlugCommand, SlugMigrateArgs, TreeArgs,
-    UndependArgs, UpdateArgs,
+    UndependArgs, UpdateArgs, WorkspaceCommand,
 };
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
@@ -36,6 +36,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     match command {
         Command::Init(args) => cmd_init(args, dir.as_deref()),
         Command::Link(args) => cmd_link(args),
+        Command::Workspace(args) => match args.command {
+            WorkspaceCommand::Migrate(args) => crate::workspace_migrate::run(dir.as_deref(), args),
+        },
         Command::Unlink => cmd_unlink(),
         Command::Slug(args) => {
             let exclusive = matches!(args.command, SlugCommand::Migrate(_));
@@ -192,7 +195,9 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
 
     if workspace_root {
         validate_workspace_layout(&requested_root)?;
-        if let Some(existing) = crate::board::workspace_child_board(&requested_root)? {
+        if !Board::is_board(&board_root)
+            && let Some(existing) = crate::board::workspace_child_board(&requested_root)?
+        {
             return Err(crate::board::already_initialized(&existing));
         }
     }
@@ -642,7 +647,7 @@ fn validate_workspace_layout(workspace: &Path) -> Result<()> {
         let entry =
             entry.map_err(|error| OrbitError::io(format!("read {}", orbit.display()), error))?;
         let name = entry.file_name();
-        if name != "board" && name != "cache" {
+        if name != "board" && name != "cache" && name != "workspace-migration.lock" {
             return Err(crate::board::already_initialized(&entry.path()));
         }
     }

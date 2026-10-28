@@ -11,15 +11,15 @@ depends_on:
 parent: orbit-ytwjhm
 checkpoint:
   by: impl-v8vgqe
-  at: 2026-10-28T15:56:03.241328Z
-  progress: Committed implementation 6b315de and follow-up canonical docs 726f7aa after full test suite and documentation review. The integration branch advanced with four commits; my branch is behind and ready to merge it.
-  next: Merge integrate/orbit-ytwjhm, resolve conflicts preserving both changes, rerun affected validation, and report commit hashes.
+  at: 2026-10-28T16:04:49.942668Z
+  progress: 'Implemented and committed read-only GitHub status plus doctor diagnostics, docs/help, and integration coverage. Merged latest integrate/orbit-ytwjhm at 4aa7a350 into the ticket branch as e2657eb, preserving status diagnostics and full/basic mode plus opt-in field creation. Final cargo test: 385 passed.'
+  next: Await integration merger; do not mark ticket done until merged.
 area: cli
 claimed_by: impl-v8vgqe
 claimed_at: 2026-10-28T15:39:34.116849Z
-lease_until: 2026-10-28T16:26:03.213216Z
+lease_until: 2026-10-28T16:34:49.908857Z
 created_at: 2026-10-28T15:23:57.647591Z
-updated_at: 2026-10-28T15:56:03.241328Z
+updated_at: 2026-10-28T16:04:49.942668Z
 ---
 
 ## Goal

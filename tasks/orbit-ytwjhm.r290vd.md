@@ -1,6 +1,6 @@
 ---
 title: Improve GitHub sync plan and conflict output
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -8,8 +8,11 @@ labels:
 - ready-for-agent
 parent: orbit-ytwjhm
 area: cli
+claimed_by: impl-r290vd
+claimed_at: 2026-10-28T15:27:21.203515Z
+lease_until: 2026-10-28T15:57:21.203515Z
 created_at: 2026-10-28T15:23:46.555436Z
-updated_at: 2026-10-28T15:27:14.157411Z
+updated_at: 2026-10-28T15:27:21.203515Z
 ---
 
 ## Goal

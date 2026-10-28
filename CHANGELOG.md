@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.4 - 2026-10-28
+
+- Treat `admin:org` and `write:org` as satisfying the `read:org` requirement for full GitHub mode. Organization administrators no longer receive a false `GITHUB_SCOPES_MISSING` warning.
+
 ## 0.9.3 - 2026-10-28
 
 - Fixed live GitHub GraphQL calls to use `gh api graphql` and a complete query document. Organization Issue Field discovery and creation now work against the real GitHub API; the previous release only worked through the local fixture client.

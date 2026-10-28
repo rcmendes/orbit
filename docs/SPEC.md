@@ -1,6 +1,6 @@
 # Orbit Specification
 
-Status: pre-alpha; v0.9.3 is the latest release and includes the Orbit folder layout ([ADR 0012](./adr/0012-orbit-folder.md)). This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
+Status: pre-alpha; v0.9.4 is the latest release and includes the Orbit folder layout ([ADR 0012](./adr/0012-orbit-folder.md)). This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
 
 ## 1. What Orbit is
 
@@ -504,6 +504,7 @@ the status check only requires the `repo` scope.
 - v0.9.1: Matt Pocock compatibility hardening. Documents the Orbit-vs-skills boundary, adds the agent-brief template, aligns Wayfinder labels and claims, and enforces triage state/category role invariants.
 - v0.9.2: fixes live GitHub organization Issue Field discovery by querying the `IssueFields` union and its concrete field types, restoring organization-backed `orbit github setup` and `--create-fields`.
 - v0.9.3: fixes the live GraphQL transport to call `gh api graphql` with a complete query document, so organization field discovery and creation work against the real GitHub API.
+- v0.9.4: treats `admin:org` and `write:org` as satisfying `read:org`, avoiding a false missing-scope warning for organization administrators.
 
 ### Command rules
 

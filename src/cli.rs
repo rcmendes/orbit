@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
-use crate::task::{Status, TaskType};
+use crate::task::{Status, TaskArea, TaskType};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -140,6 +140,14 @@ pub enum Command {
     /// Commit pending lease-only changes to the board branch.
     #[command(long_about = help::SYNC_LONG, after_long_help = help::SYNC_EXAMPLES)]
     Sync,
+
+    /// Link GitHub repositories and synchronize Issues with Tasks.
+    #[command(name = "github", long_about = help::GITHUB_LONG, after_long_help = help::GITHUB_EXAMPLES)]
+    GitHub(GitHubArgs),
+
+    /// Review and apply agent triage proposals for GitHub-linked Tasks.
+    #[command(long_about = help::TRIAGE_LONG, after_long_help = help::TRIAGE_EXAMPLES)]
+    Triage(TriageArgs),
 }
 
 #[derive(Debug, Args)]
@@ -264,6 +272,14 @@ pub struct AddArgs {
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
 
+    /// Stable work area: board, cli, mcp, setup, docs, or release.
+    #[arg(long, value_name = "AREA")]
+    pub area: Option<String>,
+
+    /// Concise verification checks or commands for agents.
+    #[arg(long, value_name = "TEXT")]
+    pub verification: Option<String>,
+
     /// Task body. Use "-" to read stdin.
     #[arg(long, value_name = "TEXT", conflicts_with = "body_file")]
     pub body: Option<String>,
@@ -298,6 +314,14 @@ pub struct ListArgs {
     /// Exclude work shapes. Repeatable; excludes any listed type.
     #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
     pub exclude_type: Vec<TaskType>,
+
+    /// Filter by work area. Repeatable; matches any listed area.
+    #[arg(long, value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
+    pub area: Vec<TaskArea>,
+
+    /// Exclude tasks with any listed area.
+    #[arg(long = "exclude-area", value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
+    pub exclude_area: Vec<TaskArea>,
 
     /// Filter by label. Repeatable; every label must match.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -349,6 +373,14 @@ pub struct ReadyArgs {
     /// Exclude Ready tasks with any of these work shapes. Repeatable.
     #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
     pub exclude_type: Vec<TaskType>,
+
+    /// Only Ready tasks with any listed work area. Repeatable.
+    #[arg(long, value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
+    pub area: Vec<TaskArea>,
+
+    /// Exclude Ready tasks with any listed work area. Repeatable.
+    #[arg(long = "exclude-area", value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
+    pub exclude_area: Vec<TaskArea>,
 
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -537,6 +569,26 @@ pub struct UpdateArgs {
     /// Remove the external blocker.
     #[arg(long = "clear-waiting")]
     pub clear_waiting: bool,
+
+    /// New work area: board, cli, mcp, setup, docs, or release.
+    #[arg(long, value_name = "AREA", conflicts_with = "clear_area")]
+    pub area: Option<String>,
+
+    /// Remove the work area classification.
+    #[arg(long = "clear-area")]
+    pub clear_area: bool,
+
+    /// New verification checks or commands for agents.
+    #[arg(
+        long,
+        value_name = "TEXT",
+        conflicts_with = "clear_verification"
+    )]
+    pub verification: Option<String>,
+
+    /// Remove task-level verification guidance.
+    #[arg(long = "clear-verification")]
+    pub clear_verification: bool,
 }
 
 #[derive(Debug, Args)]
@@ -739,4 +791,133 @@ pub struct SetupArgs {
     /// Remove Orbit-managed sections, files, and hooks.
     #[arg(long)]
     pub remove: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TriageArgs {
+    #[command(subcommand)]
+    pub command: TriageCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TriageCommand {
+    /// Load task context, project guidance, and allowed triage fields.
+    #[command(after_long_help = help::TRIAGE_CONTEXT_EXAMPLES)]
+    Context {
+        #[arg(value_name = "TASK")]
+        task: String,
+    },
+    /// Validate a proposal JSON file and preview Orbit metadata changes.
+    #[command(after_long_help = help::TRIAGE_REVIEW_EXAMPLES)]
+    Review(TriageReviewArgs),
+    /// Apply an approved proposal to Orbit (not GitHub).
+    #[command(after_long_help = help::TRIAGE_APPLY_EXAMPLES)]
+    Apply(TriageApplyArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TriageReviewArgs {
+    #[arg(value_name = "TASK")]
+    pub task: String,
+    #[arg(long, value_name = "PATH")]
+    pub proposal_file: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct TriageApplyArgs {
+    #[arg(value_name = "TASK")]
+    pub task: String,
+    #[arg(long, value_name = "PATH")]
+    pub proposal_file: PathBuf,
+    /// Required after reviewing the preview; writes Orbit metadata only.
+    #[arg(long)]
+    pub approve: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubArgs {
+    #[command(subcommand)]
+    pub command: GitHubCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GitHubCommand {
+    /// Validate org Issue Fields and persist their ids in config.toml.
+    #[command(after_long_help = help::GITHUB_SETUP_EXAMPLES)]
+    Setup(GitHubSetupArgs),
+    /// Manage explicitly linked GitHub repositories.
+    #[command(subcommand, after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
+    Repo(GitHubRepoCommand),
+    /// Adopt an existing GitHub Issue for a Task.
+    #[command(after_long_help = help::GITHUB_ADOPT_EXAMPLES)]
+    Adopt(GitHubAdoptArgs),
+    /// Create a GitHub Issue for a linked Task.
+    #[command(after_long_help = help::GITHUB_CREATE_EXAMPLES)]
+    Create(GitHubCreateArgs),
+    /// Preview or apply bidirectional sync for linked Tasks.
+    #[command(after_long_help = help::GITHUB_SYNC_CMD_EXAMPLES)]
+    Sync(GitHubSyncArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GitHubRepoCommand {
+    /// Link a repository to this Board.
+    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
+    Link(GitHubRepoLinkArgs),
+    /// Remove a linked repository.
+    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
+    Unlink(GitHubRepoLinkArgs),
+    /// List linked repositories.
+    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
+    List,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubSetupArgs {
+    /// Validate configuration without writing field ids.
+    #[arg(long)]
+    pub validate_only: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubRepoLinkArgs {
+    #[arg(value_name = "OWNER/REPO")]
+    pub repository: String,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubAdoptArgs {
+    #[arg(value_name = "TASK")]
+    pub task: String,
+    #[arg(long, value_name = "OWNER/REPO")]
+    pub repo: String,
+    #[arg(long)]
+    pub number: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubCreateArgs {
+    #[arg(value_name = "TASK")]
+    pub task: String,
+    #[arg(long, value_name = "OWNER/REPO")]
+    pub repo: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum GitHubSyncDirection {
+    #[default]
+    Both,
+    Pull,
+    Push,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubSyncArgs {
+    #[arg(value_name = "TASK")]
+    pub task: Option<String>,
+    #[arg(long, value_enum, default_value_t = GitHubSyncDirection::Both)]
+    pub direction: GitHubSyncDirection,
+    /// Apply the planned sync. Without this flag the command is a dry run.
+    #[arg(long)]
+    pub apply: bool,
 }

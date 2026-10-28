@@ -120,6 +120,8 @@ pub struct Config {
     pub board: BoardConfig,
     #[serde(default)]
     pub id: IdConfig,
+    #[serde(default)]
+    pub github: crate::github::GitHubConfig,
 }
 
 impl Config {
@@ -164,6 +166,7 @@ impl Config {
         if self.board.branch.trim().is_empty() {
             return Err(OrbitError::config("board.branch must be non-empty"));
         }
+        self.github.validate()?;
         Ok(())
     }
 
@@ -697,10 +700,24 @@ impl Board {
             return Ok(CommitOutcome::NoChanges);
         }
         config.board.storage = Some(storage);
+        self.write_config(&config)?;
+        self.commit("orbit: migrate board storage", true)
+    }
+
+    pub fn save_config<F>(&self, message: &str, mutator: F) -> Result<CommitOutcome>
+    where
+        F: FnOnce(&mut Config) -> Result<()>,
+    {
+        let mut config = Config::load(&self.root)?;
+        mutator(&mut config)?;
+        self.write_config(&config)?;
+        self.commit(message, false)
+    }
+
+    fn write_config(&self, config: &Config) -> Result<()> {
         config.validate()?;
         let toml = config.to_toml()?;
-        crate::atomic::write_atomic(&self.root.join("config.toml"), toml.as_bytes(), true)?;
-        self.commit("orbit: migrate board storage", true)
+        crate::atomic::write_atomic(&self.root.join("config.toml"), toml.as_bytes(), true)
     }
 
     /// Changes the Task-ID prefix on an empty Board. The caller must have

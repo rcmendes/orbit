@@ -204,6 +204,18 @@ impl TestRepo {
         value
     }
 
+    pub fn ok_json_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> serde_json::Value {
+        let (status, value) = self.json_with_env(args, envs);
+        assert_eq!(
+            status,
+            0,
+            "command {args:?} failed: {}",
+            serde_json::to_string_pretty(&value).unwrap()
+        );
+        assert_eq!(value["ok"], true, "command {args:?}: {value}");
+        value
+    }
+
     pub fn ok_json_in(&self, cwd: &Path, args: &[&str]) -> serde_json::Value {
         let (status, value) = self.json_in(cwd, args);
         assert_eq!(

@@ -643,6 +643,18 @@ Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link, then the near
 ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 ```
 
+### GitHub Issues (optional)
+
+Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Sync is explicit, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. See [docs/github-sync.md](./docs/github-sync.md).
+
+```bash
+# config.toml: [github] organization + repositories, then:
+orbit github repo link acme/widget
+orbit github setup
+orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
+orbit github sync orb-a7b2c9 --apply
+```
+
 ## Triage, labels, and comments
 
 Labels are free-form lowercase slugs. Three of them are **hold labels**: while present, the task is not Ready and cannot be claimed.
@@ -905,6 +917,7 @@ See [RELEASING.md](./docs/RELEASING.md) for the release process, supported targe
 | [Glossary](./docs/GLOSSARY.md) | Canonical vocabulary and the words Orbit avoids |
 | [Issue tracker guide](./docs/agents/issue-tracker.md) | How agents should use the board in this repository |
 | [Triage labels](./docs/agents/triage-labels.md) | The five canonical triage roles and category labels |
+| [Triage workflow](./docs/agents/triage-workflow.md) | Review/apply proposals for GitHub-linked Tasks |
 | [Domain docs](./docs/agents/domain.md) | How engineering skills consume this repo's domain documentation |
 | [ADRs](./docs/adr/) | Durable design decisions, from the orphan branch to the Orbit folder and Type field |
 | [Releasing](./docs/RELEASING.md) | cargo-dist, npm, smoke checks, and release operations |

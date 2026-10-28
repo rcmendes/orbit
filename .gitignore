@@ -21,3 +21,6 @@ opencode.json
 
 # macOS
 .DS_Store
+
+# Local git worktrees for parallel agent work
+.worktrees/

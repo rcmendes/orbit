@@ -58,6 +58,8 @@ the multi-repository model.
 | Collect or archive the board | `orbit export` |
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
 | Recover or maintain the board | `orbit doctor`, `orbit sync` |
+| Link GitHub Issues (optional) | `orbit github` — see [github-sync.md](./github-sync.md) |
+| Triage linked Tasks | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
 
 ## Set up a Board
 
@@ -384,10 +386,16 @@ use `done --force` or `cancel --force` on a spec parent with open tickets: it
 cancels them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md) and
 [ADR 0010](./adr/0010-structural-type-field.md).
 
+`--area` sets an optional controlled classification (`board`, `cli`, `mcp`,
+`setup`, `docs`, or `release`). Filter with `orbit list --area cli` or
+`orbit ready --exclude-area docs`. `--verification` stores concise checks or
+commands for agents; shared project defaults live in
+[`docs/agents/project-guidance.md`](./agents/project-guidance.md).
+
 ### `orbit update` — edit a ticket in place
 
-Changes the title, body, priority, type, or external blocker without touching
-status, claims, labels, or dependencies. `--type epic` is refused on a SubTask.
+Changes the title, body, priority, type, area, verification, or external blocker
+without touching status, claims, labels, or dependencies. `--type epic` is refused on a SubTask.
 
 **Good fit:** scope changed after triage, a spec needs refinement, or an external
 blocker was resolved.
@@ -397,6 +405,8 @@ orbit update orb-a7b2c9 --priority 0
 orbit update orb-a7b2c9 --type spike
 orbit update orb-a7b2c9 --body-file refined-spec.md
 orbit update orb-a7b2c9 --clear-waiting
+orbit update orb-a7b2c9 --area mcp --verification "cargo test --test mcp"
+orbit update orb-a7b2c9 --clear-area --clear-verification
 ```
 
 ### `orbit depend` and `orbit undepend` — connect work
@@ -786,6 +796,35 @@ changes.
 
 ```bash
 orbit sync
+```
+
+### `orbit github` — GitHub Issue provider
+
+Links explicitly configured repositories, adopts or creates Issues, and runs
+bidirectional sync with conflict detection. Requires `[github]` in `config.toml`,
+the `gh` CLI, and organization Issue Fields. Full setup and semantics are in
+[github-sync.md](./github-sync.md).
+
+```bash
+orbit github repo link acme/widget
+orbit github setup
+orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
+orbit github sync orb-a7b2c9              # dry-run plan
+orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
+```
+
+### `orbit triage` — agent review and apply
+
+Reviews GitHub-linked Tasks only. Agents draft a proposal JSON file, preview changes
+with `review`, apply approved metadata to Orbit with `apply --approve`, then publish
+with `orbit github sync`. Does not modify GitHub-owned title, body, or status. See
+[agents/triage-workflow.md](./agents/triage-workflow.md).
+
+```bash
+orbit triage context orb-a7b2c9 --json
+orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
+orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json
+orbit github sync orb-a7b2c9 --direction push --apply
 ```
 
 ## Scenarios

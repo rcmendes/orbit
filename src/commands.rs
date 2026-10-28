@@ -1,4 +1,5 @@
 use chrono::{Duration as ChronoDuration, Utc};
+use clap::ValueEnum;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read};
@@ -20,7 +21,7 @@ use crate::graph::{self, Graph, LoadMode};
 use crate::migrate::{self, Plan};
 use crate::setup::COMPLETION_LINE;
 use crate::slug;
-use crate::task::{self, Status, Task, TaskFrontmatter, TaskType};
+use crate::task::{self, Status, Task, TaskArea, TaskFrontmatter, TaskType};
 use crate::transition::{CheckpointUpdate, ClaimGate, FieldUpdate, Outcome, TransitionError};
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
@@ -82,6 +83,12 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             .map(|()| crate::output::CommandOutput::new(Value::Null, "").with_silent()),
         Command::Doctor(args) => crate::doctor::run(dir.as_deref(), args),
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
+        Command::GitHub(args) => {
+            with_board(dir.as_deref(), true, |board| crate::github::commands::run(board, args))
+        }
+        Command::Triage(args) => {
+            with_board(dir.as_deref(), true, |board| crate::triage::commands::run(board, args))
+        }
     }
 }
 
@@ -964,6 +971,8 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
     }
 
     let waiting_on = normalize_waiting(args.waiting_on)?;
+    let area = parse_area_option(args.area)?;
+    let verification = task::normalize_verification(args.verification)?;
     let body = resolve_body(args.body, args.body_file)?;
     let id = generate_unique_id(board, parent.as_deref())?;
     let now = Utc::now();
@@ -980,6 +989,9 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
             parent,
             waiting_on,
             checkpoint: None,
+            area,
+            verification,
+            github: None,
             claim: None,
             stray_claim_times: None,
             created_at: now,
@@ -1051,6 +1063,21 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
             if args.exclude_type.contains(&task.front.task_type) {
                 return false;
             }
+            if !args.area.is_empty()
+                && !args
+                    .area
+                    .iter()
+                    .any(|area| task.front.area == Some(*area))
+            {
+                return false;
+            }
+            if args
+                .exclude_area
+                .iter()
+                .any(|area| task.front.area == Some(*area))
+            {
+                return false;
+            }
             if !task.has_labels(&label_filters) {
                 return false;
             }
@@ -1112,6 +1139,8 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
             &excluded_labels,
             &args.task_type,
             &args.exclude_type,
+            &args.area,
+            &args.exclude_area,
         );
         if ready.is_empty() {
             return Ok(
@@ -1153,6 +1182,8 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         &excluded_labels,
         &args.task_type,
         &args.exclude_type,
+        &args.area,
+        &args.exclude_area,
     );
     if let Some(limit) = args.limit {
         ready.truncate(limit);
@@ -1628,10 +1659,14 @@ fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandO
         || args.priority.is_some()
         || args.task_type.is_some()
         || args.waiting_on.is_some()
-        || args.clear_waiting;
+        || args.clear_waiting
+        || args.area.is_some()
+        || args.clear_area
+        || args.verification.is_some()
+        || args.clear_verification;
     if !has_changes {
         return Err(OrbitError::invalid_argument(
-            "nothing to update; pass --title, --body, --priority, --type, or --waiting-on",
+            "nothing to update; pass --title, --body, --priority, --type, --area, --verification, or --waiting-on",
         ));
     }
 
@@ -1652,6 +1687,8 @@ fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandO
         None
     };
     let waiting_on = normalize_waiting(args.waiting_on)?;
+    let area = parse_area_option(args.area)?;
+    let verification = task::normalize_verification(args.verification)?;
 
     let task = {
         let task = graph.get_mut(&args.id)?;
@@ -1675,6 +1712,16 @@ fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandO
             task.front.waiting_on = None;
         } else if waiting_on.is_some() {
             task.front.waiting_on = waiting_on;
+        }
+        if args.clear_area {
+            task.front.area = None;
+        } else if let Some(area) = area {
+            task.front.area = Some(area);
+        }
+        if args.clear_verification {
+            task.front.verification = None;
+        } else if verification.is_some() {
+            task.front.verification = verification;
         }
         task.front.updated_at = Utc::now();
         task.clone()
@@ -2364,6 +2411,8 @@ fn ready_for_filters(
     excluded: &[String],
     types: &[TaskType],
     excluded_types: &[TaskType],
+    areas: &[TaskArea],
+    excluded_areas: &[TaskArea],
 ) -> Vec<Task> {
     if let Some(parent) = parent {
         ready.retain(|task| task.front.parent.as_deref() == Some(parent));
@@ -2379,6 +2428,21 @@ fn ready_for_filters(
     }
     if !excluded_types.is_empty() {
         ready.retain(|task| !excluded_types.contains(&task.front.task_type));
+    }
+    if !areas.is_empty() {
+        ready.retain(|task| {
+            task.front
+                .area
+                .is_some_and(|area| areas.contains(&area))
+        });
+    }
+    if !excluded_areas.is_empty() {
+        ready.retain(|task| {
+            !task
+                .front
+                .area
+                .is_some_and(|area| excluded_areas.contains(&area))
+        });
     }
     ready
 }
@@ -2429,6 +2493,28 @@ fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {
             Ok(Some(value))
         }
     }
+}
+
+fn parse_area_option(area: Option<String>) -> Result<Option<TaskArea>> {
+    match area {
+        None => Ok(None),
+        Some(value) => Ok(Some(parse_area_value(&value)?)),
+    }
+}
+
+fn parse_area_value(value: &str) -> Result<TaskArea> {
+    let value = value.trim();
+    TaskArea::from_str(value, true).map_err(|_| {
+        let allowed = TaskArea::all()
+            .iter()
+            .map(|area| area.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        OrbitError::new(
+            code::INVALID_AREA,
+            format!("unknown area `{value}`; expected one of: {allowed}"),
+        )
+    })
 }
 
 fn resolve_body(body: Option<String>, file: Option<std::path::PathBuf>) -> Result<String> {

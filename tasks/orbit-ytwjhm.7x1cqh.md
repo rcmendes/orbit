@@ -1,6 +1,6 @@
 ---
 title: Add interactive human review for Triage proposals
-status: todo
+status: in_progress
 type: task
 priority: 2
 labels:
@@ -10,8 +10,11 @@ depends_on:
 - orbit-ytwjhm.v8vgqe
 parent: orbit-ytwjhm
 area: cli
+claimed_by: impl-7x1cqh
+claimed_at: 2026-10-28T16:06:52.411754Z
+lease_until: 2026-10-28T16:36:52.411754Z
 created_at: 2026-10-28T15:24:06.023440Z
-updated_at: 2026-10-28T15:24:06.023440Z
+updated_at: 2026-10-28T16:06:52.411754Z
 ---
 
 ## Goal

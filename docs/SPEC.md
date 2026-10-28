@@ -524,6 +524,15 @@ structure, including provider `mode`, field applicability, `next_action`, and
 `next_command`. In basic mode, organization Issue Fields are not applicable and
 the status check only requires the `repo` scope.
 
+`orbit github create TASK...` previews selected Local Tasks without writing.
+`--apply` creates one GitHub Issue for each eligible selected Task, then stores
+the confirmed `owner/repo#number` link and sync baseline on that Task. A linked
+Task is rejected and directs the user to sync; done and cancelled Tasks require
+`--include-terminal` and create closed Issues. Each batch result reports success
+or failure independently. Repository Boards infer a destination only when one
+repository is linked; Workspace Boards use the last refreshed included-repository
+catalog and require `--repo OWNER/REPO` when multiple repositories are included.
+
 `--agents` accepts `none`, `all`, or a comma-separated list of client names. Without it, `init` asks in a TTY and otherwise writes no agent files while explaining the `orbit setup` hint in its report; `--print` never prompts. `--agents none` is the non-interactive "Board only" choice.
 
 `TYPE` is one of `task`, `epic`, `spike`, `chore`, or `decision`. `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` is shorthand for `--label repo:NAME`.

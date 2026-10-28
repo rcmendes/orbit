@@ -735,9 +735,10 @@ orbit github setup
 orbit github setup --create-fields # create missing fields (organization admin required)
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
-orbit github create orb-a7b2c9 # preview; automatically uses the only linked repository
-orbit github create orb-a7b2c9 --apply
-orbit github sync orb-a7b2c9 --apply
+orbit github sync orb-a7b2c9 --apply # publish changes to the adopted Issue
+orbit add "A new local task"        # use its printed ID below
+orbit github create orb-d4e5f6     # preview; automatically uses the only linked repository
+orbit github create orb-d4e5f6 --apply
 ```
 
 `github create` accepts one or more Task IDs and previews the destination,

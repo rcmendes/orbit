@@ -842,7 +842,9 @@ pub const GITHUB_EXAMPLES: &str = "\
 Examples:
   orbit github repo link acme/widget
   orbit github setup
+  orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
   orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
+  orbit github create orb-a7b2c9
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply";
 
@@ -859,10 +861,12 @@ Examples:
 
 pub const GITHUB_ADOPT_EXAMPLES: &str = "\
 Examples:
+  orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
   orbit github adopt orb-a7b2c9 --repo acme/widget --number 42";
 
 pub const GITHUB_CREATE_EXAMPLES: &str = "\
 Examples:
+  orbit github create orb-a7b2c9
   orbit github create orb-a7b2c9 --repo acme/widget";
 
 pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\

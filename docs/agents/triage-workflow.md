@@ -111,10 +111,12 @@ Forbidden proposal keys (GitHub-owned): `title`, `body`, `status`, `state`.
 
 ## Errors
 
+When a proposal adds or removes labels, Orbit checks the label set that would remain. That set may contain at most one state role (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) and at most one category role (`bug`, `enhancement`). Zero of either role is allowed. A proposal that only changes `area` or `verification` does not run this check. Labels that are not state or category roles are left in place.
+
 | Code | Meaning |
 | --- | --- |
 | `TRIAGE_NOT_LINKED` | Task has no GitHub link |
 | `TRIAGE_APPROVAL_REQUIRED` | `apply` without `--approve` |
-| `TRIAGE_INVALID_PROPOSAL` | Invalid JSON, forbidden fields, or non-canonical labels |
+| `TRIAGE_INVALID_PROPOSAL` | Invalid JSON, forbidden fields, non-canonical labels, or more than one state or category role |
 
 See also [`agent-brief.md`](./agent-brief.md), [`triage-labels.md`](./triage-labels.md), and [`issue-tracker.md`](./issue-tracker.md).

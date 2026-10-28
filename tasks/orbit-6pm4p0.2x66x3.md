@@ -1,14 +1,11 @@
 ---
 title: Add multi-repository GitHub Issue provider and bidirectional sync
-status: in_progress
+status: done
 type: task
 priority: 2
 parent: orbit-6pm4p0
-claimed_by: implementer-2x66x3
-claimed_at: 2026-10-28T14:27:40.202284Z
-lease_until: 2026-10-28T14:57:40.202284Z
 created_at: 2026-10-28T14:07:19.613572Z
-updated_at: 2026-10-28T14:27:40.202284Z
+updated_at: 2026-10-28T14:40:23.003238Z
 ---
 
 ## Goal

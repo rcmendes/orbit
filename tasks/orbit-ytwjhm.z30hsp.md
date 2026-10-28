@@ -1,6 +1,6 @@
 ---
 title: Add orbit github connect setup wizard
-status: todo
+status: in_progress
 type: task
 priority: 1
 labels:
@@ -8,8 +8,11 @@ labels:
 - ready-for-agent
 parent: orbit-ytwjhm
 area: setup
+claimed_by: impl-z30hsp
+claimed_at: 2026-10-28T15:27:21.046648Z
+lease_until: 2026-10-28T15:57:21.046648Z
 created_at: 2026-10-28T15:23:46.720999Z
-updated_at: 2026-10-28T15:27:13.941212Z
+updated_at: 2026-10-28T15:27:21.046648Z
 ---
 
 ## Goal

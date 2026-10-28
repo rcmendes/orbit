@@ -44,6 +44,8 @@ outside Git and a repository-local Board inside Git. See
 | --- | --- |
 | Set up a repository or workspace | `orbit init`, `orbit link`, `orbit unlink` |
 | Merge existing Workspace and child Boards | `orbit workspace migrate` |
+| Discover Workspace repositories | `orbit workspace refresh`, `orbit workspace status` |
+| Browse Workspace Remote Issues | `orbit workspace issues refresh`, `list`, `inspect` |
 | File a new ticket | `orbit add` |
 | Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend` |
 | Triage incoming work | `orbit label add/remove/list` |
@@ -231,6 +233,55 @@ are not edited or removed. After a successful
 application, the report includes the Board commit and `git revert` guidance. Keep
 the source Boards until `orbit doctor` succeeds.
 
+### `orbit workspace` — discover Workspace repositories
+
+Set `[github].organization` on the Workspace Board, for example by running
+`orbit github connect` from an organization-owned child repository. Then refresh
+the catalog explicitly:
+
+```bash
+orbit workspace refresh
+orbit workspace status
+orbit workspace include acme/api
+orbit workspace exclude acme/legacy
+```
+
+### `orbit workspace issues` — browse Remote Issues
+
+Refresh the Workspace's rebuildable GitHub Issue cache, filter cached summaries,
+or inspect one Issue's live body and comments. This catalog is separate from the
+Board and never creates Tasks.
+
+```bash
+orbit workspace issues refresh
+orbit workspace issues list [--repo OWNER/REPO] [--state open|closed]
+  [--label LABEL]... [--text TEXT] [--linked|--unlinked]
+orbit workspace issues inspect OWNER/REPO#NUMBER
+```
+
+`orbit workspace refresh` scans only direct child directories. It classifies GitHub origins by
+organization, checks access with the configured GitHub client, and saves the
+latest repository inventory at `<workspace>/.orbit/cache/repositories.json`.
+Non-Git directories, repositories without an origin, unsupported origins, and
+unsupported owners are reported separately. An inaccessible repository is
+marked `inaccessible` until it was previously accessible; after that it is
+`stale` while access is unavailable. A repository directory no longer found
+during refresh is marked `removed`. These states do not delete cached data.
+
+`orbit workspace status` reads the last repository catalog only. It does not inspect Git directories or
+contact GitHub, so a newly cloned child repository appears after the next
+explicit `refresh`. `workspace.include` and `workspace.exclude` store overrides
+in the Workspace Board configuration; selecting one removes the opposite
+override. A non-empty include list is an allowlist, and exclusions always take
+precedence. Full mode remains limited to the configured organization.
+Discovery does not create Tasks or GitHub Issues.
+
+`orbit workspace issues refresh` also refreshes the repository inventory, then
+fetches every included repository's paginated open/closed Issue summaries. It
+stores Issue Fields without bodies or comments in `issues.json`; list filters the
+cache, and inspect fetches a full Issue and its comments on demand. Per-repository
+errors are reported without replacing that repository's last successful snapshot.
+
 ### `orbit link` — reuse a Board from another repository
 
 Points this repository at an existing Orbit folder, including from all of its
@@ -366,7 +417,7 @@ normally.
 
 ### `orbit mcp` — expose the Board to an MCP client
 
-Runs the Model Context Protocol server over stdio with 14 tools and the
+Runs the Model Context Protocol server over stdio with 17 tools and the
 `orbit://tasks/{id}` resource. Editors launch it from their MCP configuration.
 `create` accepts `parent` and `type`; `update` accepts `type`; `checkpoint`
 records the claim holder's handoff; `list` and `ready` accept `parent`, `repo`,
@@ -880,7 +931,10 @@ orbit github setup
 orbit github setup --create-fields       # explicitly create missing org Issue Fields
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42  # legacy form
-orbit github create orb-a7b2c9                 # uses the only linked repository
+orbit github create orb-a7b2c9                 # preview only; uses the only linked repository
+orbit github create orb-a7b2c9 --apply         # create and link after review
+orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
+orbit github create orb-terminal --include-terminal --apply
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
 ```

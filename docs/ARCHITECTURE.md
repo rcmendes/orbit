@@ -138,7 +138,7 @@ flowchart LR
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
-| Application | `src/commands.rs`, `src/migrate.rs`, `src/workspace_migrate.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. GitHub commands provide read-only status diagnostics and explicit Issue synchronization; `doctor` includes GitHub health checks when configured. Prefix migration rewrites one Board; Workspace migration validates, combines, and activates multiple Boards. |
+| Application | `src/commands.rs`, `src/migrate.rs`, `src/workspace_migrate.rs`, `src/workspace.rs`, `src/issue_catalog.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. Workspace commands reconcile repositories and Remote Issue snapshots explicitly. GitHub commands provide status diagnostics, export previews, Issue creation, and synchronization; `doctor` includes GitHub health checks when configured. Prefix migration rewrites one Board; Workspace migration validates, combines, and activates multiple Boards. |
 | Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
@@ -464,15 +464,26 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | --- | --- | --- |
 | Bootstrap | `init`, `link`, `unlink`, `setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; `github status` diagnoses provider health without changing the Board or GitHub. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `github create` preview, `workspace status`, `workspace issues list/inspect` | Read-only. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; `github status` diagnoses provider health and `github create` previews selected Task exports without changing the Board or GitHub; Workspace status and Issue listing read their local snapshots. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
-| Maintenance | `doctor`, `sync`, `github`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly synchronize GitHub Issues, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
+| Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude`, `workspace issues refresh`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly create or synchronize GitHub Issues, discover Workspace repositories and store overrides, refresh Remote Issue summaries, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Board layouts and initialization
 
 ### Topology
 
 A Workspace is an ordinary, non-Git folder containing repositories and one Board. Its Board is the standalone repository at `<workspace>/.orbit/board`; the rebuildable catalog cache is separate at `<workspace>/.orbit/cache`. Child repositories discover the Workspace Board by walking above their Git boundary and need no link. Repositories outside the Workspace can link its root; the link pointer remains in each Repository's Git common directory. The repository-local Board remains `<repository>/.orbit`, and the global Board at `~/.orbit` is the last discovery fallback.
+
+`src/workspace.rs` owns the explicit repository inventory. `workspace refresh`
+scans one level of child directories and validates GitHub `origin` ownership and
+access against `[github].organization`; the resulting snapshot is outside the
+Board Git repository. `workspace status` reads that snapshot without network or
+filesystem discovery. Stale and removed entries remain in the cache, and the
+command never imports Issues as Tasks. `workspace issues refresh` reconciles
+that inventory and stores paginated Issue summaries separately at
+`.orbit/cache/issues.json`; per-repository errors retain the last successful
+snapshot. `workspace issues list` reads cached summaries, while `inspect` fetches
+the live body and comments. These catalog entries never enter the Task graph.
 
 ```mermaid
 flowchart LR

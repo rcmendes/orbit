@@ -348,6 +348,49 @@ user resolution. Title/body similarity is never used. After application, run
 `orbit doctor`; rollback guidance uses `git revert` on the reported single
 Workspace Board commit.
 
+### Workspace repository discovery
+
+`orbit workspace refresh` explicitly scans direct child directories of the
+Workspace. It considers only direct child Git repositories, reads their GitHub
+`origin` remotes, and checks repository access. Full mode uses the single
+`[github].organization` configured on the Workspace Board. It never creates
+Tasks or GitHub Issues. The rebuildable snapshot is stored at
+`<workspace>/.orbit/cache/repositories.json`; explicitly refreshed Remote Issue
+summaries are stored separately at `<workspace>/.orbit/cache/issues.json`.
+
+`orbit workspace status` reads only that snapshot: it does not scan directories
+or contact GitHub. New child repositories therefore appear after the next
+explicit refresh. `orbit workspace include OWNER/REPO` and `exclude OWNER/REPO`
+persist overrides in the Workspace Board's `[workspace]` config. A non-empty
+include list is an allowlist; exclusions take precedence, and the two override
+lists cannot contain the same repository.
+
+### Remote Issue catalog
+
+`orbit workspace issues refresh` first reconciles direct child repository
+discovery, then paginates all open and closed Issues for included repositories.
+Pull requests are excluded. It stores summary fields, including stable
+`OWNER/REPO#NUMBER` identity, labels, Issue Fields, URL, and timestamps, in
+`<workspace>/.orbit/cache/issues.json`; bodies and comments are fetched only by
+`orbit workspace issues inspect OWNER/REPO#NUMBER`. Each repository records its
+last successful refresh and any error. A failed refresh retains its previous
+snapshot and reports it as stale; a repository with no successful snapshot is
+unavailable. Listing can filter by repository, state, labels, title text, and
+whether an Issue is linked to a Task. Catalog entries are never Tasks and are
+excluded from task listing, readiness, claims, and Task export until explicitly
+imported.
+
+The status snapshot reports included and excluded repositories, first-time
+access failures (`inaccessible`), previously cached but unavailable repositories
+(`stale`), repositories no longer present (`removed`), unsupported owners,
+non-Git child directories, missing origins, and unsupported origin URLs. Stale
+and removed repository entries are retained; discovery does not detach or delete
+their cached data. JSON `data.repositories` entries include `repository`, `path`,
+`discovered`, `status`, `included`, `cached`, `origin`, `error`, and
+`last_checked_at`. The top-level data includes the configured `organization`,
+`last_refreshed_at`, and arrays for non-Git directories, missing origins, and
+unsupported origins.
+
 ### Slugs
 
 A Board has one slug. It is resolved from `DIR` when the Board is created; an empty Board can change it with `--slug`:
@@ -510,6 +553,15 @@ recommended next step. `--json` exposes the same diagnostic data in a stable
 structure, including provider `mode`, field applicability, `next_action`, and
 `next_command`. In basic mode, organization Issue Fields are not applicable and
 the status check only requires the `repo` scope.
+
+`orbit github create TASK...` previews selected Local Tasks without writing.
+`--apply` creates one GitHub Issue for each eligible selected Task, then stores
+the confirmed `owner/repo#number` link and sync baseline on that Task. A linked
+Task is rejected and directs the user to sync; done and cancelled Tasks require
+`--include-terminal` and create closed Issues. Each batch result reports success
+or failure independently. Repository Boards infer a destination only when one
+repository is linked; Workspace Boards use the last refreshed included-repository
+catalog and require `--repo OWNER/REPO` when multiple repositories are included.
 
 `--agents` accepts `none`, `all`, or a comma-separated list of client names. Without it, `init` asks in a TTY and otherwise writes no agent files while explaining the `orbit setup` hint in its report; `--print` never prompts. `--agents none` is the non-interactive "Board only" choice.
 
@@ -678,7 +730,7 @@ CLI + `orbit prime` is the primary interface. `prime` prints ~1k tokens: workflo
 
 `orbit init` creates the Board only; it writes harness files when the TTY prompt is accepted or `--agents` names clients. `orbit setup` writes one harness explicitly. Project scope (`--scope project`, the default) writes repository-level files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and mattpocock (`docs/agents/issue-tracker.md`). User scope (`--scope user`) writes the same managed content at the harness's user-level locations. `init` selects harnesses by detection or `--agents`; `setup` selects one explicitly named client. Orbit-managed sections and files use markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries. Generated configs record the Orbit binary but not the Board path, so moving `DIR` does not stale them; a managed config that still contains an absolute Board path is reported by `doctor` as `ABSOLUTE_BOARD_PATH`. MCP entries use an absolute binary path by default, or the portable `orbit` command with `--portable-mcp`; the portable form requires the editor's `PATH`. A hand-written `docs/agents/issue-tracker.md` without the marker is reported as `skipped` and left untouched, while `--check` still treats the integration as installed.
 
-MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 14 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `checkpoint`, `finish`, `link`, `delete`, `label`, `comment`. `create` accepts `parent` to make a SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint` records the claim holder's handoff; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature or repository. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
+MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 17 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `checkpoint`, `finish`, `link`, `delete`, `label`, `comment`, `issue_refresh`, `issue_list`, `issue_inspect`. The Workspace Issue tools refresh and browse cached Remote Issue summaries, inspect an Issue body and comments on demand, and never import or claim catalog entries. `create` accepts `parent` to make a SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint` records the claim holder's handoff; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature or repository. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
 
 ## 10. Milestones
 
@@ -694,7 +746,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **M5 — one-command onboarding.** Idempotent `init`, harness detection and selection, shared-Board `link`/`unlink`, absolute-binary hooks, and `setup --check`. Implemented; v0.8.1 makes `init` pure and moves wiring behind the prompt or `setup`.
 
-**M6 — workspaces, SubTasks, and export.** Workspaces now use a DIR plus `link`; the standalone `orbit workspace` command was removed in v0.8.1. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
+**M6 — workspaces, SubTasks, and export.** Workspaces now use a DIR plus `link`; the former `orbit workspace <folder>` creation command was removed in v0.8.1. The current `orbit workspace` commands manage repository discovery only. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
 
 **v0.5.0 — structural Type.** Metadata-only `type`, `tree` family view, close candidates, parent progress fields, and label/type exclusions. Implemented.
 

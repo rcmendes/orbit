@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Added `orbit workspace migrate` to preview and consolidate legacy Workspace and child-repository Boards into `<workspace>/.orbit/board`. It preserves source Boards, Tasks, comments, claims, Checkpoints, and relationships; remaps only colliding IDs; retains source prefixes as accepted legacy prefixes; reports config differences; blocks duplicate GitHub Issue identities; and supports resumable application with validation and rollback guidance.
+- `orbit github create` now previews selected Local Tasks by default, supports explicit batches and terminal-task opt-in, and applies each Issue independently before persisting its stable Task link and sync baseline. Workspace exports infer a single included repository; linked Tasks are directed to sync instead of being duplicated.
 
 ## 0.9.4 - 2026-10-28
 

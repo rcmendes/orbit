@@ -124,6 +124,11 @@ pub struct Config {
     pub id: IdConfig,
     #[serde(default)]
     pub github: crate::github::GitHubConfig,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::workspace::WorkspaceConfig::is_empty"
+    )]
+    pub workspace: crate::workspace::WorkspaceConfig,
 }
 
 impl Config {
@@ -179,6 +184,7 @@ impl Config {
             return Err(OrbitError::config("board.branch must be non-empty"));
         }
         self.github.validate()?;
+        self.workspace.validate()?;
         Ok(())
     }
 

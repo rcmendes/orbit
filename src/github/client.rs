@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -30,12 +30,53 @@ pub struct RepositoryInfo {
     pub owner_type: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IssueCatalogItem {
+    #[serde(default)]
+    pub identity: String,
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub state: IssueState,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub issue_fields: BTreeMap<String, serde_json::Value>,
+    pub url: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<String>,
+}
+
+impl IssueCatalogItem {
+    pub fn identity(&self) -> String {
+        if self.identity.is_empty() {
+            format!("{}#{}", self.repo, self.number)
+        } else {
+            self.identity.clone()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IssueComment {
+    pub id: u64,
+    pub body: String,
+    pub author: String,
+    pub created_at: DateTime<Utc>,
+}
+
 pub struct CreateIssueInput {
     pub title: String,
     pub body: String,
     pub labels: Vec<String>,
     pub area: Option<String>,
     pub verification: Option<String>,
+    pub organization: Option<String>,
+    pub issue_fields: IssueFieldConfig,
 }
 
 pub struct UpdateIssueInput {
@@ -57,6 +98,15 @@ pub trait GitHubClient: Send + Sync {
     fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup>;
 
     fn get_issue(&self, repo: &str, number: u64) -> Result<IssueSnapshot>;
+
+    fn list_issues_page(&self, repo: &str, page: usize) -> Result<Vec<IssueCatalogItem>>;
+
+    fn issue_comments_page(
+        &self,
+        repo: &str,
+        number: u64,
+        page: usize,
+    ) -> Result<Vec<IssueComment>>;
 
     fn create_issue(&self, repo: &str, input: &CreateIssueInput) -> Result<IssueSnapshot>;
 
@@ -233,19 +283,119 @@ impl GitHubClient for GhCliClient {
         parse_rest_issue(repo, &output)
     }
 
-    fn create_issue(&self, repo: &str, input: &CreateIssueInput) -> Result<IssueSnapshot> {
-        if input.area.is_some() || input.verification.is_some() {
-            return Err(OrbitError::new(
-                code::GITHUB_SETUP_INCOMPLETE,
-                "issue field values require `orbit github setup` before create/sync",
-            ));
+    fn list_issues_page(&self, repo: &str, page: usize) -> Result<Vec<IssueCatalogItem>> {
+        let path = format!("/repos/{repo}/issues?state=all&per_page=100&page={page}");
+        let output = gh_api(&["api", &path])?;
+        let issues: Vec<RestCatalogIssue> = serde_json::from_slice(&output).map_err(|error| {
+            OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                format!("invalid GitHub issue catalog response: {error}"),
+            )
+        })?;
+        let mut summaries = Vec::new();
+        for issue in issues
+            .into_iter()
+            .filter(|issue| issue.pull_request.is_none())
+        {
+            let issue_fields = list_issue_field_values(repo, issue.number)?;
+            summaries.push(IssueCatalogItem {
+                identity: format!("{repo}#{}", issue.number),
+                repo: repo.to_string(),
+                number: issue.number,
+                title: issue.title,
+                state: if issue.state == "open" {
+                    IssueState::Open
+                } else {
+                    IssueState::Closed
+                },
+                labels: issue.labels.into_iter().map(|label| label.name).collect(),
+                url: issue.html_url,
+                created_at: issue.created_at,
+                updated_at: issue.updated_at,
+                area: issue.area.or_else(|| string_field(&issue_fields, "Area")),
+                verification: issue
+                    .verification
+                    .or_else(|| string_field(&issue_fields, "Verification")),
+                issue_fields,
+            });
         }
-        let payload = serde_json::json!({
+        Ok(summaries)
+    }
+
+    fn issue_comments_page(
+        &self,
+        repo: &str,
+        number: u64,
+        page: usize,
+    ) -> Result<Vec<IssueComment>> {
+        let path = format!("/repos/{repo}/issues/{number}/comments?per_page=100&page={page}");
+        let output = gh_api(&["api", &path])?;
+        let comments: Vec<RestIssueComment> = serde_json::from_slice(&output).map_err(|error| {
+            OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                format!("invalid GitHub comments response: {error}"),
+            )
+        })?;
+        Ok(comments
+            .into_iter()
+            .map(|comment| IssueComment {
+                id: comment.id,
+                body: comment.body,
+                author: comment.user.login,
+                created_at: comment.created_at,
+            })
+            .collect())
+    }
+
+    fn create_issue(&self, repo: &str, input: &CreateIssueInput) -> Result<IssueSnapshot> {
+        let mut payload = serde_json::json!({
             "title": input.title,
             "body": input.body,
             "labels": input.labels,
-        })
-        .to_string();
+        });
+        let mut field_values = Vec::new();
+        if input.area.is_some() || input.verification.is_some() {
+            if input.area.is_some() && input.issue_fields.area_id.is_none()
+                || input.verification.is_some() && input.issue_fields.verification_id.is_none()
+            {
+                return Err(OrbitError::new(
+                    code::GITHUB_SETUP_INCOMPLETE,
+                    "issue field values require resolved ids from `orbit github setup`",
+                ));
+            }
+            let org = input
+                .organization
+                .as_deref()
+                .filter(|org| !org.is_empty())
+                .ok_or_else(|| {
+                    OrbitError::new(
+                        code::GITHUB_SETUP_INCOMPLETE,
+                        "issue field values require `github.organization` and `orbit github setup`",
+                    )
+                })?;
+            let fields = list_rest_issue_fields(org)?;
+            if let Some(area) = input.area.as_deref() {
+                let field_id = rest_issue_field_id(&fields, &input.issue_fields.area_name).ok_or_else(|| {
+                    OrbitError::new(
+                        code::GITHUB_SETUP_INCOMPLETE,
+                        format!("organization `{org}` is missing Issue Field `{}`; run `orbit github setup`", input.issue_fields.area_name),
+                    )
+                })?;
+                field_values.push(serde_json::json!({ "field_id": field_id, "value": area }));
+            }
+            if let Some(verification) = input.verification.as_deref() {
+                let field_id = rest_issue_field_id(&fields, &input.issue_fields.verification_name).ok_or_else(|| {
+                    OrbitError::new(
+                        code::GITHUB_SETUP_INCOMPLETE,
+                        format!("organization `{org}` is missing Issue Field `{}`; run `orbit github setup`", input.issue_fields.verification_name),
+                    )
+                })?;
+                field_values
+                    .push(serde_json::json!({ "field_id": field_id, "value": verification }));
+            }
+            payload["issue_field_values"] = serde_json::Value::Array(field_values);
+        }
+        let payload = payload.to_string();
         let path = format!("/repos/{repo}/issues");
         let output = gh_api_with_input(
             &["api", &path, "-X", "POST", "--input", "-"],
@@ -293,6 +443,30 @@ impl GitHubClient for GhCliClient {
         )?;
         parse_rest_issue(repo, &output)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct RestIssueField {
+    id: u64,
+    name: String,
+}
+
+fn list_rest_issue_fields(org: &str) -> Result<Vec<RestIssueField>> {
+    let path = format!("/orgs/{org}/issue-fields");
+    let output = gh_api(&["api", &path])?;
+    serde_json::from_slice(&output).map_err(|error| {
+        OrbitError::new(
+            code::GITHUB_SETUP_INCOMPLETE,
+            format!("invalid GitHub organization Issue Fields response: {error}"),
+        )
+    })
+}
+
+fn rest_issue_field_id(fields: &[RestIssueField], name: &str) -> Option<u64> {
+    fields
+        .iter()
+        .find(|field| field.name.eq_ignore_ascii_case(name))
+        .map(|field| field.id)
 }
 
 fn validate_org_admin(org: &str) -> Result<()> {
@@ -532,6 +706,93 @@ struct RestLabel {
 }
 
 #[derive(Debug, Deserialize)]
+struct RestCatalogIssue {
+    number: u64,
+    title: String,
+    state: String,
+    labels: Vec<RestLabel>,
+    html_url: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pull_request: Option<serde_json::Value>,
+    #[serde(default)]
+    area: Option<String>,
+    #[serde(default)]
+    verification: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RestIssueFieldValue {
+    issue_field_name: String,
+    #[serde(default)]
+    value: Option<serde_json::Value>,
+    #[serde(default)]
+    single_select_option: Option<serde_json::Value>,
+    #[serde(default)]
+    multi_select_options: Option<Vec<serde_json::Value>>,
+}
+
+fn list_issue_field_values(repo: &str, number: u64) -> Result<BTreeMap<String, serde_json::Value>> {
+    let mut fields = BTreeMap::new();
+    let mut page = 1;
+    loop {
+        let path =
+            format!("/repos/{repo}/issues/{number}/issue-field-values?per_page=100&page={page}");
+        let output = gh_api(&["api", &path])?;
+        let values: Vec<RestIssueFieldValue> =
+            serde_json::from_slice(&output).map_err(|error| {
+                OrbitError::new(
+                    code::GITHUB_NOT_CONFIGURED,
+                    format!("invalid GitHub Issue Fields response: {error}"),
+                )
+            })?;
+        if values.is_empty() {
+            break;
+        }
+        let count = values.len();
+        for field in values {
+            let value = field
+                .single_select_option
+                .and_then(|option| option.get("name").cloned())
+                .or_else(|| {
+                    field.multi_select_options.map(|options| {
+                        serde_json::Value::Array(
+                            options
+                                .into_iter()
+                                .filter_map(|option| option.get("name").cloned())
+                                .collect(),
+                        )
+                    })
+                })
+                .or(field.value)
+                .unwrap_or(serde_json::Value::Null);
+            fields.insert(field.issue_field_name, value);
+        }
+        if count < 100 {
+            break;
+        }
+        page += 1;
+    }
+    Ok(fields)
+}
+
+fn string_field(fields: &BTreeMap<String, serde_json::Value>, name: &str) -> Option<String> {
+    fields
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .and_then(|(_, value)| value.as_str().map(str::to_string))
+}
+
+#[derive(Debug, Deserialize)]
+struct RestIssueComment {
+    id: u64,
+    body: String,
+    user: RestUser,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RestUser {
     login: String,
 }
@@ -584,8 +845,52 @@ struct FixtureStore {
     created_fields: Vec<serde_json::Value>,
     #[serde(default)]
     issues: HashMap<String, IssueSnapshot>,
+    #[serde(default)]
+    create_failures: HashMap<String, String>,
+    #[serde(default)]
+    catalog_issues: HashMap<String, Vec<FixtureCatalogIssue>>,
+    #[serde(default = "fixture_catalog_page_size")]
+    catalog_page_size: usize,
+    #[serde(default)]
+    catalog_errors: HashMap<String, String>,
+    #[serde(default)]
+    issue_details: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    issue_comments: HashMap<String, Vec<IssueComment>>,
     #[serde(skip)]
     fixture_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FixtureCatalogIssue {
+    number: u64,
+    title: String,
+    state: String,
+    #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    pull_request: bool,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
+    #[serde(default = "fixture_timestamp")]
+    created_at: DateTime<Utc>,
+    #[serde(default = "fixture_timestamp")]
+    updated_at: DateTime<Utc>,
+    #[serde(default)]
+    area: Option<String>,
+    #[serde(default)]
+    verification: Option<String>,
+    #[serde(default)]
+    issue_fields: BTreeMap<String, serde_json::Value>,
+}
+
+fn fixture_timestamp() -> DateTime<Utc> {
+    Utc::now()
+}
+fn fixture_catalog_page_size() -> usize {
+    100
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -745,15 +1050,110 @@ impl GitHubClient for FixtureClient {
     fn get_issue(&self, repo: &str, number: u64) -> Result<IssueSnapshot> {
         let store = self.store.lock().expect("fixture lock");
         let key = format!("{repo}#{number}");
-        store
-            .issues
+        if let Some(issue) = store.issues.get(&key).cloned() {
+            return Ok(issue);
+        }
+        let summary = store
+            .catalog_issues
+            .get(repo)
+            .and_then(|issues| issues.iter().find(|issue| issue.number == number))
+            .ok_or_else(|| OrbitError::not_found(&key))?;
+        let body = store
+            .issue_details
             .get(&key)
-            .cloned()
-            .ok_or_else(|| OrbitError::not_found(&key))
+            .and_then(|detail| detail.get("body"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok(IssueSnapshot {
+            repo: repo.to_string(),
+            number,
+            title: summary.title.clone(),
+            body,
+            state: if summary.state == "open" {
+                IssueState::Open
+            } else {
+                IssueState::Closed
+            },
+            labels: summary.labels.clone(),
+            assignees: Vec::new(),
+            updated_at: summary.updated_at,
+            area: summary.area.clone(),
+            verification: summary.verification.clone(),
+            parent_issue: Vec::new(),
+            blocked_by: Vec::new(),
+            blocking: Vec::new(),
+        })
+    }
+
+    fn list_issues_page(&self, repo: &str, page: usize) -> Result<Vec<IssueCatalogItem>> {
+        let store = self.store.lock().expect("fixture lock");
+        if let Some(message) = store.catalog_errors.get(repo) {
+            return Err(OrbitError::new(code::GITHUB_NOT_CONFIGURED, message));
+        }
+        let issues = store.catalog_issues.get(repo).cloned().unwrap_or_default();
+        let issues = issues
+            .into_iter()
+            .filter(|issue| !issue.pull_request)
+            .collect::<Vec<_>>();
+        let page_size = store.catalog_page_size.max(1);
+        let start = page.saturating_sub(1) * page_size;
+        Ok(issues
+            .into_iter()
+            .skip(start)
+            .take(page_size)
+            .map(|issue| IssueCatalogItem {
+                identity: format!("{repo}#{}", issue.number),
+                repo: repo.to_string(),
+                number: issue.number,
+                title: issue.title,
+                state: if issue.state == "open" {
+                    IssueState::Open
+                } else {
+                    IssueState::Closed
+                },
+                labels: issue.labels,
+                url: issue.html_url.or(issue.url).unwrap_or_else(|| {
+                    format!("https://github.com/{repo}/issues/{}", issue.number)
+                }),
+                created_at: issue.created_at,
+                updated_at: issue.updated_at,
+                area: issue
+                    .area
+                    .or_else(|| string_field(&issue.issue_fields, "Area")),
+                verification: issue
+                    .verification
+                    .or_else(|| string_field(&issue.issue_fields, "Verification")),
+                issue_fields: issue.issue_fields,
+            })
+            .collect())
+    }
+
+    fn issue_comments_page(
+        &self,
+        repo: &str,
+        number: u64,
+        page: usize,
+    ) -> Result<Vec<IssueComment>> {
+        let store = self.store.lock().expect("fixture lock");
+        let key = format!("{repo}#{number}");
+        let comments = store.issue_comments.get(&key).cloned().unwrap_or_default();
+        let start = page.saturating_sub(1) * 100;
+        Ok(comments.into_iter().skip(start).take(100).collect())
     }
 
     fn create_issue(&self, repo: &str, input: &CreateIssueInput) -> Result<IssueSnapshot> {
         let mut store = self.store.lock().expect("fixture lock");
+        if let Some(message) = store
+            .create_failures
+            .get(&format!("{repo}#{}", input.title))
+            .or_else(|| store.create_failures.get(repo))
+        {
+            return Err(OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                message.clone(),
+            ));
+        }
         let number = store.issues.len() as u64 + 1;
         let snapshot = IssueSnapshot {
             repo: repo.to_string(),
@@ -773,6 +1173,7 @@ impl GitHubClient for FixtureClient {
         store
             .issues
             .insert(format!("{repo}#{number}"), snapshot.clone());
+        persist_fixture(&store)?;
         Ok(snapshot)
     }
 
@@ -809,8 +1210,17 @@ impl GitHubClient for FixtureClient {
         }
         issue.updated_at = Utc::now();
         store.issues.insert(key, issue.clone());
+        persist_fixture(&store)?;
         Ok(issue)
     }
+}
+
+fn persist_fixture(store: &FixtureStore) -> Result<()> {
+    let serialized = serde_json::to_vec_pretty(store).map_err(|error| {
+        OrbitError::config(format!("could not serialize GitHub fixture: {error}"))
+    })?;
+    std::fs::write(&store.fixture_path, serialized)
+        .map_err(|error| OrbitError::io("write GitHub fixture", error))
 }
 
 fn fixture_created_field_id(name: &str, area: bool) -> String {

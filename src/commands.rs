@@ -36,9 +36,6 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     match command {
         Command::Init(args) => cmd_init(args, dir.as_deref()),
         Command::Link(args) => cmd_link(args),
-        Command::Workspace(args) => match args.command {
-            WorkspaceCommand::Migrate(args) => crate::workspace_migrate::run(dir.as_deref(), args),
-        },
         Command::Unlink => cmd_unlink(),
         Command::Slug(args) => {
             let exclusive = matches!(args.command, SlugCommand::Migrate(_));
@@ -87,7 +84,14 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Doctor(args) => crate::doctor::run(dir.as_deref(), args),
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
         Command::GitHub(args) => {
-            if matches!(&args.command, crate::cli::GitHubCommand::Status) {
+            if matches!(
+                &args.command,
+                crate::cli::GitHubCommand::Status
+                    | crate::cli::GitHubCommand::Create(crate::cli::GitHubCreateArgs {
+                        apply: false,
+                        ..
+                    })
+            ) {
                 return with_board_read_only(dir.as_deref(), |board| {
                     crate::github::commands::run(board, args)
                 });
@@ -96,6 +100,26 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 crate::github::commands::run(board, args)
             })
         }
+        Command::Workspace(args) => match args.command {
+            WorkspaceCommand::Migrate(args) => crate::workspace_migrate::run(dir.as_deref(), args),
+            command => {
+                let args = crate::cli::WorkspaceArgs { command };
+                if matches!(
+                    &args.command,
+                    crate::cli::WorkspaceCommand::Status
+                        | crate::cli::WorkspaceCommand::Issues(crate::cli::WorkspaceIssuesArgs {
+                            command: crate::cli::WorkspaceIssuesCommand::List(_)
+                                | crate::cli::WorkspaceIssuesCommand::Inspect(_)
+                        })
+                ) {
+                    with_board_read_only(dir.as_deref(), |board| crate::workspace::run(board, args))
+                } else {
+                    with_board(dir.as_deref(), true, |board| {
+                        crate::workspace::run(board, args)
+                    })
+                }
+            }
+        },
         Command::Triage(args) => with_board(dir.as_deref(), true, |board| {
             crate::triage::commands::run(board, args, json)
         }),

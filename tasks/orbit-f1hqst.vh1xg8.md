@@ -5,13 +5,14 @@ type: task
 priority: 1
 labels:
 - enhancement
+- ready-for-agent
 depends_on:
 - orbit-f1hqst.84hvkj
 - orbit-f1hqst.r02zj4
 parent: orbit-f1hqst
 area: setup
 created_at: 2026-10-28T22:47:34.547399Z
-updated_at: 2026-10-28T22:47:34.547399Z
+updated_at: 2026-10-28T22:48:45.219604Z
 ---
 
 ## Goal

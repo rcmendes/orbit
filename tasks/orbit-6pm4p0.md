@@ -1,10 +1,10 @@
 ---
 title: Triage
-status: todo
+status: done
 type: epic
 priority: 2
 created_at: 2026-10-28T14:07:08.818604Z
-updated_at: 2026-10-28T14:07:08.818604Z
+updated_at: 2026-10-28T14:46:38.906249Z
 ---
 
 ## Goal

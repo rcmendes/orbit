@@ -1,6 +1,6 @@
 ---
 title: Document Matt Pocock compatibility boundary and agent-brief handoff
-status: in_progress
+status: done
 type: task
 priority: 2
 labels:
@@ -13,11 +13,8 @@ checkpoint:
   progress: Documented the Orbit vs Matt Pocock triage boundary and added docs/agents/agent-brief.md. Commit 5d8906e on ticket/orbit-dkyngc.z1wgx4. Wayfinding command examples and the Errors table were left for the other tickets. integrate/orbit-dkyngc was already contained; no merge conflict.
   next: merge to integrate/orbit-dkyngc
 area: docs
-claimed_by: implement-dkyngc-z1wgx4
-claimed_at: 2026-10-28T15:31:03.193550Z
-lease_until: 2026-10-28T16:03:25.651822Z
 created_at: 2026-10-28T15:20:07.774349Z
-updated_at: 2026-10-28T15:33:47.528206Z
+updated_at: 2026-10-28T15:51:50.388171Z
 ---
 
 ## Goal

@@ -1,6 +1,6 @@
 ---
 title: Add actionable GitHub remediation errors
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -11,11 +11,8 @@ depends_on:
 - orbit-ytwjhm.v8vgqe
 parent: orbit-ytwjhm
 area: cli
-claimed_by: impl-63nzes
-claimed_at: 2026-10-28T16:06:52.480142Z
-lease_until: 2026-10-28T16:46:15.459718Z
 created_at: 2026-10-28T15:24:06.082078Z
-updated_at: 2026-10-28T16:16:15.459718Z
+updated_at: 2026-10-28T16:19:35.057893Z
 ---
 
 ## Goal

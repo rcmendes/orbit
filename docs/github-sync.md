@@ -18,7 +18,9 @@ area_name = "Area"
 verification_name = "Verification"
 ```
 
-For manual configuration, run `orbit github setup` to resolve and store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to check configuration without writing ids.
+For manual configuration, run `orbit github setup` to resolve existing Issue Fields and store their GraphQL ids. This default command does not create fields. Use `orbit github setup --validate-only` to check configuration without writing ids.
+
+To let Orbit create missing fields, explicitly run `orbit github setup --create-fields`. It creates **Area** as a single-select field with `board`, `cli`, `mcp`, `setup`, `docs`, and `release` options, and **Verification** as a text field. Existing fields with those names are reused and are not changed. Before creating anything, Orbit verifies that the authenticated `gh` user has an active organization administrator membership. If the membership check fails, refresh the `read:org` scope with `gh auth refresh --hostname github.com --scopes read:org`. If field creation is denied, confirm that `gh` is authenticated as an organization administrator with permission to create organization Issue Fields. An administrator can also create the fields in GitHub and rerun the default `orbit github setup` to store their ids.
 
 To connect a Board, run `orbit github connect` from a checkout with a GitHub `origin`. It checks `gh auth status`, verifies repository access, detects whether the owner is an organization or a personal account, validates the organization fields, and writes the `[github]` organization, repository link, and field ids. It preserves other Board configuration and is safe to rerun. Use `orbit github connect --json` to inspect `owner_type`, `organization`, `repository`, `field_status`, `next_action`, and whether configuration changed.
 

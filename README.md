@@ -654,11 +654,16 @@ Connect an organization-owned repository from its checkout with `orbit github co
 orbit github connect
 orbit github repo link acme/widget
 orbit github setup
+orbit github setup --create-fields # create missing fields (organization admin required)
 orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
 orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
 orbit github create orb-a7b2c9 # automatically uses the only linked repository
 orbit github sync orb-a7b2c9 --apply
 ```
+
+`orbit github setup` does not create fields unless `--create-fields` is passed.
+See [the GitHub sync guide](./docs/github-sync.md) for required permissions and
+the fields Orbit creates.
 
 ## Triage, labels, and comments
 

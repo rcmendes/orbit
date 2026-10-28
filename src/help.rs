@@ -838,7 +838,9 @@ assignees to Orbit claims.
 Organization-level Issue Fields carry Orbit-owned area and verification values.
 Run `orbit github connect` to detect the origin repository, check `gh` access,
 validate those fields, and configure the Board without requiring manual
-`config.toml` edits.";
+`config.toml` edits. `orbit github setup` resolves existing fields by default;
+field creation is opt-in with `--create-fields` and requires organization admin
+access.";
 
 pub const GITHUB_EXAMPLES: &str = "\
 Examples:
@@ -863,7 +865,8 @@ Examples:
 pub const GITHUB_SETUP_EXAMPLES: &str = "\
 Examples:
   orbit github setup --validate-only
-  orbit github setup";
+  orbit github setup
+  orbit github setup --create-fields";
 
 pub const GITHUB_REPO_LINK_EXAMPLES: &str = "\
 Examples:

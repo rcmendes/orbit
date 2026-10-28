@@ -101,13 +101,7 @@ fn github_repo_link_and_adopt_use_fixture_client() {
     repo.init();
     write_github_config(&repo);
 
-    let link = repo.ok_json(&[
-        "github",
-        "repo",
-        "link",
-        "acme/widget",
-        "--json",
-    ]);
+    let link = repo.ok_json(&["github", "repo", "link", "acme/widget", "--json"]);
     assert_eq!(link["data"]["repository"], "acme/widget");
 
     let id = repo.add("Sync me", &[]);
@@ -149,6 +143,157 @@ fn github_setup_validate_only_reads_fixture_fields() {
 }
 
 #[test]
+fn github_setup_create_fields_creates_required_fields_and_reuses_them() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_dir.path().join("setup.json");
+    fs::write(
+        &fixture,
+        r#"{
+  "organization_admin": true,
+  "org_fields": {},
+  "issues": {}
+}"#,
+    )
+    .unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let setup = repo.ok_json_with_env(
+        &["github", "setup", "--create-fields", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(setup["data"]["area_id"], "CREATED_AREA_ID");
+    assert_eq!(setup["data"]["verification_id"], "CREATED_VERIFICATION_ID");
+
+    let created: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(created["created_fields"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        created["created_fields"][0]["options"],
+        serde_json::json!(["board", "cli", "mcp", "setup", "docs", "release"])
+    );
+    assert_eq!(created["created_fields"][0]["data_type"], "SINGLE_SELECT");
+    assert_eq!(created["created_fields"][1]["data_type"], "TEXT");
+
+    let again = repo.ok_json_with_env(
+        &["github", "setup", "--create-fields", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(again["data"]["area_id"], "CREATED_AREA_ID");
+    assert_eq!(again["data"]["verification_id"], "CREATED_VERIFICATION_ID");
+    let reused: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(reused["created_fields"].as_array().unwrap().len(), 2);
+
+    let config = fs::read_to_string(repo.board_path().join("config.toml")).unwrap();
+    assert!(config.contains("area_id = \"CREATED_AREA_ID\""));
+    assert!(config.contains("verification_id = \"CREATED_VERIFICATION_ID\""));
+}
+
+#[test]
+fn github_setup_create_fields_reuses_existing_fields_without_overwriting_them() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_dir.path().join("setup.json");
+    fs::write(
+        &fixture,
+        r#"{
+  "organization_admin": true,
+  "org_fields": { "acme/Area": "EXISTING_AREA_ID" },
+  "issues": {}
+}"#,
+    )
+    .unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let setup = repo.ok_json_with_env(
+        &["github", "setup", "--create-fields", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(setup["data"]["area_id"], "EXISTING_AREA_ID");
+    assert_eq!(setup["data"]["verification_id"], "CREATED_VERIFICATION_ID");
+
+    let fields: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(fields["org_fields"]["acme/Area"], "EXISTING_AREA_ID");
+    assert_eq!(fields["created_fields"].as_array().unwrap().len(), 1);
+    assert_eq!(fields["created_fields"][0]["name"], "Verification");
+}
+
+#[test]
+fn github_setup_create_fields_requires_organization_administration() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_dir.path().join("setup.json");
+    fs::write(
+        &fixture,
+        r#"{
+  "organization_admin": false,
+  "org_fields": {},
+  "issues": {}
+}"#,
+    )
+    .unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let (status, result) = repo.json_with_env(
+        &["github", "setup", "--create-fields", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_ne!(status, 0);
+    assert_eq!(result["error"]["code"], "GITHUB_SETUP_INCOMPLETE");
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("organization administrator")
+    );
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("create the fields in GitHub")
+    );
+    let unchanged: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(unchanged["created_fields"].is_null());
+}
+
+#[test]
+fn github_setup_without_create_fields_only_resolves_existing_fields() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_dir.path().join("setup.json");
+    fs::write(
+        &fixture,
+        r#"{
+  "organization_admin": false,
+  "org_fields": {
+    "acme/Area": "AREA_ID",
+    "acme/Verification": "VERIFICATION_ID"
+  },
+  "issues": {}
+}"#,
+    )
+    .unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let setup = repo.ok_json_with_env(
+        &["github", "setup", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(setup["data"]["area_id"], "AREA_ID");
+    assert_eq!(setup["data"]["verification_id"], "VERIFICATION_ID");
+    let config = fs::read_to_string(repo.board_path().join("config.toml")).unwrap();
+    assert!(config.contains("area_id = \"AREA_ID\""));
+    assert!(config.contains("verification_id = \"VERIFICATION_ID\""));
+    let unchanged: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(unchanged["created_fields"].is_null());
+}
+
+#[test]
 fn github_sync_dry_run_reports_assignee_warning() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
@@ -178,9 +323,11 @@ fn github_sync_dry_run_reports_assignee_warning() {
     let warnings = plan["data"]["tasks"][0]["plan"]["warnings"]
         .as_array()
         .unwrap();
-    assert!(warnings
-        .iter()
-        .any(|warning| warning.as_str().unwrap().contains("assignees")));
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("assignees"))
+    );
 }
 
 #[test]

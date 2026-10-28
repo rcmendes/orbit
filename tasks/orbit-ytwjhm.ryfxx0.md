@@ -1,6 +1,6 @@
 ---
 title: Release GitHub integration and add capability checks
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -22,11 +22,8 @@ checkpoint:
   progress: Latest integrate/orbit-ytwjhm (eebe488) is already an ancestor; merge completed as up-to-date with no conflicts. Final sequential cargo test --all (396 passed), no-default capability tests (3 passed), release artifact smoke (macOS), dist generate/plan, docs/setup checks, and clean worktree all verified. Windows smoke is wired in CI but PowerShell is unavailable locally.
   next: Work complete; record completion.
 area: release
-claimed_by: impl-ryfxx0
-claimed_at: 2026-10-28T16:21:24.532555Z
-lease_until: 2026-10-28T17:04:13.815831Z
 created_at: 2026-10-28T15:24:14.709930Z
-updated_at: 2026-10-28T16:34:21.576987Z
+updated_at: 2026-10-28T16:34:25.469307Z
 ---
 
 ## Goal

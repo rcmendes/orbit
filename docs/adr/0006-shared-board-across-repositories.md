@@ -15,4 +15,4 @@ A Workspace is one Board plus every Repository linked to it, so a product backlo
 
 - A Board shared across Repositories is versioned in its own repository, not in any linked Repository.
 - Linking a Repository that already has a local Board shadows that Board; the local Tasks remain in place and the command must say so.
-- Agent configuration records the resolved Board path, so linking after `setup` leaves those configs stale unless `link` refreshes them.
+- Originally, agent configuration recorded the resolved Board path, so linking after `setup` could leave those configs stale. **Superseded by ADR 0012:** generated configs no longer record a Board path; `link` refreshes existing managed integrations as a version reconciliation.

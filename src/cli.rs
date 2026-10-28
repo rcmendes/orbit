@@ -845,7 +845,7 @@ pub enum GitHubCommand {
     /// Detect the origin repository and configure GitHub for this Board.
     #[command(after_long_help = help::GITHUB_CONNECT_EXAMPLES)]
     Connect,
-    /// Validate org Issue Fields and persist their ids in config.toml.
+    /// Validate org Issue Fields, optionally create missing fields, and persist their ids.
     #[command(after_long_help = help::GITHUB_SETUP_EXAMPLES)]
     Setup(GitHubSetupArgs),
     /// Manage explicitly linked GitHub repositories.
@@ -878,8 +878,11 @@ pub enum GitHubRepoCommand {
 #[derive(Debug, Args)]
 pub struct GitHubSetupArgs {
     /// Validate configuration without writing field ids.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "create_fields")]
     pub validate_only: bool,
+    /// Create missing organization Issue Fields (requires organization admin access).
+    #[arg(long)]
+    pub create_fields: bool,
 }
 
 #[derive(Debug, Args)]

@@ -30,6 +30,10 @@ area_name = "Area"
 verification_name = "Verification"
 ```
 
+For manual configuration, run `orbit github setup` to resolve existing Issue Fields and store their GraphQL ids. This default command does not create fields. Use `orbit github setup --validate-only` to check configuration without writing ids.
+
+To let Orbit create missing fields, explicitly run `orbit github setup --create-fields`. It creates **Area** as a single-select field with `board`, `cli`, `mcp`, `setup`, `docs`, and `release` options, and **Verification** as a text field. Existing fields with those names are reused and are not changed. Before creating anything, Orbit verifies that the authenticated `gh` user has an active organization administrator membership. If the membership check fails, refresh the `read:org` scope with `gh auth refresh --hostname github.com --scopes read:org`. If field creation is denied, confirm that `gh` is authenticated as an organization administrator with permission to create organization Issue Fields. An administrator can also create the fields in GitHub and rerun the default `orbit github setup` to store their ids.
+
 ### Basic mode (personal repositories)
 
 Basic mode supports personal repositories without organization Issue Fields or

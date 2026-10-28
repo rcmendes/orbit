@@ -243,7 +243,11 @@ fn require_github_section(board: &Board) -> Result<()> {
 fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::CommandOutput> {
     let org = board.config.github.require_organization()?;
     let client = client_from_env()?;
-    let setup = client.validate_org_fields(org, &board.config.github.issue_fields)?;
+    let setup = if args.create_fields {
+        client.create_org_fields(org, &board.config.github.issue_fields)?
+    } else {
+        client.validate_org_fields(org, &board.config.github.issue_fields)?
+    };
     if args.validate_only {
         return Ok(crate::output::CommandOutput::new(
             json!({
@@ -257,18 +261,31 @@ fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::Comm
     }
     let area_id = setup.area_id.clone();
     let verification_id = setup.verification_id.clone();
+    let created_fields_count = setup.created_fields.len();
     board.save_config("orbit: github setup", |config| {
         config.github.issue_fields.area_id = Some(setup.area_id);
         config.github.issue_fields.verification_id = Some(setup.verification_id);
         Ok(())
     })?;
+    let mut data = json!({
+        "organization": org,
+        "area_id": area_id,
+        "verification_id": verification_id,
+    });
+    if args.create_fields {
+        data["created_fields"] = json!(setup.created_fields);
+    }
     Ok(crate::output::CommandOutput::new(
-        json!({
-            "organization": org,
-            "area_id": area_id,
-            "verification_id": verification_id,
-        }),
-        format!("Stored GitHub Issue Field ids for `{org}`"),
+        data,
+        if args.create_fields {
+            if created_fields_count == 0 {
+                format!("GitHub Issue Fields already exist for `{org}`; ids stored")
+            } else {
+                format!("Created {created_fields_count} missing GitHub Issue Field(s) for `{org}` and stored ids")
+            }
+        } else {
+            format!("Stored GitHub Issue Field ids for `{org}`")
+        },
     ))
 }
 

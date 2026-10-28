@@ -146,6 +146,19 @@ It stores the last explicitly refreshed Workspace repository inventory at
 status` does not poll or rescan; `orbit workspace refresh` updates it.
 _Avoid_: Board, task store
 
+**Remote Issue**:
+A GitHub Issue summary in the Workspace's local catalog. It is not a Task, is
+never claimable, and stays outside the Board until an explicit import creates or
+links a Task. Its body and comments are fetched on demand when inspected.
+_Avoid_: Task, claimable Issue
+
+**Remote Issue catalog**:
+The rebuildable per-Workspace cache of GitHub Issue summaries at
+`<workspace>/.orbit/cache/issues.json`. Explicit refresh paginates open and closed
+Issues (not pull requests); per-repository failures retain the previous snapshot
+and mark it stale.
+_Avoid_: Board, Task list, GitHub mirror
+
 **Legacy layout**:
 A Board from before the current path contract: the hidden worktree at
 `<git-common-dir>/orbit/board`, a shared `<workspace>/board`, a Board directly at
@@ -162,11 +175,12 @@ _Avoid_: Submodule, project, workspace
 
 ## Compatibility vocabulary
 
-Beads, GitHub, Linear, and Matt Pocock's skills call the unit an **Issue**, a
-child a **Sub-issue**, and a grouping issue an **Epic**. These are translations,
-not stored types:
+Beads, Linear, and Matt Pocock's skills call the unit an **Issue**, a child a
+**Sub-issue**, and a grouping issue an **Epic**. These are translations, not
+stored types. GitHub Issues are Remote Issues until explicitly imported:
 
-- **Issue** = Task
+- **Beads/Linear Issue** = Task
+- **GitHub Remote Issue** = catalog entry; after import, its linked Orbit work is a Task
 - **Sub-issue** = SubTask, created with `--parent`
 - **Epic** or **spec** = top-level Task with `type: epic`
 

@@ -14,7 +14,7 @@ checkpoint:
   next: Add failing GitHub CLI integration tests, implement parsing/default selection, then update docs and verify.
 area: cli
 created_at: 2026-10-28T15:23:46.658254Z
-updated_at: 2026-10-28T15:34:08.247236Z
+updated_at: 2026-10-28T15:36:28.133354Z
 ---
 
 ## Goal

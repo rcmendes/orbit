@@ -29,6 +29,7 @@ flowchart LR
         DOCTOR["doctor and sync"]
         GITHUB["GitHub provider<br/>src/github/commands.rs"]
         MIGRATE["Slug migration<br/>src/migrate.rs"]
+        WSMIGRATE["Workspace Board migration<br/>src/workspace_migrate.rs"]
         SETUP["Harness setup<br/>src/setup.rs"]
     end
 
@@ -76,12 +77,16 @@ flowchart LR
     CMD --> DOCTOR
     CMD --> GITHUB
     CMD --> MIGRATE
+    CMD --> WSMIGRATE
     CMD --> SETUP
     CMD --> Domain
     CMD --> SLUG
     MIGRATE --> SLUG
     MIGRATE --> GRAPH
     MIGRATE --> GIT
+    WSMIGRATE --> GRAPH
+    WSMIGRATE --> GIT
+    WSMIGRATE --> ATOMIC
     BOARD --> SLUG
     SLUG --> GIT
     CMD --> Durability
@@ -133,7 +138,7 @@ flowchart LR
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
-| Application | `src/commands.rs`, `src/migrate.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. GitHub commands provide read-only status diagnostics and export previews, explicit Issue creation, and Issue synchronization; `doctor` includes GitHub health checks when configured. Prefix migration plans, validates, and applies the one-commit rewrite. |
+| Application | `src/commands.rs`, `src/migrate.rs`, `src/workspace_migrate.rs`, `src/workspace.rs`, `src/issue_catalog.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. Workspace commands reconcile repositories and Remote Issue snapshots explicitly. GitHub commands provide status diagnostics, export previews, Issue creation, and synchronization; `doctor` includes GitHub health checks when configured. Prefix migration rewrites one Board; Workspace migration validates, combines, and activates multiple Boards. |
 | Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
@@ -573,7 +578,7 @@ The temporary worktree is the transaction boundary: the real Board is not touche
 
 ### Creating a Board
 
-`orbit init [DIR]` creates a repository-local Board at `./.orbit` inside Git or a Workspace Board at `<workspace>/.orbit/board` outside Git. `--dir`/`ORBIT_DIR` use the Workspace root. It refuses to shadow an existing child-repository Board or overwrite unknown `.orbit` contents; a legacy Board directly at `<workspace>/.orbit` gets a migration diagnostic. Running `init` from a child Repository with a discovered Workspace Board reuses it. `--global` and the `~/.orbit` fallback are exempt.
+`orbit init [DIR]` creates a repository-local Board at `./.orbit` inside Git or a Workspace Board at `<workspace>/.orbit/board` outside Git. `--dir`/`ORBIT_DIR` use the Workspace root. It refuses to create the first Workspace Board over an existing child-repository Board or overwrite unknown `.orbit` contents; a legacy Board directly at `<workspace>/.orbit` gets a migration diagnostic. Once a Workspace Board exists, `init` reuses it with child Boards left intact. Running `init` from a child Repository with a discovered Workspace Board reuses it. `--global` and the `~/.orbit` fallback are exempt.
 
 ```mermaid
 flowchart TD
@@ -596,7 +601,7 @@ flowchart TD
     PROMPT -->|--agents none| HINT
 ```
 
-A standalone Board directory must be empty apart from `.git`, so its first commit contains only Board files. The Workspace root itself may contain repositories and user data; init only creates the reserved `.orbit/board` and `.orbit/cache` entries, and refuses unknown entries under `.orbit`. A worktree-mode init writes the repository-local Board path to `.git/info/exclude`; it never edits a tracked `.gitignore`. `--print` returns the same plan without writing.
+A standalone Board directory must be empty apart from `.git`, so its first commit contains only Board files. The Workspace root itself may contain repositories and user data; init only creates the reserved `.orbit/board` and `.orbit/cache` entries, allows the managed `workspace-migration.lock`, and refuses other unknown entries under `.orbit`. A worktree-mode init writes the repository-local Board path to `.git/info/exclude`; it never edits a tracked `.gitignore`. `--print` returns the same plan without writing.
 
 ### Initializing a Board and wiring agents
 
@@ -661,6 +666,19 @@ flowchart TD
 ```
 
 A forced `git clean -xdff` that removes `DIR` leaves the `orbit` branch and a stale worktree record. `doctor` reports `ORPHAN_WORKTREE`; `doctor --fix` or `init` prunes the record and re-attaches `DIR` without task loss.
+
+### Workspace Board consolidation
+
+`orbit workspace migrate` discovers `<workspace>/.board`, `<workspace>/board`,
+and local or legacy Boards in child repositories. A dry run plans without writes.
+Apply acquires a Workspace migration lock, saves an atomic replay plan, validates
+Task graphs and comment sidecars, checks GitHub Issue identities, and computes
+ID remaps and config differences. If there is no Workspace Board, it builds and
+validates a staged standalone Board while child repositories continue using
+their local Boards. It commits the merged data and atomically renames the stage
+to `<workspace>/.orbit/board`; only then does Workspace discovery take over.
+The source Boards remain unchanged. `--resume` replays the saved mapping after an
+interruption; the applied commit can be reverted without deleting source backups.
 
 ### Linking and unlinking
 

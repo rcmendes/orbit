@@ -399,6 +399,11 @@ pub fn head_commit(repo: &Path) -> Result<String> {
     Ok(commit)
 }
 
+pub fn head_subject(repo: &Path) -> Result<String> {
+    let output = run_git(Some(repo), &["show", "-s", "--format=%s", "HEAD"], None)?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 pub fn reset_hard(repo: &Path, commit: &str) -> Result<()> {
     run_git(Some(repo), &["reset", "--hard", commit], None)?;
     Ok(())

@@ -1,8 +1,8 @@
 # Command guide
 
 Status: this guide describes the current Workspace repository discovery, Remote
-Issue catalog, agent reconciliation, and Orbit folder
-([ADR 0012](./adr/0012-orbit-folder.md)) behavior. The unified
+Issue catalog, agent reconciliation, explicit legacy Workspace Board migration,
+and Orbit folder ([ADR 0012](./adr/0012-orbit-folder.md)) behavior. The unified
 `init [DIR]` surface, resolver, scoped path-free agent setup, and `doctor`
 migration are implemented.
 
@@ -45,6 +45,7 @@ outside Git and a repository-local Board inside Git. See
 | Goal | Command |
 | --- | --- |
 | Set up a repository or workspace | `orbit init`, `orbit link`, `orbit unlink` |
+| Merge existing Workspace and child Boards | `orbit workspace migrate` |
 | Discover Workspace repositories | `orbit workspace refresh`, `orbit workspace status` |
 | Browse/import Workspace Remote Issues | `orbit workspace issues refresh`, `list`, `inspect`, `import` |
 | Set up agents across Workspace repositories | `orbit workspace setup` |
@@ -107,7 +108,7 @@ orbit init --slug teramigo       # Task IDs become teramigo-…
 - **CI or scripted setup:** preview with `--print`, then use `--agents none` and an explicit `--slug` when the machine should not receive editor files and IDs must be stable.
 - **Global fallback:** use `--global` only for an intentional machine-wide Board. Project-local Boards still win in discovery.
 - **Joining an existing Board:** use `orbit link DIR`; `init` is for creating or reusing the target `DIR`, not for joining another Board.
-- **Migrating a supported legacy Board:** use `orbit doctor --migrate`; `init` is not a migration command. A Board directly at `<workspace>/.orbit` remains available by explicit path and must be moved to `<workspace>/.orbit/board` before Workspace initialization.
+- **Migrating a supported storage layout:** use `orbit doctor --migrate`; `init` is not a migration command. To consolidate separate Workspace and child-repository Boards, use `orbit workspace migrate`, which creates the Workspace Board after validation when needed.
 
 **Supporting options**
 
@@ -193,9 +194,47 @@ orbit link ~/src/acme
 ```
 
 The Board is at `~/src/acme/.orbit/board`; the rebuildable catalog cache is
-reserved separately at `~/src/acme/.orbit/cache`. `orbit init` does not clone
-repositories. A child-local Board or conflicting `.orbit` content is reported
-instead of being shadowed or discarded.
+reserved separately at `~/src/acme/.orbit/cache`. Workspace migration uses the
+internal lock `<workspace>/.orbit/workspace-migration.lock`. `orbit init` does
+not clone repositories. A child-local Board or unrecognized `.orbit` content is
+reported instead of being shadowed or discarded.
+If a Workspace Board already exists, `orbit init <workspace>` reuses it even
+when child-local Boards remain as migration backups; Workspace discovery keeps
+those repositories on the shared Board.
+
+#### `orbit workspace migrate` — consolidate existing Boards
+
+Use this when work already exists in the legacy `<workspace>/.board` or
+`<workspace>/board` location, or in Boards inside child repositories. The
+command discovers those sources, validates their Task
+graphs, comments, IDs, and GitHub Issue links, and plans a merge into
+`<workspace>/.orbit/board`. It never merges by title or body. Workspace
+configuration remains authoritative; every differing source setting is listed
+in the plan. Duplicate `owner/repo#number` links stop before any writes so a
+person can choose which Task owns the Issue.
+
+An existing Workspace Board is used as the destination and its configuration
+wins. If there is no Workspace Board yet, migration uses the Workspace folder's
+derived slug and standard Board defaults, creates one in a staging directory,
+and activates `<workspace>/.orbit/board` only after validation. This
+lets users migrate child-local Boards that would otherwise prevent
+`orbit init <workspace>` from running without first shadowing those Boards.
+
+```bash
+orbit workspace migrate --dry-run  # inspect sources, ID remaps, config differences
+orbit workspace migrate            # apply and validate as one Board commit
+orbit workspace migrate --resume   # replay the saved plan after interruption
+orbit doctor                       # verify discovery and Board health
+```
+
+Task IDs remain unchanged unless they collide with a Workspace Task or another
+source. A collision remaps the Task and its structured parent/dependency edges;
+comments follow the new ID. Different source prefixes are added to
+`id.accepted_prefixes`; the Workspace's primary `id.prefix` stays authoritative.
+Claims, Checkpoints, labels, metadata, and Task body are preserved. Source Boards
+are not edited or removed. After a successful
+application, the report includes the Board commit and `git revert` guidance. Keep
+the source Boards until `orbit doctor` succeeds.
 
 ### `orbit workspace` — discover Workspace repositories
 
@@ -875,7 +914,7 @@ orbit delete orb-a7b2c9 --force
 
 ### `orbit doctor` — health check
 
-Reports the discovery trace, legacy layout, half-moved Board (`AMBIGUOUS_BOARD`), orphan worktree (`ORPHAN_WORKTREE`), storage mismatch (`STORAGE_MISMATCH`), and agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`). Running without a Board is not itself a failure. When a Board resolves, it also checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, a wrong checked-out branch, and a Claude hook that cannot find the running Orbit binary on `PATH`. Exits `1` when unhealthy.
+Reports the discovery trace, legacy layout, half-moved Board (`AMBIGUOUS_BOARD`), orphan worktree (`ORPHAN_WORKTREE`), storage mismatch (`STORAGE_MISMATCH`), and agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`). After `orbit workspace migrate`, run `doctor` from the Workspace root or a child repository to verify that the Workspace Board resolves and its merged graph is healthy. Running without a Board is not itself a failure. When a Board resolves, it also checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, a wrong checked-out branch, and a Claude hook that cannot find the running Orbit binary on `PATH`. Exits `1` when unhealthy.
 
 `--fix` removes stale temp files and re-attaches an orphan `orbit` worktree whose `DIR` was deleted. `--migrate` moves a legacy hidden or `<workspace>/board` layout to the Orbit folder; it is explicit and resumable.
 

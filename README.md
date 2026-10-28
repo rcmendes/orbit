@@ -167,7 +167,7 @@ orbit init --global           # create the global Board at ~/.orbit
 - **A one-off or CI setup:** use `--print` first, then `--agents none` when the machine should not receive editor configuration. Pass `--slug` when IDs must be predictable.
 - **A global fallback:** use `--global` only when you intentionally want one Board available when no project-local Board resolves. Discovery does not create it.
 - **Joining an existing Board:** use `orbit link DIR`; do not run `init` again. A second local Board in the same working tree is refused.
-- **Moving a supported legacy Board:** run `orbit doctor --migrate`; `init` is not a migration command. A Board directly at `<workspace>/.orbit` remains available by explicit path and must be migrated to `<workspace>/.orbit/board` before Workspace initialization.
+- **Moving a supported legacy storage layout:** run `orbit doctor --migrate`; `init` is not a migration command. To consolidate a legacy Workspace Board and child-repository Boards, use `orbit workspace migrate`; it creates the Workspace Board only after merged data validates when no Board exists yet.
 
 **Supporting `init` options**
 
@@ -661,7 +661,29 @@ orbit workspace issues import acme/api#42 acme/web#8
 orbit workspace issues import acme/api#42 --link acme/api#42=orb-a7b2c9 --apply
 ```
 
-`orbit init` only creates the Workspace Board; it does not clone repositories. A child-local Board is reported as `AMBIGUOUS_BOARD` during discovery and blocks Workspace initialization if it exists first. Unknown entries in `.orbit` prevent initialization rather than being overwritten. The catalog cache is never stored in the Board repository.
+`orbit init` only creates the Workspace Board; it does not clone repositories. A child-local Board is reported as `AMBIGUOUS_BOARD` during discovery and blocks Workspace initialization if it exists first. Once the Workspace Board exists, `init` reuses it while child Boards remain as backups. Unknown entries in `.orbit` prevent initialization rather than being overwritten; the `workspace-migration.lock` entry is managed by the migration command. The catalog cache is never stored in the Board repository.
+
+If the Workspace already has a legacy `<workspace>/.board` or `<workspace>/board`
+Board, or its child repositories have local Boards, consolidate their work with
+`orbit workspace migrate`. The command can stage a Workspace Board when none
+exists and activates it only after validation, so child Boards are not shadowed
+early. If no Workspace Board exists, the command uses the Workspace folder's
+derived slug and standard Board defaults. Preview before applying, resolve
+duplicate GitHub Issue identities explicitly, and keep source Boards as backups:
+
+```bash
+orbit workspace migrate --dry-run
+orbit workspace migrate
+orbit doctor
+```
+
+The migration preserves Tasks, comments, claims, Checkpoints, and structured
+relationships. It remaps colliding Task IDs and references, records differing
+source ID prefixes as accepted legacy prefixes without changing the Workspace's
+primary prefix, retains Workspace configuration when source settings differ,
+and records the migration as one Board commit. A saved plan makes an interrupted apply resumable with
+`orbit workspace migrate --resume`; the apply report gives `git revert` rollback
+guidance.
 
 `orbit workspace refresh` scans direct child directories and checks their
 GitHub `origin` repositories against the organization configured in
@@ -949,7 +971,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
 | **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `github status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
-| **Maintain** | `doctor` · `sync` · `workspace` · `github` · `slug` · `mcp` |
+| **Maintain** | `doctor` · `sync` · `workspace` · `workspace migrate` · `github` · `slug` · `mcp` |
 
 Every command explains its own semantics:
 
@@ -974,6 +996,7 @@ The full guide — when to use each command, end-to-end scenarios, and a common-
 | Heartbeats are uncommitted | `orbit sync` commits lease-only changes. |
 | The Task-ID prefix must change | Preview with `orbit slug migrate <slug> --dry-run`, then apply. Live claims require `--force`; external old-ID links still break. |
 | The Board is missing | `orbit init` creates one; a missing linked Board returns `LINK_NOT_FOUND`. |
+| Existing Workspace or child Boards need combining | Preview with `orbit workspace migrate --dry-run`, then apply; sources stay as backups. |
 | The Board is in the old hidden layout | It keeps working with a `LEGACY_LAYOUT` warning. Run `orbit doctor --migrate` to move it to `.orbit`; the migration is resumable. |
 | A writer is busy | `LOCKED` is retryable. Retry after a short backoff. |
 

@@ -75,7 +75,7 @@ impl Graph {
         let mut tasks = HashMap::new();
         let mut issues = Vec::new();
         let ids = board.task_ids()?;
-        let prefix_mismatch = detect_prefix_mismatch(&ids, &board.config.id.prefix);
+        let prefix_mismatch = detect_prefix_mismatch(&ids, &board.config.id);
         let accept_observed_prefix = if let Some(mismatch) = prefix_mismatch {
             let message = format!(
                 "board prefix is `{}` but {} task files use `{}`; restore `id.prefix` before running other commands",
@@ -102,7 +102,7 @@ impl Graph {
             // With one PREFIX_MISMATCH reported, the files are known to use the
             // observed prefix, so accept their IDs instead of one CORRUPT_TASK
             // per file. Structural validation still runs below.
-            if !accept_observed_prefix && !task::is_valid_id(&id, &board.config.id.prefix) {
+            if !accept_observed_prefix && !board.config.id.is_valid_task_id(&id) {
                 let issue = Issue::new(
                     code::CORRUPT_TASK,
                     Some(&id),
@@ -523,8 +523,11 @@ struct PrefixMismatch {
     tasks: usize,
 }
 
-fn detect_prefix_mismatch(ids: &[String], configured: &str) -> Option<PrefixMismatch> {
-    if ids.is_empty() || ids.iter().any(|id| task::is_valid_id(id, configured)) {
+fn detect_prefix_mismatch(
+    ids: &[String],
+    config: &crate::board::IdConfig,
+) -> Option<PrefixMismatch> {
+    if ids.is_empty() || ids.iter().any(|id| config.is_valid_task_id(id)) {
         return None;
     }
 
@@ -539,7 +542,7 @@ fn detect_prefix_mismatch(ids: &[String], configured: &str) -> Option<PrefixMism
         .into_iter()
         .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))?;
     Some(PrefixMismatch {
-        configured: configured.to_string(),
+        configured: config.prefix.clone(),
         observed,
         tasks,
     })

@@ -5,13 +5,14 @@ type: task
 priority: 1
 labels:
 - enhancement
+- ready-for-agent
 depends_on:
 - orbit-f1hqst.cy4kzy
 - orbit-f1hqst.a07zbd
 parent: orbit-f1hqst
 area: cli
 created_at: 2026-10-28T22:48:16.365154Z
-updated_at: 2026-10-28T22:48:16.365154Z
+updated_at: 2026-10-28T22:48:45.272008Z
 ---
 
 ## Goal

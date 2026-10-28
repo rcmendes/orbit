@@ -842,6 +842,9 @@ pub struct GitHubArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum GitHubCommand {
+    /// Detect the origin repository and configure GitHub for this Board.
+    #[command(after_long_help = help::GITHUB_CONNECT_EXAMPLES)]
+    Connect,
     /// Validate org Issue Fields and persist their ids in config.toml.
     #[command(after_long_help = help::GITHUB_SETUP_EXAMPLES)]
     Setup(GitHubSetupArgs),

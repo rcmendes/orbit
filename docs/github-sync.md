@@ -6,7 +6,7 @@ Orbit can link a Board to one or more GitHub repositories and keep durable Tasks
 
 - GitHub CLI (`gh`) authenticated for the organization and repositories you link.
 - Organization-level Issue Fields named **Area** and **Verification** (names are configurable under `[github.issue_fields]`).
-- A `[github]` section in `<DIR>/config.toml`:
+- An organization-owned GitHub repository. `orbit github connect` detects it from the current checkout's `origin`, validates the setup, and writes `[github]` automatically. To configure the Board manually instead, add:
 
 ```toml
 [github]
@@ -18,7 +18,11 @@ area_name = "Area"
 verification_name = "Verification"
 ```
 
-Run `orbit github setup` to resolve and store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to check configuration without writing ids.
+For manual configuration, run `orbit github setup` to resolve and store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to check configuration without writing ids.
+
+To connect a Board, run `orbit github connect` from a checkout with a GitHub `origin`. It checks `gh auth status`, verifies repository access, detects whether the owner is an organization or a personal account, validates the organization fields, and writes the `[github]` organization, repository link, and field ids. It preserves other Board configuration and is safe to rerun. Use `orbit github connect --json` to inspect `owner_type`, `organization`, `repository`, `field_status`, `next_action`, and whether configuration changed.
+
+The current Issue Fields integration requires an organization-owned repository. For a personal-account repository, connect leaves configuration unchanged and reports these options: use an organization-owned repository, use `orbit github basic` when personal-account basic mode is available, or cancel. Missing `gh` authentication, repository access, or Issue Fields is reported with a remediation action.
 
 ## Link repositories
 

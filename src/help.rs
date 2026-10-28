@@ -836,3 +836,32 @@ pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\
 Examples:
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply --direction pull";
+
+pub const TRIAGE_LONG: &str = "\
+Review GitHub-linked Tasks and apply approved metadata changes on the Orbit Board first.
+
+Triage only touches Orbit-owned `area`, task-level `verification`, and canonical triage/category
+labels. It never rewrites GitHub-owned title, body, or open/closed state, and it does not run
+verification commands. After `triage apply --approve`, publish changes with `orbit github sync`.
+
+Agents draft a proposal JSON file, run `triage review` for a preview, then `triage apply --approve`.
+When evidence is insufficient, record `uncertainty` and leave metadata unchanged.";
+
+pub const TRIAGE_EXAMPLES: &str = "\
+Examples:
+  orbit triage context orb-a7b2c9 --json
+  orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
+  orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json";
+
+pub const TRIAGE_CONTEXT_EXAMPLES: &str = "\
+Examples:
+  orbit triage context orb-a7b2c9 --json";
+
+pub const TRIAGE_REVIEW_EXAMPLES: &str = "\
+Examples:
+  orbit triage review orb-a7b2c9 --proposal-file proposal.json --json";
+
+pub const TRIAGE_APPLY_EXAMPLES: &str = "\
+Examples:
+  orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json
+  orbit github sync orb-a7b2c9 --direction push --apply";

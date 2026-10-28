@@ -83,6 +83,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::GitHub(args) => {
             with_board(dir.as_deref(), true, |board| crate::github::commands::run(board, args))
         }
+        Command::Triage(args) => {
+            with_board(dir.as_deref(), true, |board| crate::triage::commands::run(board, args))
+        }
     }
 }
 

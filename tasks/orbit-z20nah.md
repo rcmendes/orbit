@@ -1,10 +1,13 @@
 ---
 title: Persist claim checkpoints across agent handoffs
-status: todo
+status: in_progress
 type: task
 priority: 2
+claimed_by: implementer-2x66x3
+claimed_at: 2026-10-28T14:27:35.315525Z
+lease_until: 2026-10-28T14:57:35.315525Z
 created_at: 2026-10-28T14:07:08.761511Z
-updated_at: 2026-10-28T14:07:08.761511Z
+updated_at: 2026-10-28T14:27:35.315525Z
 ---
 
 ## Context

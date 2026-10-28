@@ -35,6 +35,7 @@ orbit --dir <DIR> list           # override the link for one command
 | --- | --- |
 | Create a project-local Board | `orbit init` |
 | Initialize a Workspace Board | `orbit init <WORKSPACE>` |
+| Consolidate existing Workspace and child Boards | `orbit workspace migrate --dry-run`, then `orbit workspace migrate` |
 | Refresh or inspect its repository catalog | `orbit workspace refresh`, `orbit workspace status` |
 | Reconcile agent integrations across child repositories | `orbit workspace setup` |
 | Override repository discovery | `orbit workspace include OWNER/REPO`, `orbit workspace exclude OWNER/REPO` |
@@ -49,8 +50,11 @@ Workspace Board, and reuses them when a later refresh discovers child repos.
 
 A child-local Board that competes with its Workspace Board is reported as
 `AMBIGUOUS_BOARD`; commands keep using the Workspace Board and do not delete the
-local copy. Workspace initialization refuses to shadow an existing child Board
-or conflicting `.orbit` contents. A missing linked Board fails with
+local copy. Creating the first Workspace Board with `orbit init` refuses to
+shadow an existing child Board or conflicting `.orbit` contents. Use
+`orbit workspace migrate` to preview and combine existing Boards; when no
+Workspace Board exists, it stages the merged Board and activates it after
+validation. Source Boards remain as backups. A missing linked Board fails with
 `LINK_NOT_FOUND`; re-link or restore it. Legacy `.git/orbit/board` and
 `<workspace>/board` layouts continue to resolve with a warning and can be
 migrated with `orbit doctor --migrate`. A legacy Board directly at

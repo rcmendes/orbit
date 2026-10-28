@@ -211,6 +211,21 @@ pub struct LinkArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct WorkspaceMigrateArgs {
+    /// Workspace root. Defaults to the current directory.
+    #[arg(value_name = "WORKSPACE")]
+    pub workspace: Option<PathBuf>,
+
+    /// Preview the migration without changing the Workspace Board or sources.
+    #[arg(long, conflicts_with = "resume")]
+    pub dry_run: bool,
+
+    /// Resume an interrupted migration from its saved plan.
+    #[arg(long)]
+    pub resume: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct SlugArgs {
     #[command(subcommand)]
     pub command: SlugCommand,
@@ -897,6 +912,9 @@ pub struct WorkspaceIssueInspectArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceCommand {
+    /// Combine existing Workspace and child-repository Boards.
+    #[command(long_about = help::WORKSPACE_MIGRATE_LONG, after_long_help = help::WORKSPACE_MIGRATE_EXAMPLES)]
+    Migrate(WorkspaceMigrateArgs),
     /// Show the last explicitly refreshed repository catalog.
     #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
     Status,

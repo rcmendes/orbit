@@ -265,6 +265,10 @@ pub struct IdConfig {
     pub length: usize,
     #[serde(default = "default_prefix")]
     pub prefix: String,
+    /// Additional legacy prefixes accepted for imported Tasks. New IDs always
+    /// use `prefix`; this list lets a combined Board retain source IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_prefixes: Vec<String>,
 }
 
 impl Default for IdConfig {
@@ -272,40 +276,69 @@ impl Default for IdConfig {
         Self {
             length: default_id_length(),
             prefix: default_prefix(),
+            accepted_prefixes: Vec::new(),
         }
     }
 }
 
 impl IdConfig {
     pub fn validate(&self) -> Result<()> {
-        let prefix = &self.prefix;
-        if prefix.is_empty() {
-            return Err(OrbitError::config("id.prefix must be non-empty"));
-        }
-        if prefix.contains('.')
-            || !prefix.chars().all(|character| {
-                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-            })
-        {
-            return Err(OrbitError::config(
-                "id.prefix must contain only lowercase letters, digits, and dashes (no dots)",
-            ));
-        }
-
-        if let Some(slug) = prefix.strip_suffix('-') {
-            if !slug::is_valid(slug) {
-                return Err(OrbitError::config(
-                    "a trailing-dash id.prefix requires a 1-20 character slug with alphanumeric ends and no `--`",
-                ));
+        validate_id_prefix(&self.prefix)?;
+        let mut seen = std::collections::BTreeSet::from([self.prefix.as_str()]);
+        for prefix in &self.accepted_prefixes {
+            validate_id_prefix(prefix)?;
+            if !seen.insert(prefix) {
+                return Err(OrbitError::config(format!(
+                    "id.accepted_prefixes contains duplicate prefix `{prefix}`"
+                )));
             }
-        } else if prefix.len() > slug::MAX_LEN {
-            return Err(OrbitError::config(
-                "a legacy id.prefix without a trailing dash must be at most 20 characters",
-            ));
         }
-
         Ok(())
     }
+
+    pub fn is_valid_task_id(&self, id: &str) -> bool {
+        self.prefix_for_id(id).is_some()
+    }
+
+    pub fn prefix_for_id<'a>(&'a self, id: &str) -> Option<&'a str> {
+        std::iter::once(self.prefix.as_str())
+            .chain(self.accepted_prefixes.iter().map(String::as_str))
+            .find(|prefix| task::is_valid_id(id, prefix))
+    }
+
+    pub fn parent_id(&self, id: &str) -> Option<String> {
+        self.prefix_for_id(id)
+            .and_then(|prefix| task::parent_id_from_id(id, prefix))
+    }
+}
+
+fn validate_id_prefix(prefix: &str) -> Result<()> {
+    if prefix.is_empty() {
+        return Err(OrbitError::config("id.prefix must be non-empty"));
+    }
+    if prefix.contains('.')
+        || !prefix.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+    {
+        return Err(OrbitError::config(
+            "id.prefix must contain only lowercase letters, digits, and dashes (no dots)",
+        ));
+    }
+
+    if let Some(slug) = prefix.strip_suffix('-') {
+        if !slug::is_valid(slug) {
+            return Err(OrbitError::config(
+                "a trailing-dash id.prefix requires a 1-20 character slug with alphanumeric ends and no `--`",
+            ));
+        }
+    } else if prefix.len() > slug::MAX_LEN {
+        return Err(OrbitError::config(
+            "a legacy id.prefix without a trailing dash must be at most 20 characters",
+        ));
+    }
+
+    Ok(())
 }
 
 fn default_branch() -> String {
@@ -1550,6 +1583,25 @@ mod tests {
 
         let mut config = Config::default();
         config.id.prefix = "Orb-".to_string();
+        assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
+    }
+
+    #[test]
+    fn accepted_id_prefixes_round_trip_and_validate() {
+        let mut config = Config::default();
+        config.id.accepted_prefixes = vec!["legacy-".to_string()];
+        config.validate().unwrap();
+        assert!(config.id.is_valid_task_id("legacy-a7b2c9"));
+        assert_eq!(
+            config.id.parent_id("legacy-a7b2c9.d4b3df"),
+            Some("legacy-a7b2c9".to_string())
+        );
+
+        let serialized = config.to_toml().unwrap();
+        let restored: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(restored.id.accepted_prefixes, vec!["legacy-"]);
+
+        config.id.accepted_prefixes.push("legacy-".to_string());
         assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
     }
 }

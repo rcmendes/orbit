@@ -435,7 +435,7 @@ fn diagnose_tasks(
         // A prefix mismatch means the IDs use the observed prefix; comparing
         // them with the configured prefix would flag every SubTask.
         if !prefix_mismatch {
-            let encoded_parent = crate::task::parent_id_from_id(&task.id, &board.config.id.prefix);
+            let encoded_parent = board.config.id.parent_id(&task.id);
             match (&task.front.parent, encoded_parent) {
                 (Some(parent), Some(encoded)) if parent != &encoded => {
                     issues.push(Issue::new(

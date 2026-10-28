@@ -78,7 +78,13 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
     let mut old_to_new = BTreeMap::new();
     if changed {
         for task in graph.tasks.values() {
-            let to = map_id(&task.id, &old_prefix, &new_prefix)?;
+            let source_prefix = board.config.id.prefix_for_id(&task.id).ok_or_else(|| {
+                OrbitError::new(
+                    code::MIGRATION_BLOCKED,
+                    format!("task ID {} uses no configured prefix", task.id),
+                )
+            })?;
+            let to = map_id(&task.id, source_prefix, &new_prefix)?;
             old_to_new.insert(task.id.clone(), to);
         }
     }
@@ -215,7 +221,7 @@ fn health_issues_inner(board: &Board, graph: &Graph, check_branch: bool) -> Resu
     }
 
     for task in graph.tasks.values() {
-        let encoded_parent = task::parent_id_from_id(&task.id, &board.config.id.prefix);
+        let encoded_parent = board.config.id.parent_id(&task.id);
         match (&task.front.parent, encoded_parent) {
             (Some(parent), Some(encoded)) if parent != &encoded => {
                 issues.push(Issue::new(

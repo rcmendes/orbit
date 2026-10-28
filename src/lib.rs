@@ -21,3 +21,4 @@ pub mod task;
 pub mod transition;
 pub mod triage;
 pub mod workspace;
+pub mod workspace_migrate;

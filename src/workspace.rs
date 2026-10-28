@@ -134,6 +134,9 @@ struct UnsupportedOrigin {
 pub fn run(board: &Board, args: WorkspaceArgs) -> Result<crate::output::CommandOutput> {
     let workspace = workspace_root(board)?;
     match args.command {
+        WorkspaceCommand::Migrate(_) => Err(OrbitError::invalid_argument(
+            "`workspace migrate` does not run against an already-resolved Board",
+        )),
         WorkspaceCommand::Status => status(&workspace),
         WorkspaceCommand::Refresh => refresh(board, &workspace),
         WorkspaceCommand::Include(args) => set_override(board, &args.repository, true),

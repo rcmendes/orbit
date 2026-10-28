@@ -12,7 +12,7 @@ use crate::cli::{
     CommentCommand, CommentListArgs, DeleteArgs, DependArgs, DoneArgs, HeartbeatArgs, InitArgs,
     LabelArgs, LabelCommand, LabelMutationArgs, LinkArgs, ListArgs, PrimeArgs, ReadyArgs,
     ReleaseArgs, ReopenArgs, ShowArgs, SlugArgs, SlugCommand, SlugMigrateArgs, TreeArgs,
-    UndependArgs, UpdateArgs,
+    UndependArgs, UpdateArgs, WorkspaceCommand,
 };
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
@@ -100,22 +100,26 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 crate::github::commands::run(board, args)
             })
         }
-        Command::Workspace(args) => {
-            if matches!(
-                args.command,
-                crate::cli::WorkspaceCommand::Status
-                    | crate::cli::WorkspaceCommand::Issues(crate::cli::WorkspaceIssuesArgs {
-                        command: crate::cli::WorkspaceIssuesCommand::List(_)
-                            | crate::cli::WorkspaceIssuesCommand::Inspect(_)
+        Command::Workspace(args) => match args.command {
+            WorkspaceCommand::Migrate(args) => crate::workspace_migrate::run(dir.as_deref(), args),
+            command => {
+                let args = crate::cli::WorkspaceArgs { command };
+                if matches!(
+                    &args.command,
+                    crate::cli::WorkspaceCommand::Status
+                        | crate::cli::WorkspaceCommand::Issues(crate::cli::WorkspaceIssuesArgs {
+                            command: crate::cli::WorkspaceIssuesCommand::List(_)
+                                | crate::cli::WorkspaceIssuesCommand::Inspect(_)
+                        })
+                ) {
+                    with_board_read_only(dir.as_deref(), |board| crate::workspace::run(board, args))
+                } else {
+                    with_board(dir.as_deref(), true, |board| {
+                        crate::workspace::run(board, args)
                     })
-            ) {
-                with_board_read_only(dir.as_deref(), |board| crate::workspace::run(board, args))
-            } else {
-                with_board(dir.as_deref(), true, |board| {
-                    crate::workspace::run(board, args)
-                })
+                }
             }
-        }
+        },
         Command::Triage(args) => with_board(dir.as_deref(), true, |board| {
             crate::triage::commands::run(board, args, json)
         }),
@@ -215,7 +219,9 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
 
     if workspace_root {
         validate_workspace_layout(&requested_root)?;
-        if let Some(existing) = crate::board::workspace_child_board(&requested_root)? {
+        if !Board::is_board(&board_root)
+            && let Some(existing) = crate::board::workspace_child_board(&requested_root)?
+        {
             return Err(crate::board::already_initialized(&existing));
         }
     }
@@ -665,7 +671,7 @@ fn validate_workspace_layout(workspace: &Path) -> Result<()> {
         let entry =
             entry.map_err(|error| OrbitError::io(format!("read {}", orbit.display()), error))?;
         let name = entry.file_name();
-        if name != "board" && name != "cache" {
+        if name != "board" && name != "cache" && name != "workspace-migration.lock" {
             return Err(crate::board::already_initialized(&entry.path()));
         }
     }

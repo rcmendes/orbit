@@ -47,7 +47,8 @@ pub const INIT_LONG: &str = "\
 Creates or reuses a Board. In a Git working tree, the default Board directory is
 ./.orbit, a worktree on the orbit branch. Outside a Git working tree, the current
 directory is a Workspace root and the Board is <WORKSPACE>/.orbit/board. The
-catalog cache is reserved at <WORKSPACE>/.orbit/cache. A positional path or
+catalog cache is reserved at <WORKSPACE>/.orbit/cache; Workspace migration uses
+<WORKSPACE>/.orbit/workspace-migration.lock for serialization. A positional path or
 --dir/ORBIT_DIR can name a Workspace root; an explicit Board directory remains
 accepted for existing Boards.
 
@@ -140,6 +141,33 @@ Examples:
 
   # Link without rewriting agent configuration
   orbit link ~/src/acme --no-refresh";
+
+pub const WORKSPACE_MIGRATE_LONG: &str = "\
+Workspace migration combines the legacy Workspace Board at <WORKSPACE>/.board
+(or <WORKSPACE>/board) and Boards in child repositories into
+<WORKSPACE>/.orbit/board. It uses an existing Workspace Board when present. If
+none exists, it stages a new Board and activates it only after validating the
+merged graph. It previews without writing when --dry-run is given; otherwise,
+the plan is applied. Source Boards remain intact as backups, and existing
+Workspace configuration takes precedence over source configuration.
+
+Task IDs stay unchanged unless they collide. Collisions are remapped with their
+structured parent/dependency references and comments. Duplicate GitHub Issue
+links stop the migration for explicit resolution. A saved plan allows a
+partially-applied migration to resume with --resume. The Workspace Board is
+validated before and after application; then run `orbit doctor` to check Board
+discovery and member-repository state. The migration is one Board commit; use
+`git -C <WORKSPACE>/.orbit/board revert <commit>` to roll it back. Keep the
+source Boards until the doctor check succeeds. Source Task-ID prefixes that
+differ from the Workspace prefix are recorded as accepted legacy prefixes, so
+their IDs do not need to change.";
+
+pub const WORKSPACE_MIGRATE_EXAMPLES: &str = "\
+Examples:
+  orbit workspace migrate --dry-run
+  orbit workspace migrate
+  orbit workspace migrate --resume
+  orbit workspace migrate ~/src/acme --dry-run";
 
 pub const UNLINK_LONG: &str = "\
 Removes the shared-Board pointer and refreshes agent configuration to use this

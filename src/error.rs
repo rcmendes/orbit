@@ -25,6 +25,7 @@ pub mod code {
     pub const PREFIX_COLLISION: &str = "PREFIX_COLLISION";
     pub const PREFIX_MISMATCH: &str = "PREFIX_MISMATCH";
     pub const INVALID_TYPE: &str = "INVALID_TYPE";
+    pub const INVALID_AREA: &str = "INVALID_AREA";
     pub const INVALID_LABEL: &str = "INVALID_LABEL";
     pub const LABEL_BLOCKED: &str = "LABEL_BLOCKED";
     pub const CORRUPT_COMMENT: &str = "CORRUPT_COMMENT";

@@ -9,12 +9,17 @@ labels:
 depends_on:
 - orbit-f1hqst.a2xpf8
 parent: orbit-f1hqst
+checkpoint:
+  by: rodrigomendes
+  at: 2026-10-28T23:33:49.908654Z
+  progress: Remote Issue import implementation is running in workspace-import; catalog prerequisite is merged.
+  next: Review, merge, close ticket.
 area: cli
 claimed_by: rodrigomendes
 claimed_at: 2026-10-28T23:33:30.350013Z
 lease_until: 2026-10-29T00:03:44.205647Z
 created_at: 2026-10-28T22:48:01.175045Z
-updated_at: 2026-10-28T23:33:44.205647Z
+updated_at: 2026-10-28T23:33:49.908654Z
 ---
 
 ## Goal

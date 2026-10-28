@@ -92,8 +92,13 @@ Forbidden proposal keys (GitHub-owned): `title`, `body`, `status`, `state`.
 
 | Code | Meaning |
 | --- | --- |
-| `TRIAGE_NOT_LINKED` | Task has no GitHub link |
-| `TRIAGE_APPROVAL_REQUIRED` | `apply` without `--approve` |
-| `TRIAGE_INVALID_PROPOSAL` | Invalid JSON, forbidden fields, or non-canonical labels |
+| `TRIAGE_NOT_LINKED` | Task has no GitHub link; adopt the intended Issue with `orbit github adopt <task-id> <issue-url>`. |
+| `TRIAGE_APPROVAL_REQUIRED` | `apply` was run without `--approve`; review the proposal, then rerun the reported command with `--approve`. |
+| `TRIAGE_INVALID_PROPOSAL` | The proposal is invalid; the error identifies the cause and directs you to edit the JSON and review it again. |
+
+Human errors include a `Next:` action. JSON keeps the existing error envelope and
+adds `cause`, `remediation`, and Task/proposal-file context to `error.details`.
+Do not add GitHub-owned fields (`title`, `body`, `status`, or `state`) to a
+proposal. Only use the supported metadata fields above and canonical labels.
 
 See also [`triage-labels.md`](./triage-labels.md) and [`issue-tracker.md`](./issue-tracker.md).

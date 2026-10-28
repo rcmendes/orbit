@@ -96,6 +96,19 @@ fn triage_context_requires_github_link() {
     let (status, value) = repo.json(&["triage", "context", id.as_str(), "--json"]);
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "TRIAGE_NOT_LINKED");
+    assert_eq!(value["error"]["details"]["task"], id);
+    let remediation = value["error"]["details"]["remediation"].as_str().unwrap();
+    assert!(remediation.contains(&format!("orbit github adopt {id} <issue-url>")));
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(remediation)
+    );
+
+    let human = repo.orbit(&["triage", "context", id.as_str()]);
+    assert!(!human.status.success());
+    assert!(String::from_utf8_lossy(&human.stderr).contains(remediation));
 }
 
 #[test]
@@ -193,6 +206,31 @@ fn triage_review_rejects_non_canonical_labels() {
     );
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "TRIAGE_INVALID_PROPOSAL");
+    assert_eq!(value["error"]["details"]["task"], id);
+    assert_eq!(
+        value["error"]["details"]["proposal_file"],
+        proposal.to_str().unwrap()
+    );
+    let remediation = value["error"]["details"]["remediation"].as_str().unwrap();
+    assert!(remediation.contains("canonical"));
+    assert!(
+        value["error"]["details"]["cause"]
+            .as_str()
+            .unwrap()
+            .contains("custom-label")
+    );
+    let human = repo.orbit_with_env(
+        &[
+            "triage",
+            "review",
+            id.as_str(),
+            "--proposal-file",
+            proposal.to_str().unwrap(),
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(!human.status.success());
+    assert!(String::from_utf8_lossy(&human.stderr).contains(remediation));
 }
 
 #[test]
@@ -243,6 +281,33 @@ fn triage_apply_requires_explicit_approval() {
     );
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "TRIAGE_APPROVAL_REQUIRED");
+    assert_eq!(value["error"]["details"]["task"], id);
+    assert_eq!(
+        value["error"]["details"]["proposal_file"],
+        proposal.to_str().unwrap()
+    );
+    let remediation = value["error"]["details"]["remediation"].as_str().unwrap();
+    assert!(remediation.contains("--approve"));
+    assert!(remediation.contains(proposal.to_str().unwrap()));
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(remediation)
+    );
+
+    let human = repo.orbit_with_env(
+        &[
+            "triage",
+            "apply",
+            id.as_str(),
+            "--proposal-file",
+            proposal.to_str().unwrap(),
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(!human.status.success());
+    assert!(String::from_utf8_lossy(&human.stderr).contains(remediation));
 }
 
 #[test]

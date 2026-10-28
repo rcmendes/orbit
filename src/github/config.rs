@@ -150,6 +150,10 @@ impl GitHubConfig {
                 crate::error::code::GITHUB_SETUP_INCOMPLETE,
                 "github.organization is not set; run `orbit github setup` after configuring config.toml",
             )
+            .with_details(serde_json::json!({
+                "organization": null,
+                "fields": [self.issue_fields.area_name, self.issue_fields.verification_name],
+            }))
         })
     }
 

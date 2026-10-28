@@ -65,12 +65,15 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
 }
 
 fn cmd_review(board: &Board, args: TriageReviewArgs) -> Result<crate::output::CommandOutput> {
-    let proposal = load_proposal(&args.proposal_file)?;
+    let proposal = load_proposal(&args.proposal_file)
+        .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
     require_github_link(&task)?;
 
-    let (changes, apply_ready) = proposal.build_preview(&task)?;
+    let (changes, apply_ready) = proposal
+        .build_preview(&task)
+        .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     reject_basic_structured_changes(board, &changes)?;
     let data = json!({
         "id": task.id,
@@ -101,10 +104,15 @@ fn cmd_apply(board: &Board, args: TriageApplyArgs) -> Result<crate::output::Comm
         return Err(OrbitError::new(
             code::TRIAGE_APPROVAL_REQUIRED,
             "triage apply requires explicit approval; pass --approve after reviewing the proposal",
-        ));
+        )
+        .with_details(json!({
+            "task": args.task,
+            "proposal_file": args.proposal_file.display().to_string(),
+        })));
     }
 
-    let proposal = load_proposal(&args.proposal_file)?;
+    let proposal = load_proposal(&args.proposal_file)
+        .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
     require_github_link(&task)?;
@@ -113,16 +121,20 @@ fn cmd_apply(board: &Board, args: TriageApplyArgs) -> Result<crate::output::Comm
         return Err(OrbitError::new(
             code::TRIAGE_INVALID_PROPOSAL,
             "uncertainty-only proposals must not be applied; leave metadata unchanged",
-        ));
+        )
+        .with_details(proposal_context(&args.task, &args.proposal_file)));
     }
 
-    let (changes, apply_ready) = proposal.build_preview(&task)?;
+    let (changes, apply_ready) = proposal
+        .build_preview(&task)
+        .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     reject_basic_structured_changes(board, &changes)?;
     if !apply_ready {
         return Err(OrbitError::new(
             code::TRIAGE_INVALID_PROPOSAL,
             "proposal has no applicable metadata changes",
-        ));
+        )
+        .with_details(proposal_context(&args.task, &args.proposal_file)));
     }
 
     let mut task = task.clone();
@@ -189,7 +201,33 @@ fn require_github_link(task: &Task) -> Result<serde_json::Value> {
                     task.id
                 ),
             )
+            .with_details(json!({ "task": task.id }))
         })
+}
+
+fn proposal_context(task: &str, path: &PathBuf) -> serde_json::Value {
+    json!({
+        "task": task,
+        "proposal_file": path.display().to_string(),
+    })
+}
+
+fn with_proposal_context(mut error: OrbitError, task: &str, path: &PathBuf) -> OrbitError {
+    if error.code == code::TRIAGE_INVALID_PROPOSAL {
+        let mut details = match error.details.take() {
+            Some(serde_json::Value::Object(details)) => details,
+            Some(value) => serde_json::Map::from_iter([("value".to_string(), value)]),
+            None => serde_json::Map::new(),
+        };
+        details.extend(
+            proposal_context(task, path)
+                .as_object()
+                .expect("proposal context is an object")
+                .clone(),
+        );
+        error.details = Some(serde_json::Value::Object(details));
+    }
+    error
 }
 
 fn persist_task(board: &Board, task: &Task, message: &str) -> Result<()> {

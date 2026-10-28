@@ -150,23 +150,30 @@ impl GitHubClient for GhCliClient {
         let area_id = find_field_id(&nodes, &fields.area_name);
         let verification_id = find_field_id(&nodes, &fields.verification_name);
         let mut missing = Vec::new();
+        let mut missing_fields = Vec::new();
         if area_id.is_none() {
             missing.push(format!(
                 "organization `{org}` is missing Issue Field `{}`",
                 fields.area_name
             ));
+            missing_fields.push(fields.area_name.as_str());
         }
         if verification_id.is_none() {
             missing.push(format!(
                 "organization `{org}` is missing Issue Field `{}`",
                 fields.verification_name
             ));
+            missing_fields.push(fields.verification_name.as_str());
         }
         if !missing.is_empty() {
-            return Err(OrbitError::new(
-                code::GITHUB_SETUP_INCOMPLETE,
-                missing.join("; "),
-            ));
+            return Err(
+                OrbitError::new(code::GITHUB_SETUP_INCOMPLETE, missing.join("; ")).with_details(
+                    serde_json::json!({
+                        "organization": org,
+                        "fields": missing_fields,
+                    }),
+                ),
+            );
         }
         Ok(FieldSetup {
             area_id: area_id.expect("missing Area field was reported"),
@@ -663,23 +670,30 @@ impl GitHubClient for FixtureClient {
         let area_id = store.org_fields.get(&area_key).cloned();
         let verification_id = store.org_fields.get(&verification_key).cloned();
         let mut missing = Vec::new();
+        let mut missing_fields = Vec::new();
         if area_id.is_none() {
             missing.push(format!(
                 "organization `{org}` is missing Issue Field `{}`",
                 fields.area_name
             ));
+            missing_fields.push(fields.area_name.as_str());
         }
         if verification_id.is_none() {
             missing.push(format!(
                 "organization `{org}` is missing Issue Field `{}`",
                 fields.verification_name
             ));
+            missing_fields.push(fields.verification_name.as_str());
         }
         if !missing.is_empty() {
-            return Err(OrbitError::new(
-                code::GITHUB_SETUP_INCOMPLETE,
-                missing.join("; "),
-            ));
+            return Err(
+                OrbitError::new(code::GITHUB_SETUP_INCOMPLETE, missing.join("; ")).with_details(
+                    serde_json::json!({
+                        "organization": org,
+                        "fields": missing_fields,
+                    }),
+                ),
+            );
         }
         Ok(FieldSetup {
             area_id: area_id.expect("missing Area field was reported"),

@@ -11,15 +11,15 @@ depends_on:
 parent: orbit-ytwjhm
 checkpoint:
   by: impl-v8vgqe
-  at: 2026-10-28T15:40:27.922826Z
-  progress: Verified ticket branch is based on integrate/orbit-ytwjhm; inspected existing GitHub client/sync/relationship and doctor seams. Using CLI integration tests for human/JSON status, doctor diagnostics, and read-only behavior.
-  next: Add failing status/doctor integration tests, then implement status diagnostics and docs.
+  at: 2026-10-28T15:54:06.522951Z
+  progress: Implemented read-only GitHub status, doctor diagnostics, fixture-backed integration coverage, help, and README/command/GitHub sync docs. Focused suites and full cargo test passed before the final small scope-detail adjustment.
+  next: Run final full tests, commit implementation, then merge the latest integrate/orbit-ytwjhm and verify clean.
 area: cli
 claimed_by: impl-v8vgqe
 claimed_at: 2026-10-28T15:39:34.116849Z
-lease_until: 2026-10-28T16:09:54.069981Z
+lease_until: 2026-10-28T16:24:06.489920Z
 created_at: 2026-10-28T15:23:57.647591Z
-updated_at: 2026-10-28T15:40:27.922826Z
+updated_at: 2026-10-28T15:54:06.522951Z
 ---
 
 ## Goal

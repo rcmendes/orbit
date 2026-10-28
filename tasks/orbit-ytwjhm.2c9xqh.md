@@ -1,6 +1,6 @@
 ---
 title: Add explicit GitHub basic mode for personal accounts
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -13,11 +13,8 @@ checkpoint:
   progress: Implemented and documented basic mode; merged latest integration branch updates including URL-based adopt and single-linked-repository create. GitHub/Triage focused tests pass after merge. Clippy reports pre-existing repo lints.
   next: Run final clippy on merged tip, verify clean branch includes current integration tip, then close ticket with the lint limitation recorded.
 area: cli
-claimed_by: impl-2c9xqh
-claimed_at: 2026-10-28T15:27:21.098653Z
-lease_until: 2026-10-28T16:09:04.779840Z
 created_at: 2026-10-28T15:23:46.609777Z
-updated_at: 2026-10-28T15:39:04.804690Z
+updated_at: 2026-10-28T15:39:24.636769Z
 ---
 
 ## Goal

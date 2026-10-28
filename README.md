@@ -167,7 +167,7 @@ orbit init --global           # create the global Board at ~/.orbit
 - **A one-off or CI setup:** use `--print` first, then `--agents none` when the machine should not receive editor configuration. Pass `--slug` when IDs must be predictable.
 - **A global fallback:** use `--global` only when you intentionally want one Board available when no project-local Board resolves. Discovery does not create it.
 - **Joining an existing Board:** use `orbit link DIR`; do not run `init` again. A second local Board in the same working tree is refused.
-- **Moving a legacy Board:** run `orbit doctor --migrate`; `init` is not a migration command.
+- **Moving a supported legacy Board:** run `orbit doctor --migrate`; `init` is not a migration command. A Board directly at `<workspace>/.orbit` remains available by explicit path and must be migrated to `<workspace>/.orbit/board` before Workspace initialization.
 
 **Supporting `init` options**
 

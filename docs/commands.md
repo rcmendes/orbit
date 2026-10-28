@@ -102,7 +102,7 @@ orbit init --slug teramigo       # Task IDs become teramigo-…
 - **CI or scripted setup:** preview with `--print`, then use `--agents none` and an explicit `--slug` when the machine should not receive editor files and IDs must be stable.
 - **Global fallback:** use `--global` only for an intentional machine-wide Board. Project-local Boards still win in discovery.
 - **Joining an existing Board:** use `orbit link DIR`; `init` is for creating or reusing the target `DIR`, not for joining another Board.
-- **Migrating a legacy Board:** use `orbit doctor --migrate`; `init` is not a migration command.
+- **Migrating a supported legacy Board:** use `orbit doctor --migrate`; `init` is not a migration command. A Board directly at `<workspace>/.orbit` remains available by explicit path and must be moved to `<workspace>/.orbit/board` before Workspace initialization.
 
 **Supporting options**
 

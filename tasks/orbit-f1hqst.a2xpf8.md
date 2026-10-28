@@ -1,6 +1,6 @@
 ---
 title: Build and browse the Remote Issue catalog
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
@@ -15,11 +15,8 @@ checkpoint:
   progress: Committed catalog implementation and docs (9707cb5, 5e8c908); full tests and clippy pass. Merged current integration tip 4fe3bbd; ticket remains open/in progress.
   next: Ready for review; do not close ticket.
 area: board
-claimed_by: rodrigomendes
-claimed_at: 2026-10-28T23:20:52.206844Z
-lease_until: 2026-10-29T00:01:24.658374Z
 created_at: 2026-10-28T22:47:50.427118Z
-updated_at: 2026-10-28T23:31:24.691693Z
+updated_at: 2026-10-28T23:33:22.495276Z
 ---
 
 ## Goal

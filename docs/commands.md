@@ -1,6 +1,6 @@
 # Command guide
 
-Status: this guide describes v0.8.2, including the Orbit folder
+Status: this guide describes v0.9.0, including the Orbit folder
 ([ADR 0012](./adr/0012-orbit-folder.md)). The unified `init [DIR]` surface,
 resolver, scoped path-free agent setup, and `doctor` migration are implemented.
 

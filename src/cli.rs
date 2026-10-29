@@ -1103,4 +1103,7 @@ pub struct GitHubSyncArgs {
     /// Apply the planned sync. Without this flag the command is a dry run.
     #[arg(long)]
     pub apply: bool,
+    /// Resolve a field conflict as `FIELD=orbit` or `FIELD=github`. Repeat as needed.
+    #[arg(long = "resolve", value_name = "FIELD=orbit|github", action = clap::ArgAction::Append)]
+    pub resolutions: Vec<String>,
 }

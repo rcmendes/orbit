@@ -64,6 +64,8 @@ pub struct SyncPlan {
     pub apply_labels: Option<Vec<String>>,
     pub apply_area: Option<Option<String>>,
     pub apply_verification: Option<Option<String>>,
+    pub push_title: Option<String>,
+    pub push_body: Option<String>,
     pub push_labels: Option<Vec<String>>,
     pub push_area: Option<Option<String>>,
     pub push_verification: Option<Option<String>>,
@@ -84,6 +86,8 @@ impl SyncPlan {
             && self.apply_labels.is_none()
             && self.apply_area.is_none()
             && self.apply_verification.is_none()
+            && self.push_title.is_none()
+            && self.push_body.is_none()
             && self.push_labels.is_none()
             && self.push_area.is_none()
             && self.push_verification.is_none()

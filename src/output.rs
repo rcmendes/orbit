@@ -173,7 +173,7 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
                 .unwrap_or_else(|| "one or more fields".to_string());
             details.insert("conflicting_fields".to_string(), json!(fields));
             Some(format!(
-                "Task {task} conflicts with GitHub Issue {repo}#{number} in {fields}. Resolve each field on one side, review with `orbit github sync {task}`, then apply with `orbit github sync {task} --apply`."
+                "Task {task} conflicts with GitHub Issue {repo}#{number} in {fields}. Review with `orbit github sync {task}`, choose each side with `--resolve FIELD=orbit` or `--resolve FIELD=github`, then apply with `orbit github sync {task} --resolve FIELD=orbit|github --apply`."
             ))
         }
         crate::error::code::TRIAGE_NOT_LINKED => {

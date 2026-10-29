@@ -262,7 +262,11 @@ fn inspect(
         .find(|issue| issue.number == number)
         .ok_or_else(|| OrbitError::not_found(&args.identity))?;
     let client = client_from_env()?;
-    let detail = client.get_issue(&repository, number)?;
+    let detail = client.get_issue(
+        &repository,
+        number,
+        (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
+    )?;
     let mut comments = Vec::<IssueComment>::new();
     let mut page = 1;
     loop {
@@ -428,7 +432,11 @@ fn import(
             None
         };
 
-        let issue = match client.get_issue(&repository, number) {
+        let issue = match client.get_issue(
+            &repository,
+            number,
+            (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
+        ) {
             Ok(issue) => issue,
             Err(error) => {
                 errors.push(json!({"identity": identity, "message": error.message}));

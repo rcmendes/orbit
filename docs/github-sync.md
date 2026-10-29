@@ -118,11 +118,11 @@ mode = "basic"
 repositories = ["alice/widget"]
 ```
 
-Link repositories, adopt or create Issues, and sync GitHub-owned title, body,
-open/closed state, and labels. Title, body, and state flow from GitHub to Orbit;
-labels merge in both directions, and Orbit status changes can open or close an
-Issue. GitHub assignees remain informational and are never mapped to Orbit
-claims.
+Link repositories, adopt or create Issues, and explicitly sync linked Tasks.
+Orbit owns title, body, status, and labels. A GitHub-only edit can be pulled when
+the matching Orbit field still equals its saved baseline; an Orbit-only edit is
+pushed. Concurrent edits to one field require a reviewed resolution. GitHub
+assignees remain informational and are never mapped to Orbit claims.
 
 Basic mode does **not** support organization Issue Fields: `area` and
 `verification` are neither imported from GitHub nor pushed to GitHub. Create
@@ -248,14 +248,29 @@ Rules:
 
 | Field | Authority | Notes |
 | --- | --- | --- |
-| Title, body | GitHub | Pulled on sync |
-| Open/closed | GitHub + Orbit status | Pulled on sync; Orbit `done`/`cancelled` pushes closed/open state; closed + `wontfix` → Orbit `cancelled` |
-| Labels | Both | Merged; concurrent edits since last sync → conflict |
-| `area`, `verification` | Orbit (via Issue Fields) | Full mode only; pushed to fields; concurrent edits → conflict; unavailable in basic mode |
+| Title, body | Orbit | A remote-only edit is pulled if Orbit still matches the baseline; local edits push. Same-field edits conflict. |
+| Status and open/closed | Orbit status | `todo`/`in_progress` stay open; `done`/`cancelled` close; remote state changes pull only if Orbit status is unchanged. A closed Issue with `wontfix` maps to `cancelled`. |
+| Labels | Orbit | Labels are synchronized as an exact field value, not merged. Remote-only edits pull; edits on both sides conflict. |
+| `area`, `verification` | Orbit (via Issue Fields) | Full mode only; remote-only edits can pull; Orbit changes push; concurrent edits conflict. Unavailable in basic mode. |
 | Assignees | GitHub only | Never mapped to Orbit claims |
-| Claims, checkpoints, status while in progress | Orbit | Open GitHub Issues preserve `todo` / `in_progress` |
+| Claims, checkpoints | Orbit only | Never synchronized to GitHub |
 
-Conflicts return `GITHUB_ISSUE_CONFLICT` with per-field details. Sync never silently overwrites concurrent edits on both sides.
+Conflicts return `GITHUB_ISSUE_CONFLICT` with per-field details and both values.
+No write occurs while any selected Task has an unresolved conflict. Choose a
+side for each conflicting field with repeatable `--resolve FIELD=orbit` or
+`--resolve FIELD=github`, then require `--apply` to write. `orbit` keeps the
+Orbit value and pushes it; `github` pulls the GitHub value. A resolution can be
+previewed without writing:
+
+```bash
+orbit github sync orb-a7b2c9 --resolve title=orbit
+orbit github sync orb-a7b2c9 --resolve title=orbit --resolve labels=github --apply
+```
+
+For a batch, one resolution applies to every selected Task that has a conflict
+in that field. Sync plans all selected Tasks before writing. Apply then reports
+each Task's result independently; a failed Task keeps its previous baseline, so
+it can be retried without repeating already successful Tasks' writes.
 
 GitHub command errors include a `Next:` action in human output. With `--json`,
 the existing `{ "ok": false, "error": ... }` envelope is unchanged and
@@ -272,13 +287,17 @@ the affected organization, repository, Task, Issue, or fields when known.
 - `GITHUB_REPO_NOT_LINKED`: the error names `OWNER/REPO` and gives the exact
   `orbit github repo link OWNER/REPO` command.
 - `GITHUB_ISSUE_CONFLICT`: the error names the Task, Issue, and conflicting
-  fields. Resolve each conflict on either Orbit or GitHub, review with
-  `orbit github sync <task-id>`, then retry with
-  `orbit github sync <task-id> --apply`.
+  fields. Review both values with `orbit github sync <task-id>`, choose each
+  side with `--resolve FIELD=orbit|github`, then apply with `--apply`.
 
 ## Relationships
 
-SubTasks and dependencies sync to GitHub sub-issues and blocked-by relationships when linked Issues live in the **same** repository as the parent. Cross-repository relationships are listed in sync output as unsupported rather than flattened.
+SubTasks and dependencies are previewed as GitHub sub-issues and blocked-by
+relationships when both linked Issues live in the **same** repository. `--apply`
+adds supported relationships. Cross-repository or unlinked GitHub relationships
+are listed as unsupported and preserved; Orbit does not flatten them or guess
+which remote-only relationship to remove. GitHub assignees remain separate from
+Orbit claims.
 
 ## Task frontmatter
 
@@ -299,6 +318,8 @@ github:
     labels: [bug]
     area: backend
     verification: cargo test
+    status: todo
+    issue_state: open
 ```
 
 Controlled `area` values match `TaskArea`: `board`, `cli`, `mcp`, `setup`, `docs`, `release`.

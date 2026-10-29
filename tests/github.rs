@@ -229,6 +229,15 @@ fn set_fixture_issue_field(fixture: &std::path::Path, field: &str, value: serde_
     fs::write(fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
 }
 
+fn add_fixture_issue(fixture: &std::path::Path, identity: &str, number: u64, title: &str) {
+    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(fixture).unwrap()).unwrap();
+    let mut issue = data["issues"]["acme/widget#42"].clone();
+    issue["number"] = serde_json::json!(number);
+    issue["title"] = serde_json::json!(title);
+    data["issues"][identity] = issue;
+    fs::write(fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+}
+
 fn set_task_frontmatter(repo: &TestRepo, id: &str, field: &str, value: &str) {
     let content = repo.read_task(id);
     let updated = content
@@ -277,6 +286,55 @@ fn github_repo_link_and_adopt_use_fixture_client() {
     assert_eq!(show["data"]["github"]["repo"], "acme/widget");
     assert_eq!(show["data"]["title"], "Imported issue");
     assert_eq!(show["data"]["area"], "cli");
+}
+
+#[test]
+fn one_github_issue_cannot_be_adopted_by_two_tasks() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    let first = repo.add("First task", &[]);
+    let second = repo.add("Second task", &[]);
+    for id in [&first, &second] {
+        if id == &first {
+            repo.ok_json_with_env(
+                &[
+                    "github",
+                    "adopt",
+                    id.as_str(),
+                    "--repo",
+                    "acme/widget",
+                    "--number",
+                    "42",
+                    "--json",
+                ],
+                &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+            );
+        } else {
+            let (status, error) = repo.json_with_env(
+                &[
+                    "github",
+                    "adopt",
+                    id.as_str(),
+                    "--repo",
+                    "acme/widget",
+                    "--number",
+                    "42",
+                    "--json",
+                ],
+                &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+            );
+            assert_eq!(status, 1);
+            assert!(
+                error["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("already linked")
+            );
+        }
+    }
 }
 
 #[test]
@@ -961,6 +1019,301 @@ fn github_sync_human_dry_run_lists_push_changes() {
 }
 
 #[test]
+fn orbit_title_edits_are_previewed_as_github_pushes() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_task_frontmatter(&repo, &id, "title", "\"Orbit-owned title\"");
+    set_task_frontmatter(&repo, &id, "updated_at", "2026-10-24T14:00:00Z");
+
+    let preview = repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+
+    assert_eq!(
+        preview["data"]["tasks"][0]["plan"]["push_title"],
+        "Orbit-owned title"
+    );
+    assert!(preview["data"]["tasks"][0]["plan"]["apply_title"].is_null());
+    let unchanged: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(
+        unchanged["issues"]["acme/widget#42"]["title"],
+        "Imported issue"
+    );
+}
+
+#[test]
+fn linked_task_status_labels_and_metadata_push_from_orbit() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_task_frontmatter(&repo, &id, "status", "done");
+    repo.ok_json(&["label", "remove", id.as_str(), "bug", "--json"]);
+    repo.ok_json(&["label", "add", id.as_str(), "feature", "--json"]);
+    set_task_frontmatter(&repo, &id, "area", "setup");
+    set_task_frontmatter(&repo, &id, "verification", "\"cargo test sync\"");
+    set_task_frontmatter(&repo, &id, "updated_at", "2026-10-25T14:00:00Z");
+
+    let preview = repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let plan = &preview["data"]["tasks"][0]["plan"];
+    assert_eq!(plan["push_state"], "closed");
+    assert_eq!(plan["push_labels"], serde_json::json!(["feature"]));
+    assert_eq!(plan["push_area"], serde_json::json!("setup"));
+    assert_eq!(
+        plan["push_verification"],
+        serde_json::json!("cargo test sync")
+    );
+
+    repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(applied["issues"]["acme/widget#42"]["state"], "closed");
+    assert_eq!(
+        applied["issues"]["acme/widget#42"]["labels"],
+        serde_json::json!(["feature"])
+    );
+    assert_eq!(applied["issues"]["acme/widget#42"]["area"], "setup");
+    assert_eq!(
+        applied["issues"]["acme/widget#42"]["verification"],
+        "cargo test sync"
+    );
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["github"]["last_sync"]["status"], "done");
+    assert_eq!(show["data"]["github"]["last_sync"]["issue_state"], "closed");
+}
+
+#[test]
+fn remote_only_label_and_metadata_changes_pull_when_orbit_is_unchanged() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_fixture_issue_field(&fixture, "labels", serde_json::json!(["remote-label"]));
+    set_fixture_issue_field(&fixture, "area", serde_json::json!("setup"));
+    set_fixture_issue_field(
+        &fixture,
+        "verification",
+        serde_json::json!("cargo test remote"),
+    );
+    set_fixture_issue_field(
+        &fixture,
+        "updated_at",
+        serde_json::json!("2026-10-25T13:00:00Z"),
+    );
+
+    let preview = repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let plan = &preview["data"]["tasks"][0]["plan"];
+    assert_eq!(plan["apply_labels"], serde_json::json!(["remote-label"]));
+    assert_eq!(plan["apply_area"], serde_json::json!("setup"));
+    assert_eq!(
+        plan["apply_verification"],
+        serde_json::json!("cargo test remote")
+    );
+
+    repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["labels"], serde_json::json!(["remote-label"]));
+    assert_eq!(show["data"]["area"], "setup");
+    assert_eq!(show["data"]["verification"], "cargo test remote");
+}
+
+#[test]
+fn remote_issue_close_pulls_a_terminal_orbit_status() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_fixture_issue_field(&fixture, "state", serde_json::json!("closed"));
+    set_fixture_issue_field(
+        &fixture,
+        "updated_at",
+        serde_json::json!("2026-10-25T13:00:00Z"),
+    );
+
+    let preview = repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(preview["data"]["tasks"][0]["plan"]["apply_status"], "done");
+    repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["status"], "done");
+    assert_eq!(show["data"]["github"]["last_sync"]["issue_state"], "closed");
+}
+
+#[test]
+fn supported_subtask_relationships_are_previewed_and_applied() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    add_fixture_issue(&fixture, "acme/widget#43", 43, "Child issue");
+    let repo = TestRepo::new();
+    let parent = adopt_fixture_task(&repo, &fixture, "Parent issue");
+    let child = repo.add("Child work", &["--parent", parent.as_str()]);
+    repo.ok_json_with_env(
+        &[
+            "github",
+            "adopt",
+            child.as_str(),
+            "--repo",
+            "acme/widget",
+            "--number",
+            "43",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+
+    let preview = repo.ok_json_with_env(
+        &["github", "sync", parent.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(
+        preview["data"]["tasks"][0]["relationships"]["supported"][0]["kind"],
+        "sub_issue"
+    );
+    assert_eq!(
+        preview["data"]["tasks"][0]["relationships"]["changes"][0]["action"],
+        "add"
+    );
+
+    repo.ok_json_with_env(
+        &["github", "sync", parent.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(
+        applied["issues"]["acme/widget#42"]["blocking"][0]["number"],
+        43
+    );
+}
+
+#[test]
+fn supported_blocked_by_relationships_are_previewed_and_applied() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    add_fixture_issue(&fixture, "acme/widget#43", 43, "Blocking dependency");
+    let repo = TestRepo::new();
+    let task = adopt_fixture_task(&repo, &fixture, "Blocked issue");
+    let dependency = repo.add("Dependency", &[]);
+    repo.ok_json_with_env(
+        &[
+            "github",
+            "adopt",
+            dependency.as_str(),
+            "--repo",
+            "acme/widget",
+            "--number",
+            "43",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    repo.ok_json(&["depend", task.as_str(), dependency.as_str(), "--json"]);
+
+    let preview = repo.ok_json_with_env(
+        &["github", "sync", task.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(
+        preview["data"]["tasks"][0]["relationships"]["supported"][0]["kind"],
+        "blocked_by"
+    );
+    repo.ok_json_with_env(
+        &["github", "sync", task.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(
+        applied["issues"]["acme/widget#42"]["blocked_by"][0]["number"],
+        43
+    );
+}
+
+#[test]
+fn batch_sync_reports_partial_failures_and_retries_without_advancing_failed_baseline() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    add_fixture_issue(&fixture, "acme/widget#43", 43, "Second issue");
+    let repo = TestRepo::new();
+    let first = adopt_fixture_task(&repo, &fixture, "First issue");
+    let second = repo.add("Second task", &[]);
+    repo.ok_json_with_env(
+        &[
+            "github",
+            "adopt",
+            second.as_str(),
+            "--repo",
+            "acme/widget",
+            "--number",
+            "43",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    set_task_frontmatter(&repo, &first, "title", "\"First Orbit edit\"");
+    set_task_frontmatter(&repo, &second, "title", "\"Second Orbit edit\"");
+    let second_before = repo.ok_json(&["show", second.as_str(), "--json"]);
+    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    data["update_failures"] = serde_json::json!({ "acme/widget#43": "temporary fixture failure" });
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+
+    let first_apply = repo.ok_json_with_env(
+        &["github", "sync", "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(first_apply["data"]["success_count"], 1);
+    assert_eq!(first_apply["data"]["failure_count"], 1);
+    assert_eq!(first_apply["data"]["failures"][0]["task"], second);
+    let after_partial: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(
+        after_partial["issues"]["acme/widget#42"]["title"],
+        "First Orbit edit"
+    );
+    assert_eq!(
+        after_partial["issues"]["acme/widget#43"]["title"],
+        "Second issue"
+    );
+    let second_after = repo.ok_json(&["show", second.as_str(), "--json"]);
+    assert_eq!(
+        second_after["data"]["github"]["last_sync"]["title"],
+        second_before["data"]["github"]["last_sync"]["title"]
+    );
+
+    data["update_failures"] = serde_json::json!({});
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+    let retry = repo.ok_json_with_env(
+        &["github", "sync", "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(retry["data"]["failure_count"], 0);
+    let after_retry: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(
+        after_retry["issues"]["acme/widget#43"]["title"],
+        "Second Orbit edit"
+    );
+}
+
+#[test]
 fn github_sync_human_dry_run_shows_conflicting_values_and_keeps_json_plan() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
@@ -1033,9 +1386,48 @@ fn github_sync_human_dry_run_shows_conflicting_values_and_keeps_json_plan() {
 }
 
 #[test]
+fn github_sync_can_keep_orbit_value_for_a_field_conflict() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_task_frontmatter(&repo, &id, "title", "\"Orbit edit\"");
+    set_task_frontmatter(&repo, &id, "updated_at", "2026-10-25T14:00:00Z");
+    set_fixture_issue_field(&fixture, "title", serde_json::json!("GitHub edit"));
+    set_fixture_issue_field(
+        &fixture,
+        "updated_at",
+        serde_json::json!("2026-10-25T13:00:00Z"),
+    );
+
+    let result = repo.ok_json_with_env(
+        &[
+            "github",
+            "sync",
+            id.as_str(),
+            "--resolve",
+            "title=orbit",
+            "--apply",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+
+    assert_eq!(result["data"]["apply"], true);
+    assert_eq!(
+        result["data"]["tasks"][0]["plan"]["conflicts"],
+        serde_json::json!([])
+    );
+    let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(applied["issues"]["acme/widget#42"]["title"], "Orbit edit");
+    assert!(repo.read_task(&id).contains("title: Orbit edit"));
+}
+
+#[test]
 fn github_adopt_accepts_issue_url_and_legacy_arguments() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
+    add_fixture_issue(&fixture, "acme/widget#43", 43, "Legacy issue");
     let repo = TestRepo::new();
     repo.init();
     write_github_config_for_repositories(&repo, &["acme/widget"]);
@@ -1062,13 +1454,13 @@ fn github_adopt_accepts_issue_url_and_legacy_arguments() {
             "--repo",
             "acme/widget",
             "--number",
-            "42",
+            "43",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(adopted["data"]["github"]["repo"], "acme/widget");
-    assert_eq!(adopted["data"]["github"]["number"], 42);
+    assert_eq!(adopted["data"]["github"]["number"], 43);
 }
 
 #[test]
@@ -1536,7 +1928,7 @@ fn github_status_reports_conflicts_and_doctor_reports_configuration_problems() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(status["data"]["conflicts"], 1, "{status}");
-    assert!(status["data"]["pending"]["pull"].as_u64().unwrap() > 0);
+    assert_eq!(status["data"]["pending"]["pull"], 0);
     assert!(status["data"]["pending"]["push"].as_u64().unwrap() > 0);
     assert_eq!(status["data"]["conflict_details"][0]["task"], id);
     assert_eq!(

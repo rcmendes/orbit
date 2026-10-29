@@ -870,7 +870,8 @@ Examples:
 pub const GITHUB_LONG: &str = "\
 Connects an Orbit Board to explicitly linked GitHub repositories. Each durable
 Task can map one-to-one to a GitHub Issue identified by repository and issue
-number. Sync is explicit, detects field-level conflicts, and never maps GitHub
+number. Orbit owns linked titles, bodies, statuses, labels, and supported
+metadata. Sync is explicit, detects field-level conflicts, and never maps GitHub
 assignees to Orbit claims.
 
 Full mode (the default) uses organization-level Issue Fields for Orbit-owned
@@ -909,7 +910,8 @@ Examples:
   orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
   orbit github create orb-d4e5f6 --include-terminal --apply
   orbit github sync orb-a7b2c9
-  orbit github sync orb-a7b2c9 --apply";
+  orbit github sync orb-a7b2c9 --apply
+  orbit github sync orb-a7b2c9 --resolve title=orbit --apply";
 
 pub const WORKSPACE_LONG: &str = "\
 Manage repositories that belong to the current Workspace.
@@ -1045,13 +1047,15 @@ Examples:
 pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\
 Examples:
   orbit github sync orb-a7b2c9
+  orbit github sync orb-a7b2c9 --resolve title=orbit
+  orbit github sync orb-a7b2c9 --resolve title=orbit --apply
   orbit github sync orb-a7b2c9 --apply --direction pull";
 
 pub const TRIAGE_LONG: &str = "\
 Review GitHub-linked Tasks and apply approved metadata changes on the Orbit Board first.
 
 Triage only touches Orbit-owned `area`, task-level `verification`, and canonical triage/category
-labels. In GitHub basic mode, it supports labels only. It never rewrites GitHub-owned title, body,
+labels. In GitHub basic mode, it supports labels only. It does not change Task title, body, status,
 or open/closed state, and it does not run verification commands. After approving a review or
 `triage apply --approve`, publish changes with `orbit github sync`.
 

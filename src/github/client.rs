@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{OrbitError, Result, code};
 use crate::github::config::IssueFieldConfig;
 use crate::github::model::{IssueSnapshot, IssueState};
+use crate::github::relationships::SupportedRelationship;
 
 const AREA_FIELD_OPTIONS: [&str; 6] = ["board", "cli", "mcp", "setup", "docs", "release"];
 
@@ -86,6 +87,8 @@ pub struct UpdateIssueInput {
     pub labels: Option<Vec<String>>,
     pub area: Option<Option<String>>,
     pub verification: Option<Option<String>>,
+    pub organization: Option<String>,
+    pub issue_fields: Option<IssueFieldConfig>,
 }
 
 pub trait GitHubClient: Send + Sync {
@@ -97,7 +100,12 @@ pub trait GitHubClient: Send + Sync {
 
     fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup>;
 
-    fn get_issue(&self, repo: &str, number: u64) -> Result<IssueSnapshot>;
+    fn get_issue(
+        &self,
+        repo: &str,
+        number: u64,
+        issue_fields: Option<&IssueFieldConfig>,
+    ) -> Result<IssueSnapshot>;
 
     fn list_issues_page(&self, repo: &str, page: usize) -> Result<Vec<IssueCatalogItem>>;
 
@@ -116,6 +124,13 @@ pub trait GitHubClient: Send + Sync {
         number: u64,
         input: &UpdateIssueInput,
     ) -> Result<IssueSnapshot>;
+
+    fn update_relationships(
+        &self,
+        repo: &str,
+        number: u64,
+        desired: &[SupportedRelationship],
+    ) -> Result<()>;
 }
 
 pub fn client_from_env() -> Result<Box<dyn GitHubClient>> {
@@ -277,10 +292,43 @@ impl GitHubClient for GhCliClient {
         })
     }
 
-    fn get_issue(&self, repo: &str, number: u64) -> Result<IssueSnapshot> {
+    fn get_issue(
+        &self,
+        repo: &str,
+        number: u64,
+        issue_fields: Option<&IssueFieldConfig>,
+    ) -> Result<IssueSnapshot> {
         let path = format!("/repos/{repo}/issues/{number}");
         let output = gh_api(&["api", &path])?;
-        parse_rest_issue(repo, &output)
+        let mut issue = parse_rest_issue(repo, &output)?;
+        if let Some(issue_fields) = issue_fields {
+            let values = list_issue_field_values(repo, number)?;
+            issue.area = string_field(&values, &issue_fields.area_name);
+            issue.verification = string_field(&values, &issue_fields.verification_name);
+        }
+        issue.blocking = list_issue_relationships(repo, number, "sub_issues")?
+            .iter()
+            .filter_map(|item| {
+                item.get("number")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|number| crate::github::model::IssueRef {
+                        repo: repo.to_string(),
+                        number,
+                    })
+            })
+            .collect();
+        issue.blocked_by = list_issue_relationships(repo, number, "dependencies/blocked_by")?
+            .iter()
+            .filter_map(|item| {
+                item.get("number")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|number| crate::github::model::IssueRef {
+                        repo: repo.to_string(),
+                        number,
+                    })
+            })
+            .collect();
+        Ok(issue)
     }
 
     fn list_issues_page(&self, repo: &str, page: usize) -> Result<Vec<IssueCatalogItem>> {
@@ -410,12 +458,6 @@ impl GitHubClient for GhCliClient {
         number: u64,
         input: &UpdateIssueInput,
     ) -> Result<IssueSnapshot> {
-        if input.area.is_some() || input.verification.is_some() {
-            return Err(OrbitError::new(
-                code::GITHUB_SETUP_INCOMPLETE,
-                "issue field updates require configured field ids from `orbit github setup`",
-            ));
-        }
         let mut payload = serde_json::Map::new();
         if let Some(title) = &input.title {
             payload.insert("title".into(), serde_json::json!(title));
@@ -435,14 +477,134 @@ impl GitHubClient for GhCliClient {
         if let Some(labels) = &input.labels {
             payload.insert("labels".into(), serde_json::json!(labels));
         }
-        let payload = serde_json::Value::Object(payload).to_string();
-        let path = format!("/repos/{repo}/issues/{number}");
-        let output = gh_api_with_input(
-            &["api", &path, "-X", "PATCH", "--input", "-"],
-            payload.as_bytes(),
-        )?;
-        parse_rest_issue(repo, &output)
+        if !payload.is_empty() {
+            let payload = serde_json::Value::Object(payload).to_string();
+            let path = format!("/repos/{repo}/issues/{number}");
+            gh_api_with_input(
+                &["api", &path, "-X", "PATCH", "--input", "-"],
+                payload.as_bytes(),
+            )?;
+        }
+        if input.area.is_some() || input.verification.is_some() {
+            let issue_fields = input.issue_fields.as_ref().ok_or_else(|| {
+                OrbitError::new(
+                    code::GITHUB_SETUP_INCOMPLETE,
+                    "issue field updates require configured field names from `orbit github setup`",
+                )
+            })?;
+            let organization = input.organization.as_deref().ok_or_else(|| {
+                OrbitError::new(
+                    code::GITHUB_SETUP_INCOMPLETE,
+                    "issue field updates require github.organization and `orbit github setup`",
+                )
+            })?;
+            update_rest_issue_field_values(
+                repo,
+                number,
+                organization,
+                issue_fields,
+                input.area.as_ref(),
+                input.verification.as_ref(),
+            )?;
+        }
+        self.get_issue(repo, number, input.issue_fields.as_ref())
     }
+
+    fn update_relationships(
+        &self,
+        repo: &str,
+        number: u64,
+        desired: &[SupportedRelationship],
+    ) -> Result<()> {
+        let desired_children: std::collections::BTreeSet<_> = desired
+            .iter()
+            .filter(|relationship| relationship.kind == "sub_issue")
+            .map(|relationship| relationship.github.number)
+            .collect();
+        let desired_blockers: std::collections::BTreeSet<_> = desired
+            .iter()
+            .filter(|relationship| relationship.kind == "blocked_by")
+            .map(|relationship| relationship.github.number)
+            .collect();
+
+        let children = list_issue_relationships(repo, number, "sub_issues")?;
+        let current_children: std::collections::BTreeSet<_> = children
+            .iter()
+            .filter_map(|child| child.get("number").and_then(serde_json::Value::as_u64))
+            .collect();
+        for child_number in desired_children.difference(&current_children) {
+            let child_id = rest_issue_numeric_id(repo, *child_number)?;
+            let path = format!("/repos/{repo}/issues/{number}/sub_issues");
+            let payload = serde_json::json!({ "sub_issue_id": child_id }).to_string();
+            gh_api_with_input(
+                &["api", &path, "-X", "POST", "--input", "-"],
+                payload.as_bytes(),
+            )?;
+        }
+
+        let blockers = list_issue_relationships(repo, number, "dependencies/blocked_by")?;
+        let current_blockers: std::collections::BTreeSet<_> = blockers
+            .iter()
+            .filter_map(|blocker| blocker.get("number").and_then(serde_json::Value::as_u64))
+            .collect();
+        for blocker_number in desired_blockers.difference(&current_blockers) {
+            let blocker_id = rest_issue_numeric_id(repo, *blocker_number)?;
+            let path = format!("/repos/{repo}/issues/{number}/dependencies/blocked_by");
+            let payload = serde_json::json!({ "issue_id": blocker_id }).to_string();
+            gh_api_with_input(
+                &["api", &path, "-X", "POST", "--input", "-"],
+                payload.as_bytes(),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn list_issue_relationships(
+    repo: &str,
+    number: u64,
+    relationship: &str,
+) -> Result<Vec<serde_json::Value>> {
+    let mut results = Vec::new();
+    let mut page = 1;
+    loop {
+        let path = format!("/repos/{repo}/issues/{number}/{relationship}?per_page=100&page={page}");
+        let output = gh_api(&["api", &path])?;
+        let page_values: Vec<serde_json::Value> =
+            serde_json::from_slice(&output).map_err(|error| {
+                OrbitError::new(
+                    code::GITHUB_NOT_CONFIGURED,
+                    format!("invalid GitHub issue relationship response: {error}"),
+                )
+            })?;
+        let count = page_values.len();
+        results.extend(page_values);
+        if count < 100 {
+            break;
+        }
+        page += 1;
+    }
+    Ok(results)
+}
+
+fn rest_issue_numeric_id(repo: &str, number: u64) -> Result<u64> {
+    let path = format!("/repos/{repo}/issues/{number}");
+    let output = gh_api(&["api", &path])?;
+    let issue: serde_json::Value = serde_json::from_slice(&output).map_err(|error| {
+        OrbitError::new(
+            code::GITHUB_NOT_CONFIGURED,
+            format!("invalid GitHub issue response: {error}"),
+        )
+    })?;
+    issue
+        .get("id")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                "GitHub issue response has no id",
+            )
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -467,6 +629,100 @@ fn rest_issue_field_id(fields: &[RestIssueField], name: &str) -> Option<u64> {
         .iter()
         .find(|field| field.name.eq_ignore_ascii_case(name))
         .map(|field| field.id)
+}
+
+fn update_rest_issue_field_values(
+    repo: &str,
+    number: u64,
+    organization: &str,
+    config: &IssueFieldConfig,
+    area: Option<&Option<String>>,
+    verification: Option<&Option<String>>,
+) -> Result<()> {
+    let definitions = list_rest_issue_fields(organization)?;
+    let area_id = if area.is_some() {
+        Some(rest_issue_field_id(&definitions, &config.area_name).ok_or_else(|| {
+            OrbitError::new(
+                code::GITHUB_SETUP_INCOMPLETE,
+                format!(
+                    "organization `{organization}` is missing Issue Field `{}`; run `orbit github setup`",
+                    config.area_name
+                ),
+            )
+        })?)
+    } else {
+        None
+    };
+    let verification_id = if verification.is_some() {
+        Some(rest_issue_field_id(&definitions, &config.verification_name).ok_or_else(|| {
+            OrbitError::new(
+                code::GITHUB_SETUP_INCOMPLETE,
+                format!(
+                    "organization `{organization}` is missing Issue Field `{}`; run `orbit github setup`",
+                    config.verification_name
+                ),
+            )
+        })?)
+    } else {
+        None
+    };
+    let target_ids: Vec<_> = area_id.into_iter().chain(verification_id).collect();
+    let mut values = list_rest_issue_field_values(repo, number)?;
+    values.retain(|value| {
+        value
+            .get("field_id")
+            .and_then(serde_json::Value::as_u64)
+            .is_none_or(|field_id| !target_ids.contains(&field_id))
+    });
+    for (field_id, value) in [(area_id, area), (verification_id, verification)] {
+        if let (Some(field_id), Some(Some(value))) = (field_id, value) {
+            values.push(serde_json::json!({ "field_id": field_id, "value": value }));
+        }
+    }
+    let path = format!("/repos/{repo}/issues/{number}/issue-field-values");
+    let payload = serde_json::json!({ "issue_field_values": values }).to_string();
+    gh_api_with_input(
+        &["api", &path, "-X", "PUT", "--input", "-"],
+        payload.as_bytes(),
+    )?;
+    Ok(())
+}
+
+fn list_rest_issue_field_values(repo: &str, number: u64) -> Result<Vec<serde_json::Value>> {
+    let mut values = Vec::new();
+    let mut page = 1;
+    loop {
+        let path =
+            format!("/repos/{repo}/issues/{number}/issue-field-values?per_page=100&page={page}");
+        let output = gh_api(&["api", &path])?;
+        let fields: Vec<RestIssueFieldValue> =
+            serde_json::from_slice(&output).map_err(|error| {
+                OrbitError::new(
+                    code::GITHUB_SETUP_INCOMPLETE,
+                    format!("invalid GitHub Issue Fields response: {error}"),
+                )
+            })?;
+        let count = fields.len();
+        for field in fields {
+            let value = field
+                .single_select_option
+                .and_then(|option| option.get("name").cloned())
+                .or(field.value);
+            if field.issue_field_id > 0
+                && let Some(value) = value.filter(|value| !value.is_null())
+            {
+                values.push(serde_json::json!({
+                    "field_id": field.issue_field_id,
+                    "value": value,
+                }));
+            }
+        }
+        if count < 100 {
+            break;
+        }
+        page += 1;
+    }
+    Ok(values)
 }
 
 fn validate_org_admin(org: &str) -> Result<()> {
@@ -724,6 +980,8 @@ struct RestCatalogIssue {
 
 #[derive(Debug, Deserialize)]
 struct RestIssueFieldValue {
+    #[serde(default)]
+    issue_field_id: u64,
     issue_field_name: String,
     #[serde(default)]
     value: Option<serde_json::Value>,
@@ -847,6 +1105,8 @@ struct FixtureStore {
     issues: HashMap<String, IssueSnapshot>,
     #[serde(default)]
     create_failures: HashMap<String, String>,
+    #[serde(default)]
+    update_failures: HashMap<String, String>,
     #[serde(default)]
     catalog_issues: HashMap<String, Vec<FixtureCatalogIssue>>,
     #[serde(default = "fixture_catalog_page_size")]
@@ -1047,7 +1307,12 @@ impl GitHubClient for FixtureClient {
         Ok(setup)
     }
 
-    fn get_issue(&self, repo: &str, number: u64) -> Result<IssueSnapshot> {
+    fn get_issue(
+        &self,
+        repo: &str,
+        number: u64,
+        _issue_fields: Option<&IssueFieldConfig>,
+    ) -> Result<IssueSnapshot> {
         let store = self.store.lock().expect("fixture lock");
         let key = format!("{repo}#{number}");
         if let Some(issue) = store.issues.get(&key).cloned() {
@@ -1185,6 +1450,16 @@ impl GitHubClient for FixtureClient {
     ) -> Result<IssueSnapshot> {
         let mut store = self.store.lock().expect("fixture lock");
         let key = format!("{repo}#{number}");
+        if let Some(message) = store
+            .update_failures
+            .get(&key)
+            .or_else(|| store.update_failures.get(repo))
+        {
+            return Err(OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                message.clone(),
+            ));
+        }
         let mut issue = store
             .issues
             .get(&key)
@@ -1212,6 +1487,33 @@ impl GitHubClient for FixtureClient {
         store.issues.insert(key, issue.clone());
         persist_fixture(&store)?;
         Ok(issue)
+    }
+
+    fn update_relationships(
+        &self,
+        repo: &str,
+        number: u64,
+        desired: &[SupportedRelationship],
+    ) -> Result<()> {
+        let mut store = self.store.lock().expect("fixture lock");
+        let key = format!("{repo}#{number}");
+        let mut issue = store
+            .issues
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| OrbitError::not_found(&key))?;
+        for relationship in desired {
+            let (current, reference) = match relationship.kind {
+                "sub_issue" => (&mut issue.blocking, &relationship.github),
+                "blocked_by" => (&mut issue.blocked_by, &relationship.github),
+                _ => continue,
+            };
+            if !current.contains(reference) {
+                current.push(reference.clone());
+            }
+        }
+        store.issues.insert(key, issue);
+        persist_fixture(&store)
     }
 }
 

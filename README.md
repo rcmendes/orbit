@@ -747,6 +747,8 @@ ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 
 Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Orbit is authoritative for linked Task fields; sync is explicit, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. Review and resolve conflicts with `--resolve FIELD=orbit|github` before applying. See [docs/github-sync.md](./docs/github-sync.md).
 
+GitHub Projects are a downstream view over Issues. Orbit does not synchronize ProjectV2 membership, Status, views, or custom fields; use Project auto-add and closed/reopened workflows for reporting, and keep Project Status out of Orbit's sync loop. See [the Projects boundary](./docs/github-sync.md#github-projects).
+
 GitHub sync and Triage require Orbit **v0.9.0 or newer**. The v0.9.0 default
 release binaries, shell/PowerShell installers, and npm package include both
 commands. For an organization-owned repository with Issue Fields ready, start

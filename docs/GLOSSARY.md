@@ -173,6 +173,14 @@ Orbit values and previews differences. Orbit owns the Task's editable fields and
 lifecycle, while GitHub remains unchanged until an explicit sync writes it.
 _Avoid_: Remote Issue, mirrored Issue
 
+**GitHub Project**:
+A downstream GitHub view over Issues. Orbit does not read or write ProjectV2
+membership, Status, views, or custom fields; Project auto-add and close/reopen
+workflows keep Projects aligned at the Issue level. Project custom fields are
+not organization Issue Fields, and a Project card move does not change an Orbit
+Task.
+_Avoid_: Board, Orbit Board, Project field authority
+
 **Local Task**:
 A Task managed only by Orbit. A detached Linked Task becomes a Local Task without
 losing its Task data; its prior GitHub identity remains as inactive provenance

@@ -8,6 +8,7 @@
 - Workspace catalog repositories are usable by `orbit github adopt`, `status`, and `sync` without a separate `orbit github repo link`. Linked status now reconciles an open Issue with a terminal Orbit status, and a remote `wontfix` change is surfaced even while the Issue stays closed. Removing a previously synced dependency or SubTask link now removes the supported GitHub relationship on the next explicit sync.
 - `orbit doctor` now treats ordinary non-Git child directories such as `docs/` or `notes/` as informational warnings instead of findings, so they no longer make a Workspace unhealthy or produce a removal action. A directory that previously held a repository is still reported as stale.
 - A successful `orbit github create --apply` on a Workspace Board now upserts the new Issue into the local Remote Issue cache. `doctor` no longer reports `GITHUB_ORPHAN_LINK` and `orbit workspace issues list --linked` sees the new link before the next explicit `orbit workspace issues refresh`; the upsert does not advance the catalog's last-refreshed time.
+- Documented GitHub Projects as a downstream view over Issues. Orbit does not request Project scopes or synchronize ProjectV2 membership, Status, views, or custom fields; Project auto-add and close/reopen workflows are the supported integration.
 
 ## 0.9.4 - 2026-10-28
 

@@ -22,6 +22,7 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
   Parent Tasks group one level of SubTasks; work shape is the metadata-only Type
   field.
 - Hosted sync, federation, or opaque remote trackers other than explicit GitHub Issue sync ([github-sync.md](./github-sync.md)).
+- GitHub Projects automation or ProjectV2 field synchronization. Projects remain a downstream view over Issues; see [ADR 0015](./adr/0015-github-projects-downstream.md).
 - Automatic pushes to a remote.
 
 ## 2. Architecture
@@ -646,6 +647,16 @@ or failure independently. Repository Boards infer a destination only when one
 repository is linked; Workspace Boards use the last refreshed included-repository
 catalog and require `--repo OWNER/REPO` when multiple repositories are included.
 
+GitHub Projects are downstream of Issues. Orbit does not call the ProjectV2 API,
+request Project scopes, or synchronize Project membership, Status, views, or
+custom fields. A Project's auto-add workflow can include Orbit-created Issues,
+and optional Project workflows can mirror Issue close/reopen into Status. A card
+move alone never changes an Issue or Task. Because Project custom fields are not
+organization Issue Fields, a Project field named `Area` is distinct from the
+`Area` field Orbit syncs. Project drafts remain invisible until converted to
+repository Issues, and multiple Projects may contain the same Issue without
+creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.md).
+
 `--agents` accepts `none`, `all`, or a comma-separated list of client names. Without it, `init` asks in a TTY and otherwise writes no agent files while explaining the `orbit setup` hint in its report; `--print` never prompts. `--agents none` is the non-interactive "Board only" choice.
 
 `TYPE` is one of `task`, `epic`, `spike`, `chore`, or `decision`. `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` is shorthand for `--label repo:NAME`.
@@ -885,3 +896,5 @@ Tagging `v*` triggers `.github/workflows/release.yml`: it plans, builds, creates
 - [0011. Rewrite IDs when the slug changes](./adr/0011-rewrite-ids-on-slug-migration.md)
 - [0012. One Orbit folder for every Board](./adr/0012-orbit-folder.md)
 - [0013. Claim checkpoints in task frontmatter](./adr/0013-claim-checkpoints.md)
+- [0014. GitHub Issue provider](./adr/0014-github-issue-provider.md)
+- [0015. GitHub Projects stay downstream of Issues](./adr/0015-github-projects-downstream.md)

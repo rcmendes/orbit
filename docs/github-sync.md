@@ -338,6 +338,44 @@ the affected organization, repository, Task, Issue, or fields when known.
   fields. Review both values with `orbit github sync <task-id>`, choose each
   side with `--resolve FIELD=orbit|github`, then apply with `--apply`.
 
+## GitHub Projects
+
+Orbit treats GitHub Projects as a downstream view over Issues. It does not call
+the ProjectV2 API, require a `project` or `read:project` scope, or read or write
+Project items, Status, views, or custom fields. Orbit's authority ends at the
+Issue identified by `owner/repo#number`.
+
+Recommended setup:
+
+1. Link the Project to the repository or organization, then enable its auto-add
+   workflow for each included repository, or add Issues manually.
+2. Optionally enable Project workflows that update Status when an item is closed
+   or reopened. Orbit maps `todo` and `in_progress` to an open Issue, `done` to a
+   closed Issue, and `cancelled` to a closed Issue carrying `wontfix`.
+3. Treat Project Status and custom fields as reporting. Do not use them as input
+   to Orbit.
+
+Consequences:
+
+- Moving a Project card changes neither the Issue nor the Orbit Task. A pull sync
+  sees only Issue changes, such as a close or reopen performed directly or by a
+  Project workflow.
+- Open/closed state cannot distinguish `todo` from `in_progress`. Use labels,
+  views, or filters when the Project must show that difference.
+- A cancelled Task is a closed Issue with `wontfix`. A simple closed-to-Done
+  workflow cannot distinguish it from `done`; use a label-based view or filter
+  when the distinction matters.
+- Project draft issues are not repository Issues. Orbit cannot import or link
+  them until they are converted to real Issues.
+- Project custom fields are separate from organization Issue Fields. A Project
+  field named `Area` or `Verification` is not the organization field Orbit syncs.
+- An Issue can belong to several Projects. Orbit still keeps one Task link for
+  `owner/repo#number`, so Project membership creates no duplicate Tasks.
+
+No additional Orbit configuration is required. `orbit workspace issues import`
+accepts repository Issue identities, not Project URLs or Project item IDs. See
+[ADR 0015](./adr/0015-github-projects-downstream.md).
+
 ## Relationships
 
 SubTasks and dependencies are previewed as GitHub sub-issues and blocked-by

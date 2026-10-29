@@ -1001,7 +1001,10 @@ Triage to labels. `orbit github status` is a read-only diagnostic that reports
 authentication and scopes, linked repositories, Issue Field configuration when
 applicable, linked Task count, pending changes, conflicts, unsupported
 relationships, and a recommended next action. `orbit doctor` checks GitHub
-configuration when the provider is enabled. See [github-sync.md](./github-sync.md).
+configuration when the provider is enabled. GitHub Projects are a downstream
+view over Issues: Orbit does not synchronize ProjectV2 status or custom fields;
+use Project auto-add and closed/reopened workflows for reporting. See
+[github-sync.md](./github-sync.md).
 
 ```bash
 orbit github connect

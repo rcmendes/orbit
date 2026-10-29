@@ -321,15 +321,19 @@ fn diagnose_layout_and_repositories(
     }
 
     for directory in &catalog.non_git_directories {
-        issues.push(
-            Issue::warning(
-                "WORKSPACE_NON_GIT_DIRECTORY",
-                format!("child directory `{directory}` is not a Git repository"),
-            )
-            .with_repository(directory)
-            .with_cause("Workspace discovery only includes direct child Git repositories")
-            .with_next_action("remove or exclude the folder if it is not part of the Workspace"),
-        );
+        // A directory that used to be a repository is already reported as
+        // WORKSPACE_REPOSITORY_STALE, which is the actionable finding. A plain
+        // folder that was never a repository is informational: Workspace
+        // discovery only includes direct child Git repositories, and ordinary
+        // folders such as docs/ or notes/ must not make the Workspace unhealthy.
+        if catalog.repositories.values().any(|entry| {
+            entry.status == crate::workspace::RepositoryStatus::Stale && entry.path == *directory
+        }) {
+            continue;
+        }
+        warnings.push(format!(
+            "child directory `{directory}` is not a Git repository; Workspace discovery ignores it"
+        ));
     }
     for directory in &catalog.missing_origins {
         issues.push(

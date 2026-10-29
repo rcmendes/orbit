@@ -12,7 +12,7 @@ use crate::cli::{
 };
 use crate::error::{OrbitError, Result};
 use crate::github::client::{IssueCatalogItem, IssueComment, client_from_env};
-use crate::github::model::IssueState;
+use crate::github::model::{IssueSnapshot, IssueState};
 use crate::graph::{Graph, LoadMode};
 use crate::task::{self, Status, Task, TaskArea, TaskFrontmatter, TaskType};
 
@@ -83,6 +83,44 @@ fn save(path: &Path, catalog: &IssueCatalog) -> Result<()> {
     let contents = serde_json::to_vec_pretty(catalog)
         .map_err(|error| OrbitError::config(format!("serialize Remote Issue catalog: {error}")))?;
     crate::atomic::write_atomic(path, &contents, true)
+}
+
+/// Records an Issue that Orbit just created in the Workspace cache.
+///
+/// An explicit catalog refresh stays the source of truth for repository
+/// completeness and `last_refreshed_at`. This incremental upsert only prevents
+/// the freshly linked Issue from looking orphaned to `doctor` before the next
+/// refresh. Standalone Boards have no Workspace cache, so this is a no-op there.
+pub(crate) fn remember_created_issue(
+    board: &Board,
+    repository: &str,
+    issue: &IssueSnapshot,
+) -> Result<()> {
+    if !board.is_workspace_board() {
+        return Ok(());
+    }
+    let workspace = crate::workspace::workspace_root(board)?;
+    let path = cache_path(&workspace);
+    let mut catalog = load(&path)?;
+    let repository = repository.to_ascii_lowercase();
+    let entry = catalog.repositories.entry(repository.clone()).or_default();
+    entry.issues.retain(|cached| cached.number != issue.number);
+    entry.issues.push(IssueCatalogItem {
+        identity: format!("{repository}#{}", issue.number),
+        repo: repository.clone(),
+        number: issue.number,
+        title: issue.title.clone(),
+        state: issue.state,
+        labels: issue.labels.clone(),
+        issue_fields: BTreeMap::new(),
+        url: format!("https://github.com/{repository}/issues/{}", issue.number),
+        created_at: issue.updated_at,
+        updated_at: issue.updated_at,
+        area: issue.area.clone(),
+        verification: issue.verification.clone(),
+    });
+    entry.issues.sort_by_key(|cached| cached.number);
+    save(&path, &catalog)
 }
 
 fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::CommandOutput> {

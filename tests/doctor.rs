@@ -551,6 +551,46 @@ fn doctor_resolves_a_healthy_workspace_from_its_root_and_child_repository() {
 }
 
 #[test]
+fn doctor_treats_plain_non_git_child_directories_as_warnings() {
+    let repo = TestRepo::new();
+    let (_dir, workspace, _child, fixture) = prepare_workspace(&repo);
+    std::fs::create_dir_all(workspace.join("notes")).unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &workspace,
+        &["workspace", "refresh"],
+        &fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+
+    let doctor = workspace_doctor(&repo, &workspace, &workspace, &fixture);
+    assert_eq!(doctor["data"]["healthy"], true, "{doctor}");
+    assert!(
+        !issue_codes(&doctor).contains(&"WORKSPACE_NON_GIT_DIRECTORY".to_string()),
+        "{doctor}"
+    );
+    assert!(
+        doctor["data"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("notes")),
+        "{doctor}"
+    );
+
+    let status = repo.ok_json_in(&workspace, &["workspace", "status", "--json"]);
+    assert!(
+        status["data"]["non_git_directories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|directory| directory == "notes"),
+        "{status}"
+    );
+}
+
+#[test]
 fn doctor_reports_malformed_workspace_layout_without_creating_a_board() {
     let repo = TestRepo::new();
     let dir = tempfile::tempdir().unwrap();

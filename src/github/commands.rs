@@ -1217,6 +1217,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
     };
     let mut results = Vec::new();
     let mut human = Vec::new();
+    let mut warnings = Vec::new();
     for (mut task, rejected) in plans {
         let issue_state = if task.front.status.is_terminal() {
             "closed"
@@ -1307,6 +1308,20 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         set_baseline(&mut task, &issue);
         persist_task(board, &task, &format!("orbit: github create {}", task.id))?;
 
+        let task_id = task.id.clone();
+        let mut remember_issue = |issue: &IssueSnapshot| {
+            if let Err(error) = crate::issue_catalog::remember_created_issue(board, &repo, issue) {
+                let warning = format!(
+                    "{task_id}: created {}/#{} but could not update the Remote Issue cache: {}; run `orbit workspace issues refresh`",
+                    repo, issue.number, error.message
+                );
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
+                }
+            }
+        };
+        remember_issue(&issue);
+
         let final_issue = if task.front.status.is_terminal() {
             match client.update_issue(
                 &repo,
@@ -1325,6 +1340,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                 Ok(closed) => {
                     set_baseline(&mut task, &closed);
                     persist_task(board, &task, &format!("orbit: github create {}", task.id))?;
+                    remember_issue(&closed);
                     closed
                 }
                 Err(error) => {
@@ -1396,10 +1412,12 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
     } else {
         format!("Previewed {count} Task(s); nothing was written. Apply with --apply.")
     };
-    Ok(crate::output::CommandOutput::new(
-        data,
-        format!("{summary}\n{}", human.join("\n")),
-    ))
+    let mut output =
+        crate::output::CommandOutput::new(data, format!("{summary}\n{}", human.join("\n")));
+    for warning in warnings {
+        output = output.with_warning(warning);
+    }
+    Ok(output)
 }
 
 fn format_create_preview(task: &Task, repository: &str, issue_state: &str) -> String {

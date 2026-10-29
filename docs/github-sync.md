@@ -252,6 +252,7 @@ orbit github repo list
 - Full mode includes Task `area` and `verification` values as organization Issue Fields when configured with `orbit github setup`. Basic mode rejects Tasks with those values instead of dropping them.
 - A repository is inferred only when exactly one repository is available. On a Workspace Board, run `orbit workspace refresh`; the included repository catalog is used. On a repository Board, link repositories with `orbit github repo link`. Pass `--repo OWNER/REPO` when the destination is ambiguous.
 - GitHub creates each Issue before Orbit persists the stable `owner/repo#number` link and sync baseline. Batch output reports each success or failure. If a Task already has a link, retry is refused and directs you to `orbit github sync`; this prevents a second Issue from being created.
+- On a Workspace Board, a successful apply also upserts the new Issue into `<workspace>/.orbit/cache/issues.json`. `orbit doctor` and `orbit workspace issues list --linked` recognize the link immediately without `orbit workspace issues refresh`. The upsert leaves `last_refreshed_at` unchanged; refresh remains the source of truth for catalog completeness.
 
 Preview and apply examples:
 

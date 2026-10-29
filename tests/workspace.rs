@@ -184,12 +184,39 @@ fn refresh_discovers_direct_github_children_and_reports_repository_states() {
 fn github_create_infers_the_single_included_workspace_repository() {
     let repo = TestRepo::new();
     let (_workspace_dir, workspace) = init_workspace(&repo);
+    let board_config = workspace.join(".orbit/board/config.toml");
+    let mut config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&board_config).unwrap()).unwrap();
+    let fields = config
+        .as_table_mut()
+        .unwrap()
+        .get_mut("github")
+        .unwrap()
+        .as_table_mut()
+        .unwrap()
+        .get_mut("issue_fields")
+        .unwrap()
+        .as_table_mut()
+        .unwrap();
+    fields.insert(
+        "area_id".to_string(),
+        toml::Value::String("AREA_ID".to_string()),
+    );
+    fields.insert(
+        "verification_id".to_string(),
+        toml::Value::String("VERIFICATION_ID".to_string()),
+    );
+    std::fs::write(&board_config, toml::to_string(&config).unwrap()).unwrap();
     child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
     let github_fixture = repo.home().join("github.json");
     std::fs::write(
         &github_fixture,
         json!({
             "repositories": { "acme/api": { "owner_type": "Organization" } },
+            "org_fields": {
+                "acme/Area": "AREA_ID",
+                "acme/Verification": "VERIFICATION_ID"
+            },
             "issues": {}
         })
         .to_string(),
@@ -217,6 +244,28 @@ fn github_create_infers_the_single_included_workspace_repository() {
     assert_eq!(result["data"]["tasks"][0]["success"], true);
     let task = repo.ok_json_in(&workspace, &["show", id, "--json"]);
     assert_eq!(task["data"]["github"]["repo"], "acme/api");
+
+    let (status, linked) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "list", "--linked"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{linked}");
+    assert_eq!(linked["data"]["count"], 1, "{linked}");
+    assert_eq!(linked["data"]["issues"][0]["identity"], "acme/api#1");
+
+    let (status, doctor) = run_workspace(&repo, &workspace, &["doctor"], &github_fixture);
+    assert!(status == 0 || status == 1, "{doctor}");
+    assert_eq!(doctor["data"]["healthy"], true, "{doctor}");
+    assert!(
+        !doctor["data"]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "GITHUB_ORPHAN_LINK"),
+        "{doctor}"
+    );
 }
 
 #[test]

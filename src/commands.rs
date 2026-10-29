@@ -1,4 +1,4 @@
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::Utc;
 use clap::ValueEnum;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ use crate::migrate::{self, Plan};
 use crate::setup::COMPLETION_LINE;
 use crate::slug;
 use crate::task::{self, Status, Task, TaskArea, TaskFrontmatter, TaskType};
-use crate::transition::{CheckpointUpdate, ClaimGate, FieldUpdate, Outcome, TransitionError};
+use crate::transition::{CheckpointUpdate, FieldUpdate};
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     let Cli { json, dir, command } = cli;
@@ -130,33 +130,32 @@ fn with_board<F>(dir: Option<&Path>, exclusive: bool, f: F) -> Result<crate::out
 where
     F: FnOnce(&Board) -> Result<crate::output::CommandOutput>,
 {
-    let board = Board::discover(dir)?;
-    let _lock = if exclusive {
-        board.lock_exclusive()?
+    let mode = if exclusive {
+        crate::board::AccessMode::Write
     } else {
-        board.lock_shared()?
+        crate::board::AccessMode::Read
     };
-    let mut output = f(&board)?;
-    output.warnings.extend(board.warnings.iter().cloned());
-    Ok(output)
+    with_board_access(dir, mode, f)
 }
 
-/// Resolve and read a Board without `Board::discover`'s orphan-worktree repair.
-/// Read-only diagnostics must not repair storage as a side effect of discovery.
 fn with_board_read_only<F>(dir: Option<&Path>, f: F) -> Result<crate::output::CommandOutput>
 where
     F: FnOnce(&Board) -> Result<crate::output::CommandOutput>,
 {
-    let discovery = Board::discovery(dir);
-    if let Some(error) = discovery.error {
-        return Err(error);
-    }
-    let Some(root) = discovery.root else {
-        return Err(OrbitError::board_not_found());
-    };
-    let board = Board::at_root(root, discovery.warnings)?;
-    let _lock = board.lock_shared()?;
-    let mut output = f(&board)?;
+    with_board_access(dir, crate::board::AccessMode::Inspect, f)
+}
+
+fn with_board_access<F>(
+    dir: Option<&Path>,
+    mode: crate::board::AccessMode,
+    f: F,
+) -> Result<crate::output::CommandOutput>
+where
+    F: FnOnce(&Board) -> Result<crate::output::CommandOutput>,
+{
+    let access = crate::board::BoardAccess::open(dir, mode)?;
+    let board = access.board();
+    let mut output = f(board)?;
     output.warnings.extend(board.warnings.iter().cloned());
     Ok(output)
 }
@@ -1268,7 +1267,7 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
 }
 
 fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOutput> {
-    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
     if let Some(parent) = args.parent.as_deref() {
@@ -1302,27 +1301,22 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         }
 
         let id = ready[0].id.clone();
-        claim_task(
-            &mut graph,
+        let result = crate::mutation::execute(
+            board,
+            graph,
             &id,
-            &agent,
-            false,
-            board.config.board.lease_minutes,
+            crate::mutation::Lifecycle::Claim {
+                agent: &agent,
+                steal: false,
+            },
+            Utc::now(),
         )?;
-        let task = graph.get(&id)?.clone();
-        write_task(board, &task)?;
-
-        let lease = task
+        let lease = result
+            .task
             .lease_until()
             .map(|until| until.to_rfc3339())
             .unwrap_or_default();
-        let mut output = task_output(
-            board,
-            &graph,
-            &task,
-            format!("claimed {id} by {agent} until {lease}"),
-            &format!("orbit: claim {id}"),
-        )?;
+        let mut output = mutation_output(result, format!("claimed {id} by {agent} until {lease}"));
         output.meta = Some(json!({ "claimed": true }));
         return Ok(output);
     }
@@ -1408,114 +1402,102 @@ fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::CommandOutpu
     .with_meta(json!({ "count": count })))
 }
 
-fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output::CommandOutput> {
-    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let agent = resolve_agent(args.by)?;
-
-    claim_task(
-        &mut graph,
-        &args.id,
-        &agent,
-        args.steal,
-        board.config.board.lease_minutes,
-    )?;
-    let task = graph.get(&args.id)?.clone();
-    write_task(board, &task)?;
-
-    let lease = task
-        .lease_until()
-        .map(|until| until.to_rfc3339())
-        .unwrap_or_default();
-    task_output(
-        board,
-        &graph,
-        &task,
-        format!("claimed {} by {agent} until {lease}", args.id),
-        &format!("orbit: claim {}", args.id),
-    )
+fn mutation_output(
+    result: crate::mutation::MutationResult,
+    human: String,
+) -> crate::output::CommandOutput {
+    let mut output =
+        crate::output::CommandOutput::new(graph::task_detail(&result.graph, &result.task), human);
+    output.warnings = result.warnings;
+    output
 }
 
-/// Applies one Task transition and returns its result with the updated Task.
-fn transition<T>(
-    graph: &mut Graph,
-    id: &str,
-    apply: impl FnOnce(&mut Task) -> std::result::Result<T, TransitionError>,
-) -> Result<(T, Task)> {
-    let task = graph.get_mut(id)?;
-    let result = apply(task)?;
-    Ok((result, task.clone()))
+fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output::CommandOutput> {
+    let graph = Graph::load(board, LoadMode::Strict)?.0;
+    let agent = resolve_agent(args.by)?;
+    let result = crate::mutation::execute(
+        board,
+        graph,
+        &args.id,
+        crate::mutation::Lifecycle::Claim {
+            agent: &agent,
+            steal: args.steal,
+        },
+        Utc::now(),
+    )?;
+    let lease = result
+        .task
+        .lease_until()
+        .map(|value| value.to_rfc3339())
+        .unwrap_or_default();
+    Ok(mutation_output(
+        result,
+        format!("claimed {} by {agent} until {lease}", args.id),
+    ))
 }
 
 fn cmd_release(board: &Board, args: ReleaseArgs) -> Result<crate::output::CommandOutput> {
-    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let graph = Graph::load(board, LoadMode::Strict)?.0;
     let caller = optional_agent(args.by);
-
-    let (outcome, task) = transition(&mut graph, &args.id, |task| {
-        task.release(caller.as_deref(), args.force, Utc::now())
-    })?;
-    if outcome == Outcome::Unchanged {
+    let result = crate::mutation::execute(
+        board,
+        graph,
+        &args.id,
+        crate::mutation::Lifecycle::Release {
+            caller: caller.as_deref(),
+            force: args.force,
+        },
+        Utc::now(),
+    )?;
+    if !result.changed {
         return Ok(crate::output::CommandOutput::new(
-            json!({ "id": args.id, "changed": false }),
+            json!({"id": args.id, "changed": false}),
             format!("{} was not claimed", args.id),
         ));
     }
-
-    write_task(board, &task)?;
-
-    task_output(
-        board,
-        &graph,
-        &task,
-        format!("released {}", args.id),
-        &format!("orbit: release {}", args.id),
-    )
+    Ok(mutation_output(result, format!("released {}", args.id)))
 }
 
 fn cmd_heartbeat(board: &Board, args: HeartbeatArgs) -> Result<crate::output::CommandOutput> {
-    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let graph = Graph::load(board, LoadMode::Strict)?.0;
     let agent = resolve_agent(args.by)?;
-
-    let (lease_until, task) = transition(&mut graph, &args.id, |task| {
-        task.heartbeat(
-            &agent,
-            ChronoDuration::minutes(board.config.board.lease_minutes),
-            Utc::now(),
-        )
-    })?;
-    write_task(board, &task)?;
-
+    let result = crate::mutation::execute(
+        board,
+        graph,
+        &args.id,
+        crate::mutation::Lifecycle::Heartbeat { agent: &agent },
+        Utc::now(),
+    )?;
+    let lease = result.task.lease_until().expect("heartbeat sets lease");
     Ok(crate::output::CommandOutput::new(
-        json!({ "id": args.id, "lease_until": lease_until }),
-        format!(
-            "heartbeat {} extended to {}",
-            args.id,
-            lease_until.to_rfc3339()
-        ),
+        json!({"id": args.id, "lease_until": lease}),
+        format!("heartbeat {} extended to {}", args.id, lease.to_rfc3339()),
     )
-    .with_meta(json!({ "committed": false })))
+    .with_meta(json!({"committed": false})))
 }
 
 fn cmd_checkpoint(board: &Board, args: CheckpointArgs) -> Result<crate::output::CommandOutput> {
-    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let graph = Graph::load(board, LoadMode::Strict)?.0;
     let agent = resolve_agent(args.by)?;
     let update = CheckpointUpdate {
         progress: args.progress,
         next: checkpoint_field(args.next, args.clear_next),
         blocker: checkpoint_field(args.blocker, args.clear_blocker),
     };
-
-    let (_, task) = transition(&mut graph, &args.id, |task| {
-        task.record_checkpoint(&agent, update, Utc::now())
-    })?;
-    write_task(board, &task)?;
-
-    task_output(
+    let result = crate::mutation::execute(
         board,
-        &graph,
-        &task,
+        graph,
+        &args.id,
+        crate::mutation::Lifecycle::Checkpoint {
+            agent: &agent,
+            update,
+        },
+        Utc::now(),
+    )?;
+    Ok(mutation_output(
+        result,
         format!("checkpoint recorded for {} by {agent}", args.id),
-        &format!("orbit: checkpoint {}", args.id),
-    )
+    ))
 }
 
 fn checkpoint_field(value: Option<String>, clear: bool) -> FieldUpdate<String> {
@@ -1529,209 +1511,74 @@ fn checkpoint_field(value: Option<String>, clear: bool) -> FieldUpdate<String> {
 }
 
 fn cmd_done(board: &Board, args: DoneArgs) -> Result<crate::output::CommandOutput> {
-    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let caller = optional_agent(args.by.clone());
-    let comment = resolve_optional_comment(args.comment, args.comment_file)?;
-    let author = match &comment {
-        Some(_) => Some(resolve_agent(args.by.clone())?),
-        None => None,
-    };
-    let now = Utc::now();
-
-    let open_subtasks = graph.open_children(&args.id);
-    if !open_subtasks.is_empty() && !args.force {
-        return Err(subtasks_open_error(&args.id, &open_subtasks));
-    }
-    let blocking = graph.blocking_ids(graph.get(&args.id)?);
-    if !blocking.is_empty() {
-        return Err(TransitionError::DependencyBlocked {
-            id: args.id.clone(),
-            blocking,
-        }
-        .into());
-    }
-    let cancelled_subtasks = if open_subtasks.is_empty() {
-        Vec::new()
-    } else {
-        cancel_open_subtasks(board, &mut graph, &args.id, caller.as_deref(), now)?
-    };
-
-    let outcome =
-        graph
-            .get_mut(&args.id)?
-            .complete(caller.as_deref(), args.force, &blocking, &[], now)?;
-
-    let comment = author.zip(comment);
-    let mut output = settle_terminal(
+    terminal_command(
         board,
-        &mut graph,
-        &args.id,
-        outcome,
-        comment,
-        now,
-        TerminalKind::Done,
-    )?;
-    if !cancelled_subtasks.is_empty() {
-        output.warnings.push(format!(
-            "cancelled open SubTasks: {}",
-            cancelled_subtasks.join(", ")
-        ));
-    }
-    Ok(output)
+        args.id,
+        args.by,
+        args.force,
+        args.comment,
+        args.comment_file,
+        crate::mutation::TerminalKind::Done,
+    )
 }
 
 fn cmd_cancel(board: &Board, args: CancelArgs) -> Result<crate::output::CommandOutput> {
-    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let caller = optional_agent(args.by.clone());
-    let comment = resolve_optional_comment(args.comment, args.comment_file)?;
-    let author = match &comment {
-        Some(_) => Some(resolve_agent(args.by.clone())?),
-        None => None,
-    };
-    let now = Utc::now();
-
-    let open_subtasks = graph.open_children(&args.id);
-    if !open_subtasks.is_empty() && !args.force {
-        return Err(subtasks_open_error(&args.id, &open_subtasks));
-    }
-    let cancelled_subtasks = if open_subtasks.is_empty() {
-        Vec::new()
-    } else {
-        cancel_open_subtasks(board, &mut graph, &args.id, caller.as_deref(), now)?
-    };
-
-    let outcome = graph
-        .get_mut(&args.id)?
-        .cancel(caller.as_deref(), args.force, now)?;
-
-    let comment = author.zip(comment);
-    let mut output = settle_terminal(
+    terminal_command(
         board,
-        &mut graph,
-        &args.id,
-        outcome,
-        comment,
-        now,
-        TerminalKind::Cancelled,
+        args.id,
+        args.by,
+        args.force,
+        args.comment,
+        args.comment_file,
+        crate::mutation::TerminalKind::Cancelled,
+    )
+}
+
+fn terminal_command(
+    board: &Board,
+    id: String,
+    by: Option<String>,
+    force: bool,
+    comment: Option<String>,
+    comment_file: Option<std::path::PathBuf>,
+    kind: crate::mutation::TerminalKind,
+) -> Result<crate::output::CommandOutput> {
+    let comment = resolve_optional_comment(comment, comment_file)?;
+    let author = if comment.is_some() {
+        Some(resolve_agent(by.clone())?)
+    } else {
+        None
+    };
+    let result = crate::mutation::finish(
+        board,
+        &id,
+        optional_agent(by).as_deref(),
+        force,
+        author.zip(comment),
+        kind,
+        Utc::now(),
     )?;
-    if !cancelled_subtasks.is_empty() {
-        output.warnings.push(format!(
-            "cancelled open SubTasks: {}",
-            cancelled_subtasks.join(", ")
-        ));
+    let past = kind.past();
+    let human = if !result.changed && result.comments.is_none() {
+        format!("{id} is already {past}")
+    } else if result.comments.is_some() {
+        format!("{past} {id} (comment added)")
+    } else {
+        format!("{past} {id}")
+    };
+    let data = match &result.comments {
+        Some(comments) => graph::task_detail_with_comments(&result.graph, &result.task, comments),
+        None => graph::task_detail(&result.graph, &result.task),
+    };
+    let mut output = crate::output::CommandOutput::new(data, human);
+    if !result.changed && result.comments.is_none() {
+        output.meta = Some(json!({"changed": false}));
+    }
+    output.warnings = result.warnings;
+    if result.comment_failed {
+        output = output.with_exit_code(1);
     }
     Ok(output)
-}
-
-#[derive(Clone, Copy)]
-enum TerminalKind {
-    Done,
-    Cancelled,
-}
-
-impl TerminalKind {
-    /// Human wording, e.g. "cancelled".
-    fn past(self) -> &'static str {
-        match self {
-            Self::Done => "done",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    /// Commit verb, e.g. "cancel".
-    fn verb(self) -> &'static str {
-        match self {
-            Self::Done => "done",
-            Self::Cancelled => "cancel",
-        }
-    }
-}
-
-/// Persists a done/cancel transition and its optional `(author, body)` comment.
-fn settle_terminal(
-    board: &Board,
-    graph: &mut Graph,
-    id: &str,
-    outcome: Outcome,
-    comment: Option<(String, String)>,
-    now: chrono::DateTime<Utc>,
-    kind: TerminalKind,
-) -> Result<crate::output::CommandOutput> {
-    let (past, verb) = (kind.past(), kind.verb());
-    let message = format!("orbit: {verb} {id}");
-    match (outcome, comment) {
-        (Outcome::Unchanged, None) => Ok(crate::output::CommandOutput::new(
-            graph::task_detail(graph, graph.get(id)?),
-            format!("{id} is already {past}"),
-        )
-        .with_meta(json!({ "changed": false }))),
-        (Outcome::Unchanged, Some((author, body))) => {
-            let comments = add_comment(board, id, &author, body, now)?;
-            let task = {
-                let task = graph.get_mut(id)?;
-                task.touch(now);
-                task.clone()
-            };
-            write_task(board, &task)?;
-            task_output_with_comments(
-                board,
-                graph,
-                &task,
-                &comments,
-                format!("{past} {id} (comment added)"),
-                &message,
-            )
-        }
-        (Outcome::Changed, comment) => {
-            let task = graph.get(id)?.clone();
-            write_task(board, &task)?;
-            let Some((author, body)) = comment else {
-                return task_output(board, graph, &task, format!("{past} {id}"), &message);
-            };
-            match add_comment(board, id, &author, body, now) {
-                Ok(comments) => task_output_with_comments(
-                    board,
-                    graph,
-                    &task,
-                    &comments,
-                    format!("{past} {id} (comment added)"),
-                    &message,
-                ),
-                Err(error) => {
-                    let output =
-                        task_output(board, graph, &task, format!("{past} {id}"), &message)?;
-                    Ok(output
-                        .with_warning(format!("COMMENT_FAILED: {}", error.message))
-                        .with_exit_code(1))
-                }
-            }
-        }
-    }
-}
-
-fn cancel_open_subtasks(
-    board: &Board,
-    graph: &mut Graph,
-    parent_id: &str,
-    caller: Option<&str>,
-    now: chrono::DateTime<Utc>,
-) -> Result<Vec<String>> {
-    let ids = graph.open_children(parent_id);
-    for id in &ids {
-        let task = graph.get_mut(id)?;
-        task.cancel(caller, true, now)?;
-        let task = task.clone();
-        write_task(board, &task)?;
-    }
-    Ok(ids)
-}
-
-fn subtasks_open_error(id: &str, subtasks: &[String]) -> OrbitError {
-    OrbitError::new(
-        code::SUBTASKS_OPEN,
-        format!("{id} has open SubTasks: {}", subtasks.join(", ")),
-    )
-    .with_details(json!({ "task": id, "subtasks": subtasks }))
 }
 
 fn subtasks_exist_error(id: &str, subtasks: &[String]) -> OrbitError {
@@ -1743,65 +1590,8 @@ fn subtasks_exist_error(id: &str, subtasks: &[String]) -> OrbitError {
 }
 
 fn cmd_reopen(board: &Board, args: ReopenArgs) -> Result<crate::output::CommandOutput> {
-    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let now = Utc::now();
-
-    let task = graph.get(&args.id)?.clone();
-    let child_dependents: Vec<String> = graph
-        .dependents(&args.id)
-        .iter()
-        .filter(|dependent| dependent.front.status == Status::Done)
-        .map(|dependent| dependent.id.clone())
-        .collect();
-    let mut probe = task.clone();
-    probe.reopen(args.force, &child_dependents, now)?;
-
-    let mut reopened_parent = None;
-    if let Some(parent_id) = task.front.parent.clone() {
-        let parent_status = graph.get(&parent_id)?.front.status;
-        match parent_status {
-            Status::Done => {
-                let done_dependents: Vec<String> = graph
-                    .dependents(&parent_id)
-                    .iter()
-                    .filter(|dependent| dependent.front.status == Status::Done)
-                    .map(|dependent| dependent.id.clone())
-                    .collect();
-                graph
-                    .get_mut(&parent_id)?
-                    .reopen(args.force, &done_dependents, now)?;
-                let parent = graph.get(&parent_id)?.clone();
-                write_task(board, &parent)?;
-                reopened_parent = Some(parent_id);
-            }
-            Status::Cancelled => {
-                return Err(invalid_transition(format!(
-                    "{} is a SubTask of cancelled {parent_id}; reopen the parent first",
-                    args.id
-                )));
-            }
-            _ => {}
-        }
-    }
-
-    let task = {
-        let task = graph.get_mut(&args.id)?;
-        task.reopen(args.force, &child_dependents, now)?;
-        task.clone()
-    };
-    write_task(board, &task)?;
-
-    let mut output = task_output(
-        board,
-        &graph,
-        &task,
-        format!("reopened {}", args.id),
-        &format!("orbit: reopen {}", args.id),
-    )?;
-    if let Some(parent) = reopened_parent {
-        output.warnings.push(format!("reopened parent {parent}"));
-    }
-    Ok(output)
+    let result = crate::mutation::reopen(board, &args.id, args.force, Utc::now())?;
+    Ok(mutation_output(result, format!("reopened {}", args.id)))
 }
 
 fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandOutput> {
@@ -1954,8 +1744,8 @@ fn mutate_labels(
             labels.join(", ")
         ),
     );
-    if let CommitOutcome::Failed(message) = outcome {
-        output = output.with_warning(format!("COMMIT_FAILED: {message}"));
+    if let Some(warning) = crate::mutation::commit_warning(outcome) {
+        output = output.with_warning(warning);
     }
     Ok(output)
 }
@@ -2027,8 +1817,8 @@ fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output:
         }),
         format!("commented {} as {author}", args.id),
     );
-    if let CommitOutcome::Failed(message) = outcome {
-        output = output.with_warning(format!("COMMIT_FAILED: {message}"));
+    if let Some(warning) = crate::mutation::commit_warning(outcome) {
+        output = output.with_warning(warning);
     }
     Ok(output)
 }
@@ -2203,8 +1993,8 @@ fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::output::CommandO
         }),
         human,
     );
-    if let CommitOutcome::Failed(message) = outcome {
-        output.warnings.push(format!("COMMIT_FAILED: {message}"));
+    if let Some(warning) = crate::mutation::commit_warning(outcome) {
+        output.warnings.push(warning);
     }
     Ok(output)
 }
@@ -2443,32 +2233,8 @@ fn cmd_sync(board: &Board) -> Result<crate::output::CommandOutput> {
     }
 }
 
-fn claim_task(
-    graph: &mut Graph,
-    id: &str,
-    agent: &str,
-    steal: bool,
-    lease_minutes: i64,
-) -> Result<()> {
-    let task = graph.get(id)?;
-    let gate = ClaimGate {
-        hold_labels: graph.hold_labels(task),
-        blocking: graph.blocking_ids(task),
-        open_subtasks: graph.open_children(id),
-    };
-    graph.get_mut(id)?.claim(
-        agent,
-        steal,
-        ChronoDuration::minutes(lease_minutes),
-        &gate,
-        Utc::now(),
-    )?;
-    Ok(())
-}
-
 fn write_task(board: &Board, task: &Task) -> Result<()> {
-    let rendered = task::render_task(task)?;
-    atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)
+    crate::mutation::write_task(board, task)
 }
 
 fn task_output(
@@ -2480,27 +2246,8 @@ fn task_output(
 ) -> Result<crate::output::CommandOutput> {
     let outcome = board.commit(message, false)?;
     let mut output = crate::output::CommandOutput::new(graph::task_detail(graph, task), human);
-    if let CommitOutcome::Failed(message) = outcome {
-        output = output.with_warning(format!("COMMIT_FAILED: {message}"));
-    }
-    Ok(output)
-}
-
-fn task_output_with_comments(
-    board: &Board,
-    graph: &Graph,
-    task: &Task,
-    comments: &[Comment],
-    human: String,
-    message: &str,
-) -> Result<crate::output::CommandOutput> {
-    let outcome = board.commit(message, false)?;
-    let mut output = crate::output::CommandOutput::new(
-        graph::task_detail_with_comments(graph, task, comments),
-        human,
-    );
-    if let CommitOutcome::Failed(message) = outcome {
-        output = output.with_warning(format!("COMMIT_FAILED: {message}"));
+    if let Some(warning) = crate::mutation::commit_warning(outcome) {
+        output = output.with_warning(warning);
     }
     Ok(output)
 }

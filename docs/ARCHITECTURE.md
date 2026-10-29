@@ -144,6 +144,27 @@ flowchart LR
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
 | Setup | `src/setup.rs` | Detect harnesses and write managed instruction files, MCP entries, and the Claude SessionStart hook. |
 
+### Scoped access and execution modules
+
+`board::BoardAccess::open` keeps discovery policy and the Board lock in one scope.
+`Read` retains normal orphan-worktree recovery and takes a shared lock; `Write`
+takes an exclusive lock; `Inspect` resolves without recovery and takes a shared
+lock. Dropping the access value releases the lock. Command handlers keep the
+scope alive through execution and append its discovery warnings to the result.
+
+`mutation` owns lifecycle execution and shared Task persistence. It returns
+structured mutation outcomes for presentation by command handlers, centralizes
+commit-failure warnings, and preserves the heartbeat policy of publishing without
+an immediate commit. Terminal execution includes graph checks, forced SubTask
+cancellation, optional comments, and commit outcomes. Publication remains atomic
+per file; multi-file operations do not promise rollback.
+
+`github::execution::synchronize` accepts an injected `GitHubClient` and a sync
+request and returns a typed report. It owns preflight, mode restrictions, conflict
+choices, relationship planning, application, and baseline updates. The CLI owns
+argument conversion and human/JSON presentation. Both execution modules run
+inside the caller's Board access scope; they do not acquire a second lock.
+
 ### Human output and JSON
 
 Board commands have two output paths. Human output is for terminals: `list` renders an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `ISSUE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns, while `ready`, `tree`, and `prime` use compact summary lines. `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Table widths follow the current data, labels are comma-joined, and titles longer than 60 characters are shortened. Root Tasks are ordered by priority, then creation time and ID; each Parent Task is followed by its SubTasks, also ordered by priority. `--group` renders one outlined table with a banner for each Parent Task, its SubTasks underneath, and a final `No parent` section.

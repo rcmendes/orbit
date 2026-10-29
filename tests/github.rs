@@ -2235,3 +2235,100 @@ fn github_status_and_doctor_report_the_same_missing_scopes_in_each_mode() {
         );
     }
 }
+
+#[test]
+fn injected_sync_execution_previews_then_pulls_without_cli_transport_selection() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::github::client::FixtureClient;
+    use orbit_tracker::github::execution::{SyncRequest, synchronize};
+    use orbit_tracker::github::model::SyncDirection;
+
+    let repo = TestRepo::new();
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_fixture_issue_field(&fixture, "title", serde_json::json!("Remote revision"));
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let client = FixtureClient::load(&fixture).unwrap();
+    let original_task = fs::read(board.task_path(&id)).unwrap();
+    let original_fixture = fs::read(&fixture).unwrap();
+    let _lock = board.lock_exclusive().unwrap();
+    let preview = synchronize(
+        &board,
+        &client,
+        SyncRequest {
+            task: Some(&id),
+            direction: SyncDirection::Pull,
+            resolutions: &[],
+            apply: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(preview.tasks.len(), 1);
+    assert_eq!(
+        preview.tasks[0].plan.apply_title.as_deref(),
+        Some("Remote revision")
+    );
+    assert_eq!(preview.tasks[0].success, None);
+    assert_eq!(fs::read(board.task_path(&id)).unwrap(), original_task);
+    assert_eq!(fs::read(&fixture).unwrap(), original_fixture);
+    let applied = synchronize(
+        &board,
+        &client,
+        SyncRequest {
+            task: Some(&id),
+            direction: SyncDirection::Pull,
+            resolutions: &[],
+            apply: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(applied.success_count, 1);
+    assert!(applied.failures.is_empty());
+    drop(_lock);
+    let shown = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(shown["data"]["title"], "Remote revision");
+}
+
+#[test]
+fn sync_reports_commit_failure_without_losing_pulled_changes() {
+    let repo = TestRepo::new();
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_fixture_issue_field(&fixture, "title", serde_json::json!("Remote revision"));
+    let hooks = repo.path().join("failing-hooks");
+    fs::create_dir(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    repo.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    let applied = repo.ok_json_with_env(
+        &[
+            "github",
+            "sync",
+            &id,
+            "--direction",
+            "pull",
+            "--apply",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(applied["data"]["success_count"], 1);
+    assert!(
+        applied["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().starts_with("COMMIT_FAILED:"))
+    );
+    assert_eq!(
+        repo.ok_json(&["show", &id, "--json"])["data"]["title"],
+        "Remote revision"
+    );
+}

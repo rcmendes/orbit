@@ -148,3 +148,7 @@ canonical labels. Orbit remains authoritative for those linked Task fields;
 publish their changes only through explicit, conflict-safe GitHub sync.
 
 See also [`agent-brief.md`](./agent-brief.md), [`triage-labels.md`](./triage-labels.md), and [`issue-tracker.md`](./issue-tracker.md).
+
+Triage apply preserves metadata on disk if the automatic Git commit fails and
+reports `COMMIT_FAILED` in the output warnings. Run `orbit sync` to retry the
+commit; do not repeat the proposal merely to recover the commit.

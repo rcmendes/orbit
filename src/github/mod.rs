@@ -1,6 +1,7 @@
 pub mod client;
 pub mod commands;
 pub mod config;
+pub mod execution;
 pub mod fields;
 pub mod link;
 pub mod model;

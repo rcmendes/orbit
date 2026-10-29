@@ -1,22 +1,25 @@
+use super::execution::{
+    omit_issue_fields, reject_basic_metadata, repository_available, require_repository_available,
+    set_baseline,
+};
+use crate::mutation::persist_task;
 use chrono::Utc;
 use serde_json::{Value, json};
 
-use crate::atomic;
 use crate::board::Board;
 use crate::cli::{
     GitHubAdoptArgs, GitHubArgs, GitHubCommand, GitHubCreateArgs, GitHubRepoCommand,
     GitHubRepoLinkArgs, GitHubSetupArgs, GitHubSyncArgs, GitHubSyncDirection,
 };
 use crate::error::{OrbitError, Result, code};
-use crate::git::CommitOutcome;
-use crate::github::client::{CreateIssueInput, GitHubClient, UpdateIssueInput, client_from_env};
+use crate::github::client::{CreateIssueInput, UpdateIssueInput, client_from_env};
 use crate::github::fields::parse_area;
-use crate::github::link::{GitHubLink, GitHubSyncBaseline};
-use crate::github::model::{IssueSnapshot, SyncDirection, SyncPlan, SyncResolution};
+use crate::github::link::GitHubLink;
+use crate::github::model::{IssueSnapshot, SyncDirection, SyncPlan};
 use crate::github::relationships;
 use crate::github::sync::{self, OrbitSyncView, validate_orbit_metadata};
 use crate::graph::{Graph, LoadMode};
-use crate::task::{self, Task};
+use crate::task::Task;
 
 pub fn run(board: &Board, args: GitHubArgs) -> Result<crate::output::CommandOutput> {
     match args.command {
@@ -471,40 +474,6 @@ fn scope_satisfies(granted: &str, required: &str) -> bool {
 /// A repository is available when it is directly linked on a repository-local
 /// Board or included by the Workspace catalog. Workspace members need no
 /// per-repository `orbit github repo link`.
-fn repository_available(board: &Board, repository: &str) -> Result<bool> {
-    if let Some(repositories) = crate::workspace::export_repositories(board)? {
-        return Ok(repositories
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(repository)));
-    }
-    Ok(board.config.github.contains_repo(repository))
-}
-
-fn require_repository_available(board: &Board, repository: &str) -> Result<()> {
-    if repository_available(board, repository)? {
-        return Ok(());
-    }
-    let message = if board.is_workspace_board() {
-        format!(
-            "repository `{repository}` is not included in this Workspace; run `orbit workspace refresh` or include it"
-        )
-    } else {
-        format!(
-            "repository `{repository}` is not linked to this Board; run `orbit github repo link {repository}`"
-        )
-    };
-    Err(
-        OrbitError::new(code::GITHUB_REPO_NOT_LINKED, message).with_details(json!({
-            "repository": repository,
-            "remediation": if board.is_workspace_board() {
-                "run `orbit workspace refresh` or `orbit workspace include OWNER/REPO`"
-            } else {
-                "run `orbit github repo link OWNER/REPO`"
-            },
-        })),
-    )
-}
-
 pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     let github = &board.config.github;
     if !github.is_enabled() {
@@ -1142,12 +1111,16 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
     task.front.updated_at = Utc::now();
     apply_issue_to_task(&mut task, &issue, !board.config.github.mode.is_basic())?;
     validate_orbit_metadata(&task)?;
-    persist_task(board, &task, &format!("orbit: github adopt {}", task.id))?;
+    let outcome = persist_task(board, &task, &format!("orbit: github adopt {}", task.id))?;
     let human = format!("Adopted {repo}/#{number} for {}", task.id);
-    Ok(crate::output::CommandOutput::new(
+    let mut output = crate::output::CommandOutput::new(
         json!({ "task": task.id, "github": task.front.github, "issue": issue }),
         human,
-    ))
+    );
+    output
+        .warnings
+        .extend(crate::mutation::commit_warning(outcome));
+    Ok(output)
 }
 
 fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::CommandOutput> {
@@ -1306,8 +1279,13 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         task.front.github = Some(GitHubLink::new(repo.clone(), issue.number));
         task.front.updated_at = Utc::now();
         set_baseline(&mut task, &issue);
-        persist_task(board, &task, &format!("orbit: github create {}", task.id))?;
+        warnings.extend(crate::mutation::commit_warning(persist_task(
+            board,
+            &task,
+            &format!("orbit: github create {}", task.id),
+        )?));
 
+        let mut commit_warnings = Vec::new();
         let task_id = task.id.clone();
         let mut remember_issue = |issue: &IssueSnapshot| {
             if let Err(error) = crate::issue_catalog::remember_created_issue(board, &repo, issue) {
@@ -1339,7 +1317,11 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             ) {
                 Ok(closed) => {
                     set_baseline(&mut task, &closed);
-                    persist_task(board, &task, &format!("orbit: github create {}", task.id))?;
+                    commit_warnings.extend(crate::mutation::commit_warning(persist_task(
+                        board,
+                        &task,
+                        &format!("orbit: github create {}", task.id),
+                    )?));
                     remember_issue(&closed);
                     closed
                 }
@@ -1367,6 +1349,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         } else {
             issue
         };
+        warnings.append(&mut commit_warnings);
         results.push(json!({
             "task": task.id,
             "repository": repo,
@@ -1544,186 +1527,61 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
         GitHubSyncDirection::Pull => SyncDirection::Pull,
         GitHubSyncDirection::Push => SyncDirection::Push,
     };
-    let resolutions = parse_sync_resolutions(&args.resolutions)?;
     let client = client_from_env()?;
-    let graph = Graph::load(board, LoadMode::Strict)?.0;
-    let targets: Vec<String> = if let Some(task) = args.task {
-        vec![task]
-    } else {
-        graph
-            .iter()
-            .filter(|task| task.github_link().is_some())
-            .map(|task| task.id.clone())
-            .collect()
-    };
-    if targets.is_empty() {
+    let report = super::execution::synchronize(
+        board,
+        client.as_ref(),
+        super::execution::SyncRequest {
+            task: args.task.as_deref(),
+            direction,
+            resolutions: &args.resolutions,
+            apply: args.apply,
+        },
+    )?;
+    if report.tasks.is_empty() {
         return Ok(crate::output::CommandOutput::new(
             json!({ "tasks": [], "count": 0 }),
-            "No linked Tasks to sync (nothing was written).".to_string(),
+            "No linked Tasks to sync (nothing was written).",
         ));
     }
-
-    let mut prepared = Vec::new();
-    let mut human_plans = Vec::new();
-    let mut resolved_fields = std::collections::BTreeSet::new();
-    for id in &targets {
-        let task = graph.get(id)?;
-        let link = task
-            .github_link()
-            .ok_or_else(|| OrbitError::invalid_argument(format!("task {id} has no GitHub link")))?
-            .clone();
-        require_repository_available(board, &link.repo)?;
-        if board.config.github.mode.is_basic() && direction != SyncDirection::Pull {
-            reject_basic_metadata(task)?;
-        }
-        let mut issue = client.get_issue(
-            &link.repo,
-            link.number,
-            (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
-        )?;
-        if board.config.github.mode.is_basic() {
-            omit_issue_fields(&mut issue);
-        }
-        let mut plan = sync::plan_sync(OrbitSyncView { task, link: &link }, &issue, direction);
-        resolved_fields.extend(resolve_sync_conflicts(
-            &mut plan,
-            task,
-            &issue,
-            &resolutions,
-        )?);
-        let children: Vec<_> = graph
-            .iter()
-            .filter(|candidate| candidate.front.parent.as_deref() == Some(task.id.as_str()))
-            .filter_map(|candidate| {
-                candidate
-                    .github_link()
-                    .map(|child_link| (candidate.clone(), child_link.clone()))
-            })
-            .collect();
-        let dependencies: Vec<_> = task
-            .front
-            .depends_on
-            .iter()
-            .filter_map(|dependency| graph.tasks.get(dependency))
-            .filter_map(|dependency| {
-                dependency
-                    .github_link()
-                    .map(|dependency_link| (dependency.clone(), dependency_link.clone()))
-            })
-            .collect();
-        let mut relationship =
-            relationships::plan_relationship_sync(task, &link, &issue, &children, &dependencies);
-        if direction == SyncDirection::Pull {
-            relationship.changes.clear();
-        }
-        human_plans.push(format_sync_preview(task, &link, &plan, &relationship));
-        prepared.push((task.clone(), link, issue, plan, relationship));
-    }
-
-    let unused_resolutions: Vec<_> = resolutions
-        .keys()
-        .filter(|field| !resolved_fields.contains(*field))
-        .cloned()
-        .collect();
-    if !unused_resolutions.is_empty() {
-        return Err(OrbitError::invalid_argument(format!(
-            "no matching sync conflict for resolution(s): {}",
-            unused_resolutions.join(", ")
-        )));
-    }
-
-    let unresolved: Vec<_> = prepared
-        .iter()
-        .filter(|(_, _, _, plan, _)| plan.has_conflicts())
-        .map(|(task, link, _, plan, _)| {
-            json!({
-                "task": task.id,
-                "repository": link.repo,
-                "number": link.number,
-                "conflicts": plan.conflicts,
-            })
-        })
-        .collect();
-    if args.apply && !unresolved.is_empty() {
-        let first = &unresolved[0];
-        return Err(OrbitError::new(
-            code::GITHUB_ISSUE_CONFLICT,
-            "sync has unresolved field conflicts; resolve each field before applying",
-        )
-        .with_details(json!({
-            "task": first["task"],
-            "repository": first["repository"],
-            "number": first["number"],
-            "conflicts": first["conflicts"],
-            "tasks": unresolved,
-        })));
-    }
-
-    let mut plans = Vec::with_capacity(prepared.len());
-    let mut failures = Vec::new();
-    let mut successes = 0usize;
-    for (task, link, issue, plan, relationship) in prepared {
-        let mut item = json!({
-            "task": task.id,
-            "github": link,
-            "plan": plan,
-            "relationships": relationship,
-        });
-        if args.apply {
-            match apply_plan(
-                board,
-                &task,
-                &link,
-                &issue,
-                &plan,
-                &relationship,
-                client.as_ref(),
-            ) {
-                Ok(_) => {
-                    successes += 1;
-                    item["success"] = json!(true);
-                }
-                Err(error) => {
-                    let failure = json!({
-                        "task": task.id,
-                        "repository": link.repo,
-                        "number": link.number,
-                        "code": error.code,
-                        "message": error.message,
-                        "retry_safe": true,
-                    });
-                    failures.push(failure.clone());
-                    item["success"] = json!(false);
-                    item["failure"] = failure;
-                }
-            }
-        }
-        plans.push(item);
-    }
-
     let human = if args.apply {
         format!(
-            "Applied GitHub sync for {successes}/{} task(s); {} failed and can be retried",
-            targets.len(),
-            failures.len()
+            "Applied GitHub sync for {}/{} task(s); {} failed and can be retried",
+            report.success_count,
+            report.tasks.len(),
+            report.failures.len()
         )
     } else {
         format!(
             "GitHub sync preview (dry run; nothing was written)\n{}",
-            human_plans.join("\n")
+            report
+                .tasks
+                .iter()
+                .map(|item| format_sync_preview(
+                    &item.task,
+                    &item.github,
+                    &item.plan,
+                    &item.relationships
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
         )
     };
-    Ok(crate::output::CommandOutput::new(
+    let plans: Vec<_> = report.tasks.iter().map(|item| {
+        let mut value = json!({ "task": item.task.id, "github": item.github, "plan": item.plan, "relationships": item.relationships });
+        if let Some(success) = item.success { value["success"] = json!(success); }
+        if let Some(failure) = &item.failure { value["failure"] = failure.clone(); }
+        value
+    }).collect();
+    let mut output = crate::output::CommandOutput::new(
         json!({
-            "tasks": plans,
-            "count": plans.len(),
-            "apply": args.apply,
-            "success_count": successes,
-            "failure_count": failures.len(),
-            "failures": failures,
+            "tasks": plans, "count": plans.len(), "apply": args.apply,
+            "success_count": report.success_count, "failure_count": report.failures.len(), "failures": report.failures,
         }),
         human,
-    ))
+    );
+    output.warnings = report.warnings;
+    Ok(output)
 }
 
 fn format_sync_preview(
@@ -1796,101 +1654,6 @@ fn format_sync_preview(
     output
 }
 
-fn parse_sync_resolutions(
-    values: &[String],
-) -> Result<std::collections::BTreeMap<String, SyncResolution>> {
-    let mut resolutions = std::collections::BTreeMap::new();
-    for value in values {
-        let (field, choice) = value.split_once('=').ok_or_else(|| {
-            OrbitError::invalid_argument(format!(
-                "invalid conflict resolution `{value}`; expected FIELD=orbit or FIELD=github"
-            ))
-        })?;
-        let resolution = match choice {
-            "orbit" => SyncResolution::PreferOrbit,
-            "github" => SyncResolution::PreferGitHub,
-            _ => {
-                return Err(OrbitError::invalid_argument(format!(
-                    "invalid conflict resolution `{value}`; choose `orbit` or `github`"
-                )));
-            }
-        };
-        if !matches!(
-            field,
-            "title" | "body" | "status" | "labels" | "area" | "verification"
-        ) {
-            return Err(OrbitError::invalid_argument(format!(
-                "unknown sync conflict field `{field}`"
-            )));
-        }
-        if resolutions.insert(field.to_string(), resolution).is_some() {
-            return Err(OrbitError::invalid_argument(format!(
-                "sync field `{field}` has more than one resolution"
-            )));
-        }
-    }
-    Ok(resolutions)
-}
-
-fn resolve_sync_conflicts(
-    plan: &mut SyncPlan,
-    task: &Task,
-    issue: &IssueSnapshot,
-    resolutions: &std::collections::BTreeMap<String, SyncResolution>,
-) -> Result<std::collections::BTreeSet<String>> {
-    let conflicted: std::collections::BTreeSet<_> = plan
-        .conflicts
-        .iter()
-        .map(|conflict| conflict.field.clone())
-        .collect();
-    let mut resolved = std::collections::BTreeSet::new();
-    for (field, resolution) in resolutions {
-        if !conflicted.contains(field) {
-            continue;
-        }
-        resolved.insert(field.clone());
-        match (field.as_str(), resolution) {
-            ("title", SyncResolution::PreferOrbit) => {
-                plan.push_title = Some(task.front.title.clone())
-            }
-            ("title", SyncResolution::PreferGitHub) => plan.apply_title = Some(issue.title.clone()),
-            ("body", SyncResolution::PreferOrbit) => plan.push_body = Some(task.body.clone()),
-            ("body", SyncResolution::PreferGitHub) => plan.apply_body = Some(issue.body.clone()),
-            ("status", SyncResolution::PreferOrbit) => {
-                plan.push_state = Some(crate::github::status::issue_state_from_status(
-                    task.front.status,
-                ));
-            }
-            ("status", SyncResolution::PreferGitHub) => {
-                plan.apply_status = Some(crate::github::status::status_from_issue(
-                    issue.state,
-                    &issue.labels,
-                ));
-            }
-            ("labels", SyncResolution::PreferOrbit) => {
-                plan.push_labels = Some(task.front.labels.clone())
-            }
-            ("labels", SyncResolution::PreferGitHub) => {
-                plan.apply_labels = Some(issue.labels.clone())
-            }
-            ("area", SyncResolution::PreferOrbit) => {
-                plan.push_area = Some(task.front.area.map(|area| area.as_str().to_string()));
-            }
-            ("area", SyncResolution::PreferGitHub) => plan.apply_area = Some(issue.area.clone()),
-            ("verification", SyncResolution::PreferOrbit) => {
-                plan.push_verification = Some(task.front.verification.clone());
-            }
-            ("verification", SyncResolution::PreferGitHub) => {
-                plan.apply_verification = Some(issue.verification.clone());
-            }
-            (_, SyncResolution::Skip) => {}
-            _ => unreachable!("sync resolution fields are validated when parsed"),
-        }
-        plan.conflicts.retain(|conflict| conflict.field != *field);
-    }
-    Ok(resolved)
-}
-
 fn push_preview_field<T: serde::Serialize>(
     fields: &mut Vec<String>,
     name: &str,
@@ -1918,88 +1681,6 @@ fn format_preview_value(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "<unprintable>".to_string())
 }
 
-fn apply_plan(
-    board: &Board,
-    task: &Task,
-    link: &GitHubLink,
-    issue: &IssueSnapshot,
-    plan: &SyncPlan,
-    relationship: &relationships::RelationshipReport,
-    client: &dyn GitHubClient,
-) -> Result<()> {
-    let mut task = task.clone();
-    if let Some(title) = &plan.apply_title {
-        task.front.title = title.clone();
-    }
-    if let Some(body) = &plan.apply_body {
-        task.body = body.clone();
-    }
-    if let Some(status) = plan.apply_status {
-        task.front.status = status;
-    }
-    if let Some(labels) = &plan.apply_labels {
-        task.front.labels = labels.clone();
-    }
-    if let Some(area) = &plan.apply_area {
-        task.front.area = area.as_ref().map(|value| parse_area(value)).transpose()?;
-    }
-    if let Some(verification) = &plan.apply_verification {
-        task.front.verification = verification.clone();
-    }
-    task.front.updated_at = Utc::now();
-
-    if plan.push_title.is_some()
-        || plan.push_body.is_some()
-        || plan.push_labels.is_some()
-        || plan.push_area.is_some()
-        || plan.push_verification.is_some()
-        || plan.push_state.is_some()
-    {
-        let metadata_update = plan.push_area.is_some() || plan.push_verification.is_some();
-        client.update_issue(
-            &link.repo,
-            link.number,
-            &UpdateIssueInput {
-                title: plan.push_title.clone(),
-                body: plan.push_body.clone(),
-                state: plan.push_state,
-                labels: plan.push_labels.clone(),
-                area: metadata_update
-                    .then(|| plan.push_area.clone().unwrap_or_else(|| issue.area.clone())),
-                verification: metadata_update.then(|| {
-                    plan.push_verification
-                        .clone()
-                        .unwrap_or_else(|| issue.verification.clone())
-                }),
-                organization: board.config.github.organization.clone(),
-                issue_fields: (!board.config.github.mode.is_basic())
-                    .then_some(board.config.github.issue_fields.clone()),
-            },
-        )?;
-    }
-
-    let removals = relationship
-        .changes
-        .iter()
-        .filter(|change| change.action == "remove")
-        .cloned()
-        .collect::<Vec<_>>();
-    if plan.direction != SyncDirection::Pull
-        && (!relationship.supported.is_empty() || !removals.is_empty())
-    {
-        client.update_relationships(&link.repo, link.number, &relationship.supported, &removals)?;
-    }
-
-    let refreshed = client.get_issue(
-        &link.repo,
-        link.number,
-        (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
-    )?;
-    set_baseline(&mut task, &refreshed);
-    persist_task(board, &task, &format!("orbit: github sync {}", task.id))?;
-    Ok(())
-}
-
 fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot, include_fields: bool) -> Result<()> {
     task.front.title = issue.title.clone();
     task.body = issue.body.clone();
@@ -2011,58 +1692,6 @@ fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot, include_fields: b
     task.front.status = crate::github::status::status_from_issue(issue.state, &issue.labels);
     set_baseline(task, issue);
     Ok(())
-}
-
-fn reject_basic_metadata(task: &Task) -> Result<()> {
-    let fields = [
-        task.front.area.map(|area| area.as_str().to_string()),
-        task.front.verification.clone(),
-    ];
-    let present: Vec<_> = ["area", "verification"]
-        .into_iter()
-        .zip(fields)
-        .filter_map(|(name, value)| value.map(|_| name))
-        .collect();
-    if present.is_empty() {
-        return Ok(());
-    }
-    Err(OrbitError::invalid_argument(format!(
-        "GitHub basic mode cannot sync task {} field(s): {}; remove them or use mode = `full` with organization Issue Fields",
-        task.id,
-        present.join(", ")
-    )))
-}
-
-fn omit_issue_fields(issue: &mut IssueSnapshot) {
-    // REST Issues for personal repositories do not expose organization Issue
-    // Fields. Ignore fixture/legacy values rather than importing them.
-    issue.area = None;
-    issue.verification = None;
-}
-
-fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {
-    if let Some(link) = task.front.github.as_mut() {
-        link.last_sync = Some(GitHubSyncBaseline {
-            at: Utc::now(),
-            issue_updated_at: issue.updated_at,
-            orbit_updated_at: task.front.updated_at,
-            title: issue.title.clone(),
-            body: issue.body.clone(),
-            labels: issue.labels.clone(),
-            area: task.front.area.map(|area| area.as_str().to_string()),
-            verification: task.front.verification.clone(),
-            status: Some(task.front.status),
-            issue_state: Some(issue.state),
-            sub_issues: issue.blocking.clone(),
-            blocked_by: issue.blocked_by.clone(),
-        });
-    }
-}
-
-fn persist_task(board: &Board, task: &Task, message: &str) -> Result<CommitOutcome> {
-    let rendered = task::render_task(task)?;
-    atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
-    board.commit(message, false)
 }
 
 #[cfg(test)]

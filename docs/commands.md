@@ -1254,3 +1254,7 @@ orbit sync              # commit anything left uncommitted
 - [Architecture](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
 - [Specification](./SPEC.md) for the canonical JSON contract and transition rules.
 - [Glossary](./GLOSSARY.md) for the canonical vocabulary.
+
+Triage apply preserves metadata on disk if the automatic Git commit fails and
+reports `COMMIT_FAILED` in the output warnings. Run `orbit sync` to retry the
+commit; do not repeat the proposal merely to recover the commit.

@@ -23,3 +23,5 @@ pub mod triage;
 pub mod workspace;
 pub mod workspace_doctor;
 pub mod workspace_migrate;
+
+pub mod mutation;

@@ -249,7 +249,7 @@ updated_at: 2026-10-23T12:00:00Z
 Body text, acceptance criteria, notes.
 ```
 
-Required: `title`, `status`, `created_at`, `updated_at`. Optional: `type` (default `task`; one of `task`, `epic`, `spike`, `chore`, `decision`; always written on save), `priority` (default `2`), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `waiting_on`, `checkpoint`, `area` (optional; one of `board`, `cli`, `mcp`, `setup`, `docs`, `release`), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `github` (optional link metadata when the GitHub provider is enabled), `claimed_by`, `claimed_at`, `lease_until`. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task that is not itself a SubTask; SubTasks are one level deep, a SubTask cannot have `type: epic`, and the SubTask ID must encode the same parent. `doctor` reports a mismatch as `PARENT_MISMATCH` or an invalid epic as `INVALID_TYPE`.
+Required: `title`, `status`, `created_at`, `updated_at`. Optional: `type` (default `task`; one of `task`, `epic`, `spike`, `chore`, `decision`; always written on save), `priority` (default `2`), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `waiting_on`, `checkpoint`, `area` (optional; one of `board`, `cli`, `mcp`, `setup`, `docs`, `release`), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `github` (optional active link or inactive provenance when the GitHub provider is enabled), `claimed_by`, `claimed_at`, `lease_until`. A GitHub link with no `active` field is active for backward compatibility; detach writes `active: false` while retaining the stable identity and sync baseline. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task that is not itself a SubTask; SubTasks are one level deep, a SubTask cannot have `type: epic`, and the SubTask ID must encode the same parent. `doctor` reports a mismatch as `PARENT_MISMATCH` or an invalid epic as `INVALID_TYPE`.
 
 The body is free-form Markdown. Orbit does not duplicate the title as an H1. Frontmatter is parsed as the first `---` block, not by splitting the whole file on `---`.
 
@@ -365,6 +365,22 @@ persist overrides in the Workspace Board's `[workspace]` config. A non-empty
 include list is an allowlist; exclusions take precedence, and the two override
 lists cannot contain the same repository.
 
+Detach records the repository separately in `[workspace].detached`; it does not
+change the user's include/exclude overrides. Discovery treats a detached
+repository as excluded until explicit reattachment or a later explicit include
+or exclude command clears the detached marker.
+
+`orbit workspace detach OWNER/REPO` previews the repository, every active Linked
+Task, and cached Remote Issue summaries. `--apply` marks the repository detached,
+makes its Linked Tasks local-only, and moves all active
+Remote Issue summaries to the non-claimable `archived_issues` map in
+`<workspace>/.orbit/cache/issues.json`. This works for healthy, stale, and
+unavailable repositories. It never changes a GitHub Issue. `orbit workspace
+reattach OWNER/REPO` previews archived snapshots and each exact inactive
+`owner/repo#number` Task identity, including the current sync plan and conflicts;
+`--apply` clears the detached marker, restores snapshots, and activates those links.
+GitHub sync remains a separate explicit operation.
+
 ### Remote Issue catalog
 
 `orbit workspace issues refresh` first reconciles direct child repository
@@ -393,6 +409,17 @@ by repository and Issue number rather than title. Batch preview includes creates
 links, terminal Tasks, skipped duplicates, and per-Issue errors. Import reads
 GitHub details but never writes to GitHub. Imported Tasks use ordinary readiness,
 dependency, hold-label, and claim behavior.
+
+`orbit workspace issues detach OWNER/REPO#NUMBER` previews the Linked Task and
+cached Remote Issue snapshot. Its `--apply` variant marks the Task's GitHub link
+inactive, retains the identity and last sync baseline as provenance, and moves
+that Issue summary from the active catalog into `archived_issues`. It preserves
+all Task fields and never writes GitHub. `orbit workspace issues reattach
+OWNER/REPO#NUMBER` matches only that exact inactive identity, fetches current
+Issue fields for a sync-plan/conflict preview, and requires `--apply` to reactivate
+the link. It does not resolve the previewed conflicts. Repeated detach and
+reattach operations are idempotent; a duplicate identity on another Task blocks
+reattachment.
 
 The status snapshot reports included and excluded repositories, first-time
 access failures (`inaccessible`), previously cached but unavailable repositories

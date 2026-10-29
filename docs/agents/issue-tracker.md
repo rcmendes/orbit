@@ -40,6 +40,7 @@ orbit --dir <DIR> list           # override the link for one command
 | Reconcile agent integrations across child repositories | `orbit workspace setup` |
 | Override repository discovery | `orbit workspace include OWNER/REPO`, `orbit workspace exclude OWNER/REPO` |
 | Browse and import Workspace Remote Issues | `orbit workspace issues refresh/list/inspect/import` |
+| Stop/resume Workspace synchronization safely | `orbit workspace detach/reattach OWNER/REPO`, `orbit workspace issues detach/reattach OWNER/REPO#NUMBER` |
 | Create the machine-wide fallback | `orbit init --global` |
 | Join an existing Board | `orbit link <DIR>` |
 | Move a legacy Board | `orbit doctor --migrate` |
@@ -50,6 +51,11 @@ The separate Issue catalog keeps imported work out of the Task graph until an
 explicit `workspace issues import` preview is applied. Import creates a Linked
 Task or links a selected Local Task; duplicate links are checked by repository
 and Issue number.
+Use detach when a repository or one linked Issue should stop syncing. Preview
+first, then pass `--apply`; detach keeps Task data, stores inactive provenance,
+and archives Remote Issue snapshots without changing GitHub. Reattach also
+previews exact-identity matches and sync conflicts before `--apply`. It resumes
+the link only; run the separate explicit GitHub sync workflow to apply changes.
 `workspace setup` uses that snapshot, saves the selected harnesses on the
 Workspace Board, and reuses them when a later refresh discovers child repos.
 

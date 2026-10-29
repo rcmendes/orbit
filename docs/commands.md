@@ -48,6 +48,7 @@ outside Git and a repository-local Board inside Git. See
 | Merge existing Workspace and child Boards | `orbit workspace migrate` |
 | Discover Workspace repositories | `orbit workspace refresh`, `orbit workspace status` |
 | Browse/import Workspace Remote Issues | `orbit workspace issues refresh`, `list`, `inspect`, `import` |
+| Detach or reattach repository/Issue links | `orbit workspace detach/reattach`, `orbit workspace issues detach/reattach` |
 | Set up agents across Workspace repositories | `orbit workspace setup` |
 | File a new ticket | `orbit add` |
 | Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend` |
@@ -247,7 +248,21 @@ orbit workspace refresh
 orbit workspace status
 orbit workspace include acme/api
 orbit workspace exclude acme/legacy
+orbit workspace detach acme/legacy             # preview only
+orbit workspace detach acme/legacy --apply     # preserve Tasks, archive snapshots
+orbit workspace reattach acme/legacy           # preview identities and sync plans
+orbit workspace reattach acme/legacy --apply
 ```
+
+Detach and reattach operate on an exact `OWNER/REPO`. Repository detach previews
+active Linked Tasks and cached Remote Issue summaries; applying excludes the
+repository, converts its Linked Tasks to Local Tasks with inactive provenance,
+and archives the snapshots. Reattach previews current per-Task sync plans and
+conflicts, then restores archived summaries and activates the exact links only
+with `--apply`. Both commands are local-only; neither writes to GitHub.
+Detach stores a separate `[workspace].detached` marker, so existing include and
+exclude allowlists stay unchanged. A later explicit `workspace include` or
+`workspace exclude` clears that marker.
 
 ### `orbit workspace issues` — browse and import Remote Issues
 
@@ -262,6 +277,8 @@ orbit workspace issues list [--repo OWNER/REPO] [--state open|closed]
 orbit workspace issues inspect OWNER/REPO#NUMBER
 orbit workspace issues import OWNER/REPO#NUMBER [OWNER/REPO#NUMBER]...
   [--link OWNER/REPO#NUMBER=TASK]... [--apply]
+orbit workspace issues detach OWNER/REPO#NUMBER [--apply]
+orbit workspace issues reattach OWNER/REPO#NUMBER [--apply]
 ```
 
 `orbit workspace issues refresh` also refreshes the repository inventory, then
@@ -294,6 +311,24 @@ the Task's Orbit values and show field differences before confirmation. Duplicat
 Issue links and already-linked Tasks are skipped by stable repository/number
 identity. Closed Issues map to `done`, or `cancelled` when labeled `wontfix`.
 Import never writes to GitHub, and only selected identities are processed.
+
+Detach a single Linked Task without removing its repository from the Workspace:
+
+```bash
+orbit workspace issues detach acme/api#42             # preview
+orbit workspace issues detach acme/api#42 --apply     # make its Task local-only
+orbit workspace issues reattach acme/api#42           # preview current sync plan
+orbit workspace issues reattach acme/api#42 --apply   # resume the exact link
+```
+
+Detaching retains the Local Task's data and last sync baseline, sets the
+frontmatter link to inactive, and moves the cached Issue summary out of normal
+catalog listing into `archived_issues` in `issues.json`. Reattach requires the
+repository to be included and matches only the stored repository and Issue
+number. Its preview shows current values, planned changes, and conflicts; apply
+only reactivates the link. It does not resolve conflicts or sync fields. Repeated
+detach/reattach calls are safe, and inactive provenance cannot be silently
+replaced by another import or export.
 
 ### `orbit workspace setup` — reconcile child-repository agents
 

@@ -885,6 +885,18 @@ pub enum WorkspaceIssuesCommand {
         after_long_help = help::WORKSPACE_ISSUES_EXAMPLES
     )]
     Import(WorkspaceIssuesImportArgs),
+    /// Preview or explicitly detach a Linked Task from its GitHub Issue.
+    #[command(
+        long_about = help::WORKSPACE_ISSUE_DETACH_LONG,
+        after_long_help = help::WORKSPACE_ISSUES_EXAMPLES
+    )]
+    Detach(WorkspaceIssueMutationArgs),
+    /// Preview or explicitly reattach a Local Task by its inactive GitHub identity.
+    #[command(
+        long_about = help::WORKSPACE_ISSUE_REATTACH_LONG,
+        after_long_help = help::WORKSPACE_ISSUES_EXAMPLES
+    )]
+    Reattach(WorkspaceIssueMutationArgs),
 }
 
 #[derive(Debug, Args)]
@@ -929,6 +941,16 @@ pub struct WorkspaceIssuesImportArgs {
     pub apply: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct WorkspaceIssueMutationArgs {
+    /// Exact GitHub identity: OWNER/REPO#NUMBER.
+    #[arg(value_name = "OWNER/REPO#NUMBER")]
+    pub identity: String,
+    /// Apply the reviewed operation. Without this flag, nothing is written.
+    #[arg(long)]
+    pub apply: bool,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceCommand {
     /// Combine existing Workspace and child-repository Boards.
@@ -946,6 +968,18 @@ pub enum WorkspaceCommand {
     /// Exclude an organization-owned repository from the Workspace.
     #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
     Exclude(WorkspaceRepositoryArgs),
+    /// Preview or explicitly detach a repository and its Linked Tasks.
+    #[command(
+        long_about = help::WORKSPACE_DETACH_LONG,
+        after_long_help = help::WORKSPACE_EXAMPLES
+    )]
+    Detach(WorkspaceRepositoryMutationArgs),
+    /// Preview or explicitly reattach a repository by exact GitHub identity.
+    #[command(
+        long_about = help::WORKSPACE_REATTACH_LONG,
+        after_long_help = help::WORKSPACE_EXAMPLES
+    )]
+    Reattach(WorkspaceRepositoryMutationArgs),
     /// Preview, install, or remove managed agent integrations in child repositories.
     #[command(
         long_about = help::WORKSPACE_SETUP_LONG,
@@ -992,6 +1026,16 @@ pub struct WorkspaceSetupArgs {
 pub struct WorkspaceRepositoryArgs {
     #[arg(value_name = "OWNER/REPO")]
     pub repository: String,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceRepositoryMutationArgs {
+    /// Exact repository identity: OWNER/REPO.
+    #[arg(value_name = "OWNER/REPO")]
+    pub repository: String,
+    /// Apply the reviewed operation. Without this flag, nothing is written.
+    #[arg(long)]
+    pub apply: bool,
 }
 
 #[derive(Debug, Subcommand)]

@@ -147,7 +147,9 @@ It stores the last explicitly refreshed Workspace repository inventory at
 from the versioned Board at `<workspace>/.orbit/board`. Repository status is a
 snapshot: `orbit workspace status` does not poll or rescan; `orbit workspace
 refresh` updates repository discovery, while `orbit workspace issues refresh`
-also refreshes the Issue catalog.
+also refreshes the Issue catalog. Detached Remote Issue summaries remain in the
+`archived_issues` section of `issues.json` and are excluded from normal catalog
+listing.
 _Avoid_: Board, task store
 
 **Remote Issue**:
@@ -160,15 +162,29 @@ _Avoid_: Task, claimable Issue
 The rebuildable per-Workspace cache of GitHub Issue summaries at
 `<workspace>/.orbit/cache/issues.json`. Explicit refresh paginates open and closed
 Issues (not pull requests); per-repository failures retain the previous snapshot
-and mark it stale.
+and mark it stale. Explicitly detached summaries move to a non-claimable archive
+in the same cache file.
 _Avoid_: Board, Task list, GitHub mirror
 
 **Linked Task**:
-A Task paired with one GitHub Issue by stable `owner/repo#number` identity. A
+A Task actively paired with one GitHub Issue by stable `owner/repo#number` identity. A
 new import copies the Issue fields; linking an existing Local Task preserves its
 Orbit values and previews differences. Orbit owns the Task's editable fields and
 lifecycle, while GitHub remains unchanged until an explicit sync writes it.
 _Avoid_: Remote Issue, mirrored Issue
+
+**Local Task**:
+A Task managed only by Orbit. A detached Linked Task becomes a Local Task without
+losing its Task data; its prior GitHub identity remains as inactive provenance
+until that exact Issue is explicitly reattached.
+_Avoid_: Unlinked Issue
+
+**Inactive GitHub provenance**:
+The retained `owner/repo#number` identity and last sync baseline on a Local Task
+after detach. It is not an active link, does not sync, and cannot be replaced by
+import or export. Reattach previews the exact Issue and its sync plan before
+confirmation.
+_Avoid_: Active GitHub link, Remote Issue
 
 **Legacy layout**:
 A Board from before the current path contract: the hidden worktree at

@@ -727,6 +727,16 @@ preview. Already-linked Issues and Tasks are skipped by repository and Issue
 number, never by title. Import does not write to GitHub; imported Tasks participate
 in normal dependency, hold-label, readiness, and claim rules.
 
+Detach and reattach are also preview-first and local-only. `orbit workspace
+detach OWNER/REPO --apply` excludes a repository, converts its Linked Tasks to
+Local Tasks while retaining inactive GitHub provenance, and archives its cached
+Remote Issue summaries. `orbit workspace issues detach OWNER/REPO#NUMBER --apply`
+does the same for one Linked Task. Reattach previews exact repository/Issue-number
+matches and current sync conflicts; apply restores the link and cached snapshot,
+but never resolves conflicts or writes GitHub. Run `orbit github sync` separately
+after reviewing the reattach plan. Archived snapshots are excluded from normal
+catalog listing and are never claimable. See [the detach and reattach guide](./docs/github-sync.md#detach-and-reattach).
+
 Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link, then the nearest `.orbit` walking up to the repository root (or to `$HOME` outside one, skipping `~/.orbit`), then the main checkout's `.orbit`, then the legacy hidden layout with a warning, then `~/.orbit` if it exists. An explicit override wins for one command:
 
 ```bash

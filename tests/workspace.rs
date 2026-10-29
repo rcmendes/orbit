@@ -906,3 +906,413 @@ fn issue_catalog_keeps_previous_snapshot_and_reports_partial_repository_failures
     );
     assert_eq!(web["data"]["issues"][0]["title"], "New web issue");
 }
+
+#[test]
+fn detaching_a_linked_task_previews_then_keeps_local_data_and_archives_issue() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    let github_fixture = repo.home().join("github.json");
+    std::fs::write(
+        &github_fixture,
+        json!({
+            "repositories": { "acme/api": { "owner_type": "Organization" } },
+            "catalog_issues": {
+                "acme/api": [{
+                    "number": 17,
+                    "title": "Remote title",
+                    "state": "open",
+                    "labels": ["bug"],
+                    "updated_at": "2026-02-01T00:00:00Z"
+                }]
+            },
+            "issue_details": { "acme/api#17": { "body": "Remote body" } }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+    let (status, imported) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "import", "acme/api#17", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{imported}");
+    let task_id = imported["data"]["imported"][0]["task"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "update",
+            &task_id,
+            "--title",
+            "Orbit title",
+            "--body",
+            "Orbit body",
+            "--json",
+        ],
+    );
+
+    let github_before = std::fs::read(&github_fixture).unwrap();
+    let (status, preview) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "detach", "acme/api#17"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{preview}");
+    assert_eq!(preview["data"]["apply"], false);
+    assert_eq!(preview["data"]["tasks"][0]["task"], task_id);
+    assert_eq!(
+        repo.ok_json_in(
+            &workspace,
+            &[
+                "--dir",
+                workspace.to_str().unwrap(),
+                "show",
+                &task_id,
+                "--json"
+            ],
+        )["data"]["github"]["active"],
+        serde_json::Value::Null
+    );
+
+    let (status, detached) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "detach", "acme/api#17", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{detached}");
+    assert_eq!(detached["data"]["detached"][0]["task"], task_id);
+    let (_, repeated_detach) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "detach", "acme/api#17", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(repeated_detach["data"]["already_detached"], true);
+    let task = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "show",
+            &task_id,
+            "--json",
+        ],
+    );
+    assert_eq!(task["data"]["title"], "Orbit title");
+    assert_eq!(task["data"]["body"], "Orbit body");
+    assert_eq!(task["data"]["github"]["repo"], "acme/api");
+    assert_eq!(task["data"]["github"]["number"], 17);
+    assert_eq!(task["data"]["github"]["active"], false);
+    assert_eq!(task["data"]["github"]["last_sync"]["title"], "Remote title");
+    let (_, visible) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "list", "--repo", "acme/api"],
+        &github_fixture,
+    );
+    assert_eq!(visible["data"]["count"], 0);
+    let archive = std::fs::read_to_string(workspace.join(".orbit/cache/issues.json")).unwrap();
+    assert!(archive.contains("archived_issues"));
+    assert!(archive.contains("acme/api"));
+    assert!(archive.contains("Remote title"));
+    assert_eq!(std::fs::read(&github_fixture).unwrap(), github_before);
+
+    let (status, reattach_preview) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "reattach", "acme/api#17"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{reattach_preview}");
+    assert_eq!(
+        reattach_preview["data"]["tasks"][0]["sync_plan"]["conflicts"],
+        json!([])
+    );
+    assert_eq!(
+        reattach_preview["data"]["tasks"][0]["sync_plan"]["push_title"],
+        "Orbit title"
+    );
+    let (status, reattached) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "reattach", "acme/api#17", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{reattached}");
+    assert_eq!(reattached["data"]["reattached"][0]["task"], task_id);
+    let (_, repeated_reattach) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "reattach", "acme/api#17", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(repeated_reattach["data"]["already_attached"], true);
+    let active = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "show",
+            &task_id,
+            "--json",
+        ],
+    );
+    assert_eq!(active["data"]["github"]["active"], serde_json::Value::Null);
+    assert_eq!(active["data"]["github"]["number"], 17);
+    assert_eq!(std::fs::read(&github_fixture).unwrap(), github_before);
+
+    let mut changed_remote: Value =
+        serde_json::from_slice(&std::fs::read(&github_fixture).unwrap()).unwrap();
+    changed_remote["catalog_issues"]["acme/api"][0]["title"] = json!("GitHub title");
+    std::fs::write(&github_fixture, changed_remote.to_string()).unwrap();
+    let (status, detached_again) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "detach", "acme/api#17", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{detached_again}");
+    let (status, conflict_preview) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "reattach", "acme/api#17"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{conflict_preview}");
+    assert_eq!(
+        conflict_preview["data"]["tasks"][0]["sync_plan"]["conflicts"][0]["field"],
+        "title"
+    );
+    assert_eq!(
+        repo.ok_json_in(
+            &workspace,
+            &[
+                "--dir",
+                workspace.to_str().unwrap(),
+                "show",
+                &task_id,
+                "--json"
+            ],
+        )["data"]["github"]["active"],
+        false
+    );
+}
+
+#[test]
+fn detaching_a_healthy_workspace_repository_archives_remote_issues_and_reattaches_exact_links() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    let github_fixture = repo.home().join("github.json");
+    let initial = json!({
+        "repositories": { "acme/api": { "owner_type": "Organization" } },
+        "catalog_issues": {
+            "acme/api": [{
+                "number": 21,
+                "title": "Repository issue",
+                "state": "open",
+                "labels": [],
+                "updated_at": "2026-02-01T00:00:00Z"
+            }]
+        },
+        "issue_details": { "acme/api#21": { "body": "Repository issue body" } }
+    });
+    std::fs::write(&github_fixture, initial.to_string()).unwrap();
+    let (status, included) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "include", "acme/api"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{included}");
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+    let (status, imported) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "import", "acme/api#21", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{imported}");
+    let task_id = imported["data"]["imported"][0]["task"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let github_before = std::fs::read(&github_fixture).unwrap();
+    let (status, preview) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "detach", "acme/api"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{preview}");
+    assert_eq!(preview["data"]["remote_issues"], 1);
+    assert_eq!(preview["data"]["tasks"][0]["task"], task_id);
+    assert_eq!(std::fs::read(&github_fixture).unwrap(), github_before);
+
+    let (status, detached) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "detach", "acme/api", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{detached}");
+    assert_eq!(detached["data"]["detached"][0]["task"], task_id);
+    let (_, repeated) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "detach", "acme/api", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(repeated["data"]["already_detached"], true);
+    let (_, workspace_status) =
+        run_workspace(&repo, &workspace, &["workspace", "status"], &github_fixture);
+    assert_eq!(
+        workspace_status["data"]["repositories"][0]["included"],
+        false
+    );
+    let config: toml::Value = toml::from_str(
+        &std::fs::read_to_string(workspace.join(".orbit/board/config.toml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(config["workspace"]["include"][0].as_str(), Some("acme/api"));
+    let (_, issues) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "list", "--repo", "acme/api"],
+        &github_fixture,
+    );
+    assert_eq!(issues["data"]["count"], 0);
+    let local_task = repo.ok_json_in(
+        &workspace,
+        &[
+            "--dir",
+            workspace.to_str().unwrap(),
+            "show",
+            &task_id,
+            "--json",
+        ],
+    );
+    assert_eq!(local_task["data"]["github"]["active"], false);
+    assert_eq!(std::fs::read(&github_fixture).unwrap(), github_before);
+
+    let (status, repo_preview) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "reattach", "acme/api"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{repo_preview}");
+    assert_eq!(repo_preview["data"]["tasks"][0]["identity"], "acme/api#21");
+    assert_eq!(
+        repo_preview["data"]["tasks"][0]["sync_plan"]["conflicts"],
+        json!([])
+    );
+    assert_eq!(
+        repo_preview["data"]["tasks"][0]["sync_plan"]["apply_title"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        repo_preview["data"]["tasks"][0]["sync_plan"]["push_title"],
+        serde_json::Value::Null
+    );
+    let (status, reattached) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "reattach", "acme/api", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{reattached}");
+    assert_eq!(
+        reattached["data"]["reattached"][0]["identity"],
+        "acme/api#21"
+    );
+    let (_, workspace_status) =
+        run_workspace(&repo, &workspace, &["workspace", "status"], &github_fixture);
+    assert_eq!(
+        workspace_status["data"]["repositories"][0]["included"],
+        true
+    );
+    let (_, repeated_reattach) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "reattach", "acme/api", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(repeated_reattach["data"]["already_attached"], true);
+    let (_, issues) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "list", "--repo", "acme/api"],
+        &github_fixture,
+    );
+    assert_eq!(issues["data"]["count"], 1);
+    assert_eq!(std::fs::read(&github_fixture).unwrap(), github_before);
+}
+
+#[test]
+fn detaching_a_stale_repository_keeps_its_last_snapshot_in_the_archive() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    let github_fixture = repo.home().join("github.json");
+    let initial = json!({
+        "repositories": { "acme/api": { "owner_type": "Organization" } },
+        "catalog_issues": {
+            "acme/api": [{ "number": 31, "title": "Last known issue", "state": "open", "labels": [] }]
+        }
+    });
+    std::fs::write(&github_fixture, initial.to_string()).unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+    let mut unavailable = initial;
+    unavailable["repositories"]["acme/api"]["accessible"] = json!(false);
+    unavailable["catalog_errors"] = json!({ "acme/api": "catalog endpoint unavailable" });
+    std::fs::write(&github_fixture, unavailable.to_string()).unwrap();
+    let (status, stale) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{stale}");
+    let (_, status_value) =
+        run_workspace(&repo, &workspace, &["workspace", "status"], &github_fixture);
+    assert_eq!(status_value["data"]["repositories"][0]["status"], "stale");
+    let (status, detached) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "detach", "acme/api", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{detached}");
+    assert_eq!(detached["data"]["remote_issues"], 1);
+    let cache = std::fs::read_to_string(workspace.join(".orbit/cache/issues.json")).unwrap();
+    assert!(cache.contains("Last known issue"));
+    assert!(cache.contains("archived_issues"));
+}

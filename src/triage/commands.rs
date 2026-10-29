@@ -5,12 +5,11 @@ use std::path::Path;
 use chrono::Utc;
 use serde_json::json;
 
-use crate::atomic;
 use crate::board::Board;
 use crate::cli::{TriageApplyArgs, TriageArgs, TriageCommand, TriageReviewArgs};
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{Graph, LoadMode};
-use crate::task::{self, Task, TaskArea};
+use crate::task::{Task, TaskArea};
 use crate::triage::guidance::{guidance_missing_note, read_project_guidance};
 use crate::triage::labels::CANONICAL_TRIAGE_LABELS;
 use crate::triage::proposal::TriageProposal;
@@ -189,9 +188,10 @@ fn apply_proposal(
     }
 
     task.front.updated_at = Utc::now();
-    persist_task(board, &task, &format!("orbit: triage apply {id}"))?;
+    let outcome =
+        crate::mutation::persist_task(board, &task, &format!("orbit: triage apply {id}"))?;
 
-    Ok(crate::output::CommandOutput::new(
+    let mut output = crate::output::CommandOutput::new(
         json!({
             "id": id,
             "applied": true,
@@ -203,7 +203,11 @@ fn apply_proposal(
             ),
         }),
         format!("Applied triage metadata to {id}; publish with `orbit github sync`"),
-    ))
+    );
+    if let Some(warning) = crate::mutation::commit_warning(outcome) {
+        output.warnings.push(warning);
+    }
+    Ok(output)
 }
 
 fn is_interactive_review(json_mode: bool, args: &TriageReviewArgs) -> bool {
@@ -366,13 +370,6 @@ fn with_proposal_context(mut error: OrbitError, task: &str, path: &Path) -> Orbi
         error.details = Some(serde_json::Value::Object(details));
     }
     error
-}
-
-fn persist_task(board: &Board, task: &Task, message: &str) -> Result<()> {
-    let rendered = task::render_task(task)?;
-    atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
-    board.commit(message, false)?;
-    Ok(())
 }
 
 #[cfg(test)]

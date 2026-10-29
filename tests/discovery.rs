@@ -629,3 +629,21 @@ fn workspace_init_reports_the_legacy_dot_orbit_board_for_migration() {
     let compatible = repo.ok_json(&["--dir", legacy.to_str().unwrap(), "list", "--json"]);
     assert_eq!(compatible["data"]["count"], 0);
 }
+
+#[test]
+fn scoped_board_access_holds_and_releases_the_selected_lock() {
+    use orbit_tracker::board::{AccessMode, BoardAccess};
+    let repo = TestRepo::new();
+    repo.init();
+    let root = repo.path().join(".orbit");
+    let access = BoardAccess::open(Some(&root), AccessMode::Write).unwrap();
+    assert_eq!(access.board().root, std::fs::canonicalize(&root).unwrap());
+    assert!(access.board().lock_shared().is_err());
+    drop(access);
+    let first = BoardAccess::open(Some(&root), AccessMode::Inspect).unwrap();
+    let second = BoardAccess::open(Some(&root), AccessMode::Read).unwrap();
+    assert!(first.board().lock_exclusive().is_err());
+    drop(first);
+    drop(second);
+    let _writer = BoardAccess::open(Some(&root), AccessMode::Write).unwrap();
+}

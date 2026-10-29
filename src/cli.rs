@@ -362,6 +362,14 @@ pub struct ListArgs {
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
+    /// Only Tasks with an active GitHub Issue link.
+    #[arg(long, conflicts_with = "local")]
+    pub linked: bool,
+
+    /// Only Tasks without an active GitHub Issue link. Includes detached provenance.
+    #[arg(long, conflicts_with = "linked")]
+    pub local: bool,
+
     /// Group tasks under their Parent Task and render the grouped table.
     #[arg(long)]
     pub group: bool,

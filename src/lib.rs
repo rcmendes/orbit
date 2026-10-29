@@ -14,6 +14,7 @@ pub mod legacy;
 pub mod lock;
 pub mod mcp;
 pub mod migrate;
+pub mod mutation;
 pub mod output;
 pub mod setup;
 pub mod slug;

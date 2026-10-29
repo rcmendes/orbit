@@ -118,10 +118,11 @@ fn human_output_marks_non_task_types() {
     assert!(output.status.success());
     let human = String::from_utf8_lossy(&output.stdout);
     assert!(human.lines().next().unwrap().contains("TYPE"), "{human}");
-    assert!(
-        human.lines().nth(1).unwrap().contains("epic  Epic"),
-        "{human}"
-    );
+    let row = human.lines().nth(1).unwrap();
+    let cells: Vec<&str> = row.split_whitespace().collect();
+    assert_eq!(cells[3], "epic", "{human}");
+    assert_eq!(cells[4], "-", "{human}");
+    assert_eq!(cells[5], "Epic", "{human}");
 
     let output = repo.orbit(&["show", &epic]);
     assert!(output.status.success());

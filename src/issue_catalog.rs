@@ -554,6 +554,7 @@ fn import(
     }
 
     let mut imported = Vec::new();
+    let mut commit_warning = None;
     if args.apply {
         let mut reserved_ids = graph.tasks.keys().cloned().collect::<HashSet<_>>();
         let mut writes = Vec::new();
@@ -596,7 +597,8 @@ fn import(
             }));
         }
         if !writes.is_empty() {
-            board.commit("orbit: import Workspace Remote Issues", false)?;
+            commit_warning =
+                crate::mutation::commit(board, "orbit: import Workspace Remote Issues")?;
         }
     }
 
@@ -623,7 +625,9 @@ fn import(
             data["errors"].as_array().map_or(0, Vec::len),
         )
     };
-    Ok(crate::output::CommandOutput::new(data, summary))
+    let mut output = crate::output::CommandOutput::new(data, summary);
+    output.warnings.extend(commit_warning);
+    Ok(output)
 }
 
 fn parse_link_mappings(
@@ -814,6 +818,7 @@ pub(crate) fn detach_repository(
         && issue_count == 0;
 
     let mut detached = Vec::new();
+    let mut commit_warning = None;
     if args.apply && !already_detached {
         for task in graph.iter().filter(|task| {
             task.github_link()
@@ -843,7 +848,7 @@ pub(crate) fn detach_repository(
         save(&path, &catalog)?;
         crate::workspace::set_repository_detached(board, &repository, true)?;
         if !detached.is_empty() {
-            board.commit("orbit: detach Workspace repository", false)?;
+            commit_warning = crate::mutation::commit(board, "orbit: detach Workspace repository")?;
         }
     }
 
@@ -865,7 +870,9 @@ pub(crate) fn detach_repository(
             data["tasks"].as_array().map_or(0, Vec::len)
         )
     };
-    Ok(crate::output::CommandOutput::new(data, summary))
+    let mut output = crate::output::CommandOutput::new(data, summary);
+    output.warnings.extend(commit_warning);
+    Ok(output)
 }
 
 pub(crate) fn reattach_repository(
@@ -958,6 +965,7 @@ pub(crate) fn reattach_repository(
     }
 
     let mut reattached = Vec::new();
+    let mut commit_warning = None;
     if args.apply && !already_attached {
         if !included
             && board
@@ -1005,7 +1013,8 @@ pub(crate) fn reattach_repository(
         save(&path, &catalog)?;
         crate::workspace::set_repository_detached(board, &repository, false)?;
         if !reattached.is_empty() {
-            board.commit("orbit: reattach Workspace repository", false)?;
+            commit_warning =
+                crate::mutation::commit(board, "orbit: reattach Workspace repository")?;
         }
     }
 
@@ -1026,7 +1035,9 @@ pub(crate) fn reattach_repository(
             previews.len()
         )
     };
-    Ok(crate::output::CommandOutput::new(data, summary))
+    let mut output = crate::output::CommandOutput::new(data, summary);
+    output.warnings.extend(commit_warning);
+    Ok(output)
 }
 
 fn detach_task(
@@ -1074,6 +1085,7 @@ fn detach_task(
     if active.is_empty() && inactive.is_none() {
         return Err(OrbitError::not_found(&identity));
     }
+    let mut commit_warning = None;
     if args.apply && !already_detached {
         for source in active {
             let mut task = source.clone();
@@ -1104,7 +1116,7 @@ fn detach_task(
         }
         save(&cache_path(workspace), &catalog)?;
         if !detached.is_empty() {
-            board.commit("orbit: detach Linked Task", false)?;
+            commit_warning = crate::mutation::commit(board, "orbit: detach Linked Task")?;
         }
     }
 
@@ -1120,7 +1132,9 @@ fn detach_task(
     } else {
         format!("Linked Task detach preview for {identity}; nothing was written")
     };
-    Ok(crate::output::CommandOutput::new(data, summary))
+    let mut output = crate::output::CommandOutput::new(data, summary);
+    output.warnings.extend(commit_warning);
+    Ok(output)
 }
 
 fn reattach_task(
@@ -1197,6 +1211,7 @@ fn reattach_task(
         "sync_plan": sync_plan,
     });
     let mut reattached = Vec::new();
+    let mut commit_warning = None;
     if args.apply {
         let mut task = task.clone();
         task.front
@@ -1225,7 +1240,7 @@ fn reattach_task(
             catalog.archived_issues.remove(&repository);
         }
         save(&cache_path(workspace), &catalog)?;
-        board.commit("orbit: reattach Linked Task", false)?;
+        commit_warning = crate::mutation::commit(board, "orbit: reattach Linked Task")?;
         reattached.push(json!({ "task": task.id, "identity": identity }));
     }
     let data = json!({
@@ -1239,7 +1254,9 @@ fn reattach_task(
     } else {
         format!("Linked Task reattach preview for {identity}; no data was changed")
     };
-    Ok(crate::output::CommandOutput::new(data, summary))
+    let mut output = crate::output::CommandOutput::new(data, summary);
+    output.warnings.extend(commit_warning);
+    Ok(output)
 }
 
 fn validate_issue_identity(

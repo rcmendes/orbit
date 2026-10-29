@@ -452,11 +452,18 @@ pub fn render_task(task: &Task) -> Result<String> {
     Ok(format!("---\n{yaml}---\n\n{}", task.body))
 }
 
+/// A YAML document delimiter must start at column 0. Indented `---` lines are
+/// content, for example a Markdown horizontal rule inside a block scalar such
+/// as `github.last_sync.body`.
+fn is_frontmatter_delimiter(line: &str) -> bool {
+    line.trim_end_matches(['\r', ' ', '\t']) == "---"
+}
+
 pub fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let first_end = content.find('\n')?;
     let first = &content[..first_end];
-    if first.trim_end_matches('\r').trim() != "---" {
+    if !is_frontmatter_delimiter(first) {
         return None;
     }
 
@@ -468,7 +475,7 @@ pub fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
             None => (rest, content.len()),
         };
 
-        if line.trim_end_matches('\r').trim() == "---" {
+        if is_frontmatter_delimiter(line) {
             let frontmatter = &content[first_end + 1..cursor];
             let body = &content[next..];
             let body = body
@@ -639,6 +646,50 @@ Body.
 
         let rendered = render_task(&task).unwrap();
         assert!(rendered.contains("future_field: keep this"));
+    }
+
+    #[test]
+    fn ignores_indented_horizontal_rules_inside_frontmatter() {
+        let content = r#"---
+title: Synced Task
+status: todo
+type: task
+priority: 2
+github:
+  repo: acme/app
+  number: 42
+  last_sync:
+    at: 2026-10-29T16:09:48.562851Z
+    issue_updated_at: 2026-10-29T16:09:48Z
+    orbit_updated_at: 2026-10-29T16:09:48.562851Z
+    title: Synced Task
+    body: |-
+      First paragraph.
+
+      ---
+      After the rule.
+    labels:
+    - repo:api
+created_at: 2026-10-24T19:30:38.261121Z
+updated_at: 2026-10-29T16:09:48.562851Z
+---
+
+Body with a horizontal rule.
+
+---
+
+The end.
+"#;
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        assert_eq!(task.front.title, "Synced Task");
+        assert_eq!(
+            task.front.created_at.to_rfc3339(),
+            "2026-10-24T19:30:38.261121+00:00"
+        );
+        let link = task.front.github.as_ref().unwrap();
+        assert_eq!(link.number, 42);
+        assert!(link.last_sync.as_ref().unwrap().body.contains("---"));
+        assert!(task.body.starts_with("Body with a horizontal rule."));
     }
 
     #[test]

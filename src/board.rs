@@ -389,6 +389,47 @@ pub struct Board {
     pub warnings: Vec<String>,
 }
 
+/// Opening policy includes discovery side effects and lock lifetime.
+#[derive(Clone, Copy, Debug)]
+pub enum AccessMode {
+    /// Ordinary reads retain automatic orphan-worktree recovery.
+    Read,
+    Write,
+    /// Diagnostics resolve storage without repairing it.
+    Inspect,
+}
+
+/// A Board and its command-scoped lock. Keep this value alive while using it.
+pub struct BoardAccess {
+    board: Board,
+    _lock: crate::lock::BoardLock,
+}
+
+impl BoardAccess {
+    pub fn open(dir: Option<&Path>, mode: AccessMode) -> Result<Self> {
+        let board = if matches!(mode, AccessMode::Inspect) {
+            let discovery = Board::discovery(dir);
+            if let Some(error) = discovery.error {
+                return Err(error);
+            }
+            let root = discovery.root.ok_or_else(OrbitError::board_not_found)?;
+            Board::at_root(root, discovery.warnings)?
+        } else {
+            Board::discover(dir)?
+        };
+        let lock = if matches!(mode, AccessMode::Write) {
+            board.lock_exclusive()?
+        } else {
+            board.lock_shared()?
+        };
+        Ok(Self { board, _lock: lock })
+    }
+
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
+}
+
 impl Board {
     pub fn discover(dir_override: Option<&Path>) -> Result<Self> {
         let mut discovery = Self::discovery(dir_override);

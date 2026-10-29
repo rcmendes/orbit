@@ -145,6 +145,15 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         assert!(names.contains(&expected), "{expected}");
     }
 
+    let list_tool = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "list")
+        .unwrap();
+    assert!(list_tool["inputSchema"]["properties"]["linked"].is_object());
+    assert!(list_tool["inputSchema"]["properties"]["local"].is_object());
+
     let ping = client.request(3, "ping", json!({}));
     assert_eq!(ping["result"], json!({}));
 

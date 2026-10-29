@@ -226,18 +226,18 @@ That is the entire loop. There is no daemon to start, no database to migrate, an
 
 ```text
 $ orbit list --group
-╭───────────────────┬────────┬────┬──────┬─────────────────────────────┬─────────────────────────────┬────────────╮
-│ ID                │ STATUS │ P  │ TYPE │ TITLE                       │ LABELS                      │ CLAIMED BY │
-├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9  Spec: SSO login across api, web, infra                           epic · todo · P1 · ready-for-agent │
-├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
-│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
-│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ web: login redirect         │ ready-for-agent, repo:web   │            │
-╰───────────────────┴────────┴────┴──────┴─────────────────────────────┴─────────────────────────────┴────────────╯
+╭───────────────────┬────────┬────┬──────┬───────┬─────────────────────────────┬─────────────────────────────┬────────────╮
+│ ID                │ STATUS │ P  │ TYPE │ ISSUE │ TITLE                       │ LABELS                      │ CLAIMED BY │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9  Spec: SSO login across api, web, infra                                   epic · todo · P1 · ready-for-agent │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ #12   │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
+│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ -     │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
+│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ -     │ web: login redirect         │ ready-for-agent, repo:web   │            │
+╰───────────────────┴────────┴────┴──────┴───────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
-Columns are `ID`, `STATUS`, `P` (priority), `TYPE`, `TITLE`, `LABELS`, and `CLAIMED BY`. Root Tasks are ordered by priority (then creation time and ID), and each Parent Task is followed by its SubTasks, also ordered by priority; `--group` draws that hierarchy and puts tasks without a parent in a final `No parent` section. Long titles are shortened to 60 characters in the table; `--json` always returns the full title and every field.
+Columns are `ID`, `STATUS`, `P` (priority), `TYPE`, `ISSUE`, `TITLE`, `LABELS`, and `CLAIMED BY`. `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance; `--linked` and `--local` filter on it. Root Tasks are ordered by priority (then creation time and ID), and each Parent Task is followed by its SubTasks, also ordered by priority; `--group` draws that hierarchy and puts tasks without a parent in a final `No parent` section. Long titles are shortened to 60 characters in the table; `--json` always returns the full title and every field.
 
 For one feature, `orbit tree` shows the parent, its children, progress, and blockers:
 

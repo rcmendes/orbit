@@ -657,3 +657,48 @@ fn triage_apply_accepts_area_only_proposal() {
     assert_eq!(show["data"]["area"], "cli");
     assert_eq!(show["data"]["labels"], json!(["needs-triage"]));
 }
+
+#[test]
+fn triage_apply_reports_commit_failure_after_publishing_metadata() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    let id = adopt_linked(&repo, &fixture);
+    let proposal = repo.path().join("proposal.json");
+    fs::write(&proposal, r#"{"area": "cli"}"#).unwrap();
+    let hooks = repo.path().join("failing-hooks");
+    fs::create_dir(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    repo.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    let applied = repo.ok_json_with_env(
+        &[
+            "triage",
+            "apply",
+            &id,
+            "--proposal-file",
+            proposal.to_str().unwrap(),
+            "--approve",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(applied["data"]["applied"], true);
+    assert!(
+        applied["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str().unwrap().starts_with("COMMIT_FAILED:"))
+    );
+    assert_eq!(
+        repo.ok_json(&["show", &id, "--json"])["data"]["area"],
+        "cli"
+    );
+}

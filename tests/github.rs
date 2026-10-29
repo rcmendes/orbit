@@ -289,6 +289,59 @@ fn github_repo_link_and_adopt_use_fixture_client() {
 }
 
 #[test]
+fn list_shows_and_filters_github_links() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let linked = adopt_fixture_task(&repo, &fixture, "Linked task");
+    let local = repo.add("Local task", &[]);
+
+    let all = repo.ok_json(&["list", "--json"]);
+    let tasks = all["data"]["tasks"].as_array().unwrap();
+    let linked_row = tasks.iter().find(|task| task["id"] == linked).unwrap();
+    assert_eq!(linked_row["github"]["number"], 42);
+    let local_row = tasks.iter().find(|task| task["id"] == local).unwrap();
+    assert!(local_row["github"].is_null());
+
+    let only_linked = repo.ok_json(&["list", "--linked", "--json"]);
+    assert_eq!(only_linked["data"]["count"], 1);
+    assert_eq!(only_linked["data"]["tasks"][0]["id"], linked);
+
+    let only_local = repo.ok_json(&["list", "--local", "--json"]);
+    assert_eq!(only_local["data"]["count"], 1);
+    assert_eq!(only_local["data"]["tasks"][0]["id"], local);
+
+    let human = repo.orbit(&["list"]);
+    assert!(human.status.success());
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(stdout.contains("ISSUE"), "{stdout}");
+    let linked_line = stdout.lines().find(|line| line.contains(&linked)).unwrap();
+    assert!(linked_line.contains("#42"), "{stdout}");
+    let local_line = stdout.lines().find(|line| line.contains(&local)).unwrap();
+    assert!(local_line.contains(" - "), "{stdout}");
+
+    let show = repo.orbit(&["show", linked.as_str()]);
+    assert!(show.status.success());
+    assert!(
+        String::from_utf8_lossy(&show.stdout).contains("github: acme/widget#42"),
+        "{}",
+        String::from_utf8_lossy(&show.stdout)
+    );
+    let show_local = repo.orbit(&["show", local.as_str()]);
+    assert!(show_local.status.success());
+    assert!(
+        String::from_utf8_lossy(&show_local.stdout).contains("github: -"),
+        "{}",
+        String::from_utf8_lossy(&show_local.stdout)
+    );
+
+    let conflict = repo.orbit(&["list", "--linked", "--local", "--json"]);
+    assert_eq!(conflict.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&conflict.stderr);
+    assert!(stderr.contains("cannot be used with"), "{stderr}");
+}
+
+#[test]
 fn one_github_issue_cannot_be_adopted_by_two_tasks() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
@@ -2181,4 +2234,223 @@ fn github_status_and_doctor_report_the_same_missing_scopes_in_each_mode() {
             "doctor should report {expected_missing} in {mode} mode: {issue}"
         );
     }
+}
+
+#[test]
+fn injected_sync_execution_previews_then_pulls_without_cli_transport_selection() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::github::client::FixtureClient;
+    use orbit_tracker::github::execution::{SyncOutcome, SyncRequest, synchronize};
+    use orbit_tracker::github::model::SyncDirection;
+
+    let repo = TestRepo::new();
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_fixture_issue_field(&fixture, "title", serde_json::json!("Remote revision"));
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let client = FixtureClient::load(&fixture).unwrap();
+    let original_task = fs::read(board.task_path(&id)).unwrap();
+    let original_fixture = fs::read(&fixture).unwrap();
+    let _lock = board.lock_exclusive().unwrap();
+    let preview = synchronize(
+        &board,
+        &client,
+        SyncRequest {
+            task: Some(&id),
+            direction: SyncDirection::Pull,
+            resolutions: &[],
+            apply: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(preview.tasks.len(), 1);
+    assert_eq!(
+        preview.tasks[0].plan.apply_title.as_deref(),
+        Some("Remote revision")
+    );
+    assert!(matches!(preview.tasks[0].outcome, SyncOutcome::Preview));
+    assert_eq!(fs::read(board.task_path(&id)).unwrap(), original_task);
+    assert_eq!(fs::read(&fixture).unwrap(), original_fixture);
+    let applied = synchronize(
+        &board,
+        &client,
+        SyncRequest {
+            task: Some(&id),
+            direction: SyncDirection::Pull,
+            resolutions: &[],
+            apply: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(applied.success_count, 1);
+    assert!(applied.failures.is_empty());
+    drop(_lock);
+    let shown = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(shown["data"]["title"], "Remote revision");
+}
+
+#[test]
+fn sync_reports_commit_failure_without_losing_pulled_changes() {
+    let repo = TestRepo::new();
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_fixture_issue_field(&fixture, "title", serde_json::json!("Remote revision"));
+    let hooks = repo.path().join("failing-hooks");
+    fs::create_dir(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    repo.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    let applied = repo.ok_json_with_env(
+        &[
+            "github",
+            "sync",
+            &id,
+            "--direction",
+            "pull",
+            "--apply",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(applied["data"]["success_count"], 1);
+    assert!(
+        applied["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().starts_with("COMMIT_FAILED:"))
+    );
+    assert_eq!(
+        repo.ok_json(&["show", &id, "--json"])["data"]["title"],
+        "Remote revision"
+    );
+}
+
+fn sync_request<'a>(
+    id: &'a str,
+    resolutions: &'a [String],
+    apply: bool,
+) -> orbit_tracker::github::execution::SyncRequest<'a> {
+    orbit_tracker::github::execution::SyncRequest {
+        task: Some(id),
+        direction: orbit_tracker::github::model::SyncDirection::Both,
+        resolutions,
+        apply,
+    }
+}
+
+#[test]
+fn injected_sync_requires_a_conflict_choice_and_applies_the_github_side() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::github::client::FixtureClient;
+    use orbit_tracker::github::execution::synchronize;
+
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_task_frontmatter(&repo, &id, "title", "\"Orbit edit\"");
+    set_fixture_issue_field(&fixture, "title", serde_json::json!("GitHub edit"));
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let client = FixtureClient::load(&fixture).unwrap();
+    let lock = board.lock_exclusive().unwrap();
+
+    let error = synchronize(&board, &client, sync_request(&id, &[], true))
+        .err()
+        .expect("unresolved conflicts must stop before writing");
+    assert_eq!(error.code, "GITHUB_ISSUE_CONFLICT");
+
+    let choice = ["title=github".to_string()];
+    let report = synchronize(&board, &client, sync_request(&id, &choice, true)).unwrap();
+    assert_eq!(report.success_count, 1);
+    drop(lock);
+    assert_eq!(
+        repo.ok_json(&["show", &id, "--json"])["data"]["title"],
+        "GitHub edit"
+    );
+}
+
+#[test]
+fn injected_sync_reports_typed_failures_and_retries_without_advancing_the_baseline() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::github::client::FixtureClient;
+    use orbit_tracker::github::execution::{SyncOutcome, synchronize};
+
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_task_frontmatter(&repo, &id, "title", "\"Orbit edit\"");
+    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    data["update_failures"] = serde_json::json!({ "acme/widget#42": "temporary fixture failure" });
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let _lock = board.lock_exclusive().unwrap();
+
+    let client = FixtureClient::load(&fixture).unwrap();
+    let failed = synchronize(&board, &client, sync_request(&id, &[], true)).unwrap();
+    assert_eq!(failed.success_count, 0);
+    assert_eq!(failed.failures.len(), 1);
+    assert_eq!(failed.failures[0].task, id);
+    assert_eq!(failed.failures[0].number, 42);
+    assert!(failed.failures[0].retry_safe);
+    assert!(matches!(failed.tasks[0].outcome, SyncOutcome::Failed(_)));
+
+    data["update_failures"] = serde_json::json!({});
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+    let client = FixtureClient::load(&fixture).unwrap();
+    let retried = synchronize(&board, &client, sync_request(&id, &[], true)).unwrap();
+    assert_eq!(retried.success_count, 1);
+    assert!(retried.failures.is_empty());
+    assert!(matches!(retried.tasks[0].outcome, SyncOutcome::Applied));
+    let remote: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(remote["issues"]["acme/widget#42"]["title"], "Orbit edit");
+}
+
+#[test]
+fn injected_sync_rejects_issue_fields_in_basic_mode() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::github::client::FixtureClient;
+    use orbit_tracker::github::execution::synchronize;
+
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let personal = fs::read_to_string(&fixture)
+        .unwrap()
+        .replace("acme/widget", "personal/widget");
+    fs::write(&fixture, personal).unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_basic_github_config(&repo);
+    let id = repo.add("Local task", &[]);
+    repo.ok_json_with_env(
+        &[
+            "github",
+            "adopt",
+            &id,
+            "--repo",
+            "personal/widget",
+            "--number",
+            "42",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    repo.ok_json(&["update", &id, "--area", "cli", "--json"]);
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let client = FixtureClient::load(&fixture).unwrap();
+    let _lock = board.lock_exclusive().unwrap();
+
+    let error = synchronize(&board, &client, sync_request(&id, &[], true))
+        .err()
+        .expect("basic mode cannot publish structured metadata");
+    assert_eq!(error.code, "INVALID_ARGUMENT");
+    assert!(error.message.contains("area"));
 }

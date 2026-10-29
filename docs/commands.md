@@ -653,19 +653,23 @@ orbit comment list orb-a7b2c9
 
 Lists tasks with combinable filters. Done and cancelled tasks are hidden by
 default; pass `--all`, or name a terminal status with `--status`, to include
-them. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`,
+them. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `ISSUE`,
 `TITLE`, `LABELS`, and `CLAIMED BY` columns; titles longer than 60 characters
-are shortened with an ellipsis. Root Tasks are always ordered by priority, then
-creation time and ID; each Parent Task is followed by its SubTasks, also ordered
-by priority. `--group` draws that hierarchy as one outlined table: a banner for
-each Parent Task, its SubTasks underneath, and a final `No parent` section. Use
-`--json` when a script or agent consumes the result.
+are shortened with an ellipsis. `ISSUE` is `-` for a Local Task, `#N` for a
+Linked Task, and `~#N` for detached provenance. Root Tasks are always ordered by
+priority, then creation time and ID; each Parent Task is followed by its
+SubTasks, also ordered by priority. `--group` draws that hierarchy as one
+outlined table: a banner for each Parent Task, its SubTasks underneath, and a
+final `No parent` section. Use `--json` when a script or agent consumes the
+result.
 
 **Good fit:** a human or agent wants an overview, a triage queue, one agent's
 in-progress work, or the full history.
 
 ```bash
 orbit list
+orbit list --linked                               # only Tasks linked to a GitHub Issue
+orbit list --local                                # only Tasks without an active link
 orbit list --label needs-triage
 orbit list --label repo:api --label ready-for-agent   # every label must match
 orbit list --repo api                               # shorthand for repo:api
@@ -682,22 +686,24 @@ orbit list --all --json
 Human output with `--group` looks like this:
 
 ```text
-╭───────────────────┬────────┬────┬──────┬─────────────────────────────┬─────────────────────────────┬────────────╮
-│ ID                │ STATUS │ P  │ TYPE │ TITLE                       │ LABELS                      │ CLAIMED BY │
-├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9  Spec: SSO login across api, web, infra                           epic · todo · P1 · ready-for-agent │
-├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
-│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
-│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ web: login redirect         │ ready-for-agent, repo:web   │            │
-╰───────────────────┴────────┴────┴──────┴─────────────────────────────┴─────────────────────────────┴────────────╯
+╭───────────────────┬────────┬────┬──────┬───────┬─────────────────────────────┬─────────────────────────────┬────────────╮
+│ ID                │ STATUS │ P  │ TYPE │ ISSUE │ TITLE                       │ LABELS                      │ CLAIMED BY │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9  Spec: SSO login across api, web, infra                                   epic · todo · P1 · ready-for-agent │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ #12   │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
+│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ -     │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
+│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ -     │ web: login redirect         │ ready-for-agent, repo:web   │            │
+╰───────────────────┴────────┴────┴──────┴───────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
 The table is intentionally not a machine interface. Column widths grow with the
 data, labels are joined with commas, a claim holder appears in the last column,
 and long titles are truncated. Parse `--json` instead.
 
-`--type` is repeatable and matches any listed work shape; `--exclude-type` hides
+`--linked` keeps only Tasks with an active GitHub Issue link; `--local` keeps
+only Tasks without one, including detached provenance. They are mutually
+exclusive. `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
 any listed shape. `--label` is repeatable and every label must match;
 `--exclude-label` is repeatable and hides a task carrying any of the named labels.
 `--repo NAME` is shorthand for `--label repo:NAME`. Parent groups follow the
@@ -1048,6 +1054,12 @@ never prompt or apply. `--proposal-file -` reads a proposal from stdin. Applying
 changes Orbit only; it does not publish any changed field to GitHub. Publish
 approved linked Task changes with an explicit `orbit github sync`. See
 [agents/triage-workflow.md](./agents/triage-workflow.md).
+
+Apply preserves metadata on disk if the automatic Git commit fails and reports
+`COMMIT_FAILED` in the output warnings, as every other mutating command does
+(including `orbit github adopt`/`create`/`sync` and the Workspace issue
+commands). Run `orbit sync` to retry the commit; do not repeat the proposal
+merely to recover the commit.
 
 ```bash
 orbit triage context orb-a7b2c9 --json

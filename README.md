@@ -249,7 +249,7 @@ orb-a7b2c9  todo  P1  epic  Spec: SSO login across api, web, infra  [ready-for-a
   orb-a7b2c9.z21c2w  todo  P0  infra: register OIDC client  [ready-for-agent, repo:infra]
 ```
 
-Verify Board health, its branch, and uncommitted changes. If a Claude SessionStart hook is configured, `doctor` also warns when `orbit` is not the binary on `PATH`:
+Verify Board health, its branch, and uncommitted changes. If a Claude SessionStart hook is configured, `doctor` also warns when `orbit` is not the binary on `PATH`. From a Workspace root or child repository it also names the shared Workspace and Board, checks repository discovery and cached Issue freshness, and reports duplicate links, sync conflicts, migration remnants, and agent setup drift with a safe next action:
 
 ```bash
 orbit doctor
@@ -1010,7 +1010,7 @@ The full guide — when to use each command, end-to-end scenarios, and a common-
 | The Board is in the old hidden layout | It keeps working with a `LEGACY_LAYOUT` warning. Run `orbit doctor --migrate` to move it to `.orbit`; the migration is resumable. |
 | A writer is busy | `LOCKED` is retryable. Retry after a short backoff. |
 
-`doctor` never rewrites tasks or comments, so it is always safe to run. It works without a Board: it reports the discovery trace, legacy layout, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and agent configs that still record an absolute Board path, then checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, the checked-out branch, and a Claude hook that cannot find the Orbit binary.
+`doctor` never rewrites tasks or comments, so it is always safe to run. It works without a Board: it reports the discovery trace, legacy layout, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and agent configs that still record an absolute Board path, then checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, the checked-out branch, and a Claude hook that cannot find the Orbit binary. In a Workspace it additionally reports the resolved Workspace/Board, repository access and cache freshness, migration remnants, duplicate GitHub identities, orphaned links, sync conflicts, and agent setup drift. Semantic conflicts are reported with next actions, never resolved by `doctor`.
 
 ## Why not Beads or Beans?
 

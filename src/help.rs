@@ -836,9 +836,17 @@ tasks, dangling dependencies, missing or nested parents, cycles, orphan or
 corrupt comments, stale temp files, uncommitted changes, the checked-out branch,
 and a Claude hook that cannot find the Orbit binary on PATH.
 
-It exits 1 when it finds issues. --fix removes stale temp files and re-attaches an
-orphan orbit worktree. --migrate moves a legacy Board to the Orbit folder and is
-resumable; it never rewrites task bodies or comments.";
+From a Workspace root or any child repository it also reports the resolved
+Workspace and Board, repository discovery and access failures, stale or partial
+Remote Issue caches, interrupted migrations and local Board remnants, duplicate
+GitHub identities, orphaned links, field-level sync conflicts, and missing or
+conflicting managed agent setup. Every finding identifies severity, affected
+repository/Task/Issue, cause, and a safe next action.
+
+Doctor is read-only unless `--fix` or `--migrate` is requested. --fix removes
+stale temp files and re-attaches an orphan orbit worktree. --migrate moves a
+legacy Board to the Orbit folder and is resumable; it never rewrites task bodies
+or comments, resolves semantic conflicts, or changes GitHub.";
 
 pub const DOCTOR_EXAMPLES: &str = "\
 Examples:
@@ -852,7 +860,14 @@ Examples:
   orbit doctor --migrate
 
   # Inspect the discovery trace and reported issues as JSON
-  orbit doctor --json";
+  orbit doctor --json
+
+  # Diagnose the shared Workspace from a child repository
+  cd api && orbit doctor
+
+  # Preview Workspace repositories and their cached Issues
+  orbit workspace status
+  orbit workspace issues list --state open";
 
 pub const SYNC_LONG: &str = "\
 Commits pending board changes, usually the lease updates written by heartbeat, to

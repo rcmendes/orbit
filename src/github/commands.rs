@@ -504,7 +504,7 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
             "github.organization is not set; run `orbit github connect`",
         ));
     }
-    if github.repositories.is_empty() {
+    if github.repositories.is_empty() && !board.is_workspace_board() {
         issues.push(crate::graph::Issue::new(
             code::GITHUB_REPO_NOT_LINKED,
             None,

@@ -487,6 +487,17 @@ impl Board {
         Ok(slug::main_checkout_anchor()?.join(".orbit"))
     }
 
+    /// A Workspace Board lives internally at `<workspace>/.orbit/board`; the
+    /// Workspace root is the user-facing directory.
+    pub fn is_workspace_board(&self) -> bool {
+        self.root.file_name().is_some_and(|name| name == "board")
+            && self
+                .root
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == ".orbit")
+    }
+
     pub fn storage_mode(&self) -> StorageMode {
         self.config
             .board

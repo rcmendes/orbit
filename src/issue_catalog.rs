@@ -17,21 +17,21 @@ use crate::graph::{Graph, LoadMode};
 use crate::task::{self, Status, Task, TaskArea, TaskFrontmatter, TaskType};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct IssueCatalog {
+pub(crate) struct IssueCatalog {
     #[serde(default)]
-    repositories: BTreeMap<String, CachedRepository>,
+    pub(crate) repositories: BTreeMap<String, CachedRepository>,
     #[serde(default)]
-    archived_issues: BTreeMap<String, BTreeMap<u64, IssueCatalogItem>>,
+    pub(crate) archived_issues: BTreeMap<String, BTreeMap<u64, IssueCatalogItem>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct CachedRepository {
+pub(crate) struct CachedRepository {
     #[serde(default)]
-    last_refreshed_at: Option<DateTime<Utc>>,
+    pub(crate) last_refreshed_at: Option<DateTime<Utc>>,
     #[serde(default)]
-    error: Option<String>,
+    pub(crate) error: Option<String>,
     #[serde(default)]
-    issues: Vec<IssueCatalogItem>,
+    pub(crate) issues: Vec<IssueCatalogItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,8 +57,12 @@ pub fn run(board: &Board, command: WorkspaceIssuesCommand) -> Result<crate::outp
     }
 }
 
-fn cache_path(workspace: &Path) -> PathBuf {
+pub(crate) fn cache_path(workspace: &Path) -> PathBuf {
     workspace.join(".orbit").join("cache").join("issues.json")
+}
+
+pub(crate) fn catalog_for_diagnostics(workspace: &Path) -> Result<IssueCatalog> {
+    load(&cache_path(workspace))
 }
 
 fn load(path: &Path) -> Result<IssueCatalog> {

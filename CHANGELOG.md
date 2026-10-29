@@ -4,6 +4,7 @@
 
 - Added `orbit workspace migrate` to preview and consolidate legacy Workspace and child-repository Boards into `<workspace>/.orbit/board`. It preserves source Boards, Tasks, comments, claims, Checkpoints, and relationships; remaps only colliding IDs; retains source prefixes as accepted legacy prefixes; reports config differences; blocks duplicate GitHub Issue identities; and supports resumable application with validation and rollback guidance.
 - `orbit github create` now previews selected Local Tasks by default, supports explicit batches and terminal-task opt-in, and applies each Issue independently before persisting its stable Task link and sync baseline. Workspace exports infer a single included repository; linked Tasks are directed to sync instead of being duplicated.
+- `orbit doctor` is Workspace-aware. From the Workspace root or any child repository it names the resolved Workspace/Board and reports layout problems, unreachable/stale/removed repositories, partial Issue-cache refreshes, migration remnants, duplicate GitHub identities, orphaned links, sync conflicts, and managed agent setup drift or collisions. Findings include severity, affected repository/Task/Issue, cause, and safe next action; doctor stays read-only unless `--fix` or `--migrate` is explicitly requested.
 
 ## 0.9.4 - 2026-10-28
 

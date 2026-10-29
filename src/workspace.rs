@@ -107,40 +107,40 @@ impl WorkspaceConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct RepositoryCatalog {
+pub(crate) struct RepositoryCatalog {
     #[serde(default)]
-    organization: Option<String>,
+    pub(crate) organization: Option<String>,
     #[serde(default)]
-    last_refreshed_at: Option<DateTime<Utc>>,
+    pub(crate) last_refreshed_at: Option<DateTime<Utc>>,
     #[serde(default)]
-    repositories: BTreeMap<String, RepositoryEntry>,
+    pub(crate) repositories: BTreeMap<String, RepositoryEntry>,
     #[serde(default)]
-    non_git_directories: Vec<String>,
+    pub(crate) non_git_directories: Vec<String>,
     #[serde(default)]
-    missing_origins: Vec<String>,
+    pub(crate) missing_origins: Vec<String>,
     #[serde(default)]
-    unsupported_origins: Vec<UnsupportedOrigin>,
+    pub(crate) unsupported_origins: Vec<UnsupportedOrigin>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RepositoryEntry {
-    repository: String,
-    path: String,
-    discovered: bool,
-    status: RepositoryStatus,
-    included: bool,
+pub(crate) struct RepositoryEntry {
+    pub(crate) repository: String,
+    pub(crate) path: String,
+    pub(crate) discovered: bool,
+    pub(crate) status: RepositoryStatus,
+    pub(crate) included: bool,
     #[serde(default)]
-    cached: bool,
-    origin: String,
+    pub(crate) cached: bool,
+    pub(crate) origin: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+    pub(crate) error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    last_checked_at: Option<DateTime<Utc>>,
+    pub(crate) last_checked_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum RepositoryStatus {
+pub(crate) enum RepositoryStatus {
     Included,
     Excluded,
     Inaccessible,
@@ -150,10 +150,10 @@ enum RepositoryStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct UnsupportedOrigin {
-    path: String,
-    origin: String,
-    reason: String,
+pub(crate) struct UnsupportedOrigin {
+    pub(crate) path: String,
+    pub(crate) origin: String,
+    pub(crate) reason: String,
 }
 
 pub fn run(board: &Board, args: WorkspaceArgs) -> Result<crate::output::CommandOutput> {
@@ -178,19 +178,43 @@ pub fn run(board: &Board, args: WorkspaceArgs) -> Result<crate::output::CommandO
 }
 
 pub(crate) fn workspace_root(board: &Board) -> Result<PathBuf> {
-    let orbit = board.root.parent();
-    if board.root.file_name().is_some_and(|name| name == "board")
-        && orbit
-            .and_then(Path::file_name)
-            .is_some_and(|name| name == ".orbit")
-        && let Some(workspace) = orbit.and_then(Path::parent)
-    {
-        return dunce::canonicalize(workspace)
-            .map_err(|error| OrbitError::io("resolve Workspace root", error));
+    workspace_root_if_board(board).ok_or_else(|| {
+        OrbitError::invalid_argument(
+            "`orbit workspace` requires a Workspace Board at `<workspace>/.orbit/board`",
+        )
+    })
+}
+
+pub(crate) fn workspace_root_if_board(board: &Board) -> Option<PathBuf> {
+    if !board.is_workspace_board() {
+        return None;
     }
-    Err(OrbitError::invalid_argument(
-        "`orbit workspace` requires a Workspace Board at `<workspace>/.orbit/board`",
-    ))
+    let workspace = board.root.parent()?.parent()?;
+    Some(dunce::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf()))
+}
+
+/// Finds the nearest Workspace folder that contains Workspace-only state. A
+/// regular Board at a child repository's `.orbit` is skipped so `doctor` can
+/// still identify the enclosing Workspace across the Git boundary.
+pub(crate) fn candidate_workspace_root(start: &Path) -> Option<PathBuf> {
+    let start = dunce::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    for ancestor in start.ancestors() {
+        let orbit = ancestor.join(".orbit");
+        if orbit.join("board").is_dir()
+            || orbit.join("cache").exists()
+            || orbit.join("workspace-migration-state.json").exists()
+            || orbit.join(".workspace-board-migration-stage").exists()
+        {
+            return Some(ancestor.to_path_buf());
+        }
+        if orbit.is_dir()
+            && !Board::is_board(&orbit)
+            && crate::git::toplevel_containing(ancestor).is_none()
+        {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
 }
 
 fn setup(
@@ -508,11 +532,15 @@ pub(crate) fn included_repositories(workspace: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-fn catalog_path(workspace: &Path) -> PathBuf {
+pub(crate) fn catalog_path(workspace: &Path) -> PathBuf {
     workspace
         .join(".orbit")
         .join("cache")
         .join("repositories.json")
+}
+
+pub(crate) fn catalog_for_diagnostics(workspace: &Path) -> Result<RepositoryCatalog> {
+    load_catalog(&catalog_path(workspace))
 }
 
 /// Return repositories available for issue creation from the Workspace catalog.

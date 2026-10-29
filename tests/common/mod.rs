@@ -228,6 +228,36 @@ impl TestRepo {
         value
     }
 
+    pub fn json_in_with_env(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        envs: &[(&str, &str)],
+    ) -> (i32, serde_json::Value) {
+        let mut command = self.command(env!("CARGO_BIN_EXE_orbit"), cwd, args);
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        self.parse_json(args, command.output().unwrap())
+    }
+
+    pub fn ok_json_in_with_env(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        envs: &[(&str, &str)],
+    ) -> serde_json::Value {
+        let (status, value) = self.json_in_with_env(cwd, args, envs);
+        assert_eq!(
+            status,
+            0,
+            "command {args:?} failed: {}",
+            serde_json::to_string_pretty(&value).unwrap()
+        );
+        assert_eq!(value["ok"], true, "command {args:?}: {value}");
+        value
+    }
+
     pub fn err_json(&self, args: &[&str]) -> (i32, serde_json::Value) {
         let (status, value) = self.json(args);
         assert_ne!(

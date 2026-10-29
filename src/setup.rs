@@ -475,7 +475,7 @@ pub(crate) fn has_orbit_hook(root: &Path) -> bool {
         })
 }
 
-fn configured_clients(root: &Path) -> Vec<SetupClient> {
+pub(crate) fn configured_clients(root: &Path) -> Vec<SetupClient> {
     let contains = |relative: &str, needle: &str| {
         std::fs::read_to_string(root.join(relative)).is_ok_and(|content| content.contains(needle))
     };
@@ -520,7 +520,7 @@ fn configured_portable_mcp(root: &Path, client: SetupClient) -> Option<bool> {
     configured_mcp_command(root, client).map(|command| is_portable_mcp_bin(Path::new(&command)))
 }
 
-fn configured_mcp_command(root: &Path, client: SetupClient) -> Option<String> {
+pub(crate) fn configured_mcp_command(root: &Path, client: SetupClient) -> Option<String> {
     match client {
         SetupClient::Claude => read_json_orbit_command(root, ".mcp.json", &["mcpServers", "orbit"]),
         SetupClient::Cursor => {

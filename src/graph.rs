@@ -11,18 +11,64 @@ use crate::task::{self, Status, Task, TaskType};
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Issue {
     pub code: String,
+    pub severity: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_action: Option<String>,
 }
 
 impl Issue {
     pub fn new(code: &str, task: Option<&str>, message: impl Into<String>) -> Self {
         Self {
             code: code.to_string(),
+            severity: "error".to_string(),
             task: task.map(str::to_string),
+            repository: None,
+            issue: None,
             message: message.into(),
+            cause: None,
+            next_action: None,
         }
+    }
+
+    pub fn warning(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            severity: "warning".to_string(),
+            ..Self::new(code, None, message)
+        }
+    }
+
+    pub fn with_task(mut self, task: impl Into<String>) -> Self {
+        self.task = Some(task.into());
+        self
+    }
+
+    pub fn with_repository(mut self, repository: impl Into<String>) -> Self {
+        self.repository = Some(repository.into());
+        self
+    }
+
+    pub fn with_issue(mut self, issue: impl Into<String>) -> Self {
+        self.issue = Some(issue.into());
+        self
+    }
+
+    pub fn with_cause(mut self, cause: impl Into<String>) -> Self {
+        self.cause = Some(cause.into());
+        self
+    }
+
+    pub fn with_next_action(mut self, next_action: impl Into<String>) -> Self {
+        self.next_action = Some(next_action.into());
+        self
     }
 }
 

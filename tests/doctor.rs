@@ -536,10 +536,8 @@ fn doctor_resolves_a_healthy_workspace_from_its_root_and_child_repository() {
         dunce::canonicalize(&workspace).unwrap().to_str().unwrap()
     );
     assert!(
-        root["data"]["workspace"]["board"]
-            .as_str()
-            .unwrap()
-            .ends_with(".orbit/board")
+        std::path::Path::new(root["data"]["workspace"]["board"].as_str().unwrap())
+            .ends_with(std::path::Path::new(".orbit").join("board"))
     );
 
     let nested = workspace_doctor(&repo, &child, &workspace, &fixture);

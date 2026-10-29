@@ -1,6 +1,6 @@
 ---
 title: Detach and reattach Workspace repositories and Linked Tasks
-status: todo
+status: in_progress
 type: task
 priority: 2
 labels:
@@ -11,8 +11,11 @@ depends_on:
 - orbit-f1hqst.b2w48k
 parent: orbit-f1hqst
 area: cli
+claimed_by: rodrigomendes
+claimed_at: 2026-10-29T00:16:37.586449Z
+lease_until: 2026-10-29T00:46:37.586449Z
 created_at: 2026-10-28T22:48:24.498420Z
-updated_at: 2026-10-28T22:48:45.117565Z
+updated_at: 2026-10-29T00:16:37.586449Z
 ---
 
 ## Goal

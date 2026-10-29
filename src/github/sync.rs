@@ -73,7 +73,7 @@ pub fn plan_sync(
         issue.labels.clone(),
         direction,
     );
-    plan_optional_scalar(
+    plan_scalar(
         &mut plan,
         "area",
         baseline.map(|base| base.area.clone()),
@@ -81,7 +81,7 @@ pub fn plan_sync(
         issue.area.clone(),
         direction,
     );
-    plan_optional_scalar(
+    plan_scalar(
         &mut plan,
         "verification",
         baseline.map(|base| base.verification.clone()),
@@ -107,6 +107,8 @@ pub fn baseline_from(view: OrbitSyncView<'_>, issue: &IssueSnapshot) -> GitHubSy
         verification: view.task.front.verification.clone(),
         status: Some(view.task.front.status),
         issue_state: Some(issue.state),
+        sub_issues: issue.blocking.clone(),
+        blocked_by: issue.blocked_by.clone(),
     }
 }
 
@@ -141,17 +143,6 @@ fn plan_scalar<T>(
             SyncDirection::Both | SyncDirection::Push => set_push(plan, field, &orbit_value),
         }
     }
-}
-
-fn plan_optional_scalar(
-    plan: &mut SyncPlan,
-    field: &str,
-    baseline: Option<Option<String>>,
-    orbit_value: Option<String>,
-    github_value: Option<String>,
-    direction: SyncDirection,
-) {
-    plan_scalar(plan, field, baseline, orbit_value, github_value, direction);
 }
 
 fn set_pull<T: serde::Serialize>(plan: &mut SyncPlan, field: &str, value: &T) {
@@ -219,7 +210,12 @@ fn plan_status(
     let base_status = baseline.and_then(|base| base.status);
     let base_state = baseline.and_then(|base| base.issue_state);
     let github_status = status_from_issue(issue.state, &issue.labels);
-    let github_changed = base_state.is_some_and(|state| state != issue.state);
+    let baseline_remote_status = baseline.and_then(|base| {
+        base.issue_state
+            .map(|state| status_from_issue(state, &base.labels))
+    });
+    let github_changed = base_state.is_some_and(|state| state != issue.state)
+        || baseline_remote_status.is_some_and(|status| status != github_status);
     let orbit_changed = base_status.is_some_and(|status| status != orbit_status);
 
     if orbit_status == github_status && issue_state_from_status(orbit_status) == issue.state {
@@ -240,7 +236,7 @@ fn plan_status(
         plan.apply_status = Some(pulled_status);
     } else if direction == SyncDirection::Push
         || orbit_changed
-        || base_status.is_none() && issue_state_from_status(orbit_status) != issue.state
+        || issue_state_from_status(orbit_status) != issue.state
     {
         plan.push_state = Some(issue_state_from_status(orbit_status));
     }
@@ -295,6 +291,8 @@ mod tests {
                         verification: Some("cargo test".into()),
                         status: Some(Status::Todo),
                         issue_state: Some(crate::github::model::IssueState::Open),
+                        sub_issues: Vec::new(),
+                        blocked_by: Vec::new(),
                     }),
                 }),
                 extra: BTreeMap::new(),
@@ -338,6 +336,75 @@ mod tests {
                 .iter()
                 .any(|conflict| conflict.field == "title")
         );
+    }
+
+    #[test]
+    fn pushes_an_open_issue_when_a_todo_task_was_linked_to_a_closed_issue() {
+        let mut task = sample_task("Catalog issue", "body", Status::Todo);
+        let updated_at = task.front.updated_at;
+        let link = task.front.github.as_mut().unwrap();
+        link.last_sync = Some(GitHubSyncBaseline {
+            at: Utc::now(),
+            issue_updated_at: Utc::now(),
+            orbit_updated_at: updated_at,
+            title: "Catalog issue".into(),
+            body: "body".into(),
+            labels: vec!["bug".into()],
+            area: Some("cli".into()),
+            verification: Some("cargo test".into()),
+            status: Some(Status::Todo),
+            issue_state: Some(crate::github::model::IssueState::Closed),
+            sub_issues: Vec::new(),
+            blocked_by: Vec::new(),
+        });
+        let mut issue = sample_issue("Catalog issue", "body");
+        issue.state = crate::github::model::IssueState::Closed;
+        let link = task.front.github.as_ref().unwrap();
+
+        let plan = plan_sync(
+            OrbitSyncView { task: &task, link },
+            &issue,
+            SyncDirection::Both,
+        );
+
+        assert!(!plan.has_conflicts(), "{:?}", plan.conflicts);
+        assert_eq!(
+            plan.push_state,
+            Some(crate::github::model::IssueState::Open)
+        );
+    }
+
+    #[test]
+    fn surfaces_a_remote_wontfix_change_even_when_the_state_stays_closed() {
+        let mut task = sample_task("Closed issue", "body", Status::Done);
+        let updated_at = task.front.updated_at;
+        let link = task.front.github.as_mut().unwrap();
+        link.last_sync = Some(GitHubSyncBaseline {
+            at: Utc::now(),
+            issue_updated_at: Utc::now(),
+            orbit_updated_at: updated_at,
+            title: "Closed issue".into(),
+            body: "body".into(),
+            labels: vec!["bug".into()],
+            area: Some("cli".into()),
+            verification: Some("cargo test".into()),
+            status: Some(Status::Done),
+            issue_state: Some(crate::github::model::IssueState::Closed),
+            sub_issues: Vec::new(),
+            blocked_by: Vec::new(),
+        });
+        let mut issue = sample_issue("Closed issue", "body");
+        issue.state = crate::github::model::IssueState::Closed;
+        issue.labels = vec!["bug".into(), "wontfix".into()];
+        let link = task.front.github.as_ref().unwrap();
+
+        let plan = plan_sync(
+            OrbitSyncView { task: &task, link },
+            &issue,
+            SyncDirection::Both,
+        );
+
+        assert_eq!(plan.apply_status, Some(Status::Cancelled));
     }
 
     #[test]

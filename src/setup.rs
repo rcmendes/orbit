@@ -60,6 +60,28 @@ impl SetupClient {
         ]
     }
 
+    /// Coding-agent harnesses only. Matt Pocock skills are a separate
+    /// compatibility integration, not a harness.
+    pub fn harnesses() -> Vec<SetupClient> {
+        vec![
+            SetupClient::Claude,
+            SetupClient::Cursor,
+            SetupClient::Codex,
+            SetupClient::Opencode,
+        ]
+    }
+
+    pub fn is_harness(self) -> bool {
+        matches!(
+            self,
+            SetupClient::Claude | SetupClient::Cursor | SetupClient::Codex | SetupClient::Opencode
+        )
+    }
+
+    pub fn harness_from_name(name: &str) -> Option<Self> {
+        Self::from_name(name).filter(|client| client.is_harness())
+    }
+
     pub fn uses_mcp(self) -> bool {
         !matches!(self, SetupClient::Mattpocock | SetupClient::All)
     }

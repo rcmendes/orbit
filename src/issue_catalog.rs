@@ -35,7 +35,7 @@ pub(crate) struct CachedRepository {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct RepositoryStatus {
+struct RemoteRepositoryStatus {
     repository: String,
     last_refreshed_at: Option<DateTime<Utc>>,
     status: &'static str,
@@ -153,11 +153,11 @@ fn fetch_repository(
     Ok(issues.into_values().collect())
 }
 
-fn repository_statuses(catalog: &IssueCatalog) -> Vec<RepositoryStatus> {
+fn repository_statuses(catalog: &IssueCatalog) -> Vec<RemoteRepositoryStatus> {
     catalog
         .repositories
         .iter()
-        .map(|(repository, entry)| RepositoryStatus {
+        .map(|(repository, entry)| RemoteRepositoryStatus {
             repository: repository.clone(),
             last_refreshed_at: entry.last_refreshed_at,
             status: match (entry.error.is_some(), entry.last_refreshed_at.is_some()) {

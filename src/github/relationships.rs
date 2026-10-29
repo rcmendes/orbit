@@ -34,6 +34,7 @@ pub fn plan_relationship_sync(
     let mut supported = Vec::new();
     let mut unsupported = Vec::new();
     let mut changes = Vec::new();
+    let baseline = link.last_sync.as_ref();
 
     for (child, child_link) in child_links {
         if child_link.repo == link.repo {
@@ -103,9 +104,19 @@ pub fn plan_relationship_sync(
     }
 
     for remote_child in &issue.blocking {
-        if !supported.iter().any(|relationship| {
+        if supported.iter().any(|relationship| {
             relationship.kind == "sub_issue" && relationship.github == *remote_child
         }) {
+            continue;
+        }
+        let previously_synced = baseline.is_some_and(|base| base.sub_issues.contains(remote_child));
+        if previously_synced && remote_child.repo.eq_ignore_ascii_case(&link.repo) {
+            changes.push(RelationshipChange {
+                action: "remove",
+                kind: "sub_issue",
+                github: remote_child.clone(),
+            });
+        } else {
             unsupported.push(format!(
                 "GitHub sub-issue {}/#{} has no matching linked Orbit SubTask; it is preserved",
                 remote_child.repo, remote_child.number
@@ -113,9 +124,20 @@ pub fn plan_relationship_sync(
         }
     }
     for remote_dependency in &issue.blocked_by {
-        if !supported.iter().any(|relationship| {
+        if supported.iter().any(|relationship| {
             relationship.kind == "blocked_by" && relationship.github == *remote_dependency
         }) {
+            continue;
+        }
+        let previously_synced =
+            baseline.is_some_and(|base| base.blocked_by.contains(remote_dependency));
+        if previously_synced && remote_dependency.repo.eq_ignore_ascii_case(&link.repo) {
+            changes.push(RelationshipChange {
+                action: "remove",
+                kind: "blocked_by",
+                github: remote_dependency.clone(),
+            });
+        } else {
             unsupported.push(format!(
                 "GitHub blocked-by issue {}/#{} has no matching linked Orbit Dependency; it is preserved",
                 remote_dependency.repo, remote_dependency.number
@@ -181,6 +203,101 @@ mod tests {
             },
             body: String::new(),
         }
+    }
+
+    #[test]
+    fn removes_previously_synced_relationships_that_disappeared_locally() {
+        let parent = task("orb-aaaaaa");
+        let mut link = GitHubLink::new("acme/a".to_string(), 1);
+        link.last_sync = Some(crate::github::link::GitHubSyncBaseline {
+            at: chrono::Utc::now(),
+            issue_updated_at: chrono::Utc::now(),
+            orbit_updated_at: chrono::Utc::now(),
+            title: "Parent".into(),
+            body: String::new(),
+            labels: Vec::new(),
+            area: None,
+            verification: None,
+            status: Some(crate::task::Status::Todo),
+            issue_state: Some(IssueState::Open),
+            sub_issues: vec![IssueRef {
+                repo: "acme/a".into(),
+                number: 2,
+            }],
+            blocked_by: vec![IssueRef {
+                repo: "acme/a".into(),
+                number: 3,
+            }],
+        });
+        let mut issue = IssueSnapshot {
+            repo: "acme/a".to_string(),
+            number: 1,
+            title: "t".into(),
+            body: String::new(),
+            state: IssueState::Open,
+            labels: vec![],
+            assignees: vec![],
+            updated_at: chrono::Utc::now(),
+            area: None,
+            verification: None,
+            parent_issue: vec![],
+            blocked_by: vec![IssueRef {
+                repo: "acme/a".into(),
+                number: 3,
+            }],
+            blocking: vec![IssueRef {
+                repo: "acme/a".into(),
+                number: 2,
+            }],
+        };
+
+        let report = plan_relationship_sync(&parent, &link, &issue, &[], &[]);
+
+        let removals = report
+            .changes
+            .iter()
+            .filter(|change| change.action == "remove")
+            .map(|change| change.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(removals, vec!["sub_issue", "blocked_by"]);
+        assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
+
+        issue.blocking.clear();
+        issue.blocked_by.clear();
+        let report = plan_relationship_sync(&parent, &link, &issue, &[], &[]);
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn preserves_remote_only_relationships_without_a_baseline() {
+        let parent = task("orb-aaaaaa");
+        let link = GitHubLink::new("acme/a".to_string(), 1);
+        let issue = IssueSnapshot {
+            repo: "acme/a".to_string(),
+            number: 1,
+            title: "t".into(),
+            body: String::new(),
+            state: IssueState::Open,
+            labels: vec![],
+            assignees: vec![],
+            updated_at: chrono::Utc::now(),
+            area: None,
+            verification: None,
+            parent_issue: vec![],
+            blocked_by: vec![IssueRef {
+                repo: "acme/a".into(),
+                number: 3,
+            }],
+            blocking: vec![IssueRef {
+                repo: "acme/a".into(),
+                number: 2,
+            }],
+        };
+
+        let report = plan_relationship_sync(&parent, &link, &issue, &[], &[]);
+
+        assert!(report.changes.is_empty());
+        assert_eq!(report.unsupported.len(), 2);
     }
 
     #[test]

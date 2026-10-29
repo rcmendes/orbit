@@ -279,7 +279,9 @@ shows each linked Task and Issue, the fields planned to be pulled into Orbit or
 pushed to GitHub, and any conflicts with both competing values. Empty plans say
 that no linked Tasks were found; a linked Task with no pending changes is marked
 **No changes needed**. Use `--json` for the existing machine-readable plan and
-conflict details.
+conflict details. On a Workspace Board, every repository included by the last
+`orbit workspace refresh` is available to adopt, status, and sync without a
+separate `orbit github repo link`.
 
 Apply changes:
 
@@ -339,10 +341,12 @@ the affected organization, repository, Task, Issue, or fields when known.
 
 SubTasks and dependencies are previewed as GitHub sub-issues and blocked-by
 relationships when both linked Issues live in the **same** repository. `--apply`
-adds supported relationships. Cross-repository or unlinked GitHub relationships
-are listed as unsupported and preserved; Orbit does not flatten them or guess
-which remote-only relationship to remove. GitHub assignees remain separate from
-Orbit claims.
+adds supported relationships and removes a same-repository relationship only when
+it was present at the last successful sync baseline and has since disappeared
+from the Task graph. Cross-repository relationships and remote-only additions
+that were never synced are listed as unsupported and preserved; Orbit does not
+flatten them or guess which unknown relationship to remove. GitHub assignees
+remain separate from Orbit claims.
 
 ## Task frontmatter
 

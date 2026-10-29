@@ -70,7 +70,7 @@ impl WorkspaceConfig {
         if let Some(harnesses) = &self.agent_harnesses {
             let mut seen = BTreeSet::new();
             for harness in harnesses {
-                if !matches!(harness.as_str(), "claude" | "cursor" | "codex" | "opencode") {
+                if crate::setup::SetupClient::harness_from_name(harness).is_none() {
                     return Err(OrbitError::config(format!(
                         "unsupported Workspace agent harness `{harness}`"
                     )));
@@ -439,12 +439,7 @@ fn collect_setup_output(
 }
 
 fn all_workspace_harnesses() -> Vec<crate::setup::SetupClient> {
-    vec![
-        crate::setup::SetupClient::Claude,
-        crate::setup::SetupClient::Cursor,
-        crate::setup::SetupClient::Codex,
-        crate::setup::SetupClient::Opencode,
-    ]
+    crate::setup::SetupClient::harnesses()
 }
 
 fn detected_workspace_harnesses(
@@ -464,14 +459,10 @@ fn detected_workspace_harnesses(
 fn harnesses_from_names(names: &[String]) -> Result<Vec<crate::setup::SetupClient>> {
     names
         .iter()
-        .map(|name| match name.as_str() {
-            "claude" => Ok(crate::setup::SetupClient::Claude),
-            "cursor" => Ok(crate::setup::SetupClient::Cursor),
-            "codex" => Ok(crate::setup::SetupClient::Codex),
-            "opencode" => Ok(crate::setup::SetupClient::Opencode),
-            _ => Err(OrbitError::config(format!(
-                "unsupported Workspace agent harness `{name}`"
-            ))),
+        .map(|name| {
+            crate::setup::SetupClient::harness_from_name(name).ok_or_else(|| {
+                OrbitError::config(format!("unsupported Workspace agent harness `{name}`"))
+            })
         })
         .collect()
 }
@@ -497,21 +488,16 @@ fn parse_workspace_harnesses(
                 if name.is_empty() {
                     continue;
                 }
-                let client = match name {
-                    "claude" => crate::setup::SetupClient::Claude,
-                    "cursor" => crate::setup::SetupClient::Cursor,
-                    "codex" => crate::setup::SetupClient::Codex,
-                    "opencode" => crate::setup::SetupClient::Opencode,
-                    "mattpocock" => {
-                        return Err(OrbitError::invalid_argument(
-                            "Matt Pocock skills are detected and configured separately; do not include `mattpocock` in `--agents`",
-                        ));
-                    }
-                    _ => {
-                        return Err(OrbitError::invalid_argument(format!(
+                let client = if name == "mattpocock" {
+                    return Err(OrbitError::invalid_argument(
+                        "Matt Pocock skills are detected and configured separately; do not include `mattpocock` in `--agents`",
+                    ));
+                } else {
+                    crate::setup::SetupClient::harness_from_name(name).ok_or_else(|| {
+                        OrbitError::invalid_argument(format!(
                             "unknown harness `{name}`; expected claude, cursor, codex, or opencode"
-                        )));
-                    }
+                        ))
+                    })?
                 };
                 if !clients.contains(&client) {
                     clients.push(client);
@@ -546,13 +532,7 @@ pub(crate) fn catalog_for_diagnostics(workspace: &Path) -> Result<RepositoryCata
 /// Return repositories available for issue creation from the Workspace catalog.
 /// `None` means that this Board is not a Workspace Board.
 pub(crate) fn export_repositories(board: &Board) -> Result<Option<Vec<String>>> {
-    let is_workspace = board.root.file_name().is_some_and(|name| name == "board")
-        && board
-            .root
-            .parent()
-            .and_then(Path::file_name)
-            .is_some_and(|name| name == ".orbit");
-    if !is_workspace {
+    if !board.is_workspace_board() {
         return Ok(None);
     }
     let workspace = workspace_root(board)?;
@@ -966,7 +946,7 @@ pub(crate) fn set_repository_detached(
     save_catalog(&path, &catalog)
 }
 
-fn is_direct_git_repository(path: &Path) -> bool {
+pub(crate) fn is_direct_git_repository(path: &Path) -> bool {
     let Ok(output) = git_output(path, &["rev-parse", "--show-toplevel"]) else {
         return false;
     };

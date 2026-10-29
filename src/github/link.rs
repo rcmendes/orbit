@@ -42,6 +42,13 @@ pub struct GitHubSyncBaseline {
     pub status: Option<Status>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issue_state: Option<IssueState>,
+    /// Same-repository sub-issues known at the last successful sync. A remote
+    /// edge in this set but absent from the Task graph is a local removal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sub_issues: Vec<crate::github::model::IssueRef>,
+    /// Same-repository blocked-by relationships known at the last sync.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<crate::github::model::IssueRef>,
 }
 
 impl GitHubLink {

@@ -76,9 +76,21 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
         }));
     }
 
+    let mut linked_repositories = github.repositories.clone();
+    if let Some(workspace_repositories) = crate::workspace::export_repositories(board)? {
+        for repository in workspace_repositories {
+            if !linked_repositories
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
+            {
+                linked_repositories.push(repository);
+            }
+        }
+    }
+
     let mut repositories = Vec::new();
     if auth.authenticated {
-        for name in &github.repositories {
+        for name in &linked_repositories {
             match client.repository_info(name) {
                 Ok(info) => repositories.push(json!({
                     "name": name,
@@ -100,7 +112,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
             }
         }
     } else {
-        repositories.extend(github.repositories.iter().map(|name| {
+        repositories.extend(linked_repositories.iter().map(|name| {
             json!({
                 "name": name,
                 "accessible": null,
@@ -108,7 +120,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
             })
         }));
     }
-    if configured && github.repositories.is_empty() {
+    if configured && linked_repositories.is_empty() {
         issues.push(json!({
             "code": "GITHUB_REPO_NOT_LINKED",
             "message": "No GitHub repositories are linked to this Board",
@@ -184,7 +196,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let mut unsupported = Vec::new();
     for task in graph.iter().filter(|task| task.github_link().is_some()) {
         let link = task.github_link().expect("filtered linked task");
-        let linked_repo = github.contains_repo(&link.repo);
+        let linked_repo = repository_available(board, &link.repo)?;
         if !linked_repo {
             issues.push(json!({
                 "code": "GITHUB_REPO_NOT_LINKED",
@@ -454,6 +466,43 @@ fn github_scope_status(
 
 fn scope_satisfies(granted: &str, required: &str) -> bool {
     granted == required || (required == "read:org" && matches!(granted, "admin:org" | "write:org"))
+}
+
+/// A repository is available when it is directly linked on a repository-local
+/// Board or included by the Workspace catalog. Workspace members need no
+/// per-repository `orbit github repo link`.
+fn repository_available(board: &Board, repository: &str) -> Result<bool> {
+    if let Some(repositories) = crate::workspace::export_repositories(board)? {
+        return Ok(repositories
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(repository)));
+    }
+    Ok(board.config.github.contains_repo(repository))
+}
+
+fn require_repository_available(board: &Board, repository: &str) -> Result<()> {
+    if repository_available(board, repository)? {
+        return Ok(());
+    }
+    let message = if board.is_workspace_board() {
+        format!(
+            "repository `{repository}` is not included in this Workspace; run `orbit workspace refresh` or include it"
+        )
+    } else {
+        format!(
+            "repository `{repository}` is not linked to this Board; run `orbit github repo link {repository}`"
+        )
+    };
+    Err(
+        OrbitError::new(code::GITHUB_REPO_NOT_LINKED, message).with_details(json!({
+            "repository": repository,
+            "remediation": if board.is_workspace_board() {
+                "run `orbit workspace refresh` or `orbit workspace include OWNER/REPO`"
+            } else {
+                "run `orbit github repo link OWNER/REPO`"
+            },
+        })),
+    )
 }
 
 pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
@@ -1044,7 +1093,7 @@ fn cmd_repo_unlink(
 
 fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::CommandOutput> {
     let (repo, number) = resolve_adopt_identifier(&args)?;
-    board.config.github.require_linked_repo(&repo)?;
+    require_repository_available(board, &repo)?;
     let client = client_from_env()?;
     let mut issue = client.get_issue(
         &repo,
@@ -1505,7 +1554,7 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
             .github_link()
             .ok_or_else(|| OrbitError::invalid_argument(format!("task {id} has no GitHub link")))?
             .clone();
-        board.config.github.require_linked_repo(&link.repo)?;
+        require_repository_available(board, &link.repo)?;
         if board.config.github.mode.is_basic() && direction != SyncDirection::Pull {
             reject_basic_metadata(task)?;
         }
@@ -1911,8 +1960,16 @@ fn apply_plan(
         )?;
     }
 
-    if plan.direction != SyncDirection::Pull && !relationship.supported.is_empty() {
-        client.update_relationships(&link.repo, link.number, &relationship.supported)?;
+    let removals = relationship
+        .changes
+        .iter()
+        .filter(|change| change.action == "remove")
+        .cloned()
+        .collect::<Vec<_>>();
+    if plan.direction != SyncDirection::Pull
+        && (!relationship.supported.is_empty() || !removals.is_empty())
+    {
+        client.update_relationships(&link.repo, link.number, &relationship.supported, &removals)?;
     }
 
     let refreshed = client.get_issue(
@@ -1978,6 +2035,8 @@ fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {
             verification: task.front.verification.clone(),
             status: Some(task.front.status),
             issue_state: Some(issue.state),
+            sub_issues: issue.blocking.clone(),
+            blocked_by: issue.blocked_by.clone(),
         });
     }
 }

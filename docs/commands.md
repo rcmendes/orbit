@@ -337,12 +337,16 @@ child repositories, detects Claude Code, Cursor, Codex, and OpenCode across
 those repositories, and offers an interactive selection in a terminal. Select
 explicitly with `--agents all`, `--agents auto`, `--agents none`, or a comma-
 separated list. `--print` previews without writing files or saving a selection.
+`--hooks` installs the Claude SessionStart hook; `--no-mcp` writes instructions
+only; `--portable-mcp` and `--mcp-bin PATH` choose the recorded Orbit command.
 An applied selection is stored in the Workspace Board and reused on later runs,
 so a newly discovered repository receives the same selected harnesses.
 
 ```bash
 orbit workspace setup --print
 orbit workspace setup --agents all
+orbit workspace setup --hooks --portable-mcp
+orbit workspace setup --agents claude --no-mcp
 orbit workspace refresh
 orbit workspace setup              # apply saved harnesses to new repositories
 orbit workspace setup --remove     # remove only Orbit-managed sections/config

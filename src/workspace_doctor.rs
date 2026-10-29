@@ -246,7 +246,7 @@ fn diagnose_layout_and_repositories(
                         .with_cause("the child directory was moved or deleted after discovery")
                         .with_next_action("run `orbit workspace refresh`; the repository will become stale and its cache retained"),
                     );
-                } else if !is_direct_git_repository(&path) {
+                } else if !crate::workspace::is_direct_git_repository(&path) {
                     issues.push(
                         Issue::new(
                             "WORKSPACE_REPOSITORY_INACCESSIBLE",
@@ -789,7 +789,7 @@ fn diagnose_agent_setup(
         || configured_repositories.iter().any(|(_, path)| {
             crate::setup::configured_clients(path)
                 .iter()
-                .any(|client| is_harness(*client))
+                .any(|client| client.is_harness())
         });
     if expects_workspace {
         match crate::setup::workspace_guidance(workspace, true, false) {
@@ -820,7 +820,7 @@ fn diagnose_agent_setup(
             Some(expected) => expected.clone(),
             None => crate::setup::configured_clients(path)
                 .into_iter()
-                .filter(|client| is_harness(*client))
+                .filter(|client| client.is_harness())
                 .collect(),
         };
         if clients.is_empty() {
@@ -835,16 +835,6 @@ fn diagnose_agent_setup(
     if crate::setup::detects_mattpocock_skills(workspace) {
         check_matt_setup("Workspace root", workspace, issues, warnings);
     }
-}
-
-fn is_harness(client: crate::setup::SetupClient) -> bool {
-    matches!(
-        client,
-        crate::setup::SetupClient::Claude
-            | crate::setup::SetupClient::Cursor
-            | crate::setup::SetupClient::Codex
-            | crate::setup::SetupClient::Opencode
-    )
 }
 
 fn check_repository_setup(
@@ -1068,24 +1058,6 @@ fn record_setup_preview(
             .iter()
             .map(|warning| format!("{}: {warning}", path.display())),
     );
-}
-
-fn is_direct_git_repository(path: &Path) -> bool {
-    let Ok(output) = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-    else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let top = String::from_utf8_lossy(&output.stdout);
-    let top = dunce::canonicalize(top.trim()).unwrap_or_else(|_| PathBuf::from(top.trim()));
-    let candidate = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    top == candidate
 }
 
 fn is_stale(timestamp: Option<DateTime<Utc>>) -> bool {

@@ -1248,6 +1248,60 @@ fn supported_blocked_by_relationships_are_previewed_and_applied() {
 }
 
 #[test]
+fn removing_a_synced_dependency_removes_the_github_blocked_by_relationship() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    add_fixture_issue(&fixture, "acme/widget#43", 43, "Blocking dependency");
+    let repo = TestRepo::new();
+    let task = adopt_fixture_task(&repo, &fixture, "Blocked issue");
+    let dependency = repo.add("Dependency", &[]);
+    repo.ok_json_with_env(
+        &[
+            "github",
+            "adopt",
+            dependency.as_str(),
+            "--repo",
+            "acme/widget",
+            "--number",
+            "43",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    repo.ok_json(&["depend", task.as_str(), dependency.as_str(), "--json"]);
+    repo.ok_json_with_env(
+        &["github", "sync", task.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    repo.ok_json(&["undepend", task.as_str(), dependency.as_str(), "--json"]);
+
+    let preview = repo.ok_json_with_env(
+        &["github", "sync", task.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(
+        preview["data"]["tasks"][0]["relationships"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|change| change["action"] == "remove" && change["kind"] == "blocked_by"),
+        "{preview}"
+    );
+
+    repo.ok_json_with_env(
+        &["github", "sync", task.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(
+        applied["issues"]["acme/widget#42"]
+            .get("blocked_by")
+            .is_none_or(|value| value.as_array().is_some_and(Vec::is_empty)),
+        "{applied}"
+    );
+}
+
+#[test]
 fn batch_sync_reports_partial_failures_and_retries_without_advancing_failed_baseline() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);

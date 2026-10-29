@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{OrbitError, Result, code};
 use crate::github::config::IssueFieldConfig;
 use crate::github::model::{IssueSnapshot, IssueState};
-use crate::github::relationships::SupportedRelationship;
+use crate::github::relationships::{RelationshipChange, SupportedRelationship};
 
 const AREA_FIELD_OPTIONS: [&str; 6] = ["board", "cli", "mcp", "setup", "docs", "release"];
 
@@ -130,6 +130,7 @@ pub trait GitHubClient: Send + Sync {
         repo: &str,
         number: u64,
         desired: &[SupportedRelationship],
+        removals: &[RelationshipChange],
     ) -> Result<()>;
 }
 
@@ -515,6 +516,7 @@ impl GitHubClient for GhCliClient {
         repo: &str,
         number: u64,
         desired: &[SupportedRelationship],
+        removals: &[RelationshipChange],
     ) -> Result<()> {
         let desired_children: std::collections::BTreeSet<_> = desired
             .iter()
@@ -522,6 +524,16 @@ impl GitHubClient for GhCliClient {
             .map(|relationship| relationship.github.number)
             .collect();
         let desired_blockers: std::collections::BTreeSet<_> = desired
+            .iter()
+            .filter(|relationship| relationship.kind == "blocked_by")
+            .map(|relationship| relationship.github.number)
+            .collect();
+        let remove_children: std::collections::BTreeSet<_> = removals
+            .iter()
+            .filter(|relationship| relationship.kind == "sub_issue")
+            .map(|relationship| relationship.github.number)
+            .collect();
+        let remove_blockers: std::collections::BTreeSet<_> = removals
             .iter()
             .filter(|relationship| relationship.kind == "blocked_by")
             .map(|relationship| relationship.github.number)
@@ -541,6 +553,15 @@ impl GitHubClient for GhCliClient {
                 payload.as_bytes(),
             )?;
         }
+        for child_number in remove_children.intersection(&current_children) {
+            let child_id = rest_issue_numeric_id(repo, *child_number)?;
+            let path = format!("/repos/{repo}/issues/{number}/sub_issue");
+            let payload = serde_json::json!({ "sub_issue_id": child_id }).to_string();
+            gh_api_with_input(
+                &["api", &path, "-X", "DELETE", "--input", "-"],
+                payload.as_bytes(),
+            )?;
+        }
 
         let blockers = list_issue_relationships(repo, number, "dependencies/blocked_by")?;
         let current_blockers: std::collections::BTreeSet<_> = blockers
@@ -555,6 +576,12 @@ impl GitHubClient for GhCliClient {
                 &["api", &path, "-X", "POST", "--input", "-"],
                 payload.as_bytes(),
             )?;
+        }
+        for blocker_number in remove_blockers.intersection(&current_blockers) {
+            let blocker_id = rest_issue_numeric_id(repo, *blocker_number)?;
+            let path =
+                format!("/repos/{repo}/issues/{number}/dependencies/blocked_by/{blocker_id}");
+            gh_api(&["api", &path, "-X", "DELETE"])?;
         }
         Ok(())
     }
@@ -1494,6 +1521,7 @@ impl GitHubClient for FixtureClient {
         repo: &str,
         number: u64,
         desired: &[SupportedRelationship],
+        removals: &[RelationshipChange],
     ) -> Result<()> {
         let mut store = self.store.lock().expect("fixture lock");
         let key = format!("{repo}#{number}");
@@ -1502,6 +1530,13 @@ impl GitHubClient for FixtureClient {
             .get(&key)
             .cloned()
             .ok_or_else(|| OrbitError::not_found(&key))?;
+        for removal in removals {
+            match removal.kind {
+                "sub_issue" => issue.blocking.retain(|item| item != &removal.github),
+                "blocked_by" => issue.blocked_by.retain(|item| item != &removal.github),
+                _ => {}
+            }
+        }
         for relationship in desired {
             let (current, reference) = match relationship.kind {
                 "sub_issue" => (&mut issue.blocking, &relationship.github),

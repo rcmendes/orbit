@@ -568,6 +568,53 @@ fn workspace_issue_import_previews_then_creates_a_linked_task_without_writing_gi
 }
 
 #[test]
+fn workspace_catalog_repositories_do_not_need_a_separate_github_repo_link_for_sync() {
+    let repo = TestRepo::new();
+    let (_workspace_dir, workspace) = init_workspace(&repo);
+    child_repo(&repo, &workspace, "api", "https://github.com/acme/api.git");
+    let github_fixture = repo.home().join("github.json");
+    let issue_fixture = json!({
+        "repositories": { "acme/api": { "owner_type": "Organization" } },
+        "catalog_issues": {
+            "acme/api": [{
+                "number": 31,
+                "title": "Workspace sync",
+                "state": "open",
+                "labels": ["bug"]
+            }]
+        }
+    });
+    std::fs::write(&github_fixture, issue_fixture.to_string()).unwrap();
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+    let (status, imported) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "issues", "import", "acme/api#31", "--apply"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{imported}");
+    let task = imported["data"]["imported"][0]["task"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, synced) = run_workspace(
+        &repo,
+        &workspace,
+        &["github", "sync", &task],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{synced}");
+    assert_eq!(synced["data"]["count"], 1);
+}
+
+#[test]
 fn workspace_issue_import_links_local_tasks_without_overwriting_and_skips_both_duplicate_directions()
  {
     let repo = TestRepo::new();

@@ -434,7 +434,7 @@ unsupported origins.
 
 ### Workspace agent reconciliation
 
-`orbit workspace setup [--agents auto|all|none|ask|LIST] [--print]` reconciles
+`orbit workspace setup [--agents auto|all|none|ask|LIST] [--hooks] [--no-mcp] [--portable-mcp] [--mcp-bin PATH] [--print] [--remove]` reconciles
 agent configuration against the last refreshed catalog; it does not scan Git or
 contact GitHub. The target set is the discovered, included direct child
 repositories whose local directories remain Git repositories. Harness detection
@@ -607,6 +607,15 @@ orbit doctor [--fix | --migrate]
 orbit sync
 orbit github <status|connect|setup|repo|adopt|create|sync>
 orbit triage <context|review|apply>
+orbit workspace migrate [DIR] [--dry-run] [--resume]
+orbit workspace status
+orbit workspace refresh
+orbit workspace include <OWNER/REPO>
+orbit workspace exclude <OWNER/REPO>
+orbit workspace detach <OWNER/REPO> [--apply]
+orbit workspace reattach <OWNER/REPO> [--apply]
+orbit workspace setup [--agents LIST] [--hooks] [--no-mcp] [--portable-mcp] [--mcp-bin PATH] [--print] [--remove]
+orbit workspace issues <refresh|list|inspect|import|detach|reattach>
 ```
 
 GitHub sync and Triage require Orbit 0.9.0 or newer. Default release builds
@@ -683,7 +692,7 @@ catalog and require `--repo OWNER/REPO` when multiple repositories are included.
 - `list --parent <id>` filters to that Parent Task's SubTasks; `list --group` keeps parents and SubTasks together in human output.
 - `tree <id>` returns one Parent Task and its direct SubTasks, root first, with the same task rows as `list`/`ready`; it refuses a SubTask. `data` carries `root`, `tasks`, and `count`.
 - `doctor` reports missing parents (`DANGLING_PARENT`), nested or self parents (`NESTED_SUBTASK`), parent/ID mismatches (`PARENT_MISMATCH`), and an epic on a SubTask (`INVALID_TYPE`).
-- `doctor` runs without a Board. It reports the discovery trace and the layout findings `LEGACY_LAYOUT`, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and `ABSOLUTE_BOARD_PATH`, then runs task-level checks when a Board is resolved.
+- `doctor` runs without a Board. It reports the discovery trace and the layout findings `LEGACY_LAYOUT`, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and `ABSOLUTE_BOARD_PATH`, then runs task-level checks when a Board is resolved. In a Workspace it also reports `WORKSPACE_LAYOUT`, `WORKSPACE_CACHE_CORRUPT`, `WORKSPACE_REPOSITORIES_NOT_DISCOVERED`, `WORKSPACE_CATALOG_STALE`, `WORKSPACE_REPOSITORIES_EMPTY`, `WORKSPACE_REPOSITORY_MISSING`, `WORKSPACE_REPOSITORY_STALE`, `WORKSPACE_REPOSITORY_INACCESSIBLE`, `WORKSPACE_REPOSITORY_REMOVED`, `WORKSPACE_REPOSITORY_UNSUPPORTED`, `WORKSPACE_NON_GIT_DIRECTORY`, `WORKSPACE_MISSING_ORIGIN`, `WORKSPACE_UNSUPPORTED_ORIGIN`, `WORKSPACE_CONFIG_CONFLICT`, `WORKSPACE_ISSUES_NOT_REFRESHED`, `WORKSPACE_ISSUES_STALE`, `WORKSPACE_ISSUES_UNAVAILABLE`, `WORKSPACE_MIGRATION_INCOMPLETE`, `WORKSPACE_MIGRATION_STAGE`, `WORKSPACE_LOCAL_BOARD`, `WORKSPACE_AGENT_CONFIG`, `WORKSPACE_AGENT_DRIFT`, `WORKSPACE_AGENT_CONFLICT`, `MATTPOCOCK_SETUP_DRIFT`, `GITHUB_DUPLICATE_LINK`, `GITHUB_ORPHAN_LINK`, and `GITHUB_SYNC_CONFLICT`. Findings carry `severity`, optional `repository`, `task`, and `issue`, `cause`, and `next_action`.
 - `doctor --fix` removes stale temp files and re-attaches an orphan `orbit` worktree whose `DIR` was deleted; it repairs the repository that holds `--dir`/`ORBIT_DIR` when given, else the current one. It does not rewrite tasks or comments. `doctor --migrate` performs the explicit, resumable legacy migration described in [Legacy layouts and migration](#legacy-layouts-and-migration). Before it deletes a legacy copy it requires the Task and comment Markdown of both copies to be byte-identical and refuses with `MIGRATION_BLOCKED` otherwise, or when the legacy worktree has uncommitted changes. After a workspace migration it lists a note: other Repositories still linked to the old `board` path must run `orbit link` again.
 - `undepend` is idempotent.
 - `cancel` resolves dependents. It requires the claim holder unless `--force`; on a Parent Task, `--force` also cancels open SubTasks.
@@ -778,7 +787,7 @@ Error:
 
 Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, `PREFIX_MISMATCH`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `SUBTASKS_OPEN`, `SUBTASKS_EXIST`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_SLUG`, `SLUG_LOCKED`, `MIGRATION_BLOCKED`, `PREFIX_COLLISION`, `INVALID_TYPE`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`, `NOT_A_REPOSITORY`, `LINK_NOT_FOUND`, `EPHEMERAL_BIN`.
 
-Warnings and `doctor` findings use a separate namespace: `LEGACY_LAYOUT`, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and `ABSOLUTE_BOARD_PATH`. They appear in `meta.warnings` or in the `doctor` issue list; they are not command failures.
+Warnings and `doctor` findings use a separate namespace. The base findings are `LEGACY_LAYOUT`, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and `ABSOLUTE_BOARD_PATH`; Workspace findings are the `WORKSPACE_*`, `MATTPOCOCK_SETUP_DRIFT`, `GITHUB_DUPLICATE_LINK`, `GITHUB_ORPHAN_LINK`, and `GITHUB_SYNC_CONFLICT` codes listed under Doctor. They appear in `meta.warnings` or in the `doctor` issue list; they are not command failures. Workspace findings include `severity` (`error` or `warning`), the affected repository/Task/Issue when applicable, `cause`, and a safe `next_action`.
 
 `LOCKED` is retryable. Everything else is not unless `details` says otherwise.
 

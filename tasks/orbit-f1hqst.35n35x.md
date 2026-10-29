@@ -1,6 +1,6 @@
 ---
 title: Detach and reattach Workspace repositories and Linked Tasks
-status: in_progress
+status: done
 type: task
 priority: 2
 labels:
@@ -16,11 +16,8 @@ checkpoint:
   progress: Detach/reattach implementation is running in workspace-detach; catalog and sync prerequisites are merged.
   next: Review archive/provenance and idempotence tests, merge, then unlock Workspace doctor.
 area: cli
-claimed_by: rodrigomendes
-claimed_at: 2026-10-29T00:16:37.586449Z
-lease_until: 2026-10-29T00:46:37.586449Z
 created_at: 2026-10-28T22:48:24.498420Z
-updated_at: 2026-10-29T00:17:17.652229Z
+updated_at: 2026-10-29T00:37:45.422088Z
 ---
 
 ## Goal

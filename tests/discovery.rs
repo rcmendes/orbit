@@ -637,7 +637,7 @@ fn scoped_board_access_holds_and_releases_the_selected_lock() {
     repo.init();
     let root = repo.path().join(".orbit");
     let access = BoardAccess::open(Some(&root), AccessMode::Write).unwrap();
-    assert_eq!(access.board().root, std::fs::canonicalize(&root).unwrap());
+    assert_eq!(access.board().root, dunce::canonicalize(&root).unwrap());
     assert!(access.board().lock_shared().is_err());
     drop(access);
     let first = BoardAccess::open(Some(&root), AccessMode::Inspect).unwrap();

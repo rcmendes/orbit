@@ -4,7 +4,8 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.10.1` — latest; packaging patch after the v0.10.0 npm publish was skipped
+- `v0.10.2` — latest; Workspace migration preserves the legacy configuration and refresh infers the organization
+- `v0.10.1` — packaging patch after the v0.10.0 npm publish was skipped
 - `v0.10.0` — GitHub Release published; npm publication superseded by v0.10.1
 - `v0.9.4`
 - `v0.9.3`

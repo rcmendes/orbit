@@ -191,7 +191,7 @@ jq -e '.data.applied == true' triage-apply.json > /dev/null
 "$orbit" github sync "$task_id" --direction push --apply --json > github-sync-push.json
 
 created_id="$("$orbit" add "Create fixture issue" --json | jq -r '.data.id')"
-"$orbit" github create "$created_id" --json > github-create.json
-jq -e '.data.github.repo == "alice/widget"' github-create.json > /dev/null
+"$orbit" github create "$created_id" --apply --json > github-create.json
+jq -e '.data.success_count == 1 and .data.failure_count == 0 and .data.tasks[0].github.repo == "alice/widget"' github-create.json > /dev/null
 
 echo "onboarding smoke passed"

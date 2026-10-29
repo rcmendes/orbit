@@ -183,8 +183,10 @@ try {
     Invoke-Orbit github sync $taskId --direction push --apply --json | Out-Null
 
     $createdId = (Invoke-Orbit add "Create fixture issue" --json | ConvertFrom-Json).data.id
-    $created = Invoke-Orbit github create $createdId --json | ConvertFrom-Json
-    if ($created.data.github.repo -ne "alice/widget") { throw "GitHub create did not use the linked fixture repository" }
+    $created = Invoke-Orbit github create $createdId --apply --json | ConvertFrom-Json
+    if ($created.data.success_count -ne 1 -or $created.data.tasks[0].github.repo -ne "alice/widget") {
+        throw "GitHub create did not use the linked fixture repository"
+    }
 
     Write-Output "onboarding smoke passed"
 } finally {

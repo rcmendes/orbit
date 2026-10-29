@@ -1,6 +1,6 @@
 ---
 title: Add Workspace-aware doctor diagnostics
-status: in_progress
+status: done
 type: task
 priority: 2
 labels:
@@ -16,11 +16,8 @@ depends_on:
 - orbit-f1hqst.vh1xg8
 parent: orbit-f1hqst
 area: cli
-claimed_by: rodrigomendes
-claimed_at: 2026-10-29T10:35:13.684994Z
-lease_until: 2026-10-29T11:05:13.684994Z
 created_at: 2026-10-28T22:48:35.120531Z
-updated_at: 2026-10-29T10:35:13.684994Z
+updated_at: 2026-10-29T11:05:52.408718Z
 ---
 
 ## Goal

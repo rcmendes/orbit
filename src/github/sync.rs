@@ -283,6 +283,7 @@ mod tests {
                 github: Some(GitHubLink {
                     repo: "acme/app".into(),
                     number: 9,
+                    active: true,
                     last_sync: Some(GitHubSyncBaseline {
                         at: now,
                         issue_updated_at: now,

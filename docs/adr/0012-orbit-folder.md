@@ -291,6 +291,12 @@ changing the Board's contents or Git storage model:
   applied; it preserves Orbit values on links, skips duplicate identities by
   repository/number, and never writes to GitHub. Remote Issues remain outside the
   Task graph until explicitly imported.
+- `orbit workspace detach/reattach OWNER/REPO` and `orbit workspace issues
+  detach/reattach OWNER/REPO#NUMBER` preview before applying. Detach converts
+  Linked Tasks to Local Tasks with inactive GitHub provenance and moves cached
+  summaries into a non-claimable archive in `issues.json`; it never writes to
+  GitHub. Reattach compares exact identities and previews current sync conflicts
+  before reactivating links. Sync remains a separate explicit operation.
 
 This path extension keeps Workspace metadata/cache out of the Board's Git
 repository, preserves child-local data, and makes the Workspace root the stable

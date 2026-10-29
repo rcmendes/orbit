@@ -325,7 +325,7 @@ impl Task {
     }
 
     pub fn github_link(&self) -> Option<&GitHubLink> {
-        self.front.github.as_ref()
+        self.front.github.as_ref().filter(|link| link.active)
     }
 
     pub fn has_labels(&self, labels: &[String]) -> bool {

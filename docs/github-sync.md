@@ -67,6 +67,51 @@ and Issue number, never title. Import fetches Issue details but performs no GitH
 writes; imported Tasks follow normal readiness, dependency, hold-label, and claim
 rules.
 
+## Detach and reattach
+
+Detach is an explicit local-only lifecycle operation. Both repository and
+individual Linked Task commands preview first; `--apply` is required to change
+the Board or Workspace catalog:
+
+```bash
+orbit workspace detach acme/api
+orbit workspace detach acme/api --apply
+orbit workspace issues detach acme/api#42
+orbit workspace issues detach acme/api#42 --apply
+```
+
+Repository detach previews all active Linked Tasks and cached Remote Issue
+summaries for that repository. Applying it excludes the repository, changes its
+Linked Tasks into ordinary Local Tasks, and moves cached summaries into the
+`archived_issues` section of `<workspace>/.orbit/cache/issues.json`. Individual
+detach archives only that Issue snapshot. Task title, body, status, labels,
+relationships, comments, and last sync baseline remain intact. The stable
+repository/Issue number stays in Task frontmatter with `active: false`; it is
+inactive provenance, not a sync link. Archived summaries are not returned by
+normal catalog listing, and they are never claimable Tasks. Neither detach path
+closes, deletes, or otherwise writes to GitHub. Detach and reattach are safe to
+repeat.
+
+Reattach also previews first and matches only exact repository/Issue number
+identities:
+
+```bash
+orbit workspace reattach acme/api
+orbit workspace reattach acme/api --apply
+orbit workspace issues reattach acme/api#42
+orbit workspace issues reattach acme/api#42 --apply
+```
+
+Repository reattach previews current sync plans for its inactive Tasks and the
+archived snapshots. Applying it re-includes the repository, restores snapshots,
+and reactivates those exact links. Task reattach requires its repository to be
+included and previews current GitHub values, planned changes, and field-level
+conflicts for the matching Local Task. Applying reactivates the link but does not
+pull, push, resolve conflicts, or write GitHub. Use `orbit github sync` as a
+separate explicit operation to review and resolve the plan. A conflicting
+identity on another Task blocks reattachment instead of creating duplicate
+links.
+
 `connect` detects the checkout's `origin`. Organization-owned repositories
 configure full mode when their Issue Fields are ready. For personal-account
 repositories, it leaves the Board unchanged and reports the exact `[github]`
@@ -321,6 +366,11 @@ github:
     status: todo
     issue_state: open
 ```
+
+An active link omits `active` (older Task files remain active by default). A
+detached Local Task keeps the same repository, Issue number, and `last_sync`, but
+stores `active: false`; Orbit treats that identity as provenance and excludes it
+from synchronization until reattachment.
 
 Controlled `area` values match `TaskArea`: `board`, `cli`, `mcp`, `setup`, `docs`, `release`.
 

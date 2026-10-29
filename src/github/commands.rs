@@ -1056,6 +1056,22 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
     }
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let task = graph.get(&args.task)?.clone();
+    if task.front.github.as_ref().is_some_and(|link| !link.active) {
+        return Err(OrbitError::invalid_argument(format!(
+            "task {} retains inactive GitHub provenance; use `orbit workspace issues reattach {}#{}` after reviewing it",
+            args.task,
+            task.front
+                .github
+                .as_ref()
+                .expect("inactive provenance")
+                .repo,
+            task.front
+                .github
+                .as_ref()
+                .expect("inactive provenance")
+                .number,
+        )));
+    }
     if task.github_link().is_some() {
         return Err(OrbitError::invalid_argument(format!(
             "task {} already links to a GitHub Issue",
@@ -1117,6 +1133,10 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         let rejected = if !selected.insert(id) {
             Some(format!(
                 "task {id} appears more than once in the export selection"
+            ))
+        } else if task.front.github.as_ref().is_some_and(|link| !link.active) {
+            Some(format!(
+                "task {id} retains inactive GitHub provenance; reattach the exact Issue before exporting"
             ))
         } else if task.github_link().is_some() {
             Some(format!(

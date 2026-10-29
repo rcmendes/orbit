@@ -939,6 +939,28 @@ selection.
 open and closed Issue summaries for included repositories, list filters the local
 snapshot, and inspect fetches one Issue's body and comments. Remote Issues are
 not Tasks and are never claimable.
+
+`detach OWNER/REPO` previews the repository, its active Linked Tasks, and cached
+Remote Issue summaries. Add `--apply` to exclude the repository, make its Linked
+Tasks Local Tasks with inactive GitHub provenance, and archive its snapshots.
+`reattach OWNER/REPO` previews exact-identity matches and current sync plans;
+`--apply` restores the snapshots and reactivates those exact Task links. Neither
+command writes to GitHub. Both are safe to repeat.
+";
+
+pub const WORKSPACE_DETACH_LONG: &str = "\
+Preview which active Linked Tasks and cached Remote Issues belong to a Workspace
+repository. The default is read-only. Pass --apply to exclude the repository,
+detach its Linked Tasks into Local Tasks while preserving inactive GitHub
+provenance, and archive its Remote Issue snapshots. GitHub is never changed.
+";
+
+pub const WORKSPACE_REATTACH_LONG: &str = "\
+Preview the archived Remote Issue snapshots and inactive Task provenance for an
+exact OWNER/REPO identity. Current GitHub values and field-level sync conflicts
+are shown before confirmation. Pass --apply to include the repository, restore
+its cached snapshots, and reactivate Tasks matched by repository and Issue
+number. Reattachment does not synchronize or write GitHub; sync remains explicit.
 ";
 
 pub const WORKSPACE_EXAMPLES: &str = "\
@@ -947,6 +969,10 @@ Examples:
   orbit workspace status
   orbit workspace exclude acme/legacy
   orbit workspace include acme/service
+  orbit workspace detach acme/legacy
+  orbit workspace detach acme/legacy --apply
+  orbit workspace reattach acme/legacy
+  orbit workspace reattach acme/legacy --apply
   orbit workspace setup --print
   orbit workspace setup --agents all
   orbit workspace setup --remove";
@@ -979,7 +1005,27 @@ until selected with `import`. Import previews one or more explicit identities;
 `--link OWNER/REPO#NUMBER=TASK` options to choose existing Tasks. Linking
 preserves Orbit fields and reports differences. Already-linked Issues and Tasks
 are skipped as duplicates, identified only by repository and Issue number.
-Import reads GitHub Issue details but never writes to GitHub.";
+Import reads GitHub Issue details but never writes to GitHub.
+
+`detach` and `reattach` also preview by default. They convert a Linked Task to a
+Local Task with inactive GitHub provenance, archive and restore cached snapshots,
+and compare exact identities and sync conflicts before reactivating a link. Pass
+`--apply` only after reviewing; neither operation writes to GitHub.";
+
+pub const WORKSPACE_ISSUE_DETACH_LONG: &str = "\
+Preview a Linked Task selected by exact OWNER/REPO#NUMBER identity. Pass --apply
+to make the Task local-only, retain its GitHub identity as inactive provenance,
+and move the cached Remote Issue snapshot to the non-claimable archive. Task data
+is preserved and GitHub is never changed. Repeating detach is safe.
+";
+
+pub const WORKSPACE_ISSUE_REATTACH_LONG: &str = "\
+Preview the Local Task that retains the exact OWNER/REPO#NUMBER provenance and
+compare its current fields with GitHub. The sync plan includes pending changes
+and field-level conflicts. Pass --apply to reactivate the link after review;
+this does not resolve conflicts or write GitHub. Resolve conflicts in a separate
+explicit `orbit github sync` operation. Repeating reattach is safe.
+";
 
 pub const WORKSPACE_ISSUES_EXAMPLES: &str = "\
 Examples:
@@ -988,7 +1034,11 @@ Examples:
   orbit workspace issues list --text authentication --unlinked
   orbit workspace issues inspect acme/api#42
   orbit workspace issues import acme/api#42 acme/web#8
-  orbit workspace issues import acme/api#42 --link acme/api#42=orb-a7b2c9 --apply";
+  orbit workspace issues import acme/api#42 --link acme/api#42=orb-a7b2c9 --apply
+  orbit workspace issues detach acme/api#42
+  orbit workspace issues detach acme/api#42 --apply
+  orbit workspace issues reattach acme/api#42
+  orbit workspace issues reattach acme/api#42 --apply";
 
 pub const WORKSPACE_ISSUE_IMPORT_LONG: &str = "\
 Import only the explicitly selected Remote Issues. The default is a preview;

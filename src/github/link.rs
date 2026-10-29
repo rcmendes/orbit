@@ -10,8 +10,19 @@ use crate::task::Status;
 pub struct GitHubLink {
     pub repo: String,
     pub number: u64,
+    /// `false` keeps the old identity as provenance without enabling sync.
+    #[serde(default = "default_active", skip_serializing_if = "is_active")]
+    pub active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<GitHubSyncBaseline>,
+}
+
+fn default_active() -> bool {
+    true
+}
+
+fn is_active(active: &bool) -> bool {
+    *active
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +49,7 @@ impl GitHubLink {
         Self {
             repo,
             number,
+            active: true,
             last_sync: None,
         }
     }

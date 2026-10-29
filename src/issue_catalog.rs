@@ -7,8 +7,8 @@ use serde_json::json;
 
 use crate::board::Board;
 use crate::cli::{
-    WorkspaceIssueInspectArgs, WorkspaceIssuesCommand, WorkspaceIssuesImportArgs,
-    WorkspaceIssuesListArgs,
+    WorkspaceIssueInspectArgs, WorkspaceIssueMutationArgs, WorkspaceIssuesCommand,
+    WorkspaceIssuesImportArgs, WorkspaceIssuesListArgs,
 };
 use crate::error::{OrbitError, Result};
 use crate::github::client::{IssueCatalogItem, IssueComment, client_from_env};
@@ -20,6 +20,8 @@ use crate::task::{self, Status, Task, TaskArea, TaskFrontmatter, TaskType};
 struct IssueCatalog {
     #[serde(default)]
     repositories: BTreeMap<String, CachedRepository>,
+    #[serde(default)]
+    archived_issues: BTreeMap<String, BTreeMap<u64, IssueCatalogItem>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -50,6 +52,8 @@ pub fn run(board: &Board, command: WorkspaceIssuesCommand) -> Result<crate::outp
         WorkspaceIssuesCommand::List(args) => list(board, &workspace, args),
         WorkspaceIssuesCommand::Inspect(args) => inspect(board, &workspace, args),
         WorkspaceIssuesCommand::Import(args) => import(board, &workspace, args),
+        WorkspaceIssuesCommand::Detach(args) => detach_task(board, &workspace, args),
+        WorkspaceIssuesCommand::Reattach(args) => reattach_task(board, &workspace, args),
     }
 }
 
@@ -170,7 +174,7 @@ fn linked_identities(board: &Board) -> Result<BTreeSet<String>> {
     Ok(graph
         .tasks
         .values()
-        .filter_map(|task| task.front.github.as_ref())
+        .filter_map(|task| task.github_link())
         .map(|link| format!("{}#{}", link.repo.to_ascii_lowercase(), link.number))
         .collect())
 }
@@ -410,6 +414,18 @@ fn import(
                 }));
                 continue;
             };
+            if let Some(link) = task.front.github.as_ref().filter(|link| !link.active) {
+                errors.push(json!({
+                    "identity": identity,
+                    "task": task_id,
+                    "message": format!(
+                        "Local Task `{task_id}` retains inactive provenance for {}#{}; use workspace issues reattach",
+                        link.repo,
+                        link.number
+                    ),
+                }));
+                continue;
+            }
             if let Some(link) = task.github_link() {
                 skipped_duplicates.push(json!({
                     "identity": identity,
@@ -701,6 +717,497 @@ fn create_linked_task(
             &prepared.issue,
         ));
     Ok(task)
+}
+
+pub(crate) fn detach_repository(
+    board: &Board,
+    workspace: &Path,
+    args: crate::cli::WorkspaceRepositoryMutationArgs,
+) -> Result<crate::output::CommandOutput> {
+    let repository =
+        crate::github::GitHubConfig::normalize_repo(&args.repository)?.to_ascii_lowercase();
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let tasks = graph
+        .iter()
+        .filter_map(|task| {
+            task.github_link()
+                .filter(|link| link.repo.eq_ignore_ascii_case(&repository))
+                .map(|link| {
+                    json!({
+                        "task": task.id,
+                        "identity": format!("{}#{}", link.repo, link.number),
+                        "title": task.front.title,
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    let path = cache_path(workspace);
+    let mut catalog = load(&path)?;
+    let remote_issue_snapshots = catalog
+        .repositories
+        .get(&repository)
+        .map(|cached| {
+            cached
+                .issues
+                .iter()
+                .map(|issue| json!({ "identity": issue.identity(), "snapshot": issue }))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let issue_count = catalog
+        .repositories
+        .get(&repository)
+        .map_or(0, |cached| cached.issues.len());
+    let archived_count = catalog
+        .archived_issues
+        .get(&repository)
+        .map_or(0, BTreeMap::len);
+    let already_detached = board
+        .config
+        .workspace
+        .exclude
+        .iter()
+        .any(|item| item.eq_ignore_ascii_case(&repository))
+        && tasks.is_empty()
+        && issue_count == 0;
+
+    let mut detached = Vec::new();
+    if args.apply && !already_detached {
+        for task in graph.iter().filter(|task| {
+            task.github_link()
+                .is_some_and(|link| link.repo.eq_ignore_ascii_case(&repository))
+        }) {
+            let mut task = task.clone();
+            let link = task.front.github.as_mut().expect("active link exists");
+            let identity = format!("{}#{}", link.repo, link.number);
+            link.active = false;
+            task.front.updated_at = Utc::now();
+            let rendered = task::render_task(&task)?;
+            crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
+            detached.push(json!({
+                "task": task.id,
+                "identity": identity,
+            }));
+        }
+        if let Some(cached) = catalog.repositories.get_mut(&repository) {
+            let archived = catalog
+                .archived_issues
+                .entry(repository.clone())
+                .or_default();
+            for issue in cached.issues.drain(..) {
+                archived.insert(issue.number, issue);
+            }
+        }
+        save(&path, &catalog)?;
+        crate::workspace::set_repository_detached(board, &repository, true)?;
+        if !detached.is_empty() {
+            board.commit("orbit: detach Workspace repository", false)?;
+        }
+    }
+
+    let data = json!({
+        "repository": repository,
+        "apply": args.apply,
+        "already_detached": already_detached,
+        "tasks": tasks,
+        "remote_issues": issue_count,
+        "remote_issue_snapshots": remote_issue_snapshots,
+        "archived_issues": archived_count + if args.apply { issue_count } else { 0 },
+        "detached": detached,
+    });
+    let summary = if args.apply {
+        format!("Detached {repository}; GitHub was not changed")
+    } else {
+        format!(
+            "Workspace repository detach preview: {} Linked Task(s), {issue_count} Remote Issue(s); nothing was written",
+            data["tasks"].as_array().map_or(0, Vec::len)
+        )
+    };
+    Ok(crate::output::CommandOutput::new(data, summary))
+}
+
+pub(crate) fn reattach_repository(
+    board: &Board,
+    workspace: &Path,
+    args: crate::cli::WorkspaceRepositoryMutationArgs,
+) -> Result<crate::output::CommandOutput> {
+    let repository =
+        crate::github::GitHubConfig::normalize_repo(&args.repository)?.to_ascii_lowercase();
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let inactive = graph
+        .iter()
+        .filter_map(|task| {
+            task.front
+                .github
+                .as_ref()
+                .filter(|link| !link.active && link.repo.eq_ignore_ascii_case(&repository))
+                .map(|link| (task, link))
+        })
+        .collect::<Vec<_>>();
+    for (task, link) in &inactive {
+        let duplicate_count = graph
+            .iter()
+            .filter(|candidate| {
+                candidate
+                    .front
+                    .github
+                    .as_ref()
+                    .is_some_and(|candidate_link| {
+                        candidate_link.repo.eq_ignore_ascii_case(&link.repo)
+                            && candidate_link.number == link.number
+                    })
+            })
+            .count();
+        if duplicate_count > 1 {
+            return Err(OrbitError::invalid_argument(format!(
+                "cannot reattach {}#{}: multiple Tasks retain that GitHub identity, including {}",
+                link.repo, link.number, task.id
+            )));
+        }
+    }
+    let path = cache_path(workspace);
+    let mut catalog = load(&path)?;
+    let archived_count = catalog
+        .archived_issues
+        .get(&repository)
+        .map_or(0, BTreeMap::len);
+    let archived_issue_snapshots = catalog
+        .archived_issues
+        .get(&repository)
+        .map(|issues| {
+            issues
+                .values()
+                .map(|issue| json!({ "identity": issue.identity(), "snapshot": issue }))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let included = crate::workspace::included_repositories(workspace)?
+        .iter()
+        .any(|item| item.eq_ignore_ascii_case(&repository));
+    let already_attached = included && inactive.is_empty() && archived_count == 0;
+
+    let client = if !inactive.is_empty() {
+        Some(client_from_env()?)
+    } else {
+        None
+    };
+    let mut previews = Vec::new();
+    for (task, link) in &inactive {
+        let issue = client
+            .as_ref()
+            .expect("client loaded when inactive links exist")
+            .get_issue(
+                &repository,
+                link.number,
+                (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
+            )?;
+        validate_issue_identity(&issue, &repository, link.number)?;
+        let plan = crate::github::sync::plan_sync(
+            crate::github::sync::OrbitSyncView { task, link },
+            &issue,
+            crate::github::model::SyncDirection::Both,
+        );
+        previews.push(json!({
+            "task": task.id,
+            "identity": format!("{}#{}", link.repo, link.number),
+            "issue_title": issue.title,
+            "sync_plan": plan,
+        }));
+    }
+
+    let mut reattached = Vec::new();
+    if args.apply && !already_attached {
+        if !included
+            && board
+                .config
+                .workspace
+                .exclude
+                .iter()
+                .all(|item| !item.eq_ignore_ascii_case(&repository))
+        {
+            return Err(OrbitError::invalid_argument(format!(
+                "repository `{repository}` is not included in this Workspace; reattach the repository first"
+            )));
+        }
+        for (task, link) in inactive {
+            let mut task = task.clone();
+            let stored = task
+                .front
+                .github
+                .as_mut()
+                .expect("inactive provenance exists");
+            // The selected Task was matched on the exact normalized repository and number.
+            stored.active = true;
+            task.front.updated_at = Utc::now();
+            let rendered = task::render_task(&task)?;
+            crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
+            reattached.push(json!({
+                "task": task.id,
+                "identity": format!("{}#{}", link.repo, link.number),
+            }));
+        }
+        if let Some(archived) = catalog.archived_issues.remove(&repository) {
+            let active = catalog.repositories.entry(repository.clone()).or_default();
+            for (number, issue) in archived {
+                active.issues.retain(|item| item.number != number);
+                active.issues.push(issue);
+            }
+            active.issues.sort_by_key(|issue| issue.number);
+        }
+        save(&path, &catalog)?;
+        crate::workspace::set_repository_detached(board, &repository, false)?;
+        if !reattached.is_empty() {
+            board.commit("orbit: reattach Workspace repository", false)?;
+        }
+    }
+
+    let data = json!({
+        "repository": repository,
+        "apply": args.apply,
+        "already_attached": already_attached,
+        "archived_issues": archived_count,
+        "archived_issue_snapshots": archived_issue_snapshots,
+        "tasks": previews,
+        "reattached": reattached,
+    });
+    let summary = if args.apply {
+        format!("Reattached {repository}; GitHub was not changed")
+    } else {
+        format!(
+            "Workspace repository reattach preview: {} Linked Task(s), {archived_count} archived Remote Issue(s); conflicts require review",
+            previews.len()
+        )
+    };
+    Ok(crate::output::CommandOutput::new(data, summary))
+}
+
+fn detach_task(
+    board: &Board,
+    workspace: &Path,
+    args: WorkspaceIssueMutationArgs,
+) -> Result<crate::output::CommandOutput> {
+    let (repository, number) = parse_identity(&args.identity)?;
+    let identity = format!("{repository}#{number}");
+    let graph = Graph::load(board, LoadMode::Strict)?.0;
+    let active = graph
+        .iter()
+        .filter(|task| {
+            task.github_link().is_some_and(|link| {
+                link.repo.eq_ignore_ascii_case(&repository) && link.number == number
+            })
+        })
+        .collect::<Vec<_>>();
+    let inactive = graph.iter().find(|task| {
+        task.front.github.as_ref().is_some_and(|link| {
+            !link.active && link.repo.eq_ignore_ascii_case(&repository) && link.number == number
+        })
+    });
+    let mut catalog = load(&cache_path(workspace))?;
+    let already_detached = active.is_empty() && inactive.is_some();
+    let tasks = active
+        .iter()
+        .map(|task| {
+            let snapshot = catalog
+                .repositories
+                .get(&repository)
+                .and_then(|cached| cached.issues.iter().find(|issue| issue.number == number));
+            json!({
+                "task": task.id,
+                "title": task.front.title,
+                "remote_issue": snapshot.map(|issue| json!({
+                    "identity": issue.identity(),
+                    "snapshot": issue,
+                })),
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut detached = Vec::new();
+
+    if active.is_empty() && inactive.is_none() {
+        return Err(OrbitError::not_found(&identity));
+    }
+    if args.apply && !already_detached {
+        for source in active {
+            let mut task = source.clone();
+            let link = task.front.github.as_mut().expect("active link exists");
+            let linked_repo = link.repo.clone();
+            let linked_number = link.number;
+            link.active = false;
+            task.front.updated_at = Utc::now();
+            let rendered = task::render_task(&task)?;
+            crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
+            detached.push(json!({
+                "task": task.id,
+                "identity": format!("{linked_repo}#{linked_number}"),
+            }));
+        }
+        if let Some(repository_cache) = catalog.repositories.get_mut(&repository)
+            && let Some(index) = repository_cache
+                .issues
+                .iter()
+                .position(|issue| issue.number == number)
+        {
+            let issue = repository_cache.issues.remove(index);
+            catalog
+                .archived_issues
+                .entry(repository.clone())
+                .or_default()
+                .insert(number, issue);
+        }
+        save(&cache_path(workspace), &catalog)?;
+        if !detached.is_empty() {
+            board.commit("orbit: detach Linked Task", false)?;
+        }
+    }
+
+    let data = json!({
+        "identity": identity,
+        "apply": args.apply,
+        "already_detached": already_detached,
+        "tasks": tasks,
+        "detached": detached,
+    });
+    let summary = if args.apply {
+        format!("Detached {identity}; GitHub was not changed")
+    } else {
+        format!("Linked Task detach preview for {identity}; nothing was written")
+    };
+    Ok(crate::output::CommandOutput::new(data, summary))
+}
+
+fn reattach_task(
+    board: &Board,
+    workspace: &Path,
+    args: WorkspaceIssueMutationArgs,
+) -> Result<crate::output::CommandOutput> {
+    let (repository, number) = parse_identity(&args.identity)?;
+    let identity = format!("{repository}#{number}");
+    let graph = Graph::load(board, LoadMode::Strict)?.0;
+    let inactive = graph.iter().find(|task| {
+        task.front.github.as_ref().is_some_and(|link| {
+            !link.active && link.repo.eq_ignore_ascii_case(&repository) && link.number == number
+        })
+    });
+    let provenance_count = graph
+        .iter()
+        .filter(|task| {
+            task.front.github.as_ref().is_some_and(|link| {
+                link.repo.eq_ignore_ascii_case(&repository) && link.number == number
+            })
+        })
+        .count();
+    if provenance_count > 1 {
+        return Err(OrbitError::invalid_argument(format!(
+            "cannot reattach {identity}: multiple Tasks retain that GitHub identity"
+        )));
+    }
+    if inactive.is_none()
+        && graph.iter().any(|task| {
+            task.github_link().is_some_and(|link| {
+                link.repo.eq_ignore_ascii_case(&repository) && link.number == number
+            })
+        })
+    {
+        return Ok(crate::output::CommandOutput::new(
+            json!({ "identity": identity, "apply": args.apply, "already_attached": true, "tasks": [], "reattached": [] }),
+            format!("{identity} is already attached"),
+        ));
+    }
+    let Some(task) = inactive else {
+        return Err(OrbitError::not_found(&identity));
+    };
+    let included = crate::workspace::included_repositories(workspace)?
+        .iter()
+        .any(|item| item.eq_ignore_ascii_case(&repository));
+    if !included {
+        return Err(OrbitError::invalid_argument(format!(
+            "repository `{repository}` is not included in this Workspace; reattach the repository first"
+        )));
+    }
+    let client = client_from_env()?;
+    let issue = client.get_issue(
+        &repository,
+        number,
+        (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
+    )?;
+    validate_issue_identity(&issue, &repository, number)?;
+    let link = task
+        .front
+        .github
+        .as_ref()
+        .expect("inactive provenance exists");
+    let sync_plan = crate::github::sync::plan_sync(
+        crate::github::sync::OrbitSyncView { task, link },
+        &issue,
+        crate::github::model::SyncDirection::Both,
+    );
+    let mut catalog = load(&cache_path(workspace))?;
+    let preview = json!({
+        "task": task.id,
+        "identity": identity,
+        "issue_title": issue.title,
+        "sync_plan": sync_plan,
+    });
+    let mut reattached = Vec::new();
+    if args.apply {
+        let mut task = task.clone();
+        task.front
+            .github
+            .as_mut()
+            .expect("inactive provenance exists")
+            .active = true;
+        task.front.updated_at = Utc::now();
+        let rendered = task::render_task(&task)?;
+        crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
+        if let Some(archived) = catalog
+            .archived_issues
+            .get_mut(&repository)
+            .and_then(|issues| issues.remove(&number))
+        {
+            let active = catalog.repositories.entry(repository.clone()).or_default();
+            active.issues.retain(|item| item.number != number);
+            active.issues.push(archived);
+            active.issues.sort_by_key(|item| item.number);
+        }
+        if catalog
+            .archived_issues
+            .get(&repository)
+            .is_some_and(BTreeMap::is_empty)
+        {
+            catalog.archived_issues.remove(&repository);
+        }
+        save(&cache_path(workspace), &catalog)?;
+        board.commit("orbit: reattach Linked Task", false)?;
+        reattached.push(json!({ "task": task.id, "identity": identity }));
+    }
+    let data = json!({
+        "identity": identity,
+        "apply": args.apply,
+        "tasks": [preview],
+        "reattached": reattached,
+    });
+    let summary = if args.apply {
+        format!("Reattached {identity}; review the sync plan before synchronizing")
+    } else {
+        format!("Linked Task reattach preview for {identity}; no data was changed")
+    };
+    Ok(crate::output::CommandOutput::new(data, summary))
+}
+
+fn validate_issue_identity(
+    issue: &crate::github::model::IssueSnapshot,
+    repository: &str,
+    number: u64,
+) -> Result<()> {
+    let actual_repository =
+        crate::github::GitHubConfig::normalize_repo(&issue.repo)?.to_ascii_lowercase();
+    if actual_repository != repository || issue.number != number {
+        return Err(OrbitError::invalid_argument(format!(
+            "GitHub returned {actual_repository}#{} while reattaching {repository}#{number}",
+            issue.number
+        )));
+    }
+    Ok(())
 }
 
 fn parse_identity(identity: &str) -> Result<(String, u64)> {

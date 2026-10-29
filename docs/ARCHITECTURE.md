@@ -464,9 +464,9 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | --- | --- | --- |
 | Bootstrap | `init`, `link`, `unlink`, `setup`, `workspace setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks, or reconcile selected harnesses across Workspace repositories. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `github create` preview, `workspace status`, `workspace issues list/inspect/import` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; GitHub status and create previews, plus Workspace catalog views, do not write to GitHub. Issue import previews selected records; only `--apply` writes Linked Tasks to the Board. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `github create` preview, `workspace status`, Workspace issue/catalog previews | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. Import, detach, and reattach previews do not write; only explicit apply changes Board/catalog state, never GitHub. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
-| Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude`, `workspace issues refresh`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly create or synchronize GitHub Issues, discover Workspace repositories and store overrides, refresh Remote Issue summaries, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
+| Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude/detach/reattach`, `workspace issues refresh/detach/reattach`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly create or synchronize GitHub Issues, discover or detach/reattach Workspace repositories and Linked Tasks, refresh or archive Remote Issue summaries, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. Detach/reattach previews are read-only; apply preserves local Task data and never writes GitHub. |
 
 ## 4. Board layouts and initialization
 
@@ -486,6 +486,13 @@ the live body and comments. `import` explicitly previews selected catalog
 identities, then optionally creates Linked Tasks or links Local Tasks without
 overwriting Orbit fields. Duplicate checks use stable identity and import does
 not write to GitHub. Only applied imports enter the Task graph.
+
+Repository or individual Task detach moves cached summaries into the
+`archived_issues` cache section and marks prior GitHub provenance inactive on the
+Task. Reattach matches exact repository/Issue numbers, previews current sync
+plans and conflicts, then explicitly reactivates links without syncing them.
+Inactive provenance is excluded from sync and duplicate link counts until
+reattached.
 
 `workspace setup` consumes that snapshot rather than rescanning or contacting
 GitHub. It installs managed, native harness integrations into included direct

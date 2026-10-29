@@ -141,6 +141,12 @@ pub fn run(board: &Board, args: WorkspaceArgs) -> Result<crate::output::CommandO
         WorkspaceCommand::Refresh => refresh(board, &workspace),
         WorkspaceCommand::Include(args) => set_override(board, &args.repository, true),
         WorkspaceCommand::Exclude(args) => set_override(board, &args.repository, false),
+        WorkspaceCommand::Detach(args) => {
+            crate::issue_catalog::detach_repository(board, &workspace, args)
+        }
+        WorkspaceCommand::Reattach(args) => {
+            crate::issue_catalog::reattach_repository(board, &workspace, args)
+        }
         WorkspaceCommand::Setup(args) => setup(board, &workspace, args),
         WorkspaceCommand::Issues(args) => crate::issue_catalog::run(board, args.command),
     }
@@ -833,6 +839,69 @@ fn set_override(
         json!({ "repository": repository, "override": if include { "include" } else { "exclude" } }),
         format!("{action} {repository}; run `orbit workspace refresh` to update discovery"),
     ))
+}
+
+pub(crate) fn set_repository_detached(
+    board: &Board,
+    repository: &str,
+    detached: bool,
+) -> Result<()> {
+    let repository = crate::github::GitHubConfig::normalize_repo(repository)?;
+    let organization = board.config.github.organization.as_deref().ok_or_else(|| {
+        OrbitError::new(
+            code::GITHUB_NOT_CONFIGURED,
+            "Workspace repository changes need `[github].organization` configured first",
+        )
+    })?;
+    let owner = repository
+        .split_once('/')
+        .expect("normalized repo has owner")
+        .0;
+    if !owner.eq_ignore_ascii_case(organization) {
+        return Err(OrbitError::invalid_argument(format!(
+            "Workspace repositories must be owned by configured organization `{organization}`"
+        )));
+    }
+
+    board.save_config(
+        if detached {
+            "orbit: detach Workspace repository"
+        } else {
+            "orbit: reattach Workspace repository"
+        },
+        |config| {
+            config
+                .workspace
+                .exclude
+                .retain(|item| !item.eq_ignore_ascii_case(&repository));
+            if detached {
+                config.workspace.exclude.push(repository.clone());
+            }
+            Ok(())
+        },
+    )?;
+
+    let path = catalog_path(&workspace_root(board)?);
+    let mut catalog = load_catalog(&path)?;
+    if let Some(entry) = catalog.repositories.get_mut(&repository) {
+        if detached {
+            entry.included = false;
+            entry.status = RepositoryStatus::Excluded;
+            entry.error = None;
+        } else {
+            entry.included = true;
+            entry.status = if entry.cached {
+                RepositoryStatus::Stale
+            } else {
+                RepositoryStatus::Inaccessible
+            };
+            entry.error = Some(
+                "repository was reattached locally; run `orbit workspace refresh` to verify access"
+                    .into(),
+            );
+        }
+    }
+    save_catalog(&path, &catalog)
 }
 
 fn is_direct_git_repository(path: &Path) -> bool {

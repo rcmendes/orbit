@@ -344,3 +344,26 @@ fn workspace_setup_does_not_accept_matt_skills_as_a_harness() {
             .contains("detected and configured separately")
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn workspace_setup_writes_through_symlinked_guidance_files() {
+    let repo = TestRepo::new();
+    let (_dir, root, child) = workspace(&repo);
+    refresh(&repo, &root);
+    std::fs::write(child.join("CLAUDE.md"), "# Project guidance\n").unwrap();
+    std::os::unix::fs::symlink("CLAUDE.md", child.join("AGENTS.md")).unwrap();
+
+    let (status, result) = setup(&repo, &root, &["--agents", "codex"]);
+    assert_eq!(status, 0, "{result}");
+
+    let metadata = std::fs::symlink_metadata(child.join("AGENTS.md")).unwrap();
+    assert!(metadata.file_type().is_symlink());
+    let agents = std::fs::read_to_string(child.join("AGENTS.md")).unwrap();
+    assert!(agents.contains("BEGIN ORBIT INTEGRATION"));
+    assert!(agents.contains("# Project guidance"));
+    assert_eq!(
+        std::fs::read_to_string(child.join("CLAUDE.md")).unwrap(),
+        agents
+    );
+}

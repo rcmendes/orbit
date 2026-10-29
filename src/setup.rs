@@ -1984,7 +1984,8 @@ fn apply_plan(plan: BTreeMap<PathBuf, FilePlan>) -> Result<Vec<FilePlan>> {
                             OrbitError::io(format!("create {}", parent.display()), error)
                         })?;
                     }
-                    crate::atomic::write_atomic(&file.absolute, content.as_bytes(), true)?;
+                    let target = follow_symlink(&file.absolute);
+                    crate::atomic::write_atomic(&target, content.as_bytes(), true)?;
                 }
             }
             Action::Removed => match std::fs::remove_file(&file.absolute) {
@@ -2002,6 +2003,25 @@ fn apply_plan(plan: BTreeMap<PathBuf, FilePlan>) -> Result<Vec<FilePlan>> {
         results.push(file);
     }
     Ok(results)
+}
+
+fn follow_symlink(path: &Path) -> PathBuf {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return path.to_path_buf();
+    };
+    if !metadata.file_type().is_symlink() {
+        return path.to_path_buf();
+    }
+    let Ok(target) = std::fs::read_link(path) else {
+        return path.to_path_buf();
+    };
+    if target.is_absolute() {
+        target
+    } else {
+        path.parent()
+            .map(|parent| parent.join(&target))
+            .unwrap_or(target)
+    }
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>> {

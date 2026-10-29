@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `orbit setup` and `orbit workspace setup` now write through an `AGENTS.md` symlink instead of replacing it with a regular file. Repositories that keep `AGENTS.md -> CLAUDE.md` retain the link after setup.
+- Fixed the Windows-only `tests/discovery.rs` assertion so CI checks the platform path separator.
+
 ## 0.10.2 - 2026-10-29
 
 - `orbit workspace migrate` now carries the legacy Workspace Board's configuration into a newly staged `<workspace>/.orbit/board` instead of replacing it with defaults. `[github]`, `[workspace]`, and Board policy settings are preserved; only `id.prefix`, `board.storage`, and `board.branch` are adapted to the new layout. The plan reports the source as `configuration_source`, so a migration no longer silently drops the organization, linked repositories, and resolved Issue Field IDs that `orbit workspace refresh` needs.

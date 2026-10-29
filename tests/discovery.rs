@@ -530,11 +530,10 @@ fn workspace_init_refuses_to_shadow_a_child_repository_board() {
 
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "ALREADY_INITIALIZED");
+    let message = value["error"]["message"].as_str().unwrap();
     assert!(
-        value["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("api/.orbit")
+        message.contains(&format!("api{}.orbit", std::path::MAIN_SEPARATOR)),
+        "unexpected message: {message}"
     );
     assert!(!workspace.join(".orbit/board/config.toml").exists());
 }

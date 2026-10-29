@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.3 - 2026-10-29
 
 - `orbit setup` and `orbit workspace setup` now write through an `AGENTS.md` symlink instead of replacing it with a regular file. Repositories that keep `AGENTS.md -> CLAUDE.md` retain the link after setup.
 - Fixed the Windows-only `tests/discovery.rs`, `tests/doctor.rs`, and `tests/workspace_migrate.rs` assertions so CI compares platform paths component-wise and canonicalizes with `dunce`.

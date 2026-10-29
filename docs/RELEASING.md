@@ -4,7 +4,8 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.10.2` — Workspace migration preserves the legacy configuration; refresh infers the organization. GitHub Release and installers published; the npm version is staged pending 2FA approval
+- `v0.10.3` — latest; agent setup preserves an `AGENTS.md` symlink, plus Windows-only test fixes
+- `v0.10.2` — Workspace migration preserves the legacy configuration; refresh infers the organization. GitHub Release and installers published; the npm upload was superseded by v0.10.3
 - `v0.10.1` — packaging patch after the v0.10.0 npm publish was skipped
 - `v0.10.0` — GitHub Release published; npm publication superseded by v0.10.1
 - `v0.9.4`
@@ -108,7 +109,7 @@ the release.
 
 ## Known issues
 
-- The `v0.10.2` tag's CI check is red on Windows because `tests/discovery.rs`, `tests/doctor.rs`, and `tests/workspace_migrate.rs` compared platform paths with LF-only strings or `std::fs::canonicalize` verbatim paths. The Release workflow, its Windows artifact smoke, and the post-release install smoke all passed; the test-only fixes are on `main` after the tag. npm accepted the release into its staging queue, so `0.10.2` becomes installable only after a maintainer runs `npm stage approve` with 2FA. Re-running the staged `publish-npm` job reports `E409` and marks that job red; the original staged upload remains valid.
+- The `v0.10.2` tag's CI check is red on Windows because `tests/discovery.rs`, `tests/doctor.rs`, and `tests/workspace_migrate.rs` compared platform paths with LF-only strings or `std::fs::canonicalize` verbatim paths. The Release workflow, its Windows artifact smoke, and the post-release install smoke all passed; the test-only fixes are on `main` after the tag. npm accepted the release into its staging queue, but it was superseded by `v0.10.3` and never approved, so `0.10.2` is not installable from npm. Re-running the staged `publish-npm` job reports `E409` and marks that job red; the original staged upload remains valid.
 - `v0.8.0` failed Windows CI because the doctor tests used Unix-only absolute paths and `git worktree move` could not move a clean worktree out of `.git`. Its GitHub release and tag were removed. The npm package remains published and deprecated in favor of `v0.8.1`; the bypass-2FA token cannot unpublish it, so fix a bad version by publishing a new one rather than trying to remove it by tag.
 - The `v0.7.0` tag's CI check is red on Windows because `tests/slug_migrate.rs` asserted an LF-only YAML dependency line; Git checked the migrated file out with CRLF. The Release workflow and its Windows artifact smoke passed, and npm published successfully. The test-only fix is on `main` after the tag.
 - The `v0.1.0` tag's CI check is red on Windows because it predates the Unix-only lock-test import fix. Its Release workflow succeeded and its artifacts are valid; `v0.2.0` has the fix.

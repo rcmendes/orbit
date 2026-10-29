@@ -12,15 +12,15 @@ depends_on:
 parent: orbit-f1hqst
 checkpoint:
   by: rodrigomendes
-  at: 2026-10-28T23:50:29.987150Z
-  progress: Linked Task synchronization implementation is running in workspace-sync; import and export prerequisites are merged.
-  next: Review preview/apply conflict behavior, merge, then unlock detach and Workspace doctor.
+  at: 2026-10-29T00:14:44.725310Z
+  progress: Implemented Orbit-authoritative explicit GitHub sync, conflict resolution, relationship handling, retry-safe partial apply, fixtures, tests, and docs. Commit ceb6a94; merged latest integration/workspace-issue-catalog (already up to date). cargo test and clippy pass.
+  next: Review implementation and close the ticket when accepted.
 area: cli
 claimed_by: rodrigomendes
 claimed_at: 2026-10-28T23:50:10.759851Z
-lease_until: 2026-10-29T00:20:10.759851Z
+lease_until: 2026-10-29T00:40:39.150806Z
 created_at: 2026-10-28T22:48:16.365154Z
-updated_at: 2026-10-28T23:50:29.987150Z
+updated_at: 2026-10-29T00:14:44.725310Z
 ---
 
 ## Goal

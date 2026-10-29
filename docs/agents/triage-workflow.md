@@ -22,7 +22,8 @@ A proposal may change:
 - Write an agent brief ([`agent-brief.md`](./agent-brief.md)) or maintain `.out-of-scope/`
 - Adopt or import GitHub Issues (use `orbit github adopt` or the Workspace
   `orbit workspace issues import` preview/apply workflow)
-- Change GitHub-owned title, body, or open/closed state
+- Change Task title, body, status, or open/closed state (edit those through
+  normal Orbit Task commands, then review and explicitly sync them)
 - Add arbitrary labels
 - Run verification commands
 
@@ -127,7 +128,7 @@ commands.
 | `clear_verification` | Remove verification |
 | `labels_add` / `labels_remove` | Canonical labels only |
 
-Forbidden proposal keys (GitHub-owned): `title`, `body`, `status`, `state`.
+Forbidden proposal keys (not managed by Triage): `title`, `body`, `status`, `state`.
 
 ## Errors
 
@@ -141,7 +142,9 @@ When a proposal adds or removes labels, Orbit checks the label set that would re
 
 Human errors include a `Next:` action. JSON keeps the existing error envelope and
 adds `cause`, `remediation`, and Task/proposal-file context to `error.details`.
-Do not add GitHub-owned fields (`title`, `body`, `status`, or `state`) to a
-proposal. Only use the supported metadata fields above and canonical labels.
+Do not add Task lifecycle or content fields (`title`, `body`, `status`, or
+`state`) to a Triage proposal. Only use the supported metadata fields above and
+canonical labels. Orbit remains authoritative for those linked Task fields;
+publish their changes only through explicit, conflict-safe GitHub sync.
 
 See also [`agent-brief.md`](./agent-brief.md), [`triage-labels.md`](./triage-labels.md), and [`issue-tracker.md`](./issue-tracker.md).

@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{OrbitError, Result};
+use crate::github::model::IssueState;
+use crate::task::Status;
 
 /// One-to-one link between an Orbit Task and a GitHub Issue (`owner/repo` + number).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +27,10 @@ pub struct GitHubSyncBaseline {
     pub area: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<Status>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue_state: Option<IssueState>,
 }
 
 impl GitHubLink {

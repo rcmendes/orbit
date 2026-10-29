@@ -7,12 +7,20 @@ use crate::task::Task;
 pub struct RelationshipReport {
     pub supported: Vec<SupportedRelationship>,
     pub unsupported: Vec<String>,
+    pub changes: Vec<RelationshipChange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SupportedRelationship {
     pub kind: &'static str,
     pub orbit_task: String,
+    pub github: IssueRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RelationshipChange {
+    pub action: &'static str,
+    pub kind: &'static str,
     pub github: IssueRef,
 }
 
@@ -25,6 +33,7 @@ pub fn plan_relationship_sync(
 ) -> RelationshipReport {
     let mut supported = Vec::new();
     let mut unsupported = Vec::new();
+    let mut changes = Vec::new();
 
     for (child, child_link) in child_links {
         if child_link.repo == link.repo {
@@ -36,6 +45,17 @@ pub fn plan_relationship_sync(
                     number: child_link.number,
                 },
             });
+            let reference = IssueRef {
+                repo: child_link.repo.clone(),
+                number: child_link.number,
+            };
+            if !issue.blocking.contains(&reference) {
+                changes.push(RelationshipChange {
+                    action: "add",
+                    kind: "sub_issue",
+                    github: reference,
+                });
+            }
         } else {
             unsupported.push(format!(
                 "SubTask {} links to {} but parent links to {}; cross-repository sub-issues are not synced",
@@ -54,6 +74,17 @@ pub fn plan_relationship_sync(
                     number: dep_link.number,
                 },
             });
+            let reference = IssueRef {
+                repo: dep_link.repo.clone(),
+                number: dep_link.number,
+            };
+            if !issue.blocked_by.contains(&reference) {
+                changes.push(RelationshipChange {
+                    action: "add",
+                    kind: "blocked_by",
+                    github: reference,
+                });
+            }
         } else {
             unsupported.push(format!(
                 "dependency {} is linked to {}; blocked-by sync requires the same repository as {}",
@@ -71,10 +102,32 @@ pub fn plan_relationship_sync(
         }
     }
 
+    for remote_child in &issue.blocking {
+        if !supported.iter().any(|relationship| {
+            relationship.kind == "sub_issue" && relationship.github == *remote_child
+        }) {
+            unsupported.push(format!(
+                "GitHub sub-issue {}/#{} has no matching linked Orbit SubTask; it is preserved",
+                remote_child.repo, remote_child.number
+            ));
+        }
+    }
+    for remote_dependency in &issue.blocked_by {
+        if !supported.iter().any(|relationship| {
+            relationship.kind == "blocked_by" && relationship.github == *remote_dependency
+        }) {
+            unsupported.push(format!(
+                "GitHub blocked-by issue {}/#{} has no matching linked Orbit Dependency; it is preserved",
+                remote_dependency.repo, remote_dependency.number
+            ));
+        }
+    }
+
     let _ = task;
     RelationshipReport {
         supported,
         unsupported,
+        changes,
     }
 }
 

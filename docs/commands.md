@@ -990,8 +990,8 @@ Reviews GitHub-linked Tasks only. Review displays field-by-field changes and, wh
 proposal file is used with stdin and stdout connected to terminals, prompts for
 explicit approval or cancellation. Non-TTY and `--json` reviews only preview; they
 never prompt or apply. `--proposal-file -` reads a proposal from stdin. Applying
-changes Orbit only; it does not modify GitHub-owned title, body, or status. Publish
-with an explicit `orbit github sync`. See
+changes Orbit only; it does not publish any changed field to GitHub. Publish
+approved linked Task changes with an explicit `orbit github sync`. See
 [agents/triage-workflow.md](./agents/triage-workflow.md).
 
 ```bash

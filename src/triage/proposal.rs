@@ -239,7 +239,7 @@ fn reject_forbidden_fields(value: &Value) -> Result<()> {
             return Err(OrbitError::new(
                 code::TRIAGE_INVALID_PROPOSAL,
                 format!(
-                    "proposal must not include GitHub-owned field `{field}`; triage only updates area, verification, and canonical labels on Orbit"
+                    "proposal must not include non-Triage Task field `{field}`; triage only updates area, verification, and canonical labels on Orbit"
                 ),
             ));
         }

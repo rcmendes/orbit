@@ -3,7 +3,7 @@ use chrono::Utc;
 use crate::github::fields::validate_verification;
 use crate::github::link::{GitHubLink, GitHubSyncBaseline};
 use crate::github::model::{IssueSnapshot, SyncConflict, SyncDirection, SyncPlan};
-use crate::github::status::{self, WONTFIX_LABEL, issue_state_from_status, status_from_issue};
+use crate::github::status::{issue_state_from_status, status_from_issue};
 use crate::task::{Status, Task};
 
 pub struct OrbitSyncView<'a> {
@@ -24,6 +24,8 @@ pub fn plan_sync(
         apply_labels: None,
         apply_area: None,
         apply_verification: None,
+        push_title: None,
+        push_body: None,
         push_labels: None,
         push_area: None,
         push_verification: None,
@@ -39,8 +41,6 @@ pub fn plan_sync(
     }
 
     let baseline = view.link.last_sync.as_ref();
-    let orbit_changed = baseline.map(|base| view.task.front.updated_at > base.orbit_updated_at);
-    let github_changed = baseline.map(|base| issue.updated_at > base.issue_updated_at);
 
     let orbit_title = view.task.front.title.clone();
     let orbit_body = view.task.body.clone();
@@ -49,102 +49,48 @@ pub fn plan_sync(
     let orbit_verification = view.task.front.verification.clone();
     let orbit_status = view.task.front.status;
 
-    if matches!(direction, SyncDirection::Both | SyncDirection::Pull) {
-        maybe_pull_field(
-            &mut plan,
-            "title",
-            baseline.map(|b| b.title.as_str()),
-            orbit_title.as_str(),
-            issue.title.as_str(),
-            orbit_changed,
-            github_changed,
-        );
-        if plan.conflicts.iter().all(|c| c.field != "title") && issue.title != orbit_title {
-            plan.apply_title = Some(issue.title.clone());
-        }
+    plan_scalar(
+        &mut plan,
+        "title",
+        baseline.map(|base| base.title.clone()),
+        orbit_title.clone(),
+        issue.title.clone(),
+        direction,
+    );
+    plan_scalar(
+        &mut plan,
+        "body",
+        baseline.map(|base| base.body.clone()),
+        orbit_body.clone(),
+        issue.body.clone(),
+        direction,
+    );
+    plan_scalar(
+        &mut plan,
+        "labels",
+        baseline.map(|base| base.labels.clone()),
+        orbit_labels.clone(),
+        issue.labels.clone(),
+        direction,
+    );
+    plan_optional_scalar(
+        &mut plan,
+        "area",
+        baseline.map(|base| base.area.clone()),
+        orbit_area.clone(),
+        issue.area.clone(),
+        direction,
+    );
+    plan_optional_scalar(
+        &mut plan,
+        "verification",
+        baseline.map(|base| base.verification.clone()),
+        orbit_verification.clone(),
+        issue.verification.clone(),
+        direction,
+    );
 
-        maybe_pull_field(
-            &mut plan,
-            "body",
-            baseline.map(|b| b.body.as_str()),
-            orbit_body.as_str(),
-            issue.body.as_str(),
-            orbit_changed,
-            github_changed,
-        );
-        if plan.conflicts.iter().all(|c| c.field != "body") && issue.body != orbit_body {
-            plan.apply_body = Some(issue.body.clone());
-        }
-
-        let github_status = status_from_issue(issue.state, &issue.labels);
-        if !status::preserves_in_progress(orbit_status) && github_status != orbit_status {
-            if orbit_status == Status::InProgress
-                && issue.state == crate::github::model::IssueState::Open
-            {
-                // Open GitHub issues preserve todo/in_progress; do not downgrade active work.
-            } else if github_status != orbit_status {
-                plan.apply_status = Some(github_status);
-            }
-        }
-
-        merge_labels(
-            &mut plan,
-            &orbit_labels,
-            &issue.labels,
-            baseline,
-            orbit_changed,
-            github_changed,
-        );
-
-        pull_orbit_owned_field(
-            &mut plan,
-            "area",
-            orbit_area.as_deref(),
-            issue.area.as_deref(),
-            baseline.and_then(|b| b.area.as_deref()),
-            orbit_changed,
-            github_changed,
-        );
-        pull_orbit_owned_field(
-            &mut plan,
-            "verification",
-            orbit_verification.as_deref(),
-            issue.verification.as_deref(),
-            baseline.and_then(|b| b.verification.as_deref()),
-            orbit_changed,
-            github_changed,
-        );
-    }
-
-    if matches!(direction, SyncDirection::Both | SyncDirection::Push) {
-        if let Some(labels) = &plan.apply_labels {
-            plan.push_labels = Some(labels.clone());
-        } else if orbit_labels != issue.labels {
-            plan.push_labels = Some(orbit_labels.clone());
-        }
-
-        if plan.conflicts.iter().all(|c| c.field != "area") && orbit_area != issue.area {
-            plan.push_area = Some(orbit_area.clone());
-        }
-        if plan.conflicts.iter().all(|c| c.field != "verification")
-            && orbit_verification != issue.verification
-        {
-            plan.push_verification = Some(orbit_verification.clone());
-        }
-
-        let desired_state = issue_state_from_status(orbit_status);
-        let needs_wontfix = orbit_status == Status::Cancelled
-            && !issue.labels.iter().any(|label| label == WONTFIX_LABEL);
-        if needs_wontfix {
-            plan.warnings.push(
-                "closing as cancelled requires the wontfix label on GitHub; sync will add it when pushing state"
-                    .into(),
-            );
-        }
-        if desired_state != issue.state {
-            plan.push_state = Some(desired_state);
-        }
-    }
+    plan_status(&mut plan, baseline, orbit_status, issue, direction);
 
     plan
 }
@@ -159,107 +105,144 @@ pub fn baseline_from(view: OrbitSyncView<'_>, issue: &IssueSnapshot) -> GitHubSy
         labels: issue.labels.clone(),
         area: view.task.front.area.map(|area| area.as_str().to_string()),
         verification: view.task.front.verification.clone(),
+        status: Some(view.task.front.status),
+        issue_state: Some(issue.state),
     }
 }
 
-fn maybe_pull_field(
+fn plan_scalar<T>(
     plan: &mut SyncPlan,
     field: &str,
-    baseline: Option<&str>,
-    orbit_value: &str,
-    github_value: &str,
-    orbit_changed: Option<bool>,
-    github_changed: Option<bool>,
-) {
+    baseline: Option<T>,
+    orbit_value: T,
+    github_value: T,
+    direction: SyncDirection,
+) where
+    T: Clone + PartialEq + serde::Serialize,
+{
     if github_value == orbit_value {
         return;
     }
-    let Some(base) = baseline else {
-        return;
-    };
-    if orbit_changed == Some(true)
-        && github_changed == Some(true)
-        && orbit_value != base
-        && github_value != base
-    {
-        plan.conflicts.push(SyncConflict {
-            field: field.to_string(),
-            orbit_value: serde_json::json!(orbit_value),
-            github_value: serde_json::json!(github_value),
-            message: format!("both Orbit and GitHub changed `{field}` since the last sync"),
-        });
+    if let Some(base) = baseline {
+        let orbit_changed = orbit_value != base;
+        let github_changed = github_value != base;
+        if orbit_changed && github_changed {
+            add_conflict(plan, field, &orbit_value, &github_value);
+            return;
+        }
+        match direction {
+            SyncDirection::Both if github_changed => set_pull(plan, field, &github_value),
+            SyncDirection::Both | SyncDirection::Push => set_push(plan, field, &orbit_value),
+            SyncDirection::Pull => set_pull(plan, field, &github_value),
+        }
+    } else {
+        match direction {
+            SyncDirection::Pull => set_pull(plan, field, &github_value),
+            SyncDirection::Both | SyncDirection::Push => set_push(plan, field, &orbit_value),
+        }
     }
 }
 
-fn pull_orbit_owned_field(
+fn plan_optional_scalar(
     plan: &mut SyncPlan,
     field: &str,
-    orbit_value: Option<&str>,
-    github_value: Option<&str>,
-    baseline: Option<&str>,
-    orbit_changed: Option<bool>,
-    github_changed: Option<bool>,
+    baseline: Option<Option<String>>,
+    orbit_value: Option<String>,
+    github_value: Option<String>,
+    direction: SyncDirection,
 ) {
-    if orbit_value == github_value {
-        return;
-    }
-    if let Some(base) = baseline
-        && orbit_changed == Some(true)
-        && github_changed == Some(true)
-        && orbit_value.unwrap_or("") != base
-        && github_value.unwrap_or("") != base
-    {
-        plan.conflicts.push(SyncConflict {
-            field: field.to_string(),
-            orbit_value: serde_json::json!(orbit_value),
-            github_value: serde_json::json!(github_value),
-            message: format!("both Orbit and GitHub changed `{field}` since the last sync"),
-        });
-        return;
-    }
+    plan_scalar(plan, field, baseline, orbit_value, github_value, direction);
+}
+
+fn set_pull<T: serde::Serialize>(plan: &mut SyncPlan, field: &str, value: &T) {
     match field {
-        "area" => plan.apply_area = Some(github_value.map(str::to_string)),
-        "verification" => plan.apply_verification = Some(github_value.map(str::to_string)),
+        "title" => {
+            plan.apply_title = serde_json::from_value(serde_json::to_value(value).unwrap()).ok()
+        }
+        "body" => {
+            plan.apply_body = serde_json::from_value(serde_json::to_value(value).unwrap()).ok()
+        }
+        "labels" => {
+            plan.apply_labels = serde_json::from_value(serde_json::to_value(value).unwrap()).ok()
+        }
+        "area" => {
+            plan.apply_area =
+                Some(serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap_or(None))
+        }
+        "verification" => {
+            plan.apply_verification =
+                Some(serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap_or(None))
+        }
         _ => {}
     }
 }
 
-fn merge_labels(
+fn set_push<T: serde::Serialize>(plan: &mut SyncPlan, field: &str, value: &T) {
+    match field {
+        "title" => {
+            plan.push_title = serde_json::from_value(serde_json::to_value(value).unwrap()).ok()
+        }
+        "body" => {
+            plan.push_body = serde_json::from_value(serde_json::to_value(value).unwrap()).ok()
+        }
+        "labels" => {
+            plan.push_labels = serde_json::from_value(serde_json::to_value(value).unwrap()).ok()
+        }
+        "area" => {
+            plan.push_area =
+                Some(serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap_or(None))
+        }
+        "verification" => {
+            plan.push_verification =
+                Some(serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap_or(None))
+        }
+        _ => {}
+    }
+}
+
+fn add_conflict<T: serde::Serialize>(plan: &mut SyncPlan, field: &str, orbit: &T, github: &T) {
+    plan.conflicts.push(SyncConflict {
+        field: field.to_string(),
+        orbit_value: serde_json::to_value(orbit).unwrap_or(serde_json::Value::Null),
+        github_value: serde_json::to_value(github).unwrap_or(serde_json::Value::Null),
+        message: format!("both Orbit and GitHub changed `{field}` since the last sync"),
+    });
+}
+
+fn plan_status(
     plan: &mut SyncPlan,
-    orbit_labels: &[String],
-    github_labels: &[String],
     baseline: Option<&GitHubSyncBaseline>,
-    orbit_changed: Option<bool>,
-    github_changed: Option<bool>,
+    orbit_status: Status,
+    issue: &IssueSnapshot,
+    direction: SyncDirection,
 ) {
-    if orbit_labels == github_labels {
+    let base_status = baseline.and_then(|base| base.status);
+    let base_state = baseline.and_then(|base| base.issue_state);
+    let github_status = status_from_issue(issue.state, &issue.labels);
+    let github_changed = base_state.is_some_and(|state| state != issue.state);
+    let orbit_changed = base_status.is_some_and(|status| status != orbit_status);
+
+    if orbit_status == github_status && issue_state_from_status(orbit_status) == issue.state {
         return;
     }
-    if let Some(base) = baseline {
-        let orbit_changed_labels =
-            orbit_changed == Some(true) && orbit_labels != base.labels.as_slice();
-        let github_changed_labels =
-            github_changed == Some(true) && github_labels != base.labels.as_slice();
-        if orbit_changed_labels && github_changed_labels {
-            plan.conflicts.push(SyncConflict {
-                field: "labels".into(),
-                orbit_value: serde_json::json!(orbit_labels),
-                github_value: serde_json::json!(github_labels),
-                message: "both Orbit and GitHub changed labels since the last sync".into(),
-            });
-            return;
-        }
+    if orbit_changed && github_changed {
+        add_conflict(plan, "status", &orbit_status, &github_status);
+        return;
     }
-    let mut merged = orbit_labels.to_vec();
-    for label in github_labels {
-        if !merged.iter().any(|existing| existing == label) {
-            merged.push(label.clone());
-        }
-    }
-    merged.sort();
-    merged.dedup();
-    if merged != orbit_labels {
-        plan.apply_labels = Some(merged);
+    if direction == SyncDirection::Pull || github_changed && !orbit_changed {
+        let pulled_status = if issue.state == crate::github::model::IssueState::Open
+            && base_status == Some(Status::InProgress)
+        {
+            Status::InProgress
+        } else {
+            github_status
+        };
+        plan.apply_status = Some(pulled_status);
+    } else if direction == SyncDirection::Push
+        || orbit_changed
+        || base_status.is_none() && issue_state_from_status(orbit_status) != issue.state
+    {
+        plan.push_state = Some(issue_state_from_status(orbit_status));
     }
 }
 
@@ -309,6 +292,8 @@ mod tests {
                         labels: vec!["bug".into()],
                         area: Some("cli".into()),
                         verification: Some("cargo test".into()),
+                        status: Some(Status::Todo),
+                        issue_state: Some(crate::github::model::IssueState::Open),
                     }),
                 }),
                 extra: BTreeMap::new(),

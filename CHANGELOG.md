@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed Task frontmatter parsing so an indented `---` line inside a YAML block scalar no longer ends the frontmatter early. Linking an Issue whose body contains a Markdown horizontal rule previously wrote `github.last_sync.body` with an indented `---`, after which `orbit list`, `orbit show`, and `orbit doctor` reported `CORRUPT_TASK` for that Task.
 - Added a `Publish npm` workflow that publishes the npm asset from an existing GitHub Release when the release pipeline's artifact smoke jobs are skipped or cancelled.
 
 ## 0.10.3 - 2026-10-29

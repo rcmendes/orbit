@@ -234,6 +234,26 @@ orbit github status --json
 orbit doctor --json
 ```
 
+### Tell Local, Linked, and Remote work apart
+
+`orbit list` prints Tasks only and has no link column. Use `--json`: `github` is
+`null` for a Local Task and an object with `repo` and `number` for a Linked Task.
+A link with `active: false` is detached provenance and is not synchronized.
+
+```bash
+orbit list --json | jq -r '.data.tasks[] |
+  [.id, (if .github then "\(.github.repo)#\(.github.number)" else "local" end), .title] | @tsv'
+```
+
+Sync state is computed, not stored. `orbit github status` compares each
+`last_sync` baseline with the current Task and Issue and reports pending pulls,
+pushes, and conflicts. `orbit github sync <TASK>` previews one Task and changes
+nothing without `--apply`.
+
+Remote Issues are not Tasks. `orbit workspace issues list --json` prints the
+cached catalog with a `linked` flag; `linked: false` means the Issue has no Orbit
+Task yet.
+
 ## Link repositories
 
 Repositories are linked explicitly; Orbit does not bulk-import an entire repository.

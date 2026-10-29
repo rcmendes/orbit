@@ -1,6 +1,6 @@
 # Orbit Specification
 
-Status: pre-alpha; v0.9.4 is the latest release and includes the Orbit folder layout ([ADR 0012](./adr/0012-orbit-folder.md)). This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
+Status: pre-alpha; v0.10.0 is the latest release and includes the Orbit folder layout ([ADR 0012](./adr/0012-orbit-folder.md)), the Workspace Issue catalog, and a Workspace-aware `doctor`. This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
 
 ## 1. What Orbit is
 
@@ -651,7 +651,9 @@ GitHub Projects are downstream of Issues. Orbit does not call the ProjectV2 API,
 request Project scopes, or synchronize Project membership, Status, views, or
 custom fields. A Project's auto-add workflow can include Orbit-created Issues,
 and optional Project workflows can mirror Issue close/reopen into Status. A card
-move alone never changes an Issue or Task. Because Project custom fields are not
+move alone never changes an Issue or Task; only GitHub's separate **Auto-close
+issue** workflow turns a Project Status change into an Issue close, which pull
+sync then sees as an Issue change. Because Project custom fields are not
 organization Issue Fields, a Project field named `Area` is distinct from the
 `Area` field Orbit syncs. Project drafts remain invisible until converted to
 repository Issues, and multiple Projects may contain the same Issue without
@@ -682,6 +684,7 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 - v0.9.2: fixes live GitHub organization Issue Field discovery by querying the `IssueFields` union and its concrete field types, restoring organization-backed `orbit github setup` and `--create-fields`.
 - v0.9.3: fixes the live GraphQL transport to call `gh api graphql` with a complete query document, so organization field discovery and creation work against the real GitHub API.
 - v0.9.4: treats `admin:org` and `write:org` as satisfying `read:org`, avoiding a false missing-scope warning for organization administrators.
+- v0.10.0: Workspace Issue catalog and migration. `orbit workspace issues refresh`, `list`, `inspect`, `import`, `detach`, and `reattach` browse Remote Issues and import only on explicit request; `orbit workspace migrate` consolidates legacy Boards; `doctor` is Workspace-aware; included repositories participate in GitHub adopt/status/sync without separate links; `orbit github create` previews and batches; GitHub Projects are downstream of Issues. See [ADR 0015](./adr/0015-github-projects-downstream.md).
 
 ### Command rules
 
@@ -847,6 +850,8 @@ MCP complements the CLI and is installed by default for clients that support it;
 **v0.6.0 — grouped table and slugs.** Aligned human `orbit list` output with `--group`, parent-first ordering, and per-board Task-ID slugs. Implemented.
 
 **v0.7.0 — slug migration.** `orbit slug show` and `orbit slug migrate` add read-only identity reporting and an explicit, atomic prefix rewrite for populated Boards. Implemented.
+
+**v0.8.0–v0.10.0 — Orbit folder, GitHub provider, and Workspace catalog.** `init` creates the Orbit folder, `link` shares it, and `doctor` diagnoses and migrates legacy layouts. The GitHub Issue provider adds explicit adopt/create/sync with conflict detection. The Workspace Issue catalog adds refresh/list/inspect/import/detach/reattach, a resumable Board migration, and Workspace-aware diagnostics; included repositories participate in GitHub workflow without separate links.
 
 ## 11. Testing
 

@@ -33,8 +33,11 @@ has a single correct answer across Projects.
 ## Consequences
 
 - Orbit needs no `project` or `read:project` scope and no Project configuration.
-- A Project card move does not change the Issue or the Orbit Task. Only an Issue
-  change, such as a close or reopen, is visible to pull sync.
+- Without the separate **Auto-close issue** workflow, a Project card move does
+  not change the Issue or the Orbit Task. If that workflow is enabled, moving an
+  item to its closing Status closes the Issue; the next pull sync sees only the
+  Issue change and can update the Task when Orbit's own status is unchanged.
+  Orbit never reads Project Status.
 - Project Status can lag Issue state unless a Project workflow updates it.
 - Project Status cannot represent the difference between `todo` and
   `in_progress`, or between `done` and `cancelled`; labels and views carry those

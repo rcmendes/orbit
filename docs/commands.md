@@ -1003,7 +1003,9 @@ applicable, linked Task count, pending changes, conflicts, unsupported
 relationships, and a recommended next action. `orbit doctor` checks GitHub
 configuration when the provider is enabled. GitHub Projects are a downstream
 view over Issues: Orbit does not synchronize ProjectV2 status or custom fields;
-use Project auto-add and closed/reopened workflows for reporting. See
+use Project auto-add and item added/closed/reopened workflows for reporting.
+Only GitHub's separate Auto-close issue workflow can turn a card move into an
+Issue close, which pull sync then sees as an Issue change. See
 [github-sync.md](./github-sync.md).
 
 ```bash

@@ -23,14 +23,14 @@
 
 Claude Code, Cursor, Codex, OpenCode, and any shell-capable agent get a deterministic, dependency-aware ready queue through a strict JSON CLI or an MCP server. Every claim is atomic, so two agents never take the same task. Humans get readable Git diffs and exactly the same board.
 
-**1 binary · 0 daemons · 4 statuses · 14 MCP tools · 100% Markdown tasks**
+**1 binary · 0 daemons · 4 statuses · 17 MCP tools · 100% Markdown tasks**
 
 ```text
 $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.9.4`](https://github.com/rcmendes/orbit/releases/tag/v0.9.4) is the latest release. It includes the GitHub Issue provider (`orbit github`), Triage review (`orbit triage`), and the Matt Pocock compatibility hardening. GitHub sync requires Orbit v0.9.0 or newer. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.10.0`](https://github.com/rcmendes/orbit/releases/tag/v0.10.0) is the latest release. It adds the Workspace Issue catalog (`orbit workspace issues`), Workspace-aware `doctor` diagnostics, `orbit workspace migrate` for consolidating legacy Boards, and Orbit-authoritative GitHub sync. GitHub Projects are documented as a downstream view over Issues. GitHub sync requires Orbit v0.9.0 or newer. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -747,7 +747,7 @@ ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 
 Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Orbit is authoritative for linked Task fields; sync is explicit, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. Review and resolve conflicts with `--resolve FIELD=orbit|github` before applying. See [docs/github-sync.md](./docs/github-sync.md).
 
-GitHub Projects are a downstream view over Issues. Orbit does not synchronize ProjectV2 membership, Status, views, or custom fields; use Project auto-add and closed/reopened workflows for reporting, and keep Project Status out of Orbit's sync loop. See [the Projects boundary](./docs/github-sync.md#github-projects).
+GitHub Projects are a downstream view over Issues. Orbit does not synchronize ProjectV2 membership, Status, views, or custom fields; use Project auto-add and item added/closed/reopened workflows for reporting, and keep Project Status out of Orbit's sync loop. Only GitHub's separate Auto-close issue workflow can turn a card move into an Issue close. See [the Projects boundary](./docs/github-sync.md#github-projects).
 
 GitHub sync and Triage require Orbit **v0.9.0 or newer**. The v0.9.0 default
 release binaries, shell/PowerShell installers, and npm package include both
@@ -1048,7 +1048,7 @@ See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md) and [ADR 0010](./docs/ad
 
 ## Install details
 
-Prebuilt binaries are the primary path. `v0.9.4` is the latest release. Every persistent route requires Git 2.31+ at runtime.
+Prebuilt binaries are the primary path. `v0.10.0` is the latest release. Every persistent route requires Git 2.31+ at runtime.
 
 | Route | Prerequisites | Command |
 | --- | --- | --- |

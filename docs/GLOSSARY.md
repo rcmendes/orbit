@@ -177,8 +177,9 @@ _Avoid_: Remote Issue, mirrored Issue
 A downstream GitHub view over Issues. Orbit does not read or write ProjectV2
 membership, Status, views, or custom fields; Project auto-add and close/reopen
 workflows keep Projects aligned at the Issue level. Project custom fields are
-not organization Issue Fields, and a Project card move does not change an Orbit
-Task.
+not organization Issue Fields. Without GitHub's **Auto-close issue** workflow, a
+Project card move does not change an Orbit Task; with it, the card move closes
+the Issue, and Orbit sees the Issue change on pull sync, never Project Status.
 _Avoid_: Board, Orbit Board, Project field authority
 
 **Local Task**:

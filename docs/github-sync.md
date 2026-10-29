@@ -345,32 +345,252 @@ the ProjectV2 API, require a `project` or `read:project` scope, or read or write
 Project items, Status, views, or custom fields. Orbit's authority ends at the
 Issue identified by `owner/repo#number`.
 
-Recommended setup:
+This boundary is deliberate. A Project can contain Issues from several
+repositories, the same Issue can appear in several Projects, and each Project has
+its own Status options and custom fields. Orbit keeps one Task link per
+`owner/repo#number`, so Project membership never creates duplicate Tasks or a
+second source of truth.
 
-1. Link the Project to the repository or organization, then enable its auto-add
-   workflow for each included repository, or add Issues manually.
-2. Optionally enable Project workflows that update Status when an item is closed
-   or reopened. Orbit maps `todo` and `in_progress` to an open Issue, `done` to a
-   closed Issue, and `cancelled` to a closed Issue carrying `wontfix`.
-3. Treat Project Status and custom fields as reporting. Do not use them as input
-   to Orbit.
+| Concern | Authority | Orbit behavior |
+| --- | --- | --- |
+| Task lifecycle | Orbit | `todo`, `in_progress`, `done`, `cancelled` |
+| Issue title, body, labels | Orbit | Explicit sync writes them to GitHub |
+| Issue open/closed state | Orbit | `todo`/`in_progress` open; `done`/`cancelled` closed |
+| `Area`, `Verification` | Orbit | Organization Issue Fields in full mode |
+| Claims and Checkpoints | Orbit | Local only; never written to GitHub |
+| Project membership | GitHub | Auto-add workflow or manual add |
+| Project Status and custom fields | Project | Never read or written by Orbit |
+| Project Status to Issue close | GitHub workflow | Only if **Auto-close issue** is enabled; the resulting Issue change is visible to pull sync |
+| Project draft Issues | GitHub | Invisible to Orbit until converted to a repository Issue |
 
-Consequences:
+### Set up a Project for Orbit Issues
 
-- Moving a Project card changes neither the Issue nor the Orbit Task. A pull sync
-  sees only Issue changes, such as a close or reopen performed directly or by a
-  Project workflow.
-- Open/closed state cannot distinguish `todo` from `in_progress`. Use labels,
-  views, or filters when the Project must show that difference.
-- A cancelled Task is a closed Issue with `wontfix`. A simple closed-to-Done
-  workflow cannot distinguish it from `done`; use a label-based view or filter
-  when the distinction matters.
-- Project draft issues are not repository Issues. Orbit cannot import or link
-  them until they are converted to real Issues.
-- Project custom fields are separate from organization Issue Fields. A Project
-  field named `Area` or `Verification` is not the organization field Orbit syncs.
-- An Issue can belong to several Projects. Orbit still keeps one Task link for
-  `owner/repo#number`, so Project membership creates no duplicate Tasks.
+1. Create or open the Project that should report on the repository.
+2. Link the Project to the repository or organization.
+3. Open the Project menu, choose **Workflows**, and enable **Auto-add to
+   project** for each repository Orbit exports from.
+4. Configure the status workflows:
+   - **Item added to project** sets `Status` to `Todo` for new items.
+   - **Item closed** sets `Status` to `Done`. New Projects enable this by
+     default; verify it is on.
+   - **Item reopened** sets `Status` back to `Todo`.
+5. Add views for the distinctions Project Status cannot represent, for example
+   `label:wontfix` for cancelled work or `is:open` for active work.
+
+The optional GitHub CLI equivalent for creating and linking a Project is:
+
+```bash
+gh auth refresh -s project       # only needed for gh project commands
+gh project create --owner acme --title "Engineering delivery"
+gh project link 1 --owner acme --repo acme/widget
+gh project view 1 --owner acme --web
+```
+
+Auto-add and status workflows are configured in the Project UI; the `gh project`
+command does not configure them. Orbit itself needs no Project scope or
+configuration.
+
+Auto-add only runs when an item is created or updated. It does not backfill
+Issues that already exist. To add existing Issues, add them manually in the
+Project, or use the GitHub CLI:
+
+```bash
+gh project item-add 1 --owner acme \
+  --url https://github.com/acme/widget/issues/42
+```
+
+Do not enable **Auto-close issue** unless Project Status should be able to close
+Issues. When that workflow is on, moving an item to `Done` closes the Issue, and
+a later `orbit github sync` can pull that close into the Task. That is a GitHub
+workflow changing the Issue, not Orbit reading Project Status.
+
+### Example: create an Issue and let the Project pick it up
+
+From a Board linked to `acme/widget`:
+
+```bash
+orbit init
+gh auth login
+orbit github connect
+orbit add "Rotate API tokens" -p 1
+# Use the Task ID printed by `orbit add` in the next command.
+orbit github create orb-a7b2c9 --apply
+```
+
+The export output names the new Issue, for example `acme/widget#42`. With the
+auto-add workflow enabled, the Issue appears in the Project without any Orbit
+Project command. Verify it from the CLI:
+
+```bash
+gh issue view 42 --repo acme/widget --json state,labels
+gh project item-list 1 --owner acme --field Status --format json
+```
+
+The Issue starts open. If the **Item added to project** workflow sets `Status`
+to `Todo`, the item appears there; otherwise its Status may stay empty until you
+set it. Project Status is not derived from the Issue's open state unless you
+configure that workflow.
+
+### Example: track an existing Issue
+
+To attach an existing Issue to a Local Task you already have, adopt it by URL:
+
+```bash
+orbit add "Rotate API tokens" -p 1
+orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
+```
+
+Adopt copies the Issue's title, body, labels, and status onto the Task and
+records the link. It does not create or modify the Issue. To keep the Task's
+Orbit values instead, preview a Workspace import link and apply it after review:
+
+```bash
+orbit workspace issues import acme/widget#42 --link acme/widget#42=orb-a7b2c9
+orbit workspace issues import acme/widget#42 --link acme/widget#42=orb-a7b2c9 --apply
+```
+
+On a Workspace Board, an unlinked Issue can become a new Task through the
+catalog:
+
+```bash
+orbit workspace issues refresh
+orbit workspace issues list --repo acme/widget --state open
+orbit workspace issues inspect acme/widget#42
+orbit workspace issues import acme/widget#42 --apply
+```
+
+Import previews the selected Issue and writes only with `--apply`. It creates a
+Linked Task with the Issue's title, body, labels, and status; closed Issues map
+to `done`, or `cancelled` when labeled `wontfix`. Orbit values then become
+authoritative for linked fields, so run `orbit github sync <task-id> --apply`
+when you want to publish a local change back.
+
+Auto-add does not backfill that Issue if it predates the workflow. Add it once:
+
+```bash
+gh project item-add 1 --owner acme \
+  --url https://github.com/acme/widget/issues/42
+```
+
+### Example: finish work and move the Project card
+
+Orbit's Project integration is event-driven through normal Issue changes. Close
+the Issue with an explicit sync after finishing the Task:
+
+```bash
+orbit claim orb-a7b2c9 --by agent
+orbit done orb-a7b2c9 --by agent --comment "Shipped and verified"
+orbit github sync orb-a7b2c9 --apply
+```
+
+`orbit done` changes the local Task to `done`; it does not contact GitHub by
+itself. The explicit `github sync` closes Issue `acme/widget#42`. If the Project
+has the **Item closed** workflow enabled, GitHub then moves the item to its
+`Done` Status. Verify both sides:
+
+```bash
+gh issue view 42 --repo acme/widget --json state,labels
+gh project item-list 1 --owner acme --query "status:Done" --format json
+```
+
+Reopening works in the other direction:
+
+```bash
+orbit reopen orb-a7b2c9
+orbit github sync orb-a7b2c9 --apply
+```
+
+The Issue reopens and the **Item reopened** workflow can return the Project card
+to `Todo`. If the Task had been cancelled with `wontfix`, remove that label
+explicitly before syncing; reopening does not remove labels:
+
+```bash
+orbit label remove orb-a7b2c9 wontfix
+```
+
+### Example: keep cancelled work distinct
+
+Orbit closes a cancelled Task's Issue just as it closes a done Task. To preserve
+the cancelled distinction in GitHub, add the `wontfix` label before the sync:
+
+```bash
+orbit label add orb-a7b2c9 wontfix
+orbit cancel orb-a7b2c9 --comment "Superseded by the new token service"
+orbit github sync orb-a7b2c9 --apply
+```
+
+The Issue is closed with `wontfix`. Orbit does not add that label automatically.
+A simple **Item closed** workflow still shows the card as `Done`, so add a
+Project view filtered by `label:wontfix` if cancelled work needs its own column
+or report.
+
+### What Project Status can and cannot show
+
+A typical mapping looks like this:
+
+| Orbit state | GitHub Issue | Typical Project Status | Limitation |
+| --- | --- | --- | --- |
+| `todo` | Open | `Todo` from **Item added to project** | None if the workflow is enabled; otherwise Status may be empty |
+| `in_progress` | Open | Unchanged | No Issue event distinguishes it from `todo` |
+| `done` | Closed | `Done` from **Item closed** | None |
+| `cancelled` | Closed, optionally `wontfix` | `Done` from **Item closed** | Distinguish with a label view |
+
+Orbit deliberately does not invent a Project event for `in_progress`. If a
+Project needs an `In Progress` column, use a label or another Project workflow
+that you control, and keep in mind that a Project Status change does not update
+Orbit.
+
+The exception is GitHub's own **Auto-close issue** workflow. If you enable it, a
+Project Status change to `Done` closes the Issue. The next pull sync sees a
+closed Issue and can set the Task to `done` when Orbit's status has not changed
+since the last sync. Even then, Orbit is reacting to the Issue, not reading
+Project Status. Without that workflow, moving a card has no effect on Orbit.
+
+### Draft Issues, custom fields, and multiple Projects
+
+- **Draft Issues are not repository Issues.** They have no `owner/repo#number`,
+  so Orbit cannot list, import, or link them. Convert the draft to an Issue in
+  its repository, then refresh the Workspace catalog before importing it:
+
+  ```bash
+  orbit workspace issues refresh
+  orbit workspace issues import acme/widget#123
+  ```
+
+- **Project custom fields are separate from organization Issue Fields.** A
+  Project field named `Area` or `Verification` is not the organization field
+  Orbit reads and writes. Renaming or editing the Project field does not change
+  the Issue or the Task.
+
+- **Multiple Projects are safe.** The same Issue can be in a delivery board, a
+  roadmap, and a release view at the same time. Orbit still keeps one Task link
+  for the Issue. Each Project may apply different workflows and show a different
+  Status; Orbit does not choose between them.
+
+- **Pull requests are not linked.** A Project can contain pull requests, but
+  Orbit links only Issues. A Project item that is a pull request is outside the
+  integration.
+
+### Troubleshooting
+
+- **A new Issue is missing from the Project:** confirm the Project is linked to
+  the repository and that **Auto-add to project** includes that repository.
+  Check the workflow's filter; an auto-add filter can exclude the Issue.
+  Auto-add only handles new or updated items, so add existing Issues with
+  `gh project item-add`.
+- **Closing the Issue did not move the card:** run `orbit github sync
+  <task-id> --apply` after `orbit done` or `orbit cancel`. Then confirm the
+  Project's **Item closed** workflow is enabled.
+- **A card move did not update Orbit:** this is expected unless the Project has
+  **Auto-close issue** enabled. Project Status is not an input to Orbit. Close or
+  reopen the Issue instead.
+- **A cancelled Task appears as Done:** add `wontfix` before syncing and use a
+  `label:wontfix` view. A Project Status is a single value, not an Orbit status.
+- **`gh project` fails with a scope error:** run `gh auth refresh -s project`.
+  This is only for the GitHub CLI's Project commands; Orbit does not need it.
+- **A Project field named Area is empty or stale:** Project custom fields do not
+  mirror organization Issue Fields. Inspect or edit the Issue Field through the
+  Issue and Orbit's sync workflow, not through the Project.
 
 No additional Orbit configuration is required. `orbit workspace issues import`
 accepts repository Issue identities, not Project URLs or Project item IDs. See

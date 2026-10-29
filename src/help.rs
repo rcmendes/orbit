@@ -943,6 +943,8 @@ not Tasks and are never claimable.
 `detach OWNER/REPO` previews the repository, its active Linked Tasks, and cached
 Remote Issue summaries. Add `--apply` to exclude the repository, make its Linked
 Tasks Local Tasks with inactive GitHub provenance, and archive its snapshots.
+The detached marker is separate from include/exclude allowlists, which are
+preserved.
 `reattach OWNER/REPO` previews exact-identity matches and current sync plans;
 `--apply` restores the snapshots and reactivates those exact Task links. Neither
 command writes to GitHub. Both are safe to repeat.
@@ -952,7 +954,8 @@ pub const WORKSPACE_DETACH_LONG: &str = "\
 Preview which active Linked Tasks and cached Remote Issues belong to a Workspace
 repository. The default is read-only. Pass --apply to exclude the repository,
 detach its Linked Tasks into Local Tasks while preserving inactive GitHub
-provenance, and archive its Remote Issue snapshots. GitHub is never changed.
+provenance, and archive its Remote Issue snapshots. Existing include/exclude
+allowlists are preserved. GitHub is never changed.
 ";
 
 pub const WORKSPACE_REATTACH_LONG: &str = "\

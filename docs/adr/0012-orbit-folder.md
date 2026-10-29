@@ -249,9 +249,9 @@ own resolution scope; a second `.orbit` in the same working tree returns
   DIR. The only user-level Board is the opt-in `~/.orbit` fallback.
 - **ADR 0008:** replaced. The former `orbit workspace <folder>` creation
   command and `<workspace>/board` layout are removed; `init DIR` creates the
-  current Board layout. The newer `orbit workspace status|refresh|include|exclude|setup|issues`
-  commands manage repository discovery, agent reconciliation, and the Remote
-  Issue catalog; they do not create a Workspace.
+  current Board layout. The newer `orbit workspace status|refresh|include|exclude|detach|reattach|setup|issues`
+  commands manage repository discovery, detach/reattach, agent reconciliation,
+  and the Remote Issue catalog; they do not create a Workspace.
 
 ## Workspace-root path extension
 
@@ -282,6 +282,9 @@ changing the Board's contents or Git storage model:
   only that last explicit snapshot. Include/exclude overrides live in
   `[workspace]` on the Board and do not create Tasks or Issues. Unavailable and
   removed repository entries stay cached until explicit detachment.
+- Repository detachment uses `[workspace].detached`, separate from the user's
+  include/exclude allowlists. An explicit include/exclude command clears the
+  marker; reattach clears it and restores cached Issue summaries.
 - `orbit workspace issues refresh` reconciles the repository inventory and
   stores paginated open and closed Issue summaries at
   `<workspace>/.orbit/cache/issues.json`. Pull requests are excluded; per-repo

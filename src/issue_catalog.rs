@@ -765,7 +765,7 @@ pub(crate) fn detach_repository(
     let already_detached = board
         .config
         .workspace
-        .exclude
+        .detached
         .iter()
         .any(|item| item.eq_ignore_ascii_case(&repository))
         && tasks.is_empty()
@@ -922,6 +922,12 @@ pub(crate) fn reattach_repository(
                 .config
                 .workspace
                 .exclude
+                .iter()
+                .all(|item| !item.eq_ignore_ascii_case(&repository))
+            && board
+                .config
+                .workspace
+                .detached
                 .iter()
                 .all(|item| !item.eq_ignore_ascii_case(&repository))
         {

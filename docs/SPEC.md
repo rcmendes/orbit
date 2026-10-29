@@ -365,15 +365,20 @@ persist overrides in the Workspace Board's `[workspace]` config. A non-empty
 include list is an allowlist; exclusions take precedence, and the two override
 lists cannot contain the same repository.
 
+Detach records the repository separately in `[workspace].detached`; it does not
+change the user's include/exclude overrides. Discovery treats a detached
+repository as excluded until explicit reattachment or a later explicit include
+or exclude command clears the detached marker.
+
 `orbit workspace detach OWNER/REPO` previews the repository, every active Linked
-Task, and cached Remote Issue summaries. `--apply` adds the repository to the
-Workspace exclusion list, makes its Linked Tasks local-only, and moves all active
+Task, and cached Remote Issue summaries. `--apply` marks the repository detached,
+makes its Linked Tasks local-only, and moves all active
 Remote Issue summaries to the non-claimable `archived_issues` map in
 `<workspace>/.orbit/cache/issues.json`. This works for healthy, stale, and
 unavailable repositories. It never changes a GitHub Issue. `orbit workspace
 reattach OWNER/REPO` previews archived snapshots and each exact inactive
 `owner/repo#number` Task identity, including the current sync plan and conflicts;
-`--apply` removes the exclusion, restores snapshots, and activates those links.
+`--apply` clears the detached marker, restores snapshots, and activates those links.
 GitHub sync remains a separate explicit operation.
 
 ### Remote Issue catalog

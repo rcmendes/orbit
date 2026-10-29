@@ -260,6 +260,9 @@ repository, converts its Linked Tasks to Local Tasks with inactive provenance,
 and archives the snapshots. Reattach previews current per-Task sync plans and
 conflicts, then restores archived summaries and activates the exact links only
 with `--apply`. Both commands are local-only; neither writes to GitHub.
+Detach stores a separate `[workspace].detached` marker, so existing include and
+exclude allowlists stay unchanged. A later explicit `workspace include` or
+`workspace exclude` clears that marker.
 
 ### `orbit workspace issues` — browse and import Remote Issues
 

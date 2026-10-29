@@ -1133,6 +1133,13 @@ fn detaching_a_healthy_workspace_repository_archives_remote_issues_and_reattache
         "issue_details": { "acme/api#21": { "body": "Repository issue body" } }
     });
     std::fs::write(&github_fixture, initial.to_string()).unwrap();
+    let (status, included) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "include", "acme/api"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{included}");
     let (status, refreshed) = run_workspace(
         &repo,
         &workspace,
@@ -1184,6 +1191,11 @@ fn detaching_a_healthy_workspace_repository_archives_remote_issues_and_reattache
         workspace_status["data"]["repositories"][0]["included"],
         false
     );
+    let config: toml::Value = toml::from_str(
+        &std::fs::read_to_string(workspace.join(".orbit/board/config.toml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(config["workspace"]["include"][0].as_str(), Some("acme/api"));
     let (_, issues) = run_workspace(
         &repo,
         &workspace,
@@ -1234,6 +1246,12 @@ fn detaching_a_healthy_workspace_repository_archives_remote_issues_and_reattache
     assert_eq!(
         reattached["data"]["reattached"][0]["identity"],
         "acme/api#21"
+    );
+    let (_, workspace_status) =
+        run_workspace(&repo, &workspace, &["workspace", "status"], &github_fixture);
+    assert_eq!(
+        workspace_status["data"]["repositories"][0]["included"],
+        true
     );
     let (_, repeated_reattach) = run_workspace(
         &repo,

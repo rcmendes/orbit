@@ -492,7 +492,8 @@ Repository or individual Task detach moves cached summaries into the
 Task. Reattach matches exact repository/Issue numbers, previews current sync
 plans and conflicts, then explicitly reactivates links without syncing them.
 Inactive provenance is excluded from sync and duplicate link counts until
-reattached.
+reattached. Repository detach uses a separate `[workspace].detached` marker, so
+it does not alter explicit repository include/exclude allowlists.
 
 `workspace setup` consumes that snapshot rather than rescanning or contacting
 GitHub. It installs managed, native harness integrations into included direct

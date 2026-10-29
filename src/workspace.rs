@@ -18,6 +18,9 @@ pub struct WorkspaceConfig {
     pub include: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
+    /// Repositories detached locally without changing the user's include filter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detached: Vec<String>,
     /// Harness selection reused by later `workspace setup` reconciliations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_harnesses: Option<Vec<String>>,
@@ -25,11 +28,19 @@ pub struct WorkspaceConfig {
 
 impl WorkspaceConfig {
     pub fn is_empty(&self) -> bool {
-        self.include.is_empty() && self.exclude.is_empty() && self.agent_harnesses.is_none()
+        self.include.is_empty()
+            && self.exclude.is_empty()
+            && self.detached.is_empty()
+            && self.agent_harnesses.is_none()
     }
 
     pub fn validate(&self) -> Result<()> {
-        for repository in self.include.iter().chain(&self.exclude) {
+        for repository in self
+            .include
+            .iter()
+            .chain(&self.exclude)
+            .chain(&self.detached)
+        {
             crate::github::GitHubConfig::normalize_repo(repository)?;
         }
         let included = self
@@ -44,6 +55,16 @@ impl WorkspaceConfig {
         {
             return Err(OrbitError::config(
                 "workspace.include and workspace.exclude cannot contain the same repository",
+            ));
+        }
+        let mut detached = BTreeSet::new();
+        if self
+            .detached
+            .iter()
+            .any(|repo| !detached.insert(repo.to_ascii_lowercase()))
+        {
+            return Err(OrbitError::config(
+                "workspace.detached must not contain duplicate repositories",
             ));
         }
         if let Some(harnesses) = &self.agent_harnesses {
@@ -78,6 +99,10 @@ impl WorkspaceConfig {
         self.exclude
             .iter()
             .any(|item| item.eq_ignore_ascii_case(repository))
+            || self
+                .detached
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(repository))
     }
 }
 
@@ -819,6 +844,10 @@ fn set_override(
             "orbit: workspace exclude repository"
         },
         |config| {
+            config
+                .workspace
+                .detached
+                .retain(|item| !item.eq_ignore_ascii_case(&repository));
             let (selected, other) = if include {
                 (&mut config.workspace.include, &mut config.workspace.exclude)
             } else {
@@ -872,10 +901,15 @@ pub(crate) fn set_repository_detached(
         |config| {
             config
                 .workspace
-                .exclude
+                .detached
                 .retain(|item| !item.eq_ignore_ascii_case(&repository));
             if detached {
-                config.workspace.exclude.push(repository.clone());
+                config.workspace.detached.push(repository.clone());
+            } else {
+                config
+                    .workspace
+                    .exclude
+                    .retain(|item| !item.eq_ignore_ascii_case(&repository));
             }
             Ok(())
         },

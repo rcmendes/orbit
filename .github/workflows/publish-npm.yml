@@ -1,0 +1,42 @@
+name: Publish npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag that contains orbit-tracker-npm-package.tar.gz
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.tag }}
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Download the release npm package
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "invalid release tag: $TAG" >&2
+            exit 1
+          fi
+          mkdir -p npm
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p orbit-tracker-npm-package.tar.gz -D npm
+          tar -xzf npm/orbit-tracker-npm-package.tar.gz -C npm
+          test -f npm/package/package.json
+          node -e "const p = require('./npm/package/package.json'); console.log(p.name + '@' + p.version)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish
+        run: npm publish --access public ./npm/package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

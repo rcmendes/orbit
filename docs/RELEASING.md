@@ -80,6 +80,18 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
 
     A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, onboarding, `orbit github`/`orbit triage` help, and a fixture-backed GitHub flow (connect, status, adopt/create, sync preview/apply, and Triage review/apply) without network access, plus a real MCP initialize/tools-list handshake. A red run means the published artifacts are broken even though the release exists.
 
+### Recover a skipped npm publish
+
+`publish-npm` runs only after every artifact smoke job succeeds. If a runner is cancelled before it starts, publish the release's npm asset directly instead of re-running the whole release:
+
+```bash
+gh release download v0.10.3 -p orbit-tracker-npm-package.tar.gz
+tar -xzf orbit-tracker-npm-package.tar.gz
+npm publish --access public ./package
+```
+
+Maintainers can also run the `Publish npm` workflow with the release tag. Both paths use the same `NPM_TOKEN`, so a staged upload still needs `npm stage approve` with 2FA.
+
 ## Packaging checks
 
 `scripts/onboarding-smoke.sh` and `scripts/onboarding-smoke.ps1` are the single onboarding sequence used by CI and available locally:

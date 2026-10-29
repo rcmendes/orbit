@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added a `Publish npm` workflow that publishes the npm asset from an existing GitHub Release when the release pipeline's artifact smoke jobs are skipped or cancelled.
+
 ## 0.10.3 - 2026-10-29
 
 - `orbit setup` and `orbit workspace setup` now write through an `AGENTS.md` symlink instead of replacing it with a regular file. Repositories that keep `AGENTS.md -> CLAUDE.md` retain the link after setup.

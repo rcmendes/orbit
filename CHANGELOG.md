@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `orbit list` now has an `ISSUE` column: `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. New `--linked` and `--local` filters scope the table without `--json`, and `orbit show` prints the full `owner/repo#N` link.
 - Fixed Task frontmatter parsing so an indented `---` line inside a YAML block scalar no longer ends the frontmatter early. Linking an Issue whose body contains a Markdown horizontal rule previously wrote `github.last_sync.body` with an indented `---`, after which `orbit list`, `orbit show`, and `orbit doctor` reported `CORRUPT_TASK` for that Task.
 - Added a `Publish npm` workflow that publishes the npm asset from an existing GitHub Release when the release pipeline's artifact smoke jobs are skipped or cancelled.
 

@@ -170,7 +170,9 @@ fn tool_definitions() -> Vec<Value> {
                 "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
                 "areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Only tasks with any of these work areas." },
                 "exclude_areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Exclude tasks with any of these work areas." },
-                "all": { "type": "boolean", "description": "Include done and cancelled tasks." }
+                "all": { "type": "boolean", "description": "Include done and cancelled tasks." },
+                "linked": { "type": "boolean", "description": "Only Tasks with an active GitHub Issue link." },
+                "local": { "type": "boolean", "description": "Only Tasks without an active GitHub Issue link; includes detached provenance." }
             }),
             &[],
         ),
@@ -460,6 +462,9 @@ fn dispatch_tool(
     if name == "list" && arguments.get("label").is_some() && bool_arg(arguments, "unlabeled") {
         return tool_invalid("`label` and `unlabeled` are mutually exclusive");
     }
+    if name == "list" && bool_arg(arguments, "linked") && bool_arg(arguments, "local") {
+        return tool_invalid("`linked` and `local` are mutually exclusive");
+    }
     if arguments
         .get("parent")
         .is_some_and(|value| !value.is_string())
@@ -654,6 +659,12 @@ fn dispatch_tool(
             }
             if bool_arg(arguments, "waiting") {
                 args.push("--waiting".to_string());
+            }
+            if bool_arg(arguments, "linked") {
+                args.push("--linked".to_string());
+            }
+            if bool_arg(arguments, "local") {
+                args.push("--local".to_string());
             }
             if bool_arg(arguments, "all") {
                 args.push("--all".to_string());

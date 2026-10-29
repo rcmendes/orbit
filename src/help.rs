@@ -309,21 +309,23 @@ hidden by default; pass --all to include them, or name a terminal status with
 --status. Filters combine, so --status in_progress --claimed-by claude shows
 everything one agent is holding.
 
-Human output is an aligned table with ID, STATUS, P, TYPE, TITLE, LABELS, and
-CLAIMED BY columns. Long titles are shortened to 60 characters. Root Tasks are
-ordered by priority, then creation time and ID; each Parent Task is followed by
-its SubTasks, also ordered by priority. --group renders one outlined table with
-a banner for each Parent Task and its SubTasks beneath it; tasks with no parent
-follow in a final No parent section. The table is for reading; use --json when
-another program consumes the result, because it returns the full task objects in
-data.tasks plus data.count.
+Human output is an aligned table with ID, STATUS, P, TYPE, ISSUE, TITLE, LABELS,
+and CLAIMED BY columns. ISSUE is `-` for a Local Task, `#N` for a Linked Task,
+and `~#N` for detached provenance. Long titles are shortened to 60 characters.
+Root Tasks are ordered by priority, then creation time and ID; each Parent Task
+is followed by its SubTasks, also ordered by priority. --group renders one
+outlined table with a banner for each Parent Task and its SubTasks beneath it;
+tasks with no parent follow in a final No parent section. The table is for
+reading; use --json when another program consumes the result, because it returns
+the full task objects in data.tasks plus data.count.
 
---parent lists only the SubTasks of one Parent Task. --type is repeatable and
-matches any listed work shape; --exclude-type hides any listed shape. --label is
-repeatable and every label must match; --exclude-label is repeatable and hides a
-task carrying any of the named labels. --repo NAME is shorthand for --label
-repo:NAME. For work an agent can start, use `orbit ready` instead of filtering
-this list.";
+--linked shows only Tasks with an active GitHub Issue link; --local shows only
+Tasks without one, including detached provenance. --parent lists only the
+SubTasks of one Parent Task. --type is repeatable and matches any listed work
+shape; --exclude-type hides any listed shape. --label is repeatable and every
+label must match; --exclude-label is repeatable and hides a task carrying any of
+the named labels. --repo NAME is shorthand for --label repo:NAME. For work an
+agent can start, use `orbit ready` instead of filtering this list.";
 
 pub const LIST_EXAMPLES: &str = "\
 Examples:
@@ -348,6 +350,10 @@ Examples:
   # Everything for one repository, optionally with another label
   orbit list --repo api
   orbit list --repo api --label ready-for-agent
+
+  # Only work linked to a GitHub Issue, or only local work
+  orbit list --linked
+  orbit list --local
 
   # Only epics and specs
   orbit list --type epic

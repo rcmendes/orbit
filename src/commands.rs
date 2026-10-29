@@ -1231,6 +1231,12 @@ fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutpu
             if args.unlabeled && !task.front.labels.is_empty() {
                 return false;
             }
+            if args.linked && task.github_link().is_none() {
+                return false;
+            }
+            if args.local && task.github_link().is_some() {
+                return false;
+            }
             if let Some(parent) = args.parent.as_deref()
                 && task.front.parent.as_deref() != Some(parent)
             {
@@ -2801,16 +2807,35 @@ fn group_tasks<'a>(graph: &'a Graph, tasks: &[&'a Task]) -> Result<Vec<ListGroup
     Ok(groups)
 }
 
-fn group_headers() -> [String; 7] {
-    ["ID", "STATUS", "P", "TYPE", "TITLE", "LABELS", "CLAIMED BY"].map(String::from)
+fn group_headers() -> [String; 8] {
+    [
+        "ID",
+        "STATUS",
+        "P",
+        "TYPE",
+        "ISSUE",
+        "TITLE",
+        "LABELS",
+        "CLAIMED BY",
+    ]
+    .map(String::from)
 }
 
-fn task_cells(task: &Task) -> [String; 7] {
+fn issue_cell(task: &Task) -> String {
+    match &task.front.github {
+        Some(link) if link.active => format!("#{}", link.number),
+        Some(link) => format!("~#{}", link.number),
+        None => "-".to_string(),
+    }
+}
+
+fn task_cells(task: &Task) -> [String; 8] {
     [
         task.id.to_string(),
         task.front.status.as_str().to_string(),
         format!("P{}", task.front.priority),
         task.front.task_type.as_str().to_string(),
+        issue_cell(task),
         truncate(&task.front.title, 60),
         task.front.labels.join(", "),
         task.holder()
@@ -2819,8 +2844,8 @@ fn task_cells(task: &Task) -> [String; 7] {
     ]
 }
 
-fn column_widths(rows: &[[String; 7]]) -> Vec<usize> {
-    (0..7)
+fn column_widths(rows: &[[String; 8]]) -> Vec<usize> {
+    (0..8)
         .map(|column| {
             rows.iter()
                 .map(|row| row[column].chars().count())
@@ -2903,7 +2928,7 @@ fn full_border(left: &str, right: &str, inner_width: usize) -> String {
     format!("{left}{}{right}", "─".repeat(inner_width))
 }
 
-fn table_row(cells: &[String; 7], widths: &[usize]) -> String {
+fn table_row(cells: &[String; 8], widths: &[usize]) -> String {
     let padded: Vec<String> = cells
         .iter()
         .zip(widths)
@@ -3068,6 +3093,11 @@ fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
     lines.push(format!("status: {}", task.front.status.as_str()));
     lines.push(format!("kind: {}", task.kind()));
     lines.push(format!("type: {}", task.front.task_type.as_str()));
+    lines.push(match &task.front.github {
+        Some(link) if link.active => format!("github: {}#{}", link.repo, link.number),
+        Some(link) => format!("github: {}#{} (detached)", link.repo, link.number),
+        None => "github: -".to_string(),
+    });
     lines.push(format!("priority: P{}", task.front.priority));
     if let Some(parent) = &task.front.parent {
         lines.push(format!("parent: {parent}"));

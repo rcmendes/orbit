@@ -289,6 +289,59 @@ fn github_repo_link_and_adopt_use_fixture_client() {
 }
 
 #[test]
+fn list_shows_and_filters_github_links() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let linked = adopt_fixture_task(&repo, &fixture, "Linked task");
+    let local = repo.add("Local task", &[]);
+
+    let all = repo.ok_json(&["list", "--json"]);
+    let tasks = all["data"]["tasks"].as_array().unwrap();
+    let linked_row = tasks.iter().find(|task| task["id"] == linked).unwrap();
+    assert_eq!(linked_row["github"]["number"], 42);
+    let local_row = tasks.iter().find(|task| task["id"] == local).unwrap();
+    assert!(local_row["github"].is_null());
+
+    let only_linked = repo.ok_json(&["list", "--linked", "--json"]);
+    assert_eq!(only_linked["data"]["count"], 1);
+    assert_eq!(only_linked["data"]["tasks"][0]["id"], linked);
+
+    let only_local = repo.ok_json(&["list", "--local", "--json"]);
+    assert_eq!(only_local["data"]["count"], 1);
+    assert_eq!(only_local["data"]["tasks"][0]["id"], local);
+
+    let human = repo.orbit(&["list"]);
+    assert!(human.status.success());
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(stdout.contains("ISSUE"), "{stdout}");
+    let linked_line = stdout.lines().find(|line| line.contains(&linked)).unwrap();
+    assert!(linked_line.contains("#42"), "{stdout}");
+    let local_line = stdout.lines().find(|line| line.contains(&local)).unwrap();
+    assert!(local_line.contains(" - "), "{stdout}");
+
+    let show = repo.orbit(&["show", linked.as_str()]);
+    assert!(show.status.success());
+    assert!(
+        String::from_utf8_lossy(&show.stdout).contains("github: acme/widget#42"),
+        "{}",
+        String::from_utf8_lossy(&show.stdout)
+    );
+    let show_local = repo.orbit(&["show", local.as_str()]);
+    assert!(show_local.status.success());
+    assert!(
+        String::from_utf8_lossy(&show_local.stdout).contains("github: -"),
+        "{}",
+        String::from_utf8_lossy(&show_local.stdout)
+    );
+
+    let conflict = repo.orbit(&["list", "--linked", "--local", "--json"]);
+    assert_eq!(conflict.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&conflict.stderr);
+    assert!(stderr.contains("cannot be used with"), "{stderr}");
+}
+
+#[test]
 fn one_github_issue_cannot_be_adopted_by_two_tasks() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);

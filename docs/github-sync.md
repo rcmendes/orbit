@@ -236,11 +236,17 @@ orbit doctor --json
 
 ### Tell Local, Linked, and Remote work apart
 
-`orbit list` prints Tasks only and has no link column. Use `--json`: `github` is
-`null` for a Local Task and an object with `repo` and `number` for a Linked Task.
-A link with `active: false` is detached provenance and is not synchronized.
+`orbit list` prints Tasks only. Its `ISSUE` column is `-` for a Local Task, `#N`
+for a Linked Task, and `~#N` for detached provenance, so `--linked` and
+`--local` filter the table without opening each Task. `--local` includes
+detached provenance, which Orbit no longer synchronizes.
+
+`--json` carries the full identity: `github` is `null` for a Local Task and an
+object with `repo`, `number`, and `last_sync` for a Linked Task.
 
 ```bash
+orbit list --linked
+orbit list --local
 orbit list --json | jq -r '.data.tasks[] |
   [.id, (if .github then "\(.github.repo)#\(.github.number)" else "local" end), .title] | @tsv'
 ```

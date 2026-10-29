@@ -456,7 +456,7 @@ pub fn render_task(task: &Task) -> Result<String> {
 /// content, for example a Markdown horizontal rule inside a block scalar such
 /// as `github.last_sync.body`.
 fn is_frontmatter_delimiter(line: &str) -> bool {
-    line.trim_end_matches(|c: char| c == '\r' || c == ' ' || c == '\t') == "---"
+    line.trim_end_matches(['\r', ' ', '\t']) == "---"
 }
 
 pub fn split_frontmatter(content: &str) -> Option<(&str, &str)> {

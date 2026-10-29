@@ -2230,7 +2230,7 @@ From any child repository in a Workspace, these commands resolve the shared Work
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.
 - Run `orbit prime` at session start for ready work, stale claims, and counts.
-- `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
+- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
 
 Parse the JSON envelope: `ok`, `data`, `error.code`, and `error.retryable`. If a command returns `LOCKED`, retry after a short backoff. Never infer state from prose.
 {END_MARKER}"
@@ -2288,7 +2288,7 @@ We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdo
 - The hold labels `needs-triage`, `needs-info`, and `ready-for-human` keep tasks out of the ready queue and prevent claims until removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.
 - Never edit task frontmatter directly; that bypasses dependency validation, leases, and the write lock.
 - Use `orbit show <ID>` to read acceptance criteria.
-- `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
+- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
 {END_MARKER}"
     )
 }

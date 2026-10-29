@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.1 - 2026-10-29
+
+- Packaging patch. The Orbit binary is functionally identical to 0.10.0; this release fixes the packaged onboarding smoke so the release pipeline can publish to npm. It includes the Workspace Issue catalog (`orbit workspace issues`), `orbit workspace migrate`, Workspace-aware `doctor`, batched `orbit github create`, and the GitHub Projects documentation from 0.10.0.
+- Fixed `scripts/onboarding-smoke.sh` and `scripts/onboarding-smoke.ps1` to run `orbit github create --apply` and assert the batched `data.tasks[]` result.
+
 ## 0.10.0 - 2026-10-29
 
 - This release adds the Workspace Issue catalog: `orbit workspace issues refresh`, `list`, `inspect`, `import`, `detach`, and `reattach` browse GitHub Issues across included repositories and import them only on explicit request. `orbit workspace migrate` consolidates legacy Workspace and child-repository Boards, `orbit doctor` understands Workspaces, and GitHub sync becomes Orbit-authoritative. GitHub Projects are documented as a downstream view over Issues.

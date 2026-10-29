@@ -1,6 +1,6 @@
 # Orbit Specification
 
-Status: pre-alpha; v0.10.0 is the latest release and includes the Orbit folder layout ([ADR 0012](./adr/0012-orbit-folder.md)), the Workspace Issue catalog, and a Workspace-aware `doctor`. This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
+Status: pre-alpha; v0.10.1 is the latest release and includes the Orbit folder layout ([ADR 0012](./adr/0012-orbit-folder.md)), the Workspace Issue catalog, and a Workspace-aware `doctor`. This document is canonical. `docs/brainstorming.md` and `docs/spec_alpha.md` are research notes kept for context.
 
 ## 1. What Orbit is
 
@@ -685,6 +685,7 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 - v0.9.3: fixes the live GraphQL transport to call `gh api graphql` with a complete query document, so organization field discovery and creation work against the real GitHub API.
 - v0.9.4: treats `admin:org` and `write:org` as satisfying `read:org`, avoiding a false missing-scope warning for organization administrators.
 - v0.10.0: Workspace Issue catalog and migration. `orbit workspace issues refresh`, `list`, `inspect`, `import`, `detach`, and `reattach` browse Remote Issues and import only on explicit request; `orbit workspace migrate` consolidates legacy Boards; `doctor` is Workspace-aware; included repositories participate in GitHub adopt/status/sync without separate links; `orbit github create` previews and batches; GitHub Projects are downstream of Issues. See [ADR 0015](./adr/0015-github-projects-downstream.md).
+- v0.10.1: packaging patch. The binary is functionally identical to v0.10.0; the packaged onboarding smoke now validates batched `orbit github create --apply` output so the release pipeline can publish to npm. v0.10.0 remains available as a GitHub Release.
 
 ### Command rules
 

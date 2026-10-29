@@ -387,7 +387,7 @@ fn staging_a_workspace_board_inherits_the_legacy_configuration() {
     let preview = repo.ok_json_in(&workspace, &["workspace", "migrate", "--dry-run", "--json"]);
     assert_eq!(
         preview["data"]["configuration_source"],
-        json!(std::fs::canonicalize(&source).unwrap())
+        json!(dunce::canonicalize(&source).unwrap())
     );
     assert!(!workspace.join(".orbit/board").exists());
 

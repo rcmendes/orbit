@@ -1,12 +1,12 @@
 ---
 title: Workspace Issue Catalog and Local-First GitHub Orchestration
-status: todo
+status: done
 type: epic
 priority: 2
 labels:
 - enhancement
 created_at: 2026-10-28T22:46:56.870931Z
-updated_at: 2026-10-28T22:46:56.870931Z
+updated_at: 2026-10-29T11:06:08.661173Z
 ---
 
 ## Goal

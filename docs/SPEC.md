@@ -324,7 +324,11 @@ existing `<workspace>/.board` or `<workspace>/board` Board and Boards at child
 repository `.orbit` paths (or their legacy `<git-common-dir>/orbit/board` paths)
 into `<workspace>/.orbit/board`. It requires an ordinary non-Git Workspace root.
 If the Workspace Board exists, it is the destination. Otherwise, the command
-plans a new Board using the Workspace folder's derived slug and default settings.
+plans a new Board from the legacy Workspace Board's configuration, adapting
+`id.prefix` to the Workspace folder's derived slug, `board.storage` to
+`repository`, and `board.branch` to `orbit`. Without a legacy Workspace Board it
+uses default settings. The plan names the configuration source in
+`configuration_source`.
 `--dry-run` validates and prints the plan without writing. Apply saves an atomic
 replay journal in `<workspace>/.orbit/workspace-migration-state.json` and
 serializes apply with `<workspace>/.orbit/workspace-migration.lock`. When it must
@@ -338,8 +342,12 @@ interruption; it does not rescan or guess at a new mapping. Source Boards are
 never modified or removed and remain available as backups.
 
 The Workspace config is authoritative. Every differing source config setting is
-reported with both values. Task IDs are preserved unless they collide with a
-Workspace or earlier source ID. Source prefixes that differ from the Workspace
+reported with both values. When migration stages the first Workspace Board, the
+legacy Workspace Board's configuration becomes the Workspace config: `[github]`,
+`[workspace]`, and Board policy settings carry over, while the layout-specific
+`id.prefix`, `board.storage`, and `board.branch` are adapted. Task IDs are
+preserved unless they collide with a Workspace or earlier source ID. Source
+prefixes that differ from the Workspace
 prefix are added to `id.accepted_prefixes`, so they do not force an ID rewrite.
 Collision remaps update structured `parent` and `depends_on` fields and comment
 sidecar filenames/headers. Claims, Checkpoints, labels, metadata, and bodies transfer.
@@ -354,7 +362,10 @@ Workspace Board commit.
 `orbit workspace refresh` explicitly scans direct child directories of the
 Workspace. It considers only direct child Git repositories, reads their GitHub
 `origin` remotes, and checks repository access. Full mode uses the single
-`[github].organization` configured on the Workspace Board. It never creates
+`[github].organization` configured on the Workspace Board. When it is unset,
+refresh infers the organization if every discovered GitHub origin shares one
+owner and saves it to the Board configuration; mixed-owner Workspaces must
+configure it explicitly. It never creates
 Tasks or GitHub Issues. The rebuildable snapshot is stored at
 `<workspace>/.orbit/cache/repositories.json`; explicitly refreshed Remote Issue
 summaries are stored separately at `<workspace>/.orbit/cache/issues.json`.
@@ -429,8 +440,9 @@ non-Git child directories, missing origins, and unsupported origin URLs. Stale
 and removed repository entries are retained; discovery does not detach or delete
 their cached data. JSON `data.repositories` entries include `repository`, `path`,
 `discovered`, `status`, `included`, `cached`, `origin`, `error`, and
-`last_checked_at`. The top-level data includes the configured `organization`,
-`last_refreshed_at`, and arrays for non-Git directories, missing origins, and
+`last_checked_at`. The top-level data includes the configured or inferred
+`organization`, `organization_inferred`, `last_refreshed_at`, and arrays for
+non-Git directories, missing origins, and
 unsupported origins.
 
 ### Workspace agent reconciliation
@@ -865,7 +877,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Worktree integration: initialize in the main worktree, claim from a linked worktree, assert one board.
 - Orbit folder tests: a secondary worktree resolves the main checkout's `.orbit`; `init` there reuses it; commands run from `src/` resolve the root Board and `init` there refuses while that Board exists; `git clean -xdff` removes `DIR` and `doctor --fix` re-attaches it with every Task intact; `init` outside a repository creates a `repository`-mode Board; `~/.orbit` resolves only when it exists and `init --global` creates it.
 - Workspace-root tests: `init <workspace>` creates `.orbit/board` plus `.orbit/cache` outside Git; Workspace root and nested child Git directories resolve one Board without links; an outside Repository can link the Workspace root; `--dir`/`ORBIT_DIR` accept the Workspace root; child-local Boards and unknown `.orbit` contents are reported without being overwritten; legacy direct `.orbit` Boards remain explicitly addressable.
-- Workspace migration tests: dry-run is read-only; `.board` and child Boards combine; colliding IDs and structured references remap; different source prefixes are preserved; duplicate GitHub links stop before writes; Workspace config wins; interrupted plans resume; new Boards activate only after validation; source Boards remain unchanged.
+- Workspace migration tests: dry-run is read-only; `.board` and child Boards combine; colliding IDs and structured references remap; different source prefixes are preserved; duplicate GitHub links stop before writes; Workspace config wins when a destination exists and a staged Board inherits the legacy Workspace config; interrupted plans resume; new Boards activate only after validation; source Boards remain unchanged.
 - Legacy layout tests: old `<git-common-dir>/orbit/board` and `<workspace>/board` targets resolve with `LEGACY_LAYOUT`; `doctor --migrate` is resumable and preserves Tasks; an interrupted migration reports `AMBIGUOUS_BOARD`; an orphan worktree reports `ORPHAN_WORKTREE`; a wrong `board.storage` reports `STORAGE_MISMATCH`.
 - Link tests: `link DIR` between repositories shares one graph, legacy workspace-root targets still resolve with a warning, `unlink` returns to the main checkout's Board, and `setup --scope user` writes no Board path.
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, `--remove` preserving user content, project versus user scope, and TTY versus non-TTY `init` behavior.

@@ -215,8 +215,13 @@ in the plan. Duplicate `owner/repo#number` links stop before any writes so a
 person can choose which Task owns the Issue.
 
 An existing Workspace Board is used as the destination and its configuration
-wins. If there is no Workspace Board yet, migration uses the Workspace folder's
-derived slug and standard Board defaults, creates one in a staging directory,
+wins. If there is no Workspace Board yet, migration takes the legacy Workspace
+Board's configuration, carries its `[github]`, `[workspace]`, and Board policy
+settings, and adapts only what the folder layout requires: the derived slug
+becomes `id.prefix`, `board.storage` becomes `repository`, and `board.branch`
+becomes `orbit`. Without a legacy Workspace Board it uses standard Board
+defaults. The report names the configuration source in both the human output
+and `configuration_source`. The staged Board is created in a staging directory
 and activates `<workspace>/.orbit/board` only after validation. This
 lets users migrate child-local Boards that would otherwise prevent
 `orbit init <workspace>` from running without first shadowing those Boards.
@@ -239,7 +244,11 @@ the source Boards until `orbit doctor` succeeds.
 
 ### `orbit workspace` — discover Workspace repositories
 
-Set `[github].organization` on the Workspace Board, for example by running
+`orbit workspace refresh` uses `[github].organization` from the Workspace Board.
+When it is unset, the command infers it from the direct child repositories'
+GitHub origins if they all share one owner, saves it to the Board configuration,
+and reports `organization_inferred: true`. Workspaces with repositories from
+more than one owner must set the organization explicitly, for example by running
 `orbit github connect` from an organization-owned child repository. Then refresh
 the catalog explicitly:
 

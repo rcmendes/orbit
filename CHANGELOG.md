@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `orbit workspace migrate` now carries the legacy Workspace Board's configuration into a newly staged `<workspace>/.orbit/board` instead of replacing it with defaults. `[github]`, `[workspace]`, and Board policy settings are preserved; only `id.prefix`, `board.storage`, and `board.branch` are adapted to the new layout. The plan reports the source as `configuration_source`, so a migration no longer silently drops the organization, linked repositories, and resolved Issue Field IDs that `orbit workspace refresh` needs.
+- `orbit workspace refresh` now infers `[github].organization` from direct child repository origins when every repository shares one GitHub owner, saves it to the Workspace Board, and reports `organization_inferred`. Mixed-owner Workspaces still require an explicit organization.
+- `orbit workspace refresh --json` now includes the resolved `organization` and `organization_inferred`, matching the documented Workspace status contract.
+
 ## 0.10.1 - 2026-10-29
 
 - Packaging patch. The Orbit binary is functionally identical to 0.10.0; this release fixes the packaged onboarding smoke so the release pipeline can publish to npm. It includes the Workspace Issue catalog (`orbit workspace issues`), `orbit workspace migrate`, Workspace-aware `doctor`, batched `orbit github create`, and the GitHub Projects documentation from 0.10.0.

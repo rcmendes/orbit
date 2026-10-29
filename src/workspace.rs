@@ -639,19 +639,6 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
             "Workspace repository discovery requires GitHub full mode and one configured organization",
         ));
     }
-    let organization = board
-        .config
-        .github
-        .organization
-        .as_deref()
-        .filter(|org| !org.trim().is_empty())
-        .ok_or_else(|| {
-            OrbitError::new(
-                code::GITHUB_NOT_CONFIGURED,
-                "Workspace repository discovery needs `[github].organization`; configure it with `orbit github connect` from an organization-owned child repository",
-            )
-        })?
-        .to_string();
     let client = client_from_env()?;
     let path = catalog_path(workspace);
     let mut catalog = load_catalog(&path)?;
@@ -681,6 +668,7 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
     }
     children.sort_by_key(|entry| entry.file_name());
 
+    let mut discovered = Vec::new();
     for child in children {
         let child_name = child.file_name().to_string_lossy().into_owned();
         if child_name == ".orbit" {
@@ -718,6 +706,18 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
                 continue;
             }
         };
+        discovered.push((child_path, origin, repository));
+    }
+
+    let (organization, organization_inferred) = resolve_organization(board, &discovered)?;
+    if organization_inferred {
+        board.save_config("orbit: infer workspace organization", |config| {
+            config.github.organization = Some(organization.clone());
+            Ok(())
+        })?;
+    }
+
+    for (child_path, origin, repository) in discovered {
         let previous_entry = previous.get(&repository);
         let (status, included, error, checked_at) = if !repository
             .split_once('/')
@@ -801,7 +801,7 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
         current.insert(repository, entry);
     }
 
-    catalog.organization = Some(organization);
+    catalog.organization = Some(organization.clone());
     catalog.last_refreshed_at = Some(Utc::now());
     catalog.repositories = current;
     catalog.non_git_directories = non_git_directories;
@@ -811,6 +811,8 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
     let count = catalog.repositories.len();
     let data = json!({
         "workspace": workspace,
+        "organization": organization,
+        "organization_inferred": organization_inferred,
         "last_refreshed_at": catalog.last_refreshed_at,
         "repository_count": count,
         "repositories": catalog.repositories.values().collect::<Vec<_>>(),
@@ -966,6 +968,46 @@ fn git_output(path: &Path, args: &[&str]) -> std::result::Result<String, String>
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn resolve_organization(
+    board: &Board,
+    discovered: &[(PathBuf, String, String)],
+) -> Result<(String, bool)> {
+    if let Some(organization) = board
+        .config
+        .github
+        .organization
+        .as_deref()
+        .map(str::trim)
+        .filter(|organization| !organization.is_empty())
+    {
+        return Ok((organization.to_string(), false));
+    }
+    let owners = discovered
+        .iter()
+        .filter_map(|(_, _, repository)| {
+            repository
+                .split_once('/')
+                .map(|(owner, _)| owner.to_string())
+        })
+        .collect::<BTreeSet<_>>();
+    match owners.len() {
+        0 => Err(OrbitError::new(
+            code::GITHUB_NOT_CONFIGURED,
+            "Workspace repository discovery found no GitHub child repository to infer an organization from; clone an organization repository under the Workspace, or run `orbit github connect` from one",
+        )),
+        1 => Ok((owners.into_iter().next().expect("one owner exists"), true)),
+        _ => {
+            let owners = owners.into_iter().collect::<Vec<_>>().join(", ");
+            Err(OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                format!(
+                    "Workspace repositories belong to multiple owners ({owners}); set `[github].organization` on the Workspace Board, for example with `orbit github connect` from the intended repository"
+                ),
+            ))
+        }
+    }
 }
 
 fn parse_github_origin(origin: &str) -> std::result::Result<String, String> {

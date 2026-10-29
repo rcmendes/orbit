@@ -382,7 +382,7 @@ fn diagnose_layout_and_repositories(
     }
     if config_organization.is_none() {
         warnings.push(format!(
-            "{}: Workspace has no GitHub organization configured; run `orbit github connect` from an organization-owned child repository before refreshing",
+            "{}: Workspace has no GitHub organization configured; `orbit workspace refresh` infers it when every child repository has the same owner, or run `orbit github connect` from an organization-owned child repository to choose it explicitly",
             workspace.display()
         ));
     }

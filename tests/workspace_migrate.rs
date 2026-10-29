@@ -3,6 +3,7 @@ mod common;
 use std::path::Path;
 
 use common::TestRepo;
+use serde_json::json;
 
 const TASK: &str = "---\ntitle: Preserved work\nstatus: todo\ntype: task\npriority: 1\nlabels:\n- ready-for-agent\ndepends_on: []\nclaimed_by: migration-agent\nclaimed_at: 2026-10-28T12:00:00Z\nlease_until: 2026-10-28T12:30:00Z\ncheckpoint:\n  by: migration-agent\n  at: 2026-10-28T12:01:00Z\n  progress: Existing work checkpoint\n  next: Continue the task\ncreated_at: 2026-10-28T12:00:00Z\nupdated_at: 2026-10-28T12:00:00Z\n---\n\nHistory stays with the task.\n";
 
@@ -365,6 +366,43 @@ fn workspace_configuration_wins_and_every_difference_is_reported() {
     assert_eq!(
         std::fs::read(workspace_config_path).unwrap(),
         workspace_config
+    );
+}
+
+#[test]
+fn staging_a_workspace_board_inherits_the_legacy_configuration() {
+    let repo = TestRepo::new();
+    let temp = empty_workspace();
+    let workspace = temp.path().join("Acme");
+    let source = workspace.join(".board");
+    write_board(&source, "teramigo-abcdef", TASK);
+    let mut config = std::fs::read_to_string(source.join("config.toml"))
+        .unwrap()
+        .replace("default_priority = 2", "default_priority = 0");
+    config.push_str(
+        "\n[github]\norganization = \"acme\"\nrepositories = [\"acme/api\", \"acme/web\"]\n\n[github.issue_fields]\narea_name = \"Area\"\nverification_name = \"Verification\"\narea_id = \"AREA123\"\nverification_id = \"VERIFY123\"\n",
+    );
+    std::fs::write(source.join("config.toml"), &config).unwrap();
+
+    let preview = repo.ok_json_in(&workspace, &["workspace", "migrate", "--dry-run", "--json"]);
+    assert_eq!(
+        preview["data"]["configuration_source"],
+        json!(std::fs::canonicalize(&source).unwrap())
+    );
+    assert!(!workspace.join(".orbit/board").exists());
+
+    let applied = repo.ok_json_in(&workspace, &["workspace", "migrate", "--json"]);
+    assert_eq!(applied["data"]["destination_created"], true);
+    let written = std::fs::read_to_string(workspace.join(".orbit/board/config.toml")).unwrap();
+    assert!(written.contains("default_priority = 0"), "{written}");
+    assert!(written.contains("storage = \"repository\""), "{written}");
+    assert!(written.contains("organization = \"acme\""), "{written}");
+    assert!(written.contains("acme/api"), "{written}");
+    assert!(written.contains("area_id = \"AREA123\""), "{written}");
+    assert!(written.contains("prefix = \"acme-\""), "{written}");
+    assert_eq!(
+        std::fs::read_to_string(source.join("config.toml")).unwrap(),
+        config
     );
 }
 

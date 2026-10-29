@@ -181,6 +181,96 @@ fn refresh_discovers_direct_github_children_and_reports_repository_states() {
 }
 
 #[test]
+fn refresh_infers_the_organization_when_every_child_repository_shares_one_owner() {
+    let repo = TestRepo::new();
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+    repo.init_at(&workspace);
+    let repositories = [
+        ("acme/api", "Organization", true),
+        ("acme/web", "Organization", true),
+    ];
+    for (repo_name, _, _) in repositories {
+        let folder = repo_name.split('/').nth(1).unwrap();
+        child_repo(
+            &repo,
+            &workspace,
+            folder,
+            &format!("git@github.com:{repo_name}.git"),
+        );
+    }
+    let github_fixture = repo.home().join("github.json");
+    std::fs::write(&github_fixture, fixture(&repositories)).unwrap();
+
+    let (status, refreshed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{refreshed}");
+    assert_eq!(refreshed["data"]["organization"], "acme");
+    assert_eq!(refreshed["data"]["organization_inferred"], true);
+    let config = std::fs::read_to_string(workspace.join(".orbit/board/config.toml")).unwrap();
+    assert!(config.contains("organization = \"acme\""), "{config}");
+
+    let (status, listed) =
+        run_workspace(&repo, &workspace, &["workspace", "status"], &github_fixture);
+    assert_eq!(status, 0, "{listed}");
+    assert_eq!(listed["data"]["organization"], "acme");
+
+    let (status, again) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "refresh"],
+        &github_fixture,
+    );
+    assert_eq!(status, 0, "{again}");
+    assert_eq!(again["data"]["organization_inferred"], false);
+}
+
+#[test]
+fn refresh_requires_an_explicit_organization_when_child_owners_differ() {
+    let repo = TestRepo::new();
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().to_path_buf();
+    repo.init_at(&workspace);
+    let repositories = [
+        ("acme/api", "Organization", true),
+        ("other/web", "Organization", true),
+    ];
+    for (repo_name, _, _) in repositories {
+        let folder = repo_name.split('/').nth(1).unwrap();
+        child_repo(
+            &repo,
+            &workspace,
+            folder,
+            &format!("git@github.com:{repo_name}.git"),
+        );
+    }
+    let github_fixture = repo.home().join("github.json");
+    std::fs::write(&github_fixture, fixture(&repositories)).unwrap();
+
+    let (status, failed) = run_workspace(
+        &repo,
+        &workspace,
+        &["workspace", "refresh"],
+        &github_fixture,
+    );
+    assert_ne!(status, 0, "{failed}");
+    assert_eq!(failed["error"]["code"], "GITHUB_NOT_CONFIGURED");
+    assert!(
+        failed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("multiple owners"),
+        "{failed}"
+    );
+    let config = std::fs::read_to_string(workspace.join(".orbit/board/config.toml")).unwrap();
+    assert!(!config.contains("[github]"), "{config}");
+}
+
+#[test]
 fn github_create_infers_the_single_included_workspace_repository() {
     let repo = TestRepo::new();
     let (_workspace_dir, workspace) = init_workspace(&repo);

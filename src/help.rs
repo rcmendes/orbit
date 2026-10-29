@@ -146,9 +146,11 @@ pub const WORKSPACE_MIGRATE_LONG: &str = "\
 Workspace migration combines the legacy Workspace Board at <WORKSPACE>/.board
 (or <WORKSPACE>/board) and Boards in child repositories into
 <WORKSPACE>/.orbit/board. It uses an existing Workspace Board when present. If
-none exists, it stages a new Board and activates it only after validating the
-merged graph. It previews without writing when --dry-run is given; otherwise,
-the plan is applied. Source Boards remain intact as backups, and existing
+none exists, it stages a new Board from the legacy Workspace Board's
+configuration, adapting only the Task-ID prefix, storage mode, and branch, and
+activates it only after validating the merged graph. It previews without writing
+when --dry-run is given; otherwise,
+the plan is applied. Source Boards remain intact as backups, and an existing
 Workspace configuration takes precedence over source configuration.
 
 Task IDs stay unchanged unless they collide. Collisions are remapped with their
@@ -934,7 +936,9 @@ Manage repositories that belong to the current Workspace.
 `refresh` explicitly scans direct child directories, reads GitHub origins,
 checks repository access, and updates the local Workspace catalog. `status` is
 read-only and reports the last refresh; it does not poll GitHub or scan for new
-folders. Full mode uses the organization in `[github].organization`.
+folders. Full mode uses the organization in `[github].organization`; when it is
+unset, refresh infers it if every child repository shares one GitHub owner and
+saves it to the Board.
 
 Repository inclusion and exclusion are stored in the Workspace Board. Excluding
 a repository does not delete its cached catalog data. Discovery never creates

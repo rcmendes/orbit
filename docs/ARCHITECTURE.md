@@ -476,7 +476,9 @@ A Workspace is an ordinary, non-Git folder containing repositories and one Board
 
 `src/workspace.rs` owns the explicit repository inventory. `workspace refresh`
 scans one level of child directories and validates GitHub `origin` ownership and
-access against `[github].organization`; the resulting snapshot is outside the
+access against `[github].organization`; when that setting is unset, it adopts
+the single owner shared by every discovered origin and saves it to the Board.
+The resulting snapshot is outside the
 Board Git repository. `workspace status` reads that snapshot without network or
 filesystem discovery. Stale and removed entries remain in the cache.
 `workspace issues refresh` reconciles that inventory and stores paginated Issue summaries separately at
@@ -681,7 +683,9 @@ A forced `git clean -xdff` that removes `DIR` leaves the `orbit` branch and a st
 and local or legacy Boards in child repositories. A dry run plans without writes.
 Apply acquires a Workspace migration lock, saves an atomic replay plan, validates
 Task graphs and comment sidecars, checks GitHub Issue identities, and computes
-ID remaps and config differences. If there is no Workspace Board, it builds and
+ID remaps and config differences. If there is no Workspace Board, it takes the
+legacy Workspace Board's configuration as the staged Board's base and adapts
+only the Task-ID prefix, storage mode, and branch; it then builds and
 validates a staged standalone Board while child repositories continue using
 their local Boards. It commits the merged data and atomically renames the stage
 to `<workspace>/.orbit/board`; only then does Workspace discovery take over.

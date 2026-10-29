@@ -667,8 +667,9 @@ If the Workspace already has a legacy `<workspace>/.board` or `<workspace>/board
 Board, or its child repositories have local Boards, consolidate their work with
 `orbit workspace migrate`. The command can stage a Workspace Board when none
 exists and activates it only after validation, so child Boards are not shadowed
-early. If no Workspace Board exists, the command uses the Workspace folder's
-derived slug and standard Board defaults. Preview before applying, resolve
+early. If no Workspace Board exists, the command stages one from the legacy
+Workspace Board's configuration, adapting only the layout-specific `id.prefix`,
+`board.storage`, and `board.branch`. Preview before applying, resolve
 duplicate GitHub Issue identities explicitly, and keep source Boards as backups:
 
 ```bash
@@ -687,7 +688,10 @@ guidance.
 
 `orbit workspace refresh` scans direct child directories and checks their
 GitHub `origin` repositories against the organization configured in
-`[github].organization`. Use `orbit workspace include OWNER/REPO` and
+`[github].organization`. When that setting is unset, refresh infers it if every
+child repository shares one GitHub owner and saves it to the Board; a
+mixed-owner Workspace must configure it explicitly. Use
+`orbit workspace include OWNER/REPO` and
 `orbit workspace exclude OWNER/REPO` to set explicit overrides; the latest
 include or exclude command replaces the opposite override for that repository.
 When at least one repository is explicitly included, the include list acts as

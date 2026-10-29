@@ -129,7 +129,7 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
     };
     let remediation = match error.code {
         crate::error::code::GITHUB_NOT_CONFIGURED => Some(
-            "If GitHub is not configured, run `orbit github connect` from the repository checkout with the intended GitHub origin. If `gh` is not authenticated, run `gh auth login` first.".to_string(),
+            "In a Workspace, run `orbit workspace refresh` to infer the organization when every child repository shares one owner. Otherwise run `orbit github connect` from the repository checkout with the intended GitHub origin. If `gh` is not authenticated, run `gh auth login` first.".to_string(),
         ),
         crate::error::code::GITHUB_SETUP_INCOMPLETE => Some(
             "Run `orbit github setup` to resolve and store the configured Issue Field ids. If the named field is missing, create it in the organization at Settings > Projects > Issue fields, or run `orbit github setup --create-fields` as an organization administrator; if the organization is unset, run `orbit github connect`.".to_string(),

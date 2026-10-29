@@ -21,6 +21,8 @@ struct MigrationPlan {
     initialize_destination: bool,
     destination_config_before: Vec<u8>,
     destination_config_after: Option<Vec<u8>>,
+    #[serde(default)]
+    configuration_source: Option<PathBuf>,
     accepted_prefixes_added: Vec<String>,
     sources: Vec<PathBuf>,
     files: Vec<PlannedFile>,
@@ -157,15 +159,23 @@ fn make_plan(workspace: &Path) -> Result<MigrationPlan> {
             destination.display()
         )));
     }
-    let (destination_config, destination_graph, destination_config_before) =
+    let (destination_config, destination_graph, destination_config_before, configuration_source) =
         if initialize_destination {
             let (slug, _) = crate::slug::auto_slug_for_dir(workspace);
-            let mut config = Config::default();
+            let source = workspace_config_source(workspace, &destination);
+            let mut config = match &source {
+                Some(root) => Config::load(root)?,
+                None => Config::default(),
+            };
             config.id.prefix = crate::slug::prefix(&slug);
             config.board.storage = Some(crate::board::StorageMode::Repository);
+            config.board.branch = "orbit".to_string();
             config.validate()?;
-            let config_bytes = config.to_toml()?.into_bytes();
-            (config, Graph::from_tasks(Vec::new()), config_bytes)
+            let mut initialized = Config::default();
+            initialized.id.prefix = config.id.prefix.clone();
+            initialized.board.storage = Some(crate::board::StorageMode::Repository);
+            let config_bytes = initialized.to_toml()?.into_bytes();
+            (config, Graph::from_tasks(Vec::new()), config_bytes, source)
         } else {
             let board = Board::at_root(destination.clone(), Vec::new())?;
             let (graph, _) = Graph::load(&board, LoadMode::Strict)?;
@@ -173,7 +183,7 @@ fn make_plan(workspace: &Path) -> Result<MigrationPlan> {
             let config_bytes = std::fs::read(&config_path).map_err(|error| {
                 OrbitError::io(format!("read {}", config_path.display()), error)
             })?;
-            (board.config, graph, config_bytes)
+            (board.config, graph, config_bytes, None)
         };
     let sources = find_sources(workspace, &destination)?;
     if sources.is_empty() {
@@ -428,7 +438,10 @@ fn make_plan(workspace: &Path) -> Result<MigrationPlan> {
         }
     }
 
-    let destination_config_after = if accepted_prefixes_added.is_empty() {
+    let destination_config_after = if initialize_destination {
+        let bytes = merged_config.to_toml()?.into_bytes();
+        (bytes != destination_config_before).then_some(bytes)
+    } else if accepted_prefixes_added.is_empty() {
         None
     } else {
         Some(merged_config.to_toml()?.into_bytes())
@@ -440,6 +453,7 @@ fn make_plan(workspace: &Path) -> Result<MigrationPlan> {
         initialize_destination,
         destination_config_before,
         destination_config_after,
+        configuration_source,
         accepted_prefixes_added,
         sources,
         files: plan_files,
@@ -448,6 +462,16 @@ fn make_plan(workspace: &Path) -> Result<MigrationPlan> {
         configuration_conflicts,
         commit: None,
     })
+}
+
+fn workspace_config_source(workspace: &Path, destination: &Path) -> Option<PathBuf> {
+    [
+        workspace.join(".orbit"),
+        workspace.join("board"),
+        workspace.join(".board"),
+    ]
+    .into_iter()
+    .find(|candidate| candidate != destination && Board::is_board(candidate))
 }
 
 fn find_sources(workspace: &Path, destination: &Path) -> Result<Vec<PathBuf>> {
@@ -861,6 +885,7 @@ fn render_plan(
         "resumed": resumed,
         "id_mappings": plan.mappings,
         "accepted_prefixes_added": plan.accepted_prefixes_added,
+        "configuration_source": plan.configuration_source,
         "configuration_conflicts": plan.configuration_conflicts,
         "commit": commit,
     });
@@ -878,6 +903,12 @@ fn render_plan(
             mapping.source.display(),
             mapping.to,
             mapping.reason
+        ));
+    }
+    if let Some(source) = &plan.configuration_source {
+        human.push_str(&format!(
+            "configuration inherited from {} (storage, branch, and ID prefix adapted to the Orbit folder layout)\n",
+            source.display()
         ));
     }
     if !plan.accepted_prefixes_added.is_empty() {

@@ -11,7 +11,8 @@ use crate::error::{OrbitError, Result, code};
 use crate::graph::{Graph, LoadMode};
 use crate::task::Task;
 use chrono::Utc;
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::json;
 
 pub struct SyncRequest<'a> {
     pub task: Option<&'a str>,
@@ -20,19 +21,36 @@ pub struct SyncRequest<'a> {
     pub apply: bool,
 }
 
+/// A per-Task apply failure. The Task's baseline is not advanced, so retrying is safe.
+#[derive(Clone, Debug, Serialize)]
+pub struct SyncFailure {
+    pub task: String,
+    pub repository: String,
+    pub number: u64,
+    pub code: &'static str,
+    pub message: String,
+    pub retry_safe: bool,
+}
+
+/// What happened to one Task: nothing was attempted (preview), it applied, or it failed.
+pub enum SyncOutcome {
+    Preview,
+    Applied,
+    Failed(SyncFailure),
+}
+
 pub struct SyncTaskResult {
     pub task: Task,
     pub github: GitHubLink,
     pub plan: SyncPlan,
     pub relationships: relationships::RelationshipReport,
-    pub success: Option<bool>,
-    pub failure: Option<Value>,
+    pub outcome: SyncOutcome,
 }
 
 pub struct SyncReport {
     pub warnings: Vec<String>,
     pub tasks: Vec<SyncTaskResult>,
-    pub failures: Vec<Value>,
+    pub failures: Vec<SyncFailure>,
     pub success_count: usize,
 }
 
@@ -167,28 +185,26 @@ pub fn synchronize(
             github: link.clone(),
             plan: plan.clone(),
             relationships: relationship.clone(),
-            success: None,
-            failure: None,
+            outcome: SyncOutcome::Preview,
         };
         if request.apply {
             match apply_plan(board, &task, &link, &issue, &plan, &relationship, client) {
                 Ok(warning) => {
                     warnings.extend(warning);
                     successes += 1;
-                    item.success = Some(true);
+                    item.outcome = SyncOutcome::Applied;
                 }
                 Err(error) => {
-                    let failure = json!({
-                        "task": task.id,
-                        "repository": link.repo,
-                        "number": link.number,
-                        "code": error.code,
-                        "message": error.message,
-                        "retry_safe": true,
-                    });
+                    let failure = SyncFailure {
+                        task: task.id.clone(),
+                        repository: link.repo.clone(),
+                        number: link.number,
+                        code: error.code,
+                        message: error.message,
+                        retry_safe: true,
+                    };
                     failures.push(failure.clone());
-                    item.success = Some(false);
-                    item.failure = Some(failure);
+                    item.outcome = SyncOutcome::Failed(failure);
                 }
             }
         }

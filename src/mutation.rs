@@ -50,6 +50,55 @@ pub fn persist_task(board: &Board, task: &Task, message: &str) -> Result<CommitO
     board.commit(message, false)
 }
 
+/// Writes a Task and commits it, returning the commit warning if any.
+pub fn save(board: &Board, task: &Task, message: &str) -> Result<Option<String>> {
+    Ok(commit_warning(persist_task(board, task, message)?))
+}
+
+/// Writes a new Task file (never replacing an existing one) without committing.
+pub fn create_task(board: &Board, task: &Task) -> Result<()> {
+    let rendered = task::render_task(task)?;
+    crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), false)
+}
+
+/// Commits already-published files, returning the commit warning if any.
+pub fn commit(board: &Board, message: &str) -> Result<Option<String>> {
+    Ok(commit_warning(board.commit(message, false)?))
+}
+
+/// Removes a Task file and its comment sidecar; absent files are fine.
+pub fn remove_task(board: &Board, id: &str) -> Result<()> {
+    for path in [board.task_path(id), board.comment_path(id)] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(OrbitError::io(format!("delete {}", path.display()), error));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates and appends a Comment to a Task's sidecar, returning all comments.
+pub fn append_comment(
+    board: &Board,
+    id: &str,
+    author: &str,
+    body: &str,
+    created_at: DateTime<Utc>,
+) -> Result<Vec<Comment>> {
+    comment::validate_body(body)?;
+    let mut comments = board.read_comments(id)?;
+    comments.push(Comment {
+        author: author.into(),
+        body: body.trim_end_matches(['\r', '\n']).into(),
+        created_at,
+    });
+    board.write_comments(id, &comments)?;
+    Ok(comments)
+}
+
 pub fn commit_warning(outcome: CommitOutcome) -> Option<String> {
     match outcome {
         CommitOutcome::Failed(message) => Some(format!("COMMIT_FAILED: {message}")),
@@ -100,20 +149,12 @@ pub fn finish(
     let mut warnings = Vec::new();
     let mut comments = None;
     let mut comment_failed = false;
+    let mut comment_warning = None;
     if changed {
         write_task(board, task)?;
     }
     if let Some((author, body)) = comment {
-        let append = (|| {
-            let mut comments = board.read_comments(id)?;
-            comments.push(Comment {
-                author,
-                body: body.trim_end_matches(['\r', '\n']).into(),
-                created_at: now,
-            });
-            board.write_comments(id, &comments)?;
-            Ok(comments)
-        })();
+        let append = append_comment(board, id, &author, &body, now);
         match append {
             Ok(value) => {
                 comments = Some(value);
@@ -123,8 +164,7 @@ pub fn finish(
                 }
             }
             Err(error) if changed => {
-                let error: OrbitError = error;
-                warnings.push(format!("COMMENT_FAILED: {}", error.message));
+                comment_warning = Some(format!("COMMENT_FAILED: {}", error.message));
                 comment_failed = true;
             }
             Err(error) => return Err(error),
@@ -136,6 +176,8 @@ pub fn finish(
     {
         warnings.push(warning);
     }
+    // Commit failures precede comment failures, matching the pre-module order.
+    warnings.extend(comment_warning);
     if !open.is_empty() {
         warnings.push(format!("cancelled open SubTasks: {}", open.join(", ")));
     }
@@ -224,17 +266,21 @@ pub fn execute(
     })
 }
 
+fn done_dependents(graph: &Graph, id: &str) -> Vec<String> {
+    graph
+        .dependents(id)
+        .iter()
+        .filter(|dependent| dependent.front.status == Status::Done)
+        .map(|dependent| dependent.id.clone())
+        .collect()
+}
+
 /// Reopens a Task and, when needed, its completed Parent Task in one scope.
 pub fn reopen(board: &Board, id: &str, force: bool, now: DateTime<Utc>) -> Result<MutationResult> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
 
     let task = graph.get(id)?.clone();
-    let child_dependents: Vec<String> = graph
-        .dependents(id)
-        .iter()
-        .filter(|dependent| dependent.front.status == Status::Done)
-        .map(|dependent| dependent.id.clone())
-        .collect();
+    let child_dependents = done_dependents(&graph, id);
     let mut probe = task.clone();
     probe.reopen(force, &child_dependents, now)?;
 
@@ -243,15 +289,10 @@ pub fn reopen(board: &Board, id: &str, force: bool, now: DateTime<Utc>) -> Resul
         let parent_status = graph.get(&parent_id)?.front.status;
         match parent_status {
             Status::Done => {
-                let done_dependents: Vec<String> = graph
-                    .dependents(&parent_id)
-                    .iter()
-                    .filter(|dependent| dependent.front.status == Status::Done)
-                    .map(|dependent| dependent.id.clone())
-                    .collect();
+                let parent_dependents = done_dependents(&graph, &parent_id);
                 graph
                     .get_mut(&parent_id)?
-                    .reopen(force, &done_dependents, now)?;
+                    .reopen(force, &parent_dependents, now)?;
                 let parent = graph.get(&parent_id)?.clone();
                 write_task(board, &parent)?;
                 reopened_parent = Some(parent_id);

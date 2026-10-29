@@ -2,6 +2,7 @@ use super::execution::{
     omit_issue_fields, reject_basic_metadata, repository_available, require_repository_available,
     set_baseline,
 };
+use crate::github::execution::SyncOutcome;
 use crate::mutation::persist_task;
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -1569,8 +1570,14 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
     };
     let plans: Vec<_> = report.tasks.iter().map(|item| {
         let mut value = json!({ "task": item.task.id, "github": item.github, "plan": item.plan, "relationships": item.relationships });
-        if let Some(success) = item.success { value["success"] = json!(success); }
-        if let Some(failure) = &item.failure { value["failure"] = failure.clone(); }
+        match &item.outcome {
+            SyncOutcome::Preview => {}
+            SyncOutcome::Applied => value["success"] = json!(true),
+            SyncOutcome::Failed(failure) => {
+                value["success"] = json!(false);
+                value["failure"] = json!(failure);
+            }
+        }
         value
     }).collect();
     let mut output = crate::output::CommandOutput::new(

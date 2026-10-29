@@ -1055,6 +1055,12 @@ changes Orbit only; it does not publish any changed field to GitHub. Publish
 approved linked Task changes with an explicit `orbit github sync`. See
 [agents/triage-workflow.md](./agents/triage-workflow.md).
 
+Apply preserves metadata on disk if the automatic Git commit fails and reports
+`COMMIT_FAILED` in the output warnings, as every other mutating command does
+(including `orbit github adopt`/`create`/`sync` and the Workspace issue
+commands). Run `orbit sync` to retry the commit; do not repeat the proposal
+merely to recover the commit.
+
 ```bash
 orbit triage context orb-a7b2c9 --json
 orbit triage review orb-a7b2c9 --proposal-file proposal.json
@@ -1254,7 +1260,3 @@ orbit sync              # commit anything left uncommitted
 - [Architecture](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
 - [Specification](./SPEC.md) for the canonical JSON contract and transition rules.
 - [Glossary](./GLOSSARY.md) for the canonical vocabulary.
-
-Triage apply preserves metadata on disk if the automatic Git commit fails and
-reports `COMMIT_FAILED` in the output warnings. Run `orbit sync` to retry the
-commit; do not repeat the proposal merely to recover the commit.

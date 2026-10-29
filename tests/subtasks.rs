@@ -704,3 +704,27 @@ fn show_human_includes_kind_parent_and_subtasks() {
     assert!(stdout.contains("kind: subtask"), "{stdout}");
     assert!(stdout.contains(&format!("parent: {parent}")), "{stdout}");
 }
+
+#[test]
+fn forced_cancel_of_a_terminal_parent_still_commits_its_cancelled_subtasks() {
+    let repo = TestRepo::new();
+    repo.init();
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let content = repo
+        .read_task(&parent)
+        .replace("status: todo", "status: cancelled");
+    repo.write_task(&parent, &content);
+    repo.ok_json(&["sync", "--json"]);
+
+    repo.ok_json(&["cancel", &parent, "--by", "test", "--force", "--json"]);
+
+    assert_eq!(status(&repo, &child), "cancelled");
+    let board = repo.board_path();
+    assert_eq!(repo.git_in(&board, &["status", "--porcelain"]).stdout, b"");
+    let subject = repo.git_in(&board, &["log", "-1", "--format=%s"]);
+    assert_eq!(
+        String::from_utf8_lossy(&subject.stdout).trim(),
+        format!("orbit: cancel {parent}")
+    );
+}

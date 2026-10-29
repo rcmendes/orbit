@@ -2240,7 +2240,7 @@ fn github_status_and_doctor_report_the_same_missing_scopes_in_each_mode() {
 fn injected_sync_execution_previews_then_pulls_without_cli_transport_selection() {
     use orbit_tracker::board::Board;
     use orbit_tracker::github::client::FixtureClient;
-    use orbit_tracker::github::execution::{SyncRequest, synchronize};
+    use orbit_tracker::github::execution::{SyncOutcome, SyncRequest, synchronize};
     use orbit_tracker::github::model::SyncDirection;
 
     let repo = TestRepo::new();
@@ -2269,7 +2269,7 @@ fn injected_sync_execution_previews_then_pulls_without_cli_transport_selection()
         preview.tasks[0].plan.apply_title.as_deref(),
         Some("Remote revision")
     );
-    assert_eq!(preview.tasks[0].success, None);
+    assert!(matches!(preview.tasks[0].outcome, SyncOutcome::Preview));
     assert_eq!(fs::read(board.task_path(&id)).unwrap(), original_task);
     assert_eq!(fs::read(&fixture).unwrap(), original_fixture);
     let applied = synchronize(
@@ -2331,4 +2331,126 @@ fn sync_reports_commit_failure_without_losing_pulled_changes() {
         repo.ok_json(&["show", &id, "--json"])["data"]["title"],
         "Remote revision"
     );
+}
+
+fn sync_request<'a>(
+    id: &'a str,
+    resolutions: &'a [String],
+    apply: bool,
+) -> orbit_tracker::github::execution::SyncRequest<'a> {
+    orbit_tracker::github::execution::SyncRequest {
+        task: Some(id),
+        direction: orbit_tracker::github::model::SyncDirection::Both,
+        resolutions,
+        apply,
+    }
+}
+
+#[test]
+fn injected_sync_requires_a_conflict_choice_and_applies_the_github_side() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::github::client::FixtureClient;
+    use orbit_tracker::github::execution::synchronize;
+
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_task_frontmatter(&repo, &id, "title", "\"Orbit edit\"");
+    set_fixture_issue_field(&fixture, "title", serde_json::json!("GitHub edit"));
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let client = FixtureClient::load(&fixture).unwrap();
+    let lock = board.lock_exclusive().unwrap();
+
+    let error = synchronize(&board, &client, sync_request(&id, &[], true))
+        .err()
+        .expect("unresolved conflicts must stop before writing");
+    assert_eq!(error.code, "GITHUB_ISSUE_CONFLICT");
+
+    let choice = ["title=github".to_string()];
+    let report = synchronize(&board, &client, sync_request(&id, &choice, true)).unwrap();
+    assert_eq!(report.success_count, 1);
+    drop(lock);
+    assert_eq!(
+        repo.ok_json(&["show", &id, "--json"])["data"]["title"],
+        "GitHub edit"
+    );
+}
+
+#[test]
+fn injected_sync_reports_typed_failures_and_retries_without_advancing_the_baseline() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::github::client::FixtureClient;
+    use orbit_tracker::github::execution::{SyncOutcome, synchronize};
+
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Local title");
+    set_task_frontmatter(&repo, &id, "title", "\"Orbit edit\"");
+    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    data["update_failures"] = serde_json::json!({ "acme/widget#42": "temporary fixture failure" });
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let _lock = board.lock_exclusive().unwrap();
+
+    let client = FixtureClient::load(&fixture).unwrap();
+    let failed = synchronize(&board, &client, sync_request(&id, &[], true)).unwrap();
+    assert_eq!(failed.success_count, 0);
+    assert_eq!(failed.failures.len(), 1);
+    assert_eq!(failed.failures[0].task, id);
+    assert_eq!(failed.failures[0].number, 42);
+    assert!(failed.failures[0].retry_safe);
+    assert!(matches!(failed.tasks[0].outcome, SyncOutcome::Failed(_)));
+
+    data["update_failures"] = serde_json::json!({});
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+    let client = FixtureClient::load(&fixture).unwrap();
+    let retried = synchronize(&board, &client, sync_request(&id, &[], true)).unwrap();
+    assert_eq!(retried.success_count, 1);
+    assert!(retried.failures.is_empty());
+    assert!(matches!(retried.tasks[0].outcome, SyncOutcome::Applied));
+    let remote: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(remote["issues"]["acme/widget#42"]["title"], "Orbit edit");
+}
+
+#[test]
+fn injected_sync_rejects_issue_fields_in_basic_mode() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::github::client::FixtureClient;
+    use orbit_tracker::github::execution::synchronize;
+
+    let fixture_dir = TempDir::new().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let personal = fs::read_to_string(&fixture)
+        .unwrap()
+        .replace("acme/widget", "personal/widget");
+    fs::write(&fixture, personal).unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_basic_github_config(&repo);
+    let id = repo.add("Local task", &[]);
+    repo.ok_json_with_env(
+        &[
+            "github",
+            "adopt",
+            &id,
+            "--repo",
+            "personal/widget",
+            "--number",
+            "42",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    repo.ok_json(&["update", &id, "--area", "cli", "--json"]);
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let client = FixtureClient::load(&fixture).unwrap();
+    let _lock = board.lock_exclusive().unwrap();
+
+    let error = synchronize(&board, &client, sync_request(&id, &[], true))
+        .err()
+        .expect("basic mode cannot publish structured metadata");
+    assert_eq!(error.code, "INVALID_ARGUMENT");
+    assert!(error.message.contains("area"));
 }

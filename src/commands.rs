@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read};
 use std::path::Path;
 
-use crate::atomic;
 use crate::board::Board;
 use crate::cli::{
     AddArgs, CancelArgs, CheckpointArgs, ClaimArgs, Cli, Command, CommentAddArgs, CommentArgs,
@@ -1148,8 +1147,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
         body,
     };
 
-    let rendered = task::render_task(&task)?;
-    atomic::write_atomic(&board.task_path(&id), rendered.as_bytes(), false)?;
+    crate::mutation::create_task(board, &task)?;
     graph.tasks.insert(id.clone(), task.clone());
 
     let type_prefix = if task_type == TaskType::Task {
@@ -1163,7 +1161,8 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
         }
         None => format!("created {id}  P{priority}  {type_prefix}{title}"),
     };
-    task_output(board, &graph, &task, human, &format!("orbit: add {id}"))
+    let warning = crate::mutation::commit(board, &format!("orbit: add {id}"))?;
+    Ok(task_output(&graph, &task, human, warning))
 }
 
 fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutput> {
@@ -1671,14 +1670,13 @@ fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandO
         task.clone()
     };
 
-    write_task(board, &task)?;
-    task_output(
-        board,
+    let warning = crate::mutation::save(board, &task, &format!("orbit: update {}", args.id))?;
+    Ok(task_output(
         &graph,
         &task,
         format!("updated {}", args.id),
-        &format!("orbit: update {}", args.id),
-    )
+        warning,
+    ))
 }
 
 fn cmd_label(board: &Board, args: LabelArgs) -> Result<crate::output::CommandOutput> {
@@ -1726,14 +1724,14 @@ fn mutate_labels(
         ));
     }
 
-    write_task(board, &task)?;
-    let outcome = board.commit(
+    let warning = crate::mutation::save(
+        board,
+        &task,
         &format!(
             "orbit: label {} {}",
             if add { "add" } else { "remove" },
             args.id
         ),
-        false,
     )?;
     let mut output = crate::output::CommandOutput::new(
         json!({ "id": args.id, "labels": task.front.labels, "changed": true }),
@@ -1744,9 +1742,7 @@ fn mutate_labels(
             labels.join(", ")
         ),
     );
-    if let Some(warning) = crate::mutation::commit_warning(outcome) {
-        output = output.with_warning(warning);
-    }
+    output.warnings.extend(warning);
     Ok(output)
 }
 
@@ -1799,16 +1795,14 @@ fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output:
     let body = resolve_body(args.body, args.body_file)?;
 
     let now = Utc::now();
-    let comments = add_comment(board, &args.id, &author, body, now)?;
+    let comments = crate::mutation::append_comment(board, &args.id, &author, &body, now)?;
     let comment = comments.last().expect("a comment was appended").clone();
     let task = {
         let task = graph.get_mut(&args.id)?;
         task.front.updated_at = now;
         task.clone()
     };
-    write_task(board, &task)?;
-
-    let outcome = board.commit(&format!("orbit: comment {}", args.id), false)?;
+    let warning = crate::mutation::save(board, &task, &format!("orbit: comment {}", args.id))?;
     let mut output = crate::output::CommandOutput::new(
         json!({
             "id": args.id,
@@ -1817,9 +1811,7 @@ fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output:
         }),
         format!("commented {} as {author}", args.id),
     );
-    if let Some(warning) = crate::mutation::commit_warning(outcome) {
-        output = output.with_warning(warning);
-    }
+    output.warnings.extend(warning);
     Ok(output)
 }
 
@@ -1903,15 +1895,13 @@ fn cmd_depend(board: &Board, args: DependArgs) -> Result<crate::output::CommandO
         task.front.updated_at = Utc::now();
         task.clone()
     };
-    write_task(board, &task)?;
-
-    task_output(
-        board,
+    let warning = crate::mutation::save(board, &task, &format!("orbit: depend {}", args.id))?;
+    Ok(task_output(
         &graph,
         &task,
         format!("{} now depends on {}", args.id, args.dep_id),
-        &format!("orbit: depend {}", args.id),
-    )
+        warning,
+    ))
 }
 
 fn cmd_undepend(board: &Board, args: UndependArgs) -> Result<crate::output::CommandOutput> {
@@ -1936,15 +1926,13 @@ fn cmd_undepend(board: &Board, args: UndependArgs) -> Result<crate::output::Comm
         task.front.updated_at = Utc::now();
         task.clone()
     };
-    write_task(board, &task)?;
-
-    task_output(
-        board,
+    let warning = crate::mutation::save(board, &task, &format!("orbit: undepend {}", args.id))?;
+    Ok(task_output(
         &graph,
         &task,
         format!("{} no longer depends on {}", args.id, args.dep_id),
-        &format!("orbit: undepend {}", args.id),
-    )
+        warning,
+    ))
 }
 
 fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::output::CommandOutput> {
@@ -1977,7 +1965,7 @@ fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::output::CommandO
         &mut cleaned_ids,
     )?;
 
-    let outcome = board.commit(&format!("orbit: delete {}", args.id), false)?;
+    let warning = crate::mutation::commit(board, &format!("orbit: delete {}", args.id))?;
     let subtasks_deleted = deleted_ids.len().saturating_sub(1);
     let human = if subtasks_deleted == 0 {
         format!("deleted {}", args.id)
@@ -1993,9 +1981,7 @@ fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::output::CommandO
         }),
         human,
     );
-    if let Some(warning) = crate::mutation::commit_warning(outcome) {
-        output.warnings.push(warning);
-    }
+    output.warnings.extend(warning);
     Ok(output)
 }
 
@@ -2029,7 +2015,7 @@ fn delete_subtree(
                 task.front.updated_at = now;
                 task.clone()
             };
-            write_task(board, &updated)?;
+            crate::mutation::write_task(board, &updated)?;
             if !cleaned.iter().any(|seen| seen == dependent) {
                 cleaned.push(dependent.clone());
             }
@@ -2045,27 +2031,7 @@ fn delete_subtree(
         delete_subtree(board, graph, &child, force, now, deleted, cleaned)?;
     }
 
-    let path = board.task_path(id);
-    match std::fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(OrbitError::io(format!("delete {}", path.display()), error));
-        }
-    }
-
-    let comments_path = board.comment_path(id);
-    match std::fs::remove_file(&comments_path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(OrbitError::io(
-                format!("delete {}", comments_path.display()),
-                error,
-            ));
-        }
-    }
-
+    crate::mutation::remove_task(board, id)?;
     graph.tasks.remove(id);
     deleted.push(id.to_string());
     Ok(())
@@ -2233,42 +2199,15 @@ fn cmd_sync(board: &Board) -> Result<crate::output::CommandOutput> {
     }
 }
 
-fn write_task(board: &Board, task: &Task) -> Result<()> {
-    crate::mutation::write_task(board, task)
-}
-
 fn task_output(
-    board: &Board,
     graph: &Graph,
     task: &Task,
     human: String,
-    message: &str,
-) -> Result<crate::output::CommandOutput> {
-    let outcome = board.commit(message, false)?;
+    warning: Option<String>,
+) -> crate::output::CommandOutput {
     let mut output = crate::output::CommandOutput::new(graph::task_detail(graph, task), human);
-    if let Some(warning) = crate::mutation::commit_warning(outcome) {
-        output = output.with_warning(warning);
-    }
-    Ok(output)
-}
-
-fn add_comment(
-    board: &Board,
-    id: &str,
-    author: &str,
-    body: String,
-    created_at: chrono::DateTime<Utc>,
-) -> Result<Vec<Comment>> {
-    comment::validate_body(&body)?;
-    let comment = Comment {
-        author: author.to_string(),
-        created_at,
-        body: body.trim_end_matches(['\r', '\n']).to_string(),
-    };
-    let mut comments = board.read_comments(id)?;
-    comments.push(comment);
-    board.write_comments(id, &comments)?;
-    Ok(comments)
+    output.warnings.extend(warning);
+    output
 }
 
 fn resolve_optional_comment(

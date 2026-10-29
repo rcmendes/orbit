@@ -14,6 +14,7 @@ pub mod legacy;
 pub mod lock;
 pub mod mcp;
 pub mod migrate;
+pub mod mutation;
 pub mod output;
 pub mod setup;
 pub mod slug;
@@ -23,5 +24,3 @@ pub mod triage;
 pub mod workspace;
 pub mod workspace_doctor;
 pub mod workspace_migrate;
-
-pub mod mutation;

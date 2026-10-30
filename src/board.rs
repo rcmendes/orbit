@@ -891,6 +891,18 @@ fn init_worktree_at(board_root: &Path, slug: Option<&str>) -> Result<InitResult>
     if board_root.join("config.toml").exists() {
         return Err(already_initialized(board_root));
     }
+    if board_root.is_dir()
+        && std::fs::read_dir(board_root)
+            .map_err(|error| OrbitError::io(format!("read {}", board_root.display()), error))?
+            .next()
+            .is_some()
+    {
+        return Err(OrbitError::config(format!(
+            "board directory {} must be empty; pass a new or empty directory, or run `orbit init` inside it to use {}/.orbit",
+            board_root.display(),
+            board_root.display()
+        )));
+    }
 
     let common = git::common_dir_at(&repo)?;
     let bootstrap = common.join("orbit");

@@ -72,7 +72,11 @@ outside Git and a repository-local Board inside Git. See
 ### `orbit init` — create the Board
 
 Inside a Git repository, creates or reuses the repository-local Board at
-`./.orbit`. Outside Git, `orbit init` at a Workspace root creates the Board at
+`./.orbit`. A positional `DIR` that is already a Git working-tree root, including
+`.`, means "initialize that checkout" and uses its `./.orbit` (the main
+checkout's from a linked worktree), so `orbit init .` is equivalent to `orbit
+init`. Any other `DIR` is the Board directory itself and must be new or empty.
+Outside Git, `orbit init` at a Workspace root creates the Board at
 `<workspace>/.orbit/board` and reserves `<workspace>/.orbit/cache`. Child
 repositories discover it automatically, including across their Git boundary.
 Re-running at the same root is safe.
@@ -82,6 +86,7 @@ multi-repository Workspace.
 
 ```bash
 orbit init                       # repo ./.orbit, or Workspace ./.orbit/board
+orbit init .                     # same as plain init inside a repository
 orbit init --agents none         # Board only; no agent files
 orbit init --agents all          # wire every supported harness
 orbit init --print               # preview every file that would change
@@ -96,7 +101,7 @@ orbit init --slug teramigo       # Task IDs become teramigo-…
 | Option | Use it when | Example |
 | --- | --- | --- |
 | *none* | Start a repository-local Board in Git or a Workspace Board outside Git. | `orbit init` |
-| `DIR` | Choose a Workspace root or explicit Board directory. Workspace Board files live at `<DIR>/.orbit/board`. | `orbit init ~/src/acme` |
+| `DIR` | Choose a Workspace root, an existing repository root (initialize at its `./.orbit`), or an explicit new/empty Board directory. Workspace Board files live at `<DIR>/.orbit/board`. | `orbit init ~/src/acme` |
 | `--global` | Create or reuse the opt-in `~/.orbit` fallback. It conflicts with positional `DIR` and `--dir`/`ORBIT_DIR`, and discovery never creates it. | `orbit init --global` |
 | `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents non-interactively: `none`, `all`, `auto`, or a client list. | `orbit init --agents all` |

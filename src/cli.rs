@@ -157,6 +157,9 @@ pub enum Command {
 #[derive(Debug, Args)]
 pub struct InitArgs {
     /// Orbit folder (DIR) to create or reuse. Defaults to ./.orbit.
+    ///
+    /// A path that is an existing Git working-tree root, such as `.`, initializes
+    /// that checkout's ./.orbit instead of using the root as the Board directory.
     #[arg(value_name = "DIR")]
     pub target: Option<PathBuf>,
 

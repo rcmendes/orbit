@@ -50,7 +50,10 @@ directory is a Workspace root and the Board is <WORKSPACE>/.orbit/board. The
 catalog cache is reserved at <WORKSPACE>/.orbit/cache; Workspace migration uses
 <WORKSPACE>/.orbit/workspace-migration.lock for serialization. A positional path or
 --dir/ORBIT_DIR can name a Workspace root; an explicit Board directory remains
-accepted for existing Boards.
+accepted for existing Boards. A path that is an existing Git working-tree root,
+including `.`, means \"initialize here\" and uses that checkout's ./.orbit (or the
+main checkout's ./.orbit from a linked worktree). A non-empty Board directory is
+refused with CONFIG_ERROR.
 
 Inside a Workspace, child repositories find the Workspace Board across their Git
 boundary and need no `orbit link`. Repositories outside it can link the Workspace

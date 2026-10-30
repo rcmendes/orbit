@@ -138,10 +138,11 @@ cd your-repository
 orbit init
 ```
 
-In a Git repository, `orbit init` creates the Board in `./.orbit`. At a non-Git Workspace root, it creates `<workspace>/.orbit/board` and reserves `<workspace>/.orbit/cache`; child repositories discover the Board without `orbit link`. It derives the Task-ID slug from the repository or Workspace folder and prints a numbered setup report: the Board path, branch, storage mode, Task-ID prefix, and Git exclusion; the coding agents it wired, the MCP command, and every file it created or updated; then `orbit doctor` and the next commands, each with a short explanation. In a terminal it asks whether to wire the coding-agent harnesses it detects; without a terminal it writes no agent files and explains how to wire them. Pass `--agents` to decide up front, and `--print` to see the same report in future tense without writing anything.
+In a Git repository, `orbit init` creates the Board in `./.orbit`; `orbit init .` and a `DIR` that is already a repository root do the same. Any other `DIR` is the Board directory and must be new or empty. At a non-Git Workspace root, it creates `<workspace>/.orbit/board` and reserves `<workspace>/.orbit/cache`; child repositories discover the Board without `orbit link`. It derives the Task-ID slug from the repository or Workspace folder and prints a numbered setup report: the Board path, branch, storage mode, Task-ID prefix, and Git exclusion; the coding agents it wired, the MCP command, and every file it created or updated; then `orbit doctor` and the next commands, each with a short explanation. In a terminal it asks whether to wire the coding-agent harnesses it detects; without a terminal it writes no agent files and explains how to wire them. Pass `--agents` to decide up front, and `--print` to see the same report in future tense without writing anything.
 
 ```bash
 orbit init                    # repo ./.orbit, or Workspace ./.orbit/board
+orbit init .                  # same as plain init inside a repository
 orbit init --agents all       # wire every supported harness
 orbit init --agents none      # Board only, no agent files
 orbit init --print            # preview without writing
@@ -154,7 +155,7 @@ orbit init --global           # create the global Board at ~/.orbit
 | Parameter | Use it when | Example |
 | --- | --- | --- |
 | *none* | Start a project-local Board in Git, or a Workspace Board outside Git. | `orbit init` |
-| `DIR` | Name a Workspace root or explicit Board directory. A Workspace stores its Board at `<DIR>/.orbit/board`. | `orbit init ~/src/acme` |
+| `DIR` | Name a Workspace root, an existing repository root (uses its `./.orbit`), or an explicit new/empty Board directory. A Workspace stores its Board at `<DIR>/.orbit/board`. | `orbit init ~/src/acme` |
 | `--global` | Create or reuse the opt-in global Board at `~/.orbit`. It is the last discovery fallback and is never created implicitly. Conflicts with positional `DIR` and `--dir`/`ORBIT_DIR`. | `orbit init --global` |
 | `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents without a prompt: `none`, `all`, `auto`, or a comma-separated client list. | `orbit init --agents all` |

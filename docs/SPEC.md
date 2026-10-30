@@ -297,11 +297,11 @@ prefix = "orb-"
 
 ## 5. Board lifecycle
 
-A Board lives in the Orbit folder, `DIR`. In a Git working tree, the default is `./.orbit` (or the main checkout's `.orbit` from a linked worktree). Outside Git, `orbit init` at the Workspace root creates `<workspace>/.orbit/board`. `--dir` and `ORBIT_DIR` accept a Workspace root or a Board directory; for Workspace commands they name the root, not the internal `.orbit/board` path.
+A Board lives in the Orbit folder, `DIR`. In a Git working tree, the default is `./.orbit` (or the main checkout's `.orbit` from a linked worktree). A `DIR` that is itself a Git working-tree root, including `.`, means "initialize that checkout" and resolves to its `./.orbit` (the main checkout's from a linked worktree); any other `DIR` is the Board folder and must be new or empty. Outside Git, `orbit init` at the Workspace root creates `<workspace>/.orbit/board`. `--dir` and `ORBIT_DIR` accept a Workspace root or a Board directory; for Workspace commands they name the root, not the internal `.orbit/board` path.
 
 `orbit init [DIR] [--slug SLUG] [--global] [--agents LIST|none|all] [--print]`:
 
-1. Resolves the target and refuses to create a Board when a conflicting repository-local Board or Workspace `.orbit` layout already exists. `--global` is exempt. A configured `user.name` / `user.email` is required. The repository does not need an initial commit.
+1. Resolves the target and refuses to create a Board when a conflicting repository-local Board or Workspace `.orbit` layout already exists, or when an explicit Board directory is not empty. `--global` is exempt. A configured `user.name` / `user.email` is required. The repository does not need an initial commit.
 2. Chooses the storage mode:
    - Inside a Git working tree, it creates the `orbit` orphan branch if needed, adds `DIR` as a worktree of that repository, and writes the `DIR` path to `.git/info/exclude`. It never edits a tracked file.
    - Outside every Git working tree, a Workspace root stores its Board at `<workspace>/.orbit/board`, an independent Git repository with `HEAD` on `orbit`; `<workspace>/.orbit/cache` is reserved separately. Explicit existing Board directories remain supported.
@@ -311,7 +311,7 @@ A Board lives in the Orbit folder, `DIR`. In a Git working tree, the default is 
 
 `orbit init` is idempotent when `DIR` already holds a Board: the Board is reused and nothing is rewritten. If a different repository-local Board already resolves for `DIR`, `init` returns `ALREADY_INITIALIZED` naming that Board and creates nothing. The `~/.orbit` fallback does not block creating a local Board. Run `orbit unlink` before creating a local Board in a linked repository. A linked repository keeps its Board until `unlink`. `--print` computes the same result without writing.
 
-`init` takes its target from the positional argument, then `--dir`/`ORBIT_DIR`. With no target it uses `./.orbit` inside Git, the current directory as a Workspace root outside Git, or a discovered Workspace root when invoked from a child Repository. `--global` is exclusive with a positional target and with `--dir`/`ORBIT_DIR` and means `~/.orbit`. `link` uses only its positional path; `--dir`/`ORBIT_DIR` never retarget the pointer written by `link`.
+`init` takes its target from the positional argument, then `--dir`/`ORBIT_DIR`. With no target it uses `./.orbit` inside Git, the current directory as a Workspace root outside Git, or a discovered Workspace root when invoked from a child Repository. An explicit target that is already a Git working-tree root, such as `.` or a repository path, also uses that checkout's `./.orbit` (or the main checkout's from a linked worktree) instead of treating the root as an explicit Board directory. `--global` is exclusive with a positional target and with `--dir`/`ORBIT_DIR` and means `~/.orbit`. `link` uses only its positional path; `--dir`/`ORBIT_DIR` never retarget the pointer written by `link`.
 
 A repository owns one local Board. A child Repository inside a Workspace discovers the Workspace Board by walking above its Git root and needs no `orbit link`. Workspace discovery takes precedence over a child-local Board and reports `AMBIGUOUS_BOARD`; `orbit init <workspace>` refuses to create the first Workspace Board when a child-local Board already exists. After migration creates the Workspace Board, `init` reuses it and leaves child Boards untouched as backups. A second `.orbit` in the same working tree is refused because the `orbit` branch can be checked out by only one worktree.
 

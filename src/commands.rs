@@ -191,9 +191,15 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
     let (requested_root, explicit_global) = if args.global {
         (global_dir.clone().expect("global home was checked"), true)
     } else if let Some(target) = args.target.as_deref() {
-        (crate::board::resolve_external(target)?, false)
+        (
+            resolve_init_root(crate::board::resolve_external(target)?)?,
+            false,
+        )
     } else if let Some(dir) = dir {
-        (crate::board::resolve_external(dir)?, false)
+        (
+            resolve_init_root(crate::board::resolve_external(dir)?)?,
+            false,
+        )
     } else {
         (default_init_dir(&cwd)?, false)
     };
@@ -635,6 +641,28 @@ fn default_init_dir(cwd: &Path) -> Result<std::path::PathBuf> {
         return Ok(main.join(".orbit"));
     }
     Ok(cwd.join(".orbit"))
+}
+
+/// Git cannot add a Board worktree over a populated checkout, so a target that
+/// is itself a working-tree root means "initialize here": use the repository's
+/// `.orbit`, or the main checkout's `.orbit` from a linked worktree, exactly
+/// like `orbit init` without a target. `orbit init .` therefore does not fail
+/// with a raw `git worktree add` error.
+fn resolve_init_root(root: std::path::PathBuf) -> Result<std::path::PathBuf> {
+    let Some(toplevel) = crate::git::toplevel_containing(&root) else {
+        return Ok(root);
+    };
+    let toplevel = dunce::canonicalize(&toplevel).unwrap_or(toplevel);
+    if root != toplevel || Board::is_board(&root) {
+        return Ok(root);
+    }
+    let common = crate::git::common_dir_at(&toplevel)?;
+    let main = if common.file_name().and_then(|name| name.to_str()) == Some(".git") {
+        common.parent().unwrap_or(&toplevel).to_path_buf()
+    } else {
+        toplevel
+    };
+    Ok(main.join(".orbit"))
 }
 
 /// A non-Git directory is the Workspace boundary. Existing direct Board paths

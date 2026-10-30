@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed `orbit init .` and `orbit init <existing-repo>`: a target that is already a Git working-tree root now initializes that checkout's `./.orbit` instead of passing the populated checkout to `git worktree add` and failing with `GIT_ERROR`. A non-empty explicit Board directory now returns `CONFIG_ERROR` with an actionable message.
+
 ## 0.10.4 - 2026-10-29
 
 - `orbit list` now has an `ISSUE` column: `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. New `--linked` and `--local` filters scope the table without `--json`, and `orbit show` prints the full `owner/repo#N` link.

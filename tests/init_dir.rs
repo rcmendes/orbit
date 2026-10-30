@@ -250,6 +250,104 @@ fn init_in_a_worktree_reuses_the_main_checkout_board() {
 }
 
 #[test]
+fn init_dot_at_the_repository_root_uses_the_orbit_folder() {
+    let repo = TestRepo::new();
+
+    let value = repo.ok_json(&["init", ".", "--agents", "none", "--json"]);
+
+    assert_eq!(value["data"]["created"], true);
+    assert_eq!(value["data"]["storage"], "worktree");
+    assert_eq!(
+        value["data"]["board"].as_str().unwrap(),
+        canonical(&repo.path().join(".orbit"))
+    );
+    assert!(repo.path().join(".orbit/config.toml").is_file());
+    assert!(!repo.path().join(".git/orbit/link").exists());
+}
+
+#[test]
+fn init_dot_at_the_repository_root_is_idempotent() {
+    let repo = TestRepo::new();
+
+    repo.ok_json(&["init", ".", "--agents", "none", "--json"]);
+    let second = repo.ok_json(&["init", ".", "--agents", "none", "--json"]);
+
+    assert_eq!(second["data"]["created"], false);
+    assert_eq!(
+        second["data"]["board"].as_str().unwrap(),
+        canonical(&repo.path().join(".orbit"))
+    );
+}
+
+#[test]
+fn init_dot_print_reports_the_repository_orbit_folder() {
+    let repo = TestRepo::new();
+
+    let value = repo.ok_json(&["init", ".", "--agents", "none", "--print", "--json"]);
+
+    assert_eq!(value["data"]["preview"], true);
+    assert_eq!(value["data"]["storage"], "worktree");
+    assert_eq!(
+        value["data"]["board"].as_str().unwrap(),
+        format!("{}/.orbit", canonical(repo.path()))
+    );
+    assert_eq!(value["data"]["exclude"], "/.orbit/");
+    assert!(!repo.path().join(".orbit").exists());
+}
+
+#[test]
+fn init_repository_root_path_uses_the_orbit_folder() {
+    let repo = TestRepo::new();
+    let project = repo.named_repo("project");
+
+    let value = repo.ok_json(&["init", "project", "--agents", "none", "--json"]);
+
+    assert_eq!(
+        value["data"]["board"].as_str().unwrap(),
+        canonical(&project.join(".orbit"))
+    );
+    assert_eq!(value["data"]["prefix"], "project-");
+    assert!(project.join(".orbit/config.toml").is_file());
+}
+
+#[test]
+fn init_dot_in_a_linked_worktree_reuses_the_main_checkout_board() {
+    let repo = TestRepo::new();
+    repo.init();
+    let worktree_dir = tempfile::tempdir().unwrap();
+    let worktree = worktree_dir.path().join("wt");
+    repo.add_worktree(&worktree, "feature");
+
+    let value = repo.ok_json_in(&worktree, &["init", ".", "--agents", "none", "--json"]);
+
+    assert_eq!(value["data"]["created"], false);
+    assert_eq!(
+        value["data"]["board"].as_str().unwrap(),
+        canonical(&repo.path().join(".orbit"))
+    );
+}
+
+#[test]
+fn init_refuses_a_non_empty_target_directory() {
+    let repo = TestRepo::new();
+    let target = repo.path().join("populated");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("keep.txt"), "keep").unwrap();
+
+    let (status, value) = repo.json(&["init", "populated", "--agents", "none", "--json"]);
+
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "CONFIG_ERROR");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("must be empty"), "{message}");
+    assert_eq!(
+        std::fs::read_to_string(target.join("keep.txt")).unwrap(),
+        "keep"
+    );
+    assert!(!target.join("config.toml").exists());
+}
+
+#[test]
 fn init_refreshes_a_missing_worktree_exclusion() {
     let repo = TestRepo::new();
     repo.ok_json(&["init", "shared-board", "--agents", "none", "--json"]);

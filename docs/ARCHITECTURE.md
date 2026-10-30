@@ -610,11 +610,11 @@ The temporary worktree is the transaction boundary: the real Board is not touche
 
 ### Creating a Board
 
-`orbit init [DIR]` creates a repository-local Board at `./.orbit` inside Git or a Workspace Board at `<workspace>/.orbit/board` outside Git. `--dir`/`ORBIT_DIR` use the Workspace root. It refuses to create the first Workspace Board over an existing child-repository Board or overwrite unknown `.orbit` contents; a legacy Board directly at `<workspace>/.orbit` gets a migration diagnostic. Once a Workspace Board exists, `init` reuses it with child Boards left intact. Running `init` from a child Repository with a discovered Workspace Board reuses it. `--global` and the `~/.orbit` fallback are exempt.
+`orbit init [DIR]` creates a repository-local Board at `./.orbit` inside Git or a Workspace Board at `<workspace>/.orbit/board` outside Git. A `DIR` that is already a Git working-tree root, including `.`, also resolves to that checkout's `./.orbit` (the main checkout's from a linked worktree), so `orbit init .` matches plain `orbit init`; any other explicit `DIR` is the Board directory and must be new or empty. `--dir`/`ORBIT_DIR` use the Workspace root. It refuses to create the first Workspace Board over an existing child-repository Board or overwrite unknown `.orbit` contents; a legacy Board directly at `<workspace>/.orbit` gets a migration diagnostic. Once a Workspace Board exists, `init` reuses it with child Boards left intact. Running `init` from a child Repository with a discovered Workspace Board reuses it. `--global` and the `~/.orbit` fallback are exempt.
 
 ```mermaid
 flowchart TD
-    I["orbit init [DIR]"] --> R["resolve root<br/>repo .orbit or Workspace .orbit/board"]
+    I["orbit init [DIR]"] --> R["resolve root<br/>repo .orbit or Workspace .orbit/board<br/>working-tree root means its .orbit"]
     R --> EXISTS{"DIR is a Board?"}
     EXISTS -->|yes| REUSE["reuse it<br/>idempotent"]
     EXISTS -->|no| SECOND{"another Board resolves<br/>for DIR?"}

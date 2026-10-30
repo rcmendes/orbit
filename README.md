@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.10.5`](https://github.com/rcmendes/orbit/releases/tag/v0.10.5) is the latest release. It fixes `orbit init .` when the target is already a repository root and adds opt-in GitHub auto-push (`[github] auto_push = true`) so mapped Task changes reach linked Issues without a manual sync. GitHub sync requires Orbit v0.9.0 or newer. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.10.6`](https://github.com/rcmendes/orbit/releases/tag/v0.10.6) is the latest release. It adds `orbit github auto-push on|off` to toggle opt-in Issue publishing without editing `config.toml`, and renames `orbit github create --include-terminal` to `--include-closed` (the old spelling remains a hidden alias). GitHub sync requires Orbit v0.9.0 or newer. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>

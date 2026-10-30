@@ -4,7 +4,8 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.10.5` — latest; `orbit init .` initializes a repository-root target, and opt-in `[github] auto_push` publishes mapped Task changes to linked Issues
+- `v0.10.6` — latest; `orbit github auto-push on|off` toggles opt-in push, and `github create` uses `--include-closed`
+- `v0.10.5` — `orbit init .` initializes a repository-root target, and opt-in `[github] auto_push` publishes mapped Task changes to linked Issues
 - `v0.10.4` — `orbit list` marks Local, Linked, and detached Tasks in an `ISSUE` column with `--linked`/`--local` filters, and Task frontmatter parsing no longer ends early on an indented `---`
 - `v0.10.3` — agent setup preserves an `AGENTS.md` symlink, plus Windows-only test fixes
 - `v0.10.2` — Workspace migration preserves the legacy configuration; refresh infers the organization. GitHub Release, installers, and npm published; superseded by v0.10.3

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.6 - 2026-10-30
+
+- Added `orbit github auto-push on|off` to toggle `[github] auto_push` without editing `config.toml`. The command writes and commits the Board config, reports the previous value, and warns when enabling with zero or multiple available repositories because new Tasks cannot infer a single Issue destination. Automatic push stays push-only; pulling still requires `orbit github sync --apply --direction pull`.
+- Renamed `orbit github create --include-terminal` to `--include-closed`. The new name matches the Board's "closed work" language and GitHub's closed Issue state; `--include-terminal` remains accepted as a hidden alias, and the refusal message now points at `--include-closed`. Done Issues still close with `state_reason: completed` and cancelled ones with `not_planned`.
+
 ## 0.10.5 - 2026-10-30
 
 - Fixed `orbit init .` and `orbit init <existing-repo>`: a target that is already a Git working-tree root now initializes that checkout's `./.orbit` instead of passing the populated checkout to `git worktree add` and failing with `GIT_ERROR`. A non-empty explicit Board directory now returns `CONFIG_ERROR` with an actionable message.

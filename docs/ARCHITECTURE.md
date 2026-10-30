@@ -166,6 +166,15 @@ choices, relationship planning, application, and baseline updates. The CLI owns
 argument conversion and human/JSON presentation. Both execution modules run
 inside the caller's Board access scope; they do not acquire a second lock.
 
+`github::auto_push` is the opt-in post-mutation path. The task command wrapper
+snapshots `tasks/*.md` before and after a successful write, then pushes changed
+mapped fields for every linked Task, creating an Issue for a newly added Task
+when exactly one repository is available. It runs inside the same exclusive
+Board lock, never pulls, and turns remote failures and conflicts into warnings.
+GitHub commands, Workspace issue commands, `sync`, migrations, and `delete` use
+the non-auto-push wrapper. The publish path is selected by
+`[github].auto_push` plus the `--no-sync`/`ORBIT_NO_AUTO_SYNC` escape hatch.
+
 ### Human output and JSON
 
 Board commands have two output paths. Human output is for terminals: `list` renders an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `ISSUE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns, while `ready`, `tree`, and `prime` use compact summary lines. `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Table widths follow the current data, labels are comma-joined, and titles longer than 60 characters are shortened. Root Tasks are ordered by priority, then creation time and ID; each Parent Task is followed by its SubTasks, also ordered by priority. `--group` renders one outlined table with a banner for each Parent Task, its SubTasks underneath, and a final `No parent` section.
@@ -488,7 +497,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
 | Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `github create` preview, `workspace status`, Workspace issue/catalog previews | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. Import, detach, and reattach previews do not write; only explicit apply changes Board/catalog state, never GitHub. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
-| Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude/detach/reattach`, `workspace issues refresh/detach/reattach`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly create or synchronize GitHub Issues, discover or detach/reattach Workspace repositories and Linked Tasks, refresh or archive Remote Issue summaries, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. Detach/reattach previews are read-only; apply preserves local Task data and never writes GitHub. |
+| Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude/detach/reattach`, `workspace issues refresh/detach/reattach`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly create or synchronize GitHub Issues, or push mapped changes when auto-push is enabled, discover or detach/reattach Workspace repositories and Linked Tasks, refresh or archive Remote Issue summaries, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. Detach/reattach previews are read-only; apply preserves local Task data and never writes GitHub. |
 
 ## 4. Board layouts and initialization
 
@@ -514,7 +523,7 @@ not write to GitHub. Only applied imports enter the Task graph.
 Repository or individual Task detach moves cached summaries into the
 `archived_issues` cache section and marks prior GitHub provenance inactive on the
 Task. Reattach matches exact repository/Issue numbers, previews current sync
-plans and conflicts, then explicitly reactivates links without syncing them.
+plans and conflicts, then reactivates links without syncing them.
 Inactive provenance is excluded from sync and duplicate link counts until
 reattached. Repository detach uses a separate `[workspace].detached` marker, so
 it does not alter explicit repository include/exclude allowlists.
@@ -910,7 +919,7 @@ sequenceDiagram
 - Parentage is one level deep and is not a Dependency. A Parent Task is Ready only when every SubTask is `done` or `cancelled`.
 - `done` and `cancelled` both resolve dependents. `delete` is not a status; it removes the task and its comments, and `--force` removes a SubTask subtree.
 - Comments are append-only and immutable. A correction is a new comment.
-- Meaningful mutations auto-commit to the `orbit` branch. Heartbeats wait for the next mutation or `sync`. Nothing is pushed.
+- Meaningful mutations auto-commit to the `orbit` branch. Heartbeats wait for the next mutation or `sync`. The Board's Git branch is never pushed; GitHub auto-push is opt-in per Board.
 - `export` takes the shared lock and writes nothing. Its snapshot is sorted by task ID and contains no timestamps or machine-local paths.
 - Human output is presentation only. `list` tables may truncate titles or change column widths; `--json` carries the complete, stable shape.
 - MCP does not bypass the CLI. Every tool call reuses the same lock, atomic-write, auto-commit, and error envelope.

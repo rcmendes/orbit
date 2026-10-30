@@ -2454,3 +2454,354 @@ fn injected_sync_rejects_issue_fields_in_basic_mode() {
     assert_eq!(error.code, "INVALID_ARGUMENT");
     assert!(error.message.contains("area"));
 }
+
+fn enable_auto_push(repo: &TestRepo, repositories: &[&str], basic: bool) {
+    let path = repo.board_path().join("config.toml");
+    let mut config = fs::read_to_string(&path).unwrap();
+    let repositories = repositories
+        .iter()
+        .map(|repository| format!("\"{repository}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    config.push_str(&format!(
+        "\n[github]\nmode = \"{}\"\nrepositories = [{repositories}]\nauto_push = true\n",
+        if basic { "basic" } else { "full" }
+    ));
+    if !basic {
+        config.push_str("organization = \"acme\"\n");
+    }
+    fs::write(path, config).unwrap();
+}
+
+fn empty_fixture(dir: &TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("fixture.json");
+    fs::write(
+        &path,
+        r#"{
+  "org_fields": {
+    "acme/Area": "AREA_ID",
+    "acme/Verification": "VERIFICATION_ID"
+  },
+  "issues": {},
+  "repositories": {
+    "acme/widget": { "owner_type": "Organization", "accessible": true }
+  }
+}"#,
+    )
+    .unwrap();
+    path
+}
+
+fn auto_push_fixture() -> (TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = empty_fixture(&dir);
+    (dir, path)
+}
+
+fn fixture_issue(path: &std::path::Path, number: u64) -> serde_json::Value {
+    let fixture: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    fixture["issues"]
+        .as_object()
+        .and_then(|issues| issues.get(&format!("acme/widget#{number}")))
+        .cloned()
+        .unwrap_or_else(|| panic!("missing fixture issue {number}: {fixture}"))
+}
+
+#[test]
+fn auto_push_creates_an_issue_and_tracks_status_and_labels() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    let add = repo.ok_json_with_env(&["add", "Auto-created task", "-p", "1", "--json"], &env);
+    let id = add["data"]["id"].as_str().unwrap().to_string();
+    let created = fixture_issue(&fixture, 1);
+    assert_eq!(created["title"], "Auto-created task");
+    assert_eq!(created["state"], "open");
+    assert!(created["labels"].as_array().unwrap().is_empty());
+
+    repo.ok_json_with_env(&["claim", &id, "--by", "agent", "--json"], &env);
+    let claimed = fixture_issue(&fixture, 1);
+    assert!(
+        claimed["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|label| label == "orbit:in-progress")
+    );
+
+    repo.ok_json_with_env(&["release", &id, "--by", "agent", "--json"], &env);
+    assert!(
+        fixture_issue(&fixture, 1)["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|label| label != "orbit:in-progress")
+    );
+
+    repo.ok_json_with_env(&["claim", &id, "--by", "agent", "--json"], &env);
+    repo.ok_json_with_env(&["done", &id, "--by", "agent", "--json"], &env);
+    let closed = fixture_issue(&fixture, 1);
+    assert_eq!(closed["state"], "closed");
+    assert_eq!(closed["state_reason"], "completed");
+    assert!(
+        closed["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|label| label != "orbit:in-progress")
+    );
+}
+
+#[test]
+fn auto_push_cancels_with_not_planned_and_reopens() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+    let add = repo.ok_json_with_env(&["add", "Cancel me", "--json"], &env);
+    let id = add["data"]["id"].as_str().unwrap().to_string();
+
+    repo.ok_json_with_env(&["cancel", &id, "--by", "agent", "--json"], &env);
+    let cancelled = fixture_issue(&fixture, 1);
+    assert_eq!(cancelled["state"], "closed");
+    assert_eq!(cancelled["state_reason"], "not_planned");
+
+    repo.ok_json_with_env(&["reopen", &id, "--json"], &env);
+    let reopened = fixture_issue(&fixture, 1);
+    assert_eq!(reopened["state"], "open");
+    assert!(reopened.get("state_reason").is_none());
+}
+
+#[test]
+fn auto_push_pushes_mapped_fields_but_not_priority_changes() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+    let add = repo.ok_json_with_env(&["add", "Field task", "--json"], &env);
+    let id = add["data"]["id"].as_str().unwrap().to_string();
+    let before = fixture_issue(&fixture, 1)["updated_at"].clone();
+
+    repo.ok_json_with_env(&["update", &id, "--priority", "0", "--json"], &env);
+    let after_priority = fixture_issue(&fixture, 1);
+    assert_eq!(after_priority["updated_at"], before);
+    assert_eq!(after_priority["title"], "Field task");
+
+    repo.ok_json_with_env(&["update", &id, "--title", "Renamed", "--json"], &env);
+    let after_title = fixture_issue(&fixture, 1);
+    assert_eq!(after_title["title"], "Renamed");
+    assert_ne!(after_title["updated_at"], before);
+}
+
+#[test]
+fn auto_push_warns_and_preserves_a_remote_conflict() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+    let add = repo.ok_json_with_env(&["add", "Original", "--json"], &env);
+    let id = add["data"]["id"].as_str().unwrap().to_string();
+
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    document["issues"]["acme/widget#1"]["title"] = serde_json::json!("Remote edit");
+    fs::write(&fixture, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+
+    let update = repo.ok_json_with_env(&["update", &id, "--title", "Local edit", "--json"], &env);
+    let warnings = update["meta"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .unwrap()
+            .contains("GITHUB_AUTO_PUSH_CONFLICT")),
+        "{warnings:?}"
+    );
+    assert_eq!(fixture_issue(&fixture, 1)["title"], "Remote edit");
+    let shown = repo.ok_json_with_env(&["show", &id, "--json"], &env);
+    assert_eq!(shown["data"]["github"]["last_sync"]["title"], "Original");
+}
+
+#[test]
+fn auto_push_respects_no_sync_and_the_environment_switch() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    repo.ok_json_with_env(&["--no-sync", "add", "Command local", "--json"], &env);
+    repo.ok_json_with_env(
+        &["add", "Environment local", "--json"],
+        &[
+            ("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap()),
+            ("ORBIT_NO_AUTO_SYNC", "1"),
+        ],
+    );
+    let fixture_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(
+        fixture_json["issues"].as_object().unwrap().is_empty(),
+        "{fixture_json}"
+    );
+}
+
+#[test]
+fn auto_push_requires_exactly_one_destination_repository() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["acme/widget", "acme/other"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    let add = repo.ok_json_with_env(&["add", "Ambiguous", "--json"], &env);
+    let warnings = add["meta"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("exactly one")),
+        "{warnings:?}"
+    );
+    let fixture_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(fixture_json["issues"].as_object().unwrap().is_empty());
+}
+
+#[test]
+fn auto_push_does_not_create_an_issue_for_a_preexisting_local_task() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Local first", &[]);
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    repo.ok_json_with_env(&["update", &id, "--title", "Local edited", "--json"], &env);
+    let fixture_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(fixture_json["issues"].as_object().unwrap().is_empty());
+}
+
+#[test]
+fn auto_push_works_with_auto_commit_disabled() {
+    let repo = TestRepo::new();
+    repo.init();
+    let config_path = repo.board_path().join("config.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("auto_commit = true", "auto_commit = false");
+    fs::write(&config_path, config).unwrap();
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    let add = repo.ok_json_with_env(&["add", "No commit", "--json"], &env);
+    let id = add["data"]["id"].as_str().unwrap();
+    let shown = repo.ok_json_with_env(&["show", id, "--json"], &env);
+    assert_eq!(shown["data"]["github"]["number"], 1);
+    assert_eq!(fixture_issue(&fixture, 1)["title"], "No commit");
+}
+
+#[test]
+fn auto_push_basic_mode_keeps_area_and_verification_local() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["personal/widget"], true);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    let add = repo.ok_json_with_env(&["add", "Metadata task", "--area", "cli", "--json"], &env);
+    let warnings = add["meta"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("basic mode cannot sync")),
+        "{warnings:?}"
+    );
+    let fixture_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(fixture_json["issues"].as_object().unwrap().is_empty());
+}
+
+#[test]
+fn github_status_reports_auto_push_state() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    let status = repo.ok_json_with_env(&["github", "status", "--json"], &env);
+    assert_eq!(status["data"]["auto_push"]["enabled"], true);
+    assert_eq!(
+        status["data"]["auto_push"]["reserved_label"],
+        "orbit:in-progress"
+    );
+    assert_eq!(status["data"]["linked_tasks"], 0);
+    assert_eq!(status["data"]["local_tasks"], 0);
+}
+
+#[test]
+fn doctor_reports_a_missing_reserved_label_when_auto_push_is_enabled() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    let (exit, doctor) = repo.json_with_env(&["doctor", "--json"], &env);
+    assert_eq!(exit, 1, "{doctor}");
+    assert!(
+        doctor["data"]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("orbit:in-progress")),
+        "{doctor}"
+    );
+}
+
+#[test]
+fn auto_push_is_skipped_when_the_local_commit_fails() {
+    let repo = TestRepo::new();
+    repo.init();
+    enable_auto_push(&repo, &["acme/widget"], false);
+    let hooks = repo.path().join("failing-hooks");
+    fs::create_dir(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    repo.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    let (_fixture_dir, fixture) = auto_push_fixture();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    let add = repo.ok_json_with_env(&["add", "Commit fails", "--json"], &env);
+    let warnings = add["meta"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().starts_with("COMMIT_FAILED:")),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("auto-push skipped")),
+        "{warnings:?}"
+    );
+    let fixture_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    assert!(fixture_json["issues"].as_object().unwrap().is_empty());
+}

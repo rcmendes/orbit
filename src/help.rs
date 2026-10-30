@@ -883,7 +883,7 @@ Examples:
 pub const SYNC_LONG: &str = "\
 Commits pending board changes, usually the lease updates written by heartbeat, to
 the board branch. Heartbeats deliberately do not commit on every call; a later
-mutation, or this command, persists them. Nothing is pushed.
+mutation, or this command, persists them. The Board's Git branch is never pushed; GitHub auto-push is opt-in.
 
 Use sync after a long heartbeat-only period, or when doctor reports uncommitted
 Board changes.";
@@ -897,8 +897,11 @@ pub const GITHUB_LONG: &str = "\
 Connects an Orbit Board to explicitly linked GitHub repositories. Each durable
 Task can map one-to-one to a GitHub Issue identified by repository and issue
 number. Orbit owns linked titles, bodies, statuses, labels, and supported
-metadata. Sync is explicit, detects field-level conflicts, and never maps GitHub
-assignees to Orbit claims.
+metadata. Sync is explicit unless the Board opts into `[github] auto_push =
+true`, which pushes mapped changes after a local mutation. Auto-push is
+push-only: it never pulls, never overwrites a remote conflict, and never creates
+an Issue for an existing Local Task. It detects field-level conflicts and never
+maps GitHub assignees to Orbit claims.
 
 Full mode (the default) uses organization-level Issue Fields for Orbit-owned
 area and verification values; run setup after editing config.toml. Basic mode
@@ -914,7 +917,10 @@ fields is opt-in with `--create-fields` and requires organization administrator
 access. Run `orbit github status` for a read-only health report of authentication
 and scopes, linked repositories, Issue Fields when applicable, pending changes,
 conflicts, unsupported relationships, and the next recommended action. `orbit
-doctor` also checks GitHub configuration when the provider is enabled. GitHub sync
+doctor` also checks GitHub configuration when the provider is enabled. With
+auto-push enabled, priority, type, comments, claims, checkpoints, and
+relationships do not trigger a push; use `orbit --no-sync <command>` or
+`ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. GitHub sync
 requires Orbit 0.9.0 or newer; default release builds include the
 `github-provider` capability. `github create` previews one or more Local Tasks by
 default. Pass `--apply` to create Issues and persist their links; done and cancelled

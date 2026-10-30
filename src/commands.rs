@@ -24,7 +24,15 @@ use crate::task::{self, Status, Task, TaskArea, TaskFrontmatter, TaskType};
 use crate::transition::{CheckpointUpdate, FieldUpdate};
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
-    let Cli { json, dir, command } = cli;
+    let Cli {
+        json,
+        dir,
+        no_sync,
+        command,
+    } = cli;
+    if no_sync {
+        crate::github::auto_push::suppress();
+    }
 
     if json && matches!(&command, Command::Prime(args) if args.hook_json) {
         return Err(OrbitError::invalid_argument(
@@ -40,17 +48,19 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             let exclusive = matches!(args.command, SlugCommand::Migrate(_));
             with_board(dir.as_deref(), exclusive, |board| cmd_slug(board, args))
         }
-        Command::Add(args) => with_board(dir.as_deref(), true, |board| cmd_add(board, args)),
+        Command::Add(args) => with_task_board(dir.as_deref(), true, |board| cmd_add(board, args)),
         Command::List(args) => with_board(dir.as_deref(), false, |board| cmd_list(board, args)),
         Command::Ready(args) => {
             let exclusive = args.claim;
-            with_board(dir.as_deref(), exclusive, |board| cmd_ready(board, args))
+            with_task_board(dir.as_deref(), exclusive, |board| cmd_ready(board, args))
         }
         Command::Show(args) => with_board(dir.as_deref(), false, |board| cmd_show(board, args)),
         Command::Tree(args) => with_board(dir.as_deref(), false, |board| cmd_tree(board, args)),
-        Command::Claim(args) => with_board(dir.as_deref(), true, |board| cmd_claim(board, args)),
+        Command::Claim(args) => {
+            with_task_board(dir.as_deref(), true, |board| cmd_claim(board, args))
+        }
         Command::Release(args) => {
-            with_board(dir.as_deref(), true, |board| cmd_release(board, args))
+            with_task_board(dir.as_deref(), true, |board| cmd_release(board, args))
         }
         Command::Heartbeat(args) => {
             with_board(dir.as_deref(), true, |board| cmd_heartbeat(board, args))
@@ -58,13 +68,19 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Checkpoint(args) => {
             with_board(dir.as_deref(), true, |board| cmd_checkpoint(board, args))
         }
-        Command::Done(args) => with_board(dir.as_deref(), true, |board| cmd_done(board, args)),
-        Command::Cancel(args) => with_board(dir.as_deref(), true, |board| cmd_cancel(board, args)),
-        Command::Reopen(args) => with_board(dir.as_deref(), true, |board| cmd_reopen(board, args)),
-        Command::Update(args) => with_board(dir.as_deref(), true, |board| cmd_update(board, args)),
+        Command::Done(args) => with_task_board(dir.as_deref(), true, |board| cmd_done(board, args)),
+        Command::Cancel(args) => {
+            with_task_board(dir.as_deref(), true, |board| cmd_cancel(board, args))
+        }
+        Command::Reopen(args) => {
+            with_task_board(dir.as_deref(), true, |board| cmd_reopen(board, args))
+        }
+        Command::Update(args) => {
+            with_task_board(dir.as_deref(), true, |board| cmd_update(board, args))
+        }
         Command::Label(args) => {
             let exclusive = !matches!(args.command, LabelCommand::List);
-            with_board(dir.as_deref(), exclusive, |board| cmd_label(board, args))
+            with_task_board(dir.as_deref(), exclusive, |board| cmd_label(board, args))
         }
         Command::Comment(args) => {
             let exclusive = matches!(args.command, CommentCommand::Add(_));
@@ -119,7 +135,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 }
             }
         },
-        Command::Triage(args) => with_board(dir.as_deref(), true, |board| {
+        Command::Triage(args) => with_task_board(dir.as_deref(), true, |board| {
             crate::triage::commands::run(board, args, json)
         }),
     }
@@ -134,19 +150,43 @@ where
     } else {
         crate::board::AccessMode::Read
     };
-    with_board_access(dir, mode, f)
+    with_board_access(dir, mode, AutoPush::Off, f)
+}
+
+/// Task commands that may push mapped changes after a successful mutation.
+fn with_task_board<F>(
+    dir: Option<&Path>,
+    exclusive: bool,
+    f: F,
+) -> Result<crate::output::CommandOutput>
+where
+    F: FnOnce(&Board) -> Result<crate::output::CommandOutput>,
+{
+    let mode = if exclusive {
+        crate::board::AccessMode::Write
+    } else {
+        crate::board::AccessMode::Read
+    };
+    with_board_access(dir, mode, AutoPush::On, f)
 }
 
 fn with_board_read_only<F>(dir: Option<&Path>, f: F) -> Result<crate::output::CommandOutput>
 where
     F: FnOnce(&Board) -> Result<crate::output::CommandOutput>,
 {
-    with_board_access(dir, crate::board::AccessMode::Inspect, f)
+    with_board_access(dir, crate::board::AccessMode::Inspect, AutoPush::Off, f)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AutoPush {
+    Off,
+    On,
 }
 
 fn with_board_access<F>(
     dir: Option<&Path>,
     mode: crate::board::AccessMode,
+    auto_push: AutoPush,
     f: F,
 ) -> Result<crate::output::CommandOutput>
 where
@@ -154,7 +194,28 @@ where
 {
     let access = crate::board::BoardAccess::open(dir, mode)?;
     let board = access.board();
+    let snapshot = (auto_push == AutoPush::On
+        && matches!(mode, crate::board::AccessMode::Write)
+        && board.config.github.auto_push
+        && !crate::github::auto_push::suppressed())
+    .then(|| crate::github::auto_push::snapshot(board));
     let mut output = f(board)?;
+    if let Some(before) = snapshot {
+        if output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("COMMIT_FAILED"))
+        {
+            output.warnings.push(
+                "auto-push skipped because the local Board commit failed; retry after `orbit sync`"
+                    .to_string(),
+            );
+        } else {
+            output
+                .warnings
+                .extend(crate::github::auto_push::after_command(board, &before));
+        }
+    }
     output.warnings.extend(board.warnings.iter().cloned());
     Ok(output)
 }

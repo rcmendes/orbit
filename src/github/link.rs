@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{OrbitError, Result};
-use crate::github::model::IssueState;
+use crate::github::model::{IssueState, IssueStateReason};
 use crate::task::Status;
 
 /// One-to-one link between an Orbit Task and a GitHub Issue (`owner/repo` + number).
@@ -42,6 +42,8 @@ pub struct GitHubSyncBaseline {
     pub status: Option<Status>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issue_state: Option<IssueState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue_state_reason: Option<IssueStateReason>,
     /// Same-repository sub-issues known at the last successful sync. A remote
     /// edge in this set but absent from the Task graph is a local removal.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

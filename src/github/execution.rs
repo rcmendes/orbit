@@ -188,7 +188,19 @@ pub fn synchronize(
             outcome: SyncOutcome::Preview,
         };
         if request.apply {
-            match apply_plan(board, &task, &link, &issue, &plan, &relationship, client) {
+            match apply_plan(
+                board,
+                client,
+                ApplyPlanRequest {
+                    task: &task,
+                    link: &link,
+                    issue: &issue,
+                    plan: &plan,
+                    relationship: &relationship,
+                    advance_baseline: true,
+                    commit_message: &format!("orbit: github sync {}", task.id),
+                },
+            ) {
                 Ok(warning) => {
                     warnings.extend(warning);
                     successes += 1;
@@ -283,10 +295,14 @@ fn resolve_sync_conflicts(
                 plan.push_state = Some(crate::github::status::issue_state_from_status(
                     task.front.status,
                 ));
+                plan.push_state_reason =
+                    crate::github::status::issue_state_reason_from_status(task.front.status);
+                plan.push_status_label = true;
             }
             ("status", SyncResolution::PreferGitHub) => {
                 plan.apply_status = Some(crate::github::status::status_from_issue(
                     issue.state,
+                    issue.state_reason,
                     &issue.labels,
                 ));
             }
@@ -314,15 +330,30 @@ fn resolve_sync_conflicts(
     Ok(resolved)
 }
 
-fn apply_plan(
+pub(crate) struct ApplyPlanRequest<'a> {
+    pub task: &'a Task,
+    pub link: &'a GitHubLink,
+    pub issue: &'a IssueSnapshot,
+    pub plan: &'a SyncPlan,
+    pub relationship: &'a relationships::RelationshipReport,
+    pub advance_baseline: bool,
+    pub commit_message: &'a str,
+}
+
+pub(crate) fn apply_plan(
     board: &Board,
-    task: &Task,
-    link: &GitHubLink,
-    issue: &IssueSnapshot,
-    plan: &SyncPlan,
-    relationship: &relationships::RelationshipReport,
     client: &dyn GitHubClient,
+    request: ApplyPlanRequest<'_>,
 ) -> Result<Option<String>> {
+    let ApplyPlanRequest {
+        task,
+        link,
+        issue,
+        plan,
+        relationship,
+        advance_baseline,
+        commit_message,
+    } = request;
     let mut task = task.clone();
     if let Some(title) = &plan.apply_title {
         task.front.title = title.clone();
@@ -334,7 +365,7 @@ fn apply_plan(
         task.front.status = status;
     }
     if let Some(labels) = &plan.apply_labels {
-        task.front.labels = labels.clone();
+        task.front.labels = crate::github::status::user_labels(labels);
     }
     if let Some(area) = &plan.apply_area {
         task.front.area = area.as_ref().map(|value| parse_area(value)).transpose()?;
@@ -344,12 +375,26 @@ fn apply_plan(
     }
     task.front.updated_at = Utc::now();
 
+    let labels = if let Some(labels) = &plan.push_labels {
+        Some(crate::github::status::labels_for_status(
+            labels,
+            task.front.status,
+        ))
+    } else if plan.push_status_label {
+        Some(crate::github::status::labels_for_status(
+            &crate::github::status::user_labels(&issue.labels),
+            task.front.status,
+        ))
+    } else {
+        None
+    };
+
     if plan.push_title.is_some()
         || plan.push_body.is_some()
-        || plan.push_labels.is_some()
+        || plan.push_state.is_some()
+        || labels.is_some()
         || plan.push_area.is_some()
         || plan.push_verification.is_some()
-        || plan.push_state.is_some()
     {
         let metadata_update = plan.push_area.is_some() || plan.push_verification.is_some();
         client.update_issue(
@@ -359,7 +404,8 @@ fn apply_plan(
                 title: plan.push_title.clone(),
                 body: plan.push_body.clone(),
                 state: plan.push_state,
-                labels: plan.push_labels.clone(),
+                state_reason: plan.push_state_reason,
+                labels,
                 area: metadata_update
                     .then(|| plan.push_area.clone().unwrap_or_else(|| issue.area.clone())),
                 verification: metadata_update.then(|| {
@@ -386,13 +432,17 @@ fn apply_plan(
         client.update_relationships(&link.repo, link.number, &relationship.supported, &removals)?;
     }
 
+    if !advance_baseline {
+        return Ok(None);
+    }
+
     let refreshed = client.get_issue(
         &link.repo,
         link.number,
         (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
     )?;
     set_baseline(&mut task, &refreshed);
-    let outcome = persist_task(board, &task, &format!("orbit: github sync {}", task.id))?;
+    let outcome = persist_task(board, &task, commit_message)?;
     Ok(crate::mutation::commit_warning(outcome))
 }
 
@@ -465,11 +515,12 @@ pub(crate) fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {
             orbit_updated_at: task.front.updated_at,
             title: issue.title.clone(),
             body: issue.body.clone(),
-            labels: issue.labels.clone(),
+            labels: crate::github::status::user_labels(&issue.labels),
             area: task.front.area.map(|area| area.as_str().to_string()),
             verification: task.front.verification.clone(),
             status: Some(task.front.status),
             issue_state: Some(issue.state),
+            issue_state_reason: issue.state_reason,
             sub_issues: issue.blocking.clone(),
             blocked_by: issue.blocked_by.clone(),
         });

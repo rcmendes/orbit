@@ -10,6 +10,8 @@ pub struct IssueSnapshot {
     pub title: String,
     pub body: String,
     pub state: IssueState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_reason: Option<IssueStateReason>,
     pub labels: Vec<String>,
     pub assignees: Vec<String>,
     pub updated_at: DateTime<Utc>,
@@ -30,6 +32,15 @@ pub struct IssueSnapshot {
 pub enum IssueState {
     Open,
     Closed,
+}
+
+/// GitHub's closed-issue reason: `completed` or `not_planned`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueStateReason {
+    Completed,
+    NotPlanned,
+    Reopened,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,8 +81,18 @@ pub struct SyncPlan {
     pub push_area: Option<Option<String>>,
     pub push_verification: Option<Option<String>>,
     pub push_state: Option<IssueState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push_state_reason: Option<IssueStateReason>,
+    /// The reserved `orbit:in-progress` label must be added or removed even
+    /// though the Issue state itself is unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub push_status_label: bool,
     pub conflicts: Vec<SyncConflict>,
     pub warnings: Vec<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl SyncPlan {
@@ -92,6 +113,7 @@ impl SyncPlan {
             && self.push_area.is_none()
             && self.push_verification.is_none()
             && self.push_state.is_none()
+            && !self.push_status_label
     }
 }
 

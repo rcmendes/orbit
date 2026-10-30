@@ -1,3 +1,4 @@
+pub mod auto_push;
 pub mod client;
 pub mod commands;
 pub mod config;

@@ -21,9 +21,9 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 - Arbitrary-depth hierarchy, Beads-style issue-type entities, or attachments.
   Parent Tasks group one level of SubTasks; work shape is the metadata-only Type
   field.
-- Hosted sync, federation, or opaque remote trackers other than explicit GitHub Issue sync ([github-sync.md](./github-sync.md)).
+- Hosted sync, federation, or opaque remote trackers other than explicit GitHub Issue sync or an opted-in auto-push ([github-sync.md](./github-sync.md)).
 - GitHub Projects automation or ProjectV2 field synchronization. Projects remain a downstream view over Issues; see [ADR 0015](./adr/0015-github-projects-downstream.md).
-- Automatic pushes to a remote.
+- Automatic pushes of the Board's Git branch to a remote. Opt-in GitHub Issue auto-push is a separate, local-to-remote API write; see [ADR 0016](./adr/0016-opt-in-auto-push.md).
 
 ## 2. Architecture
 
@@ -32,7 +32,7 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 3. **Comments:** append-only Markdown sidecars at `comments/<id>.md` inside `DIR`.
 4. **Index (speed):** every process rebuilds an in-memory graph from the task files. There is no persistent cache and no watcher.
 5. **Writes (safety):** every mutation takes one Board-wide exclusive lock at `<DIR>/.lock`, performs a read-modify-write, and publishes each file with a temp-file + `fsync` + rename. Readers take a shared lock for a consistent snapshot.
-6. **History:** meaningful mutations auto-commit to the `orbit` branch. Heartbeat/lease-only changes are committed by `orbit sync`. Nothing is pushed automatically.
+6. **History:** meaningful mutations auto-commit to the `orbit` branch. Heartbeat/lease-only changes are committed by `orbit sync`. The Board's Git branch is never pushed automatically. GitHub Issue auto-push is opt-in per Board and is defined in [ADR 0016](./adr/0016-opt-in-auto-push.md).
 
 The board is deliberately outside code branches: task churn never enters a feature PR, and agents in separate worktrees share one queue. See `docs/adr/0001-markdown-board-on-orphan-branch.md`, `docs/adr/0002-single-writer-lock-and-atomic-rename.md`, and `docs/adr/0012-orbit-folder.md`.
 
@@ -573,7 +573,7 @@ Before this layout, a local Board lived at `<git-common-dir>/orbit/board` with i
 
 When the Board has a configured GitHub provider, `doctor` also reports GitHub authentication and required scopes, linked-repository access, and (in full mode) organization Issue Field configuration problems. These checks are read-only and are collected alongside Board diagnostics; a GitHub problem does not prevent task or Board integrity checks from running. Workspace diagnostics are likewise read-only unless an explicit deterministic `--fix` or `--migrate` is requested; doctor never resolves semantic conflicts, merges or deletes Tasks, detaches repositories, closes Issues, or overwrites user-authored agent files.
 
-Auto-commit policy: create/update/claim/release/checkpoint/done/cancel/reopen/depend/undepend/delete/comment/label commit immediately as `orbit: <verb> <id>`. Heartbeat and lease-only writes are not committed until the next meaningful mutation or `orbit sync`. A failed commit does not fail the operation: the state is already on disk and the result carries `meta.warnings: ["COMMIT_FAILED: ..."]`. `doctor` reports uncommitted board changes. A slug migration first flushes heartbeat-only writes as `orbit: sync`, then records one `orbit: migrate task prefix from <old> to <new>` commit. Nothing is pushed.
+Auto-commit policy: create/update/claim/release/checkpoint/done/cancel/reopen/depend/undepend/delete/comment/label commit immediately as `orbit: <verb> <id>`. Heartbeat and lease-only writes are not committed until the next meaningful mutation or `orbit sync`. A failed commit does not fail the operation: the state is already on disk and the result carries `meta.warnings: ["COMMIT_FAILED: ..."]`. `doctor` reports uncommitted board changes. A slug migration first flushes heartbeat-only writes as `orbit: sync`, then records one `orbit: migrate task prefix from <old> to <new>` commit. The Board's Git branch is never pushed; GitHub auto-push is a separate opt-in API write.
 
 ## 6. Commands
 
@@ -638,9 +638,10 @@ it must not silently ignore configured GitHub state.
 
 `orbit github status` is a read-only provider diagnostic. It reports the `gh`
 identity and known token scopes, configured organization and linked repositories,
-Area and Verification field configuration/resolution, linked Task count, pending
-pull/push changes, conflicts, unsupported cross-repository relationships, and a
-recommended next step. `--json` exposes the same diagnostic data in a stable
+Area and Verification field configuration/resolution, linked Task count, local
+Task count without an Issue, auto-push state, pending pull/push changes,
+conflicts, unsupported cross-repository relationships, and a recommended next
+step. `--json` exposes the same diagnostic data in a stable
 structure, including provider `mode`, field applicability, `next_action`, and
 `next_command`. In basic mode, organization Issue Fields are not applicable and
 the status check only requires the `repo` scope.
@@ -658,6 +659,48 @@ Task is rejected and directs the user to sync; done and cancelled Tasks require
 or failure independently. Repository Boards infer a destination only when one
 repository is linked; Workspace Boards use the last refreshed included-repository
 catalog and require `--repo OWNER/REPO` when multiple repositories are included.
+
+### Automatic push
+
+`[github] auto_push = true` opts a Board into publishing mapped Task changes after
+a successful write command. The default is `false`. Auto-push is push-only and
+synchronous: it never pulls, never resolves a conflict by overwriting a remote
+value, and never creates an Issue for an existing Local Task. The Board lock is
+held for the complete push. `--no-sync` and `ORBIT_NO_AUTO_SYNC=1` suppress it;
+explicit `orbit github sync` is never suppressed.
+
+The trigger is a change to title, body, labels, status, `area`, or
+`verification`. Priority, type, `waiting_on`, claims, checkpoints, comments, and
+dependency relationships do not trigger a remote write. The command wrapper
+snapshots `tasks/*.md` before and after a task write command and pushes every
+changed Task whose mapped delta is non-empty. Deleted Tasks leave their Issues
+untouched and warn when linked. `orbit github *`, Workspace issue import and
+detach/reattach, `orbit sync`, `doctor`, `init`/`link`/`unlink`, migrations, and
+`delete` are excluded; `triage apply` is included.
+
+`orbit add` creates an Issue when exactly one repository is available — linked
+on a repository Board, or included in a Workspace catalog. With zero or multiple
+repositories the Task stays local with a warning. A failed creation is not
+retried automatically; use `orbit github create` explicitly. Enabling the flag
+does not backfill existing Local Tasks.
+
+`todo` and `in_progress` both map to an open Issue. Claiming adds the reserved
+label `orbit:in-progress`; release, `done`, `cancel`, and reopen to `todo` remove
+it. The label is excluded from Label sync in both directions and never read back
+as a Status. `done` closes with `state_reason: completed`, `cancelled` closes
+with `state_reason: not_planned`, and reopen reopens. Native `state_reason` is
+authoritative; `wontfix` remains a pull fallback for older Issues and is never
+added automatically.
+
+A field changed on both sides is skipped with a `GITHUB_AUTO_PUSH_CONFLICT`
+warning. Remote-only changes produce `GITHUB_AUTO_PUSH_PENDING` and are left for
+explicit sync. When any field is skipped, the sync baseline does not advance, so
+the conflict remains visible. The local mutation always succeeds; remote failures
+are warnings, not command errors. If the local mutation's Git commit failed,
+auto-push is skipped rather than publishing state outside Board history.
+`orbit github status` reports whether auto-push is enabled, pending changes, and
+local Tasks without an Issue; `doctor` reports a missing reserved label or the
+absence of a linked repository.
 
 GitHub Projects are downstream of Issues. Orbit does not call the ProjectV2 API,
 request Project scopes, or synchronize Project membership, Status, views, or

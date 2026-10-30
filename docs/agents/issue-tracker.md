@@ -55,7 +55,8 @@ Use detach when a repository or one linked Issue should stop syncing. Preview
 first, then pass `--apply`; detach keeps Task data, stores inactive provenance,
 and archives Remote Issue snapshots without changing GitHub. Reattach also
 previews exact-identity matches and sync conflicts before `--apply`. It resumes
-the link only; run the separate explicit GitHub sync workflow to apply changes.
+the link only; run the separate GitHub sync workflow (or wait for the next
+auto-push, when enabled) to apply changes.
 `workspace setup` uses that snapshot, saves the selected harnesses on the
 Workspace Board, and reuses them when a later refresh discovers child repos.
 

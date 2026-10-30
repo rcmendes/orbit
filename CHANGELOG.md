@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed `orbit init .` and `orbit init <existing-repo>`: a target that is already a Git working-tree root now initializes that checkout's `./.orbit` instead of passing the populated checkout to `git worktree add` and failing with `GIT_ERROR`. A non-empty explicit Board directory now returns `CONFIG_ERROR` with an actionable message.
+- Added opt-in GitHub auto-push (`[github] auto_push = true`). `orbit add` creates an Issue when exactly one repository is available; mapped title/body/label/status/`area`/`verification` changes push after local mutations, claims add the reserved `orbit:in-progress` label, and `done`/`cancelled` use native `state_reason`. Auto-push is push-only, synchronous, never overwrites a remote conflict, and leaves existing Local Tasks unlinked. `--no-sync` and `ORBIT_NO_AUTO_SYNC=1` suppress it. See [ADR 0016](./docs/adr/0016-opt-in-auto-push.md).
 
 ## 0.10.4 - 2026-10-29
 

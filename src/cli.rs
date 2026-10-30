@@ -23,6 +23,10 @@ pub struct Cli {
     #[arg(global = true, long, env = "ORBIT_DIR", value_name = "PATH")]
     pub dir: Option<PathBuf>,
 
+    /// Do not auto-push task changes to GitHub for this command.
+    #[arg(global = true, long = "no-sync")]
+    pub no_sync: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

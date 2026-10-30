@@ -409,7 +409,7 @@ Task churn does not belong in your feature PRs. The `orbit` branch is separate f
 - **One writer at a time.** Mutations take a Board-wide exclusive lock; readers take it shared for a consistent snapshot.
 - **Atomic publishes.** Each file is written to a temp file, fsynced, renamed, and the directory is fsynced on Unix. A crash cannot leave a half-written task.
 - **No persistent index.** Every command rebuilds the graph from Markdown. There is no cache to corrupt and no watcher to miss an event.
-- **Auto-commit with an escape hatch.** Meaningful mutations commit to the `orbit` branch. Heartbeats are lease-only and wait for the next mutation or `orbit sync`. Nothing is pushed.
+- **Auto-commit with an escape hatch.** Meaningful mutations commit to the `orbit` branch. Heartbeats are lease-only and wait for the next mutation or `orbit sync`. The Board's Git branch is never pushed; opted-in GitHub Issue auto-push is separate.
 - **Typed failures.** `LOCKED` is retryable; dependency, claim, label, and parent failures carry the IDs you need to resolve them.
 
 ## The agent loop
@@ -750,7 +750,7 @@ ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 
 ### GitHub Issues (optional)
 
-Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Orbit is authoritative for linked Task fields; sync is explicit, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. Review and resolve conflicts with `--resolve FIELD=orbit|github` before applying. See [docs/github-sync.md](./docs/github-sync.md).
+Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Orbit is authoritative for linked Task fields; sync is explicit unless the Board opts into `auto_push`, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. Review and resolve conflicts with `--resolve FIELD=orbit|github` before applying. See [docs/github-sync.md](./docs/github-sync.md).
 
 GitHub Projects are a downstream view over Issues. Orbit does not synchronize ProjectV2 membership, Status, views, or custom fields; use Project auto-add and item added/closed/reopened workflows for reporting, and keep Project Status out of Orbit's sync loop. Only GitHub's separate Auto-close issue workflow can turn a card move into an Issue close. See [the Projects boundary](./docs/github-sync.md#github-projects).
 
@@ -780,6 +780,17 @@ repository name as described below before creating or syncing Issues.
 `orbit github connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports the exact basic-mode `[github]` entries to add or merge into the Board's `config.toml`, preserving other linked repositories. Use `orbit github connect --json` for machine-readable status, including the same guidance in `remediation` and `next_actions`.
 
 Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
+
+To publish mapped changes after local mutations instead of running `orbit github sync` by hand, set `auto_push = true` in `[github]`:
+
+```toml
+[github]
+mode = "basic"
+repositories = ["alice/widget"]
+auto_push = true
+```
+
+Auto-push is push-only. `orbit add` creates an Issue when exactly one repository is available; title, body, labels, status, `area`, and `verification` changes are pushed; `done` closes with `state_reason: completed`, `cancelled` with `not_planned`, and `claim` adds the reserved `orbit:in-progress` label. It never pulls, never overwrites a field that changed on GitHub, and never creates an Issue for an existing Local Task. Priority, type, comments, claims, checkpoints, and relationships do not trigger a push. Conflicts and failed pushes are warnings, not command failures; the baseline stays unchanged so `orbit github sync <task>` can resolve them. Use `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. See [github-sync.md](./docs/github-sync.md#automatic-push).
 
 ```bash
 # Personal repository: [github] mode = "basic" + repositories in config.toml.

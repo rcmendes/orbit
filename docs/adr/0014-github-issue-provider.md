@@ -14,7 +14,7 @@ Orbit needs explicit, multi-repository synchronization with GitHub Issues while 
 
 ## Consequences
 
-- Sync is explicit (`orbit github sync`, dry-run by default; `--apply` writes).
+- Sync is explicit (`orbit github sync`, dry-run by default; `--apply` writes) unless the Board opts into the automatic push defined by [ADR 0016](./0016-opt-in-auto-push.md).
 - Missing Issue Field setup returns `GITHUB_SETUP_INCOMPLETE` instead of falling back to body-text conventions.
 - Basic mode syncs titles, bodies, labels, and open/closed state, but does not import or publish `area` and `verification`; Triage is limited to labels. Switching to full mode and configuring the organization fields is the upgrade path.
 - Parallel work on structured metadata (`area`, `verification` frontmatter) shares the task model with ticket `orbit-6pm4p0.2m09a7`.

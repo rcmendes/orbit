@@ -111,6 +111,7 @@ pub(crate) fn remember_created_issue(
         number: issue.number,
         title: issue.title.clone(),
         state: issue.state,
+        state_reason: issue.state_reason,
         labels: issue.labels.clone(),
         issue_fields: BTreeMap::new(),
         url: format!("https://github.com/{repository}/issues/{}", issue.number),
@@ -686,7 +687,8 @@ fn prepare_issue(issue: crate::github::model::IssueSnapshot) -> Result<PreparedI
         .map(crate::github::fields::parse_area)
         .transpose()?;
     let verification = task::normalize_verification(issue.verification.clone())?;
-    let status = crate::github::status::status_from_issue(issue.state, &issue.labels);
+    let status =
+        crate::github::status::status_from_issue(issue.state, issue.state_reason, &issue.labels);
     Ok(PreparedIssue {
         issue,
         labels,

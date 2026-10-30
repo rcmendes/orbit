@@ -3,7 +3,10 @@ use chrono::Utc;
 use crate::github::fields::validate_verification;
 use crate::github::link::{GitHubLink, GitHubSyncBaseline};
 use crate::github::model::{IssueSnapshot, SyncConflict, SyncDirection, SyncPlan};
-use crate::github::status::{issue_state_from_status, status_from_issue};
+use crate::github::status::{
+    has_reserved_status_label, issue_state_from_status, issue_state_reason_from_status,
+    status_from_issue, user_labels,
+};
 use crate::task::{Status, Task};
 
 pub struct OrbitSyncView<'a> {
@@ -30,6 +33,8 @@ pub fn plan_sync(
         push_area: None,
         push_verification: None,
         push_state: None,
+        push_state_reason: None,
+        push_status_label: false,
         conflicts: Vec::new(),
         warnings: Vec::new(),
     };
@@ -44,7 +49,7 @@ pub fn plan_sync(
 
     let orbit_title = view.task.front.title.clone();
     let orbit_body = view.task.body.clone();
-    let orbit_labels = view.task.front.labels.clone();
+    let orbit_labels = user_labels(&view.task.front.labels);
     let orbit_area = view.task.front.area.map(|area| area.as_str().to_string());
     let orbit_verification = view.task.front.verification.clone();
     let orbit_status = view.task.front.status;
@@ -68,9 +73,9 @@ pub fn plan_sync(
     plan_scalar(
         &mut plan,
         "labels",
-        baseline.map(|base| base.labels.clone()),
+        baseline.map(|base| user_labels(&base.labels)),
         orbit_labels.clone(),
-        issue.labels.clone(),
+        user_labels(&issue.labels),
         direction,
     );
     plan_scalar(
@@ -102,11 +107,12 @@ pub fn baseline_from(view: OrbitSyncView<'_>, issue: &IssueSnapshot) -> GitHubSy
         orbit_updated_at: view.task.front.updated_at,
         title: issue.title.clone(),
         body: issue.body.clone(),
-        labels: issue.labels.clone(),
+        labels: user_labels(&issue.labels),
         area: view.task.front.area.map(|area| area.as_str().to_string()),
         verification: view.task.front.verification.clone(),
         status: Some(view.task.front.status),
         issue_state: Some(issue.state),
+        issue_state_reason: issue.state_reason,
         sub_issues: issue.blocking.clone(),
         blocked_by: issue.blocked_by.clone(),
     }
@@ -209,16 +215,25 @@ fn plan_status(
 ) {
     let base_status = baseline.and_then(|base| base.status);
     let base_state = baseline.and_then(|base| base.issue_state);
-    let github_status = status_from_issue(issue.state, &issue.labels);
+    let github_status = status_from_issue(issue.state, issue.state_reason, &issue.labels);
     let baseline_remote_status = baseline.and_then(|base| {
         base.issue_state
-            .map(|state| status_from_issue(state, &base.labels))
+            .map(|state| status_from_issue(state, base.issue_state_reason, &base.labels))
     });
     let github_changed = base_state.is_some_and(|state| state != issue.state)
         || baseline_remote_status.is_some_and(|status| status != github_status);
     let orbit_changed = base_status.is_some_and(|status| status != orbit_status);
 
-    if orbit_status == github_status && issue_state_from_status(orbit_status) == issue.state {
+    let want_state = issue_state_from_status(orbit_status);
+    let want_reason = issue_state_reason_from_status(orbit_status);
+    let want_reserved = orbit_status == Status::InProgress;
+    let has_reserved = has_reserved_status_label(&issue.labels);
+    let state_changed = want_state != issue.state
+        || (want_state == crate::github::model::IssueState::Closed
+            && want_reason != issue.state_reason);
+    let status_label_changed = want_reserved != has_reserved;
+
+    if !state_changed && !status_label_changed && orbit_status == github_status {
         return;
     }
     if orbit_changed && github_changed {
@@ -234,11 +249,18 @@ fn plan_status(
             github_status
         };
         plan.apply_status = Some(pulled_status);
-    } else if direction == SyncDirection::Push
-        || orbit_changed
-        || issue_state_from_status(orbit_status) != issue.state
-    {
-        plan.push_state = Some(issue_state_from_status(orbit_status));
+    } else if direction == SyncDirection::Push || orbit_changed || state_changed {
+        if state_changed {
+            plan.push_state = Some(want_state);
+            plan.push_state_reason = if want_state == crate::github::model::IssueState::Closed {
+                want_reason
+            } else {
+                None
+            };
+        }
+        if status_label_changed {
+            plan.push_status_label = true;
+        }
     }
 }
 
@@ -291,6 +313,7 @@ mod tests {
                         verification: Some("cargo test".into()),
                         status: Some(Status::Todo),
                         issue_state: Some(crate::github::model::IssueState::Open),
+                        issue_state_reason: None,
                         sub_issues: Vec::new(),
                         blocked_by: Vec::new(),
                     }),
@@ -308,6 +331,7 @@ mod tests {
             title: title.into(),
             body: body.into(),
             state: crate::github::model::IssueState::Open,
+            state_reason: None,
             labels: vec!["bug".into()],
             assignees: vec!["human".into()],
             updated_at: Utc.with_ymd_and_hms(2026, 10, 23, 13, 0, 0).unwrap(),
@@ -354,6 +378,7 @@ mod tests {
             verification: Some("cargo test".into()),
             status: Some(Status::Todo),
             issue_state: Some(crate::github::model::IssueState::Closed),
+            issue_state_reason: None,
             sub_issues: Vec::new(),
             blocked_by: Vec::new(),
         });
@@ -390,6 +415,7 @@ mod tests {
             verification: Some("cargo test".into()),
             status: Some(Status::Done),
             issue_state: Some(crate::github::model::IssueState::Closed),
+            issue_state_reason: None,
             sub_issues: Vec::new(),
             blocked_by: Vec::new(),
         });

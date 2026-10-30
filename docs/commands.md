@@ -28,6 +28,7 @@ contract.
 | `--json` | Print exactly one JSON object on stdout, including errors. |
 | `--dir <PATH>` | Use a Workspace root or a specific Board directory for this command. |
 | `ORBIT_DIR` | Environment equivalent of `--dir`. |
+| `--no-sync` | Skip GitHub auto-push for this command. `ORBIT_NO_AUTO_SYNC=1` does the same for a process. Explicit `orbit github sync` is unaffected. |
 
 Exit codes are `0` for success, `1` for a domain failure (for example
 `DEPENDENCY_BLOCKED` or a failing `doctor`), and `2` for a usage error.
@@ -1028,6 +1029,17 @@ Only GitHub's separate Auto-close issue workflow can turn a card move into an
 Issue close, which pull sync then sees as an Issue change. See
 [github-sync.md](./github-sync.md).
 
+Set `[github] auto_push = true` to publish mapped changes after a local mutation.
+It is push-only: `orbit add` creates an Issue when exactly one repository is
+available, title/body/label/status/`area`/`verification` changes are pushed, and
+`orbit:in-progress` tracks claims. It never pulls, never overwrites a remote
+conflict, and never creates an Issue for an existing Local Task. `done` closes
+with `state_reason: completed`; `cancelled` with `not_planned`. Priority, type,
+comments, claims, checkpoints, and relationships do not trigger a push. Use
+`orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation;
+explicit `orbit github sync` is unaffected. See
+[github-sync.md#automatic-push](./github-sync.md#automatic-push).
+
 ```bash
 orbit github connect
 orbit github status
@@ -1043,6 +1055,7 @@ orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
 orbit github create orb-terminal --include-terminal --apply
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
+orbit --no-sync add "Local-only task"     # skip auto-push for one command
 ```
 
 `orbit github setup` only resolves existing fields and stores their ids. Creating
@@ -1056,8 +1069,9 @@ Reviews GitHub-linked Tasks only. Review displays field-by-field changes and, wh
 proposal file is used with stdin and stdout connected to terminals, prompts for
 explicit approval or cancellation. Non-TTY and `--json` reviews only preview; they
 never prompt or apply. `--proposal-file -` reads a proposal from stdin. Applying
-changes Orbit only; it does not publish any changed field to GitHub. Publish
-approved linked Task changes with an explicit `orbit github sync`. See
+changes Orbit; with `[github] auto_push = true`, the changed labels, `area`, and
+`verification` are pushed immediately. Otherwise, publish approved linked Task
+changes with an explicit `orbit github sync`. See
 [agents/triage-workflow.md](./agents/triage-workflow.md).
 
 Apply preserves metadata on disk if the automatic Git commit fails and reports

@@ -109,8 +109,10 @@ commands.
    orbit triage apply <ID> --proposal-file proposal.json --approve --json
    ```
 
-5. **Sync to GitHub** — review and apply do not write to GitHub. Publish Orbit-owned fields and
-   labels only with an explicit sync:
+5. **Sync to GitHub** — review never writes to GitHub. With `[github] auto_push =
+   true`, `triage apply` pushes the changed labels/`area`/`verification`
+   immediately. Otherwise publish Orbit-owned fields and labels only with an
+   explicit sync:
 
    ```bash
    orbit github sync <ID> --direction push --apply
@@ -145,7 +147,8 @@ adds `cause`, `remediation`, and Task/proposal-file context to `error.details`.
 Do not add Task lifecycle or content fields (`title`, `body`, `status`, or
 `state`) to a Triage proposal. Only use the supported metadata fields above and
 canonical labels. Orbit remains authoritative for those linked Task fields;
-publish their changes only through explicit, conflict-safe GitHub sync.
+publish their changes through auto-push (when enabled) or explicit,
+conflict-safe GitHub sync.
 
 See also [`agent-brief.md`](./agent-brief.md), [`triage-labels.md`](./triage-labels.md), and [`issue-tracker.md`](./issue-tracker.md).
 

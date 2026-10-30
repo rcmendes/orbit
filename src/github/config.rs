@@ -16,8 +16,15 @@ pub struct GitHubConfig {
     pub organization: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<String>,
+    /// Publish mapped Task changes to linked Issues after a local mutation.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_push: bool,
     #[serde(default)]
     pub issue_fields: IssueFieldConfig,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

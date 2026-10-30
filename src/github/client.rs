@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{OrbitError, Result, code};
 use crate::github::config::IssueFieldConfig;
-use crate::github::model::{IssueSnapshot, IssueState};
+use crate::github::model::{IssueSnapshot, IssueState, IssueStateReason};
 use crate::github::relationships::{RelationshipChange, SupportedRelationship};
 
 const AREA_FIELD_OPTIONS: [&str; 6] = ["board", "cli", "mcp", "setup", "docs", "release"];
@@ -39,6 +39,8 @@ pub struct IssueCatalogItem {
     pub number: u64,
     pub title: String,
     pub state: IssueState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_reason: Option<IssueStateReason>,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
@@ -84,6 +86,7 @@ pub struct UpdateIssueInput {
     pub title: Option<String>,
     pub body: Option<String>,
     pub state: Option<IssueState>,
+    pub state_reason: Option<IssueStateReason>,
     pub labels: Option<Vec<String>>,
     pub area: Option<Option<String>>,
     pub verification: Option<Option<String>>,
@@ -124,6 +127,12 @@ pub trait GitHubClient: Send + Sync {
         number: u64,
         input: &UpdateIssueInput,
     ) -> Result<IssueSnapshot>;
+
+    /// Ensure an Orbit-managed label exists on the repository. An existing
+    /// label is left untouched.
+    fn ensure_label(&self, repo: &str, name: &str) -> Result<()>;
+
+    fn label_exists(&self, repo: &str, name: &str) -> Result<bool>;
 
     fn update_relationships(
         &self,
@@ -357,6 +366,7 @@ impl GitHubClient for GhCliClient {
                 } else {
                     IssueState::Closed
                 },
+                state_reason: issue.state_reason,
                 labels: issue.labels.into_iter().map(|label| label.name).collect(),
                 url: issue.html_url,
                 created_at: issue.created_at,
@@ -475,6 +485,9 @@ impl GitHubClient for GhCliClient {
                 }),
             );
         }
+        if let Some(reason) = input.state_reason {
+            payload.insert("state_reason".into(), serde_json::json!(reason));
+        }
         if let Some(labels) = &input.labels {
             payload.insert("labels".into(), serde_json::json!(labels));
         }
@@ -509,6 +522,46 @@ impl GitHubClient for GhCliClient {
             )?;
         }
         self.get_issue(repo, number, input.issue_fields.as_ref())
+    }
+
+    fn ensure_label(&self, repo: &str, name: &str) -> Result<()> {
+        if self.label_exists(repo, name)? {
+            return Ok(());
+        }
+        let payload = serde_json::json!({
+            "name": name,
+            "color": crate::github::status::IN_PROGRESS_LABEL_COLOR,
+            "description": crate::github::status::IN_PROGRESS_LABEL_DESCRIPTION,
+        })
+        .to_string();
+        let create_path = format!("/repos/{repo}/labels");
+        match gh_api_with_input(
+            &["api", &create_path, "-X", "POST", "--input", "-"],
+            payload.as_bytes(),
+        ) {
+            Ok(_) => Ok(()),
+            Err(error)
+                if error.message.contains("already_exists")
+                    || error.message.contains("already exists") =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn label_exists(&self, repo: &str, name: &str) -> Result<bool> {
+        let encoded = name.replace(':', "%3A");
+        let path = format!("/repos/{repo}/labels/{encoded}");
+        match gh_api(&["api", &path]) {
+            Ok(_) => Ok(true),
+            Err(error)
+                if error.message.contains("Not Found") || error.message.contains("HTTP 404") =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn update_relationships(
@@ -978,6 +1031,8 @@ struct RestIssue {
     title: String,
     body: Option<String>,
     state: String,
+    #[serde(default)]
+    state_reason: Option<IssueStateReason>,
     labels: Vec<RestLabel>,
     assignees: Vec<RestUser>,
     updated_at: DateTime<Utc>,
@@ -993,6 +1048,8 @@ struct RestCatalogIssue {
     number: u64,
     title: String,
     state: String,
+    #[serde(default)]
+    state_reason: Option<IssueStateReason>,
     labels: Vec<RestLabel>,
     html_url: String,
     created_at: DateTime<Utc>,
@@ -1099,6 +1156,7 @@ fn parse_rest_issue(repo: &str, bytes: &[u8]) -> Result<IssueSnapshot> {
         } else {
             IssueState::Closed
         },
+        state_reason: issue.state_reason,
         labels: issue.labels.into_iter().map(|label| label.name).collect(),
         assignees: issue.assignees.into_iter().map(|user| user.login).collect(),
         updated_at: issue.updated_at,
@@ -1126,8 +1184,10 @@ struct FixtureStore {
     repositories: HashMap<String, FixtureRepository>,
     #[serde(default)]
     org_fields: HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     created_fields: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    labels: HashMap<String, Vec<String>>,
     #[serde(default)]
     issues: HashMap<String, IssueSnapshot>,
     #[serde(default)]
@@ -1153,6 +1213,8 @@ struct FixtureCatalogIssue {
     number: u64,
     title: String,
     state: String,
+    #[serde(default)]
+    state_reason: Option<IssueStateReason>,
     #[serde(default)]
     labels: Vec<String>,
     #[serde(default)]
@@ -1367,6 +1429,7 @@ impl GitHubClient for FixtureClient {
             } else {
                 IssueState::Closed
             },
+            state_reason: None,
             labels: summary.labels.clone(),
             assignees: Vec::new(),
             updated_at: summary.updated_at,
@@ -1404,6 +1467,7 @@ impl GitHubClient for FixtureClient {
                 } else {
                     IssueState::Closed
                 },
+                state_reason: issue.state_reason,
                 labels: issue.labels,
                 url: issue.html_url.or(issue.url).unwrap_or_else(|| {
                     format!("https://github.com/{repo}/issues/{}", issue.number)
@@ -1453,6 +1517,7 @@ impl GitHubClient for FixtureClient {
             title: input.title.clone(),
             body: input.body.clone(),
             state: IssueState::Open,
+            state_reason: None,
             labels: input.labels.clone(),
             assignees: Vec::new(),
             updated_at: Utc::now(),
@@ -1500,6 +1565,12 @@ impl GitHubClient for FixtureClient {
         }
         if let Some(state) = input.state {
             issue.state = state;
+            if state == IssueState::Open {
+                issue.state_reason = None;
+            }
+        }
+        if let Some(reason) = input.state_reason {
+            issue.state_reason = Some(reason);
         }
         if let Some(labels) = &input.labels {
             issue.labels = labels.clone();
@@ -1514,6 +1585,24 @@ impl GitHubClient for FixtureClient {
         store.issues.insert(key, issue.clone());
         persist_fixture(&store)?;
         Ok(issue)
+    }
+
+    fn ensure_label(&self, repo: &str, name: &str) -> Result<()> {
+        let mut store = self.store.lock().expect("fixture lock");
+        let labels = store.labels.entry(repo.to_string()).or_default();
+        if labels.iter().any(|label| label == name) {
+            return Ok(());
+        }
+        labels.push(name.to_string());
+        persist_fixture(&store)
+    }
+
+    fn label_exists(&self, repo: &str, name: &str) -> Result<bool> {
+        let store = self.store.lock().expect("fixture lock");
+        Ok(store
+            .labels
+            .get(repo)
+            .is_some_and(|labels| labels.iter().any(|label| label == name)))
     }
 
     fn update_relationships(

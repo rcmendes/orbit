@@ -716,7 +716,7 @@ fn diagnose_links(
         {
             conflicts.push("labels");
         }
-        let cached_status = status_from_issue(cached.state, &cached.labels);
+        let cached_status = status_from_issue(cached.state, cached.state_reason, &cached.labels);
         let local_status_changed = baseline
             .status
             .is_some_and(|status| status != task.front.status);

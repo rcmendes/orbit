@@ -220,6 +220,7 @@ mod tests {
             verification: None,
             status: Some(crate::task::Status::Todo),
             issue_state: Some(IssueState::Open),
+            issue_state_reason: None,
             sub_issues: vec![IssueRef {
                 repo: "acme/a".into(),
                 number: 2,
@@ -235,6 +236,7 @@ mod tests {
             title: "t".into(),
             body: String::new(),
             state: IssueState::Open,
+            state_reason: None,
             labels: vec![],
             assignees: vec![],
             updated_at: chrono::Utc::now(),
@@ -278,6 +280,7 @@ mod tests {
             title: "t".into(),
             body: String::new(),
             state: IssueState::Open,
+            state_reason: None,
             labels: vec![],
             assignees: vec![],
             updated_at: chrono::Utc::now(),
@@ -312,6 +315,7 @@ mod tests {
             title: "t".into(),
             body: String::new(),
             state: IssueState::Open,
+            state_reason: None,
             labels: vec![],
             assignees: vec![],
             updated_at: chrono::Utc

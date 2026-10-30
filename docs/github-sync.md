@@ -1,6 +1,6 @@
 # GitHub Issue sync
 
-Orbit can link a Board to one or more GitHub repositories and keep durable Tasks aligned with GitHub Issues through explicit sync. Orbit remains local-first: Task edits stay on the Board; Issue creation occurs only with `orbit github create --apply`, and Orbit persists the Issue link only after GitHub confirms creation. Changes to an existing Issue are published only with `orbit github sync --apply`.
+Orbit can link a Board to one or more GitHub repositories and keep durable Tasks aligned with GitHub Issues through explicit sync. Orbit remains local-first: Task edits stay on the Board; Issue creation occurs only with `orbit github create --apply` or an opted-in auto-push during `orbit add`, and Orbit persists the Issue link only after GitHub confirms creation. Changes to an existing Issue are published only with `orbit github sync --apply` or an opted-in auto-push. See [Automatic push](#automatic-push).
 
 GitHub sync requires Orbit **v0.9.0 or newer**. That release includes `orbit
 github` and `orbit triage` in its default binaries, shell/PowerShell installers,
@@ -163,7 +163,7 @@ mode = "basic"
 repositories = ["alice/widget"]
 ```
 
-Link repositories, adopt or create Issues, and explicitly sync linked Tasks.
+Link repositories, adopt or create Issues, and explicitly sync linked Tasks or enable auto-push.
 Orbit owns title, body, status, and labels. A GitHub-only edit can be pulled when
 the matching Orbit field still equals its saved baseline; an Orbit-only edit is
 pushed. Concurrent edits to one field require a reviewed resolution. GitHub
@@ -268,6 +268,60 @@ Repositories are linked explicitly; Orbit does not bulk-import an entire reposit
 orbit github repo link acme-corp/widget
 orbit github repo list
 ```
+
+## Automatic push
+
+Set `auto_push = true` in the Board's `[github]` section to publish mapped Task
+changes after a local mutation instead of running `orbit github sync` by hand:
+
+```toml
+[github]
+mode = "basic"
+repositories = ["acme-corp/widget"]
+auto_push = true
+```
+
+The default is `false`. Auto-push is **push-only**: it never pulls, never
+overwrites a field that changed on GitHub, and never creates an Issue for an
+existing Local Task. It runs synchronously while the Board lock is held, so an
+opted-in mutation waits for the `gh` calls to finish.
+
+What triggers a push:
+
+- Creating a Task: `orbit add` creates an Issue when exactly one repository is
+  linked (or included in a Workspace catalog). With zero or multiple
+  repositories the Task stays local and the command warns. Use
+  `orbit github create` for the explicit path.
+- A change to title, body, labels, status, `area`, or `verification`.
+- Status transitions: `claim` adds the reserved `orbit:in-progress` label;
+  `release`, `done`, `cancel`, and reopen remove it. `done` closes the Issue with
+  `state_reason: completed`; `cancelled` closes it with `state_reason:
+  not_planned`; reopen reopens it.
+
+What does not trigger a push: priority, type, `waiting_on`, claims, heartbeats,
+checkpoints, comments, and dependency relationships. Those fields either have no
+GitHub representation or remain explicit. `orbit github *`, Workspace issue
+import/detach/reattach, `orbit sync`, `doctor`, migrations, and `delete` are also
+excluded. `orbit triage apply` is included because it changes labels, `area`, and
+`verification`.
+
+If a field changed on both sides, auto-push skips it and warns with
+`GITHUB_AUTO_PUSH_CONFLICT`; remote-only changes produce
+`GITHUB_AUTO_PUSH_PENDING`. Both leave the sync baseline unchanged, so
+`orbit github sync <task>` can still review and resolve the difference. A failed
+push is also a warning — the local Task is never rolled back. If the local commit
+failed, auto-push is skipped.
+
+`orbit:in-progress` is an Orbit-managed label, not part of the Task's user
+Labels. `orbit github connect`, `setup`, and `repo link` ensure it exists; pull
+sync ignores it. Enabling `auto_push` backfills nothing: existing Local Tasks
+still need `orbit github create`, and existing `in_progress` Tasks receive the
+label on their next mapped change or explicit sync. `orbit github status` shows
+whether auto-push is enabled and how many local Tasks have no Issue; `orbit
+doctor` reports a missing reserved label or no linked repository.
+
+Use `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a one-off local-only
+mutation. Explicit `orbit github sync` is never suppressed.
 
 ## Adopt or create Issues
 
@@ -503,7 +557,7 @@ gh project item-add 1 --owner acme \
 ### Example: finish work and move the Project card
 
 Orbit's Project integration is event-driven through normal Issue changes. Close
-the Issue with an explicit sync after finishing the Task:
+the Issue with an explicit sync (or auto-push, when enabled) after finishing the Task:
 
 ```bash
 orbit claim orb-a7b2c9 --by agent
@@ -512,7 +566,7 @@ orbit github sync orb-a7b2c9 --apply
 ```
 
 `orbit done` changes the local Task to `done`; it does not contact GitHub by
-itself. The explicit `github sync` closes Issue `acme/widget#42`. If the Project
+itself. An explicit `github sync` (or auto-push) closes Issue `acme/widget#42`. If the Project
 has the **Item closed** workflow enabled, GitHub then moves the item to its
 `Done` Status. Verify both sides:
 

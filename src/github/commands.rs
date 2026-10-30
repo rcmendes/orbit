@@ -96,11 +96,27 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     if auth.authenticated {
         for name in &linked_repositories {
             match client.repository_info(name) {
-                Ok(info) => repositories.push(json!({
-                    "name": name,
-                    "accessible": true,
-                    "owner_type": info.owner_type,
-                })),
+                Ok(info) => {
+                    let label_present = client
+                        .label_exists(name, crate::github::status::IN_PROGRESS_LABEL)
+                        .ok();
+                    if github.auto_push && label_present == Some(false) {
+                        issues.push(json!({
+                            "code": "GITHUB_SETUP_INCOMPLETE",
+                            "message": format!(
+                                "the `{}` label is missing on `{name}`; run `orbit github connect` or create it",
+                                crate::github::status::IN_PROGRESS_LABEL
+                            ),
+                            "repository": name,
+                        }));
+                    }
+                    repositories.push(json!({
+                        "name": name,
+                        "accessible": true,
+                        "owner_type": info.owner_type,
+                        "reserved_label_present": label_present,
+                    }));
+                }
                 Err(error) => {
                     issues.push(json!({
                         "code": error.code,
@@ -111,6 +127,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
                         "name": name,
                         "accessible": false,
                         "owner_type": null,
+                        "reserved_label_present": null,
                     }));
                 }
             }
@@ -121,6 +138,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
                 "name": name,
                 "accessible": null,
                 "owner_type": null,
+                "reserved_label_present": null,
             })
         }));
     }
@@ -236,6 +254,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
             title: String::new(),
             body: String::new(),
             state: crate::github::model::IssueState::Open,
+            state_reason: None,
             labels: Vec::new(),
             assignees: Vec::new(),
             updated_at: Utc::now(),
@@ -401,7 +420,12 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
         "organization": github.organization,
         "repositories": repositories,
         "fields": fields,
+        "auto_push": {
+            "enabled": github.auto_push,
+            "reserved_label": crate::github::status::IN_PROGRESS_LABEL,
+        },
         "linked_tasks": graph.iter().filter(|task| task.github_link().is_some()).count(),
+        "local_tasks": graph.iter().filter(|task| task.github_link().is_none()).count(),
         "pending": {
             "pull": pending_pull.iter().map(|entry| entry["changes"].as_u64().unwrap_or(0)).sum::<u64>(),
             "push": pending_push.iter().map(|entry| entry["changes"].as_u64().unwrap_or(0)).sum::<u64>(),
@@ -542,6 +566,48 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
             ));
         }
     }
+    if github.auto_push {
+        let mut repositories = github.repositories.clone();
+        if let Ok(Some(workspace_repositories)) = crate::workspace::export_repositories(board) {
+            for repository in workspace_repositories {
+                if !repositories
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
+                {
+                    repositories.push(repository);
+                }
+            }
+        }
+        if repositories.is_empty() {
+            issues.push(crate::graph::Issue::new(
+                code::GITHUB_REPO_NOT_LINKED,
+                None,
+                "auto-push is enabled but no GitHub repository is linked or included; new Tasks stay local",
+            ));
+        }
+        for repository in repositories {
+            match client.label_exists(&repository, crate::github::status::IN_PROGRESS_LABEL) {
+                Ok(true) => {}
+                Ok(false) => issues.push(crate::graph::Issue::new(
+                    code::GITHUB_SETUP_INCOMPLETE,
+                    None,
+                    format!(
+                        "the `{}` label is missing on `{repository}`; run `orbit github connect` or create it",
+                        crate::github::status::IN_PROGRESS_LABEL
+                    ),
+                )),
+                Err(error) => issues.push(crate::graph::Issue::new(
+                    error.code,
+                    None,
+                    format!(
+                        "could not check the `{}` label on `{repository}`: {}",
+                        crate::github::status::IN_PROGRESS_LABEL,
+                        error.message
+                    ),
+                )),
+            }
+        }
+    }
     if github.mode.is_basic() {
         return issues;
     }
@@ -594,6 +660,7 @@ fn count_push_changes(plan: &SyncPlan) -> usize {
         plan.push_area.is_some(),
         plan.push_verification.is_some(),
         plan.push_state.is_some(),
+        plan.push_status_label,
     ]
     .into_iter()
     .filter(|pending| *pending)
@@ -712,6 +779,40 @@ fn render_status(data: &Value) -> String {
         field_human_status(&data["fields"]["verification"]),
     ));
     output.push_str(&format!(
+        "auto-push: {}{}\n",
+        if data["auto_push"]["enabled"] == true {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if data["auto_push"]["enabled"] == true {
+            format!(
+                " (reserved label {}; {} local Task(s) without an Issue)",
+                data["auto_push"]["reserved_label"]
+                    .as_str()
+                    .unwrap_or("orbit:in-progress"),
+                data["local_tasks"].as_u64().unwrap_or(0)
+            )
+        } else {
+            String::new()
+        }
+    ));
+    if data["auto_push"]["enabled"] == true {
+        let missing = data["repositories"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|repository| repository["reserved_label_present"] == false)
+            .filter_map(|repository| repository["name"].as_str())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            output.push_str(&format!(
+                "reserved label missing on: {}\n",
+                missing.join(", ")
+            ));
+        }
+    }
+    output.push_str(&format!(
         "linked Tasks: {}; pending pull: {}; pending push: {}; conflicts: {}; unsupported relationships: {}\n",
         data["linked_tasks"].as_u64().unwrap_or(0),
         data["pending"]["pull"].as_u64().unwrap_or(0),
@@ -796,7 +897,7 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
         let remediation = format!(
             "To use `{repo}` in basic mode, edit the Board's `config.toml` and add or merge these settings (preserve any other linked repositories):\n\n[github]\nmode = \"basic\"\nrepositories = [\"{repo}\"]\n\nThen run `orbit github status`. See `docs/github-sync.md#basic-mode-personal-repositories`."
         );
-        return Ok(connect_blocked(
+        let mut output = connect_blocked(
             json!({
                 "repository": repo,
                 "owner_type": "user",
@@ -813,7 +914,15 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
             format!(
                 "`{repo}` is owned by a personal account. Organization Issue Fields are unavailable.\n{remediation}\nNo configuration was changed."
             ),
-        ));
+        );
+        if let Err(error) = client.ensure_label(&repo, crate::github::status::IN_PROGRESS_LABEL) {
+            output.warnings.push(format!(
+                "could not ensure the `{}` label: {}; auto-push will keep pushing other fields",
+                crate::github::status::IN_PROGRESS_LABEL,
+                error.message
+            ));
+        }
+        return Ok(output);
     }
 
     if !repository.owner_type.eq_ignore_ascii_case("organization") {
@@ -897,7 +1006,7 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
             Ok(())
         })?;
     }
-    Ok(crate::output::CommandOutput::new(
+    let mut output = crate::output::CommandOutput::new(
         json!({
             "status": "connected",
             "owner_type": "organization",
@@ -915,7 +1024,15 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
                 " Configuration was already current."
             }
         ),
-    ))
+    );
+    if let Err(error) = client.ensure_label(&repo, crate::github::status::IN_PROGRESS_LABEL) {
+        output.warnings.push(format!(
+            "could not ensure the `{}` label: {}; auto-push will keep pushing other fields",
+            crate::github::status::IN_PROGRESS_LABEL,
+            error.message
+        ));
+    }
+    Ok(output)
 }
 
 fn connect_blocked(data: serde_json::Value, human: String) -> crate::output::CommandOutput {
@@ -997,7 +1114,7 @@ fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::Comm
     if args.create_fields {
         data["created_fields"] = json!(setup.created_fields);
     }
-    Ok(crate::output::CommandOutput::new(
+    let mut output = crate::output::CommandOutput::new(
         data,
         if args.create_fields {
             if created_fields_count == 0 {
@@ -1010,7 +1127,17 @@ fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::Comm
         } else {
             format!("Stored GitHub Issue Field ids for `{org}`")
         },
-    ))
+    );
+    for repo in &board.config.github.repositories {
+        if let Err(error) = client.ensure_label(repo, crate::github::status::IN_PROGRESS_LABEL) {
+            output.warnings.push(format!(
+                "could not ensure the `{}` label on `{repo}`: {}; auto-push will keep pushing other fields",
+                crate::github::status::IN_PROGRESS_LABEL,
+                error.message
+            ));
+        }
+    }
+    Ok(output)
 }
 
 fn cmd_repo(board: &Board, command: GitHubRepoCommand) -> Result<crate::output::CommandOutput> {
@@ -1037,10 +1164,20 @@ fn cmd_repo_link(board: &Board, args: GitHubRepoLinkArgs) -> Result<crate::outpu
         config.github.link_repo(&repo)?;
         Ok(())
     })?;
-    Ok(crate::output::CommandOutput::new(
+    let mut output = crate::output::CommandOutput::new(
         json!({ "repository": repo, "linked": true }),
         format!("Linked `{repo}`"),
-    ))
+    );
+    if let Ok(client) = client_from_env()
+        && let Err(error) = client.ensure_label(&repo, crate::github::status::IN_PROGRESS_LABEL)
+    {
+        output.warnings.push(format!(
+            "could not ensure the `{}` label on `{repo}`: {}; auto-push will keep pushing other fields",
+            crate::github::status::IN_PROGRESS_LABEL,
+            error.message
+        ));
+    }
+    Ok(output)
 }
 
 fn cmd_repo_unlink(
@@ -1245,7 +1382,10 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             &CreateIssueInput {
                 title: task.front.title.clone(),
                 body: task.body.clone(),
-                labels: task.front.labels.clone(),
+                labels: crate::github::status::labels_for_status(
+                    &task.front.labels,
+                    task.front.status,
+                ),
                 area: task.front.area.map(|area| area.as_str().to_string()),
                 verification: task.front.verification.clone(),
                 organization: board.config.github.organization.clone(),
@@ -1307,6 +1447,9 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                 issue.number,
                 &UpdateIssueInput {
                     state: Some(crate::github::model::IssueState::Closed),
+                    state_reason: crate::github::status::issue_state_reason_from_status(
+                        task.front.status,
+                    ),
                     title: None,
                     body: None,
                     labels: None,
@@ -1691,12 +1834,13 @@ fn format_preview_value(value: &serde_json::Value) -> String {
 fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot, include_fields: bool) -> Result<()> {
     task.front.title = issue.title.clone();
     task.body = issue.body.clone();
-    task.front.labels = issue.labels.clone();
+    task.front.labels = crate::github::status::user_labels(&issue.labels);
     if include_fields {
         task.front.area = issue.area.as_deref().map(parse_area).transpose()?;
         task.front.verification = issue.verification.clone();
     }
-    task.front.status = crate::github::status::status_from_issue(issue.state, &issue.labels);
+    task.front.status =
+        crate::github::status::status_from_issue(issue.state, issue.state_reason, &issue.labels);
     set_baseline(task, issue);
     Ok(())
 }

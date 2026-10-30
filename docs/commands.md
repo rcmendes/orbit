@@ -992,7 +992,8 @@ orbit doctor --json
 ### `orbit sync` — persist lease-only changes
 
 Commits pending board changes, mostly heartbeats, to the board branch. Nothing is
-pushed.
+pushed. This is not the GitHub toggle: use `orbit github auto-push on|off` to control
+automatic Issue publishing.
 
 **Good fit:** a long session only heartbeated, or `doctor` reports uncommitted
 changes.
@@ -1029,8 +1030,11 @@ Only GitHub's separate Auto-close issue workflow can turn a card move into an
 Issue close, which pull sync then sees as an Issue change. See
 [github-sync.md](./github-sync.md).
 
-Set `[github] auto_push = true` to publish mapped changes after a local mutation.
-It is push-only: `orbit add` creates an Issue when exactly one repository is
+Enable `[github] auto_push` to publish mapped changes after a local mutation.
+Toggle it with `orbit github auto-push on` or `orbit github auto-push off`; the
+command writes the Board config and commits it, reports the previous value, and
+warns when no single repository can receive newly created Issues. It is
+push-only: `orbit add` creates an Issue when exactly one repository is
 available, title/body/label/status/`area`/`verification` changes are pushed, and
 `orbit:in-progress` tracks claims. It never pulls, never overwrites a remote
 conflict, and never creates an Issue for an existing Local Task. `done` closes
@@ -1055,6 +1059,8 @@ orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
 orbit github create orb-a7b2c9 --include-closed --apply
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
+orbit github auto-push on                 # publish mapped changes after mutations
+orbit github auto-push off                # return to explicit sync only
 orbit --no-sync add "Local-only task"     # skip auto-push for one command
 ```
 

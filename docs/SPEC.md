@@ -618,7 +618,7 @@ orbit setup <claude|cursor|codex|opencode|mattpocock|all> [--scope project|user]
 orbit mcp
 orbit doctor [--fix | --migrate]
 orbit sync
-orbit github <status|connect|setup|repo|adopt|create|sync>
+orbit github <status|connect|setup|repo|adopt|create|sync|auto-push>
 orbit triage <context|review|apply>
 orbit workspace migrate [DIR] [--dry-run] [--resume]
 orbit workspace status
@@ -663,7 +663,10 @@ catalog and require `--repo OWNER/REPO` when multiple repositories are included.
 ### Automatic push
 
 `[github] auto_push = true` opts a Board into publishing mapped Task changes after
-a successful write command. The default is `false`. Auto-push is push-only and
+a successful write command. `orbit github auto-push on|off` toggles the same flag,
+writes and commits the Board config, reports the previous value, and warns when
+enabling with zero or multiple available repositories because new Tasks cannot
+infer a single Issue destination. The default is `false`. Auto-push is push-only and
 synchronous: it never pulls, never resolves a conflict by overwriting a remote
 value, and never creates an Issue for an existing Local Task. The Board lock is
 held for the complete push. `--no-sync` and `ORBIT_NO_AUTO_SYNC=1` suppress it;

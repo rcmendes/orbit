@@ -781,7 +781,14 @@ repository name as described below before creating or syncing Issues.
 
 Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
 
-To publish mapped changes after local mutations instead of running `orbit github sync` by hand, set `auto_push = true` in `[github]`:
+To publish mapped changes after local mutations instead of running `orbit github sync` by hand, toggle auto-push on the Board:
+
+```bash
+orbit github auto-push on     # writes [github] auto_push = true and commits it
+orbit github auto-push off
+```
+
+The equivalent Board configuration is:
 
 ```toml
 [github]

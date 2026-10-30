@@ -883,7 +883,7 @@ Examples:
 pub const SYNC_LONG: &str = "\
 Commits pending board changes, usually the lease updates written by heartbeat, to
 the board branch. Heartbeats deliberately do not commit on every call; a later
-mutation, or this command, persists them. The Board's Git branch is never pushed; GitHub auto-push is opt-in.
+mutation, or this command, persists them. The Board's Git branch is never pushed; GitHub auto-push is opt-in and toggled with `orbit github auto-push on|off`, not this command.
 
 Use sync after a long heartbeat-only period, or when doctor reports uncommitted
 Board changes.";
@@ -898,7 +898,8 @@ Connects an Orbit Board to explicitly linked GitHub repositories. Each durable
 Task can map one-to-one to a GitHub Issue identified by repository and issue
 number. Orbit owns linked titles, bodies, statuses, labels, and supported
 metadata. Sync is explicit unless the Board opts into `[github] auto_push =
-true`, which pushes mapped changes after a local mutation. Auto-push is
+true`, which pushes mapped changes after a local mutation; `orbit github
+auto-push on|off` toggles that setting and commits it to the Board. Auto-push is
 push-only: it never pulls, never overwrites a remote conflict, and never creates
 an Issue for an existing Local Task. It detects field-level conflicts and never
 maps GitHub assignees to Orbit claims.
@@ -943,7 +944,9 @@ Examples:
   orbit github create orb-d4e5f6 --include-closed --apply
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply
-  orbit github sync orb-a7b2c9 --resolve title=orbit --apply";
+  orbit github sync orb-a7b2c9 --resolve title=orbit --apply
+  orbit github auto-push on
+  orbit github auto-push off";
 
 pub const WORKSPACE_LONG: &str = "\
 Manage repositories that belong to the current Workspace.
@@ -1131,8 +1134,16 @@ Examples:
   orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
   orbit github create orb-d4e5f6 --include-closed --apply";
 
+pub const GITHUB_AUTO_PUSH_EXAMPLES: &str = "\
+Examples:
+  orbit github auto-push on
+  orbit github auto-push off
+  orbit github auto-push enable          # alias for on
+  orbit github auto-push disable         # alias for off";
+
 pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\
 Examples:
+  orbit github sync
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --resolve title=orbit
   orbit github sync orb-a7b2c9 --resolve title=orbit --apply

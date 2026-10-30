@@ -2480,6 +2480,35 @@ fn injected_sync_rejects_issue_fields_in_basic_mode() {
     assert!(error.message.contains("area"));
 }
 
+#[test]
+fn github_auto_push_toggle_commits_the_board_flag() {
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    let on = repo.ok_json(&["github", "auto-push", "on", "--json"]);
+    assert_eq!(on["data"]["auto_push"]["enabled"], true);
+    assert_eq!(on["data"]["auto_push"]["previous"], false);
+    assert_eq!(on["data"]["auto_push"]["changed"], true);
+    let config = fs::read_to_string(repo.board_path().join("config.toml")).unwrap();
+    assert!(config.contains("auto_push = true"), "{config}");
+    let log = repo.git_in(&repo.board_path(), &["log", "-1", "--format=%s"]);
+    assert_eq!(
+        String::from_utf8_lossy(&log.stdout).trim(),
+        "orbit: github auto-push on"
+    );
+
+    let again = repo.ok_json(&["github", "auto-push", "enable", "--json"]);
+    assert_eq!(again["data"]["auto_push"]["enabled"], true);
+    assert_eq!(again["data"]["auto_push"]["changed"], false);
+
+    let off = repo.ok_json(&["github", "auto-push", "disable", "--json"]);
+    assert_eq!(off["data"]["auto_push"]["enabled"], false);
+    assert_eq!(off["data"]["auto_push"]["previous"], true);
+    let config = fs::read_to_string(repo.board_path().join("config.toml")).unwrap();
+    assert!(!config.contains("auto_push = true"), "{config}");
+}
+
 fn enable_auto_push(repo: &TestRepo, repositories: &[&str], basic: bool) {
     let path = repo.board_path().join("config.toml");
     let mut config = fs::read_to_string(&path).unwrap();

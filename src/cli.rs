@@ -1076,6 +1076,9 @@ pub enum GitHubCommand {
     /// Preview or apply bidirectional sync for linked Tasks.
     #[command(after_long_help = help::GITHUB_SYNC_CMD_EXAMPLES)]
     Sync(GitHubSyncArgs),
+    /// Enable or disable automatic push of Task changes to linked Issues.
+    #[command(after_long_help = help::GITHUB_AUTO_PUSH_EXAMPLES)]
+    AutoPush(GitHubAutoPushArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -1143,6 +1146,21 @@ pub struct GitHubCreateArgs {
     /// Include done and cancelled Tasks in the export.
     #[arg(long, alias = "include-terminal")]
     pub include_closed: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GitHubAutoPushArgs {
+    /// Turn automatic push on or off.
+    #[arg(value_name = "STATE")]
+    pub state: AutoPushState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AutoPushState {
+    #[value(alias = "enable", alias = "true")]
+    On,
+    #[value(alias = "disable", alias = "false")]
+    Off,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]

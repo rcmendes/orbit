@@ -272,7 +272,17 @@ orbit github repo list
 ## Automatic push
 
 Set `auto_push = true` in the Board's `[github]` section to publish mapped Task
-changes after a local mutation instead of running `orbit github sync` by hand:
+changes after a local mutation instead of running `orbit github sync` by hand.
+Use `orbit github auto-push on` or `orbit github auto-push off` to toggle it
+without editing TOML; the command writes the Board config, commits it, and
+reports the previous value:
+
+```bash
+orbit github auto-push on
+orbit github auto-push off
+```
+
+The equivalent Board configuration is:
 
 ```toml
 [github]

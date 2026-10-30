@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 
 use crate::board::Board;
 use crate::cli::{
-    GitHubAdoptArgs, GitHubArgs, GitHubCommand, GitHubCreateArgs, GitHubRepoCommand,
-    GitHubRepoLinkArgs, GitHubSetupArgs, GitHubSyncArgs, GitHubSyncDirection,
+    AutoPushState, GitHubAdoptArgs, GitHubArgs, GitHubAutoPushArgs, GitHubCommand,
+    GitHubCreateArgs, GitHubRepoCommand, GitHubRepoLinkArgs, GitHubSetupArgs, GitHubSyncArgs,
+    GitHubSyncDirection,
 };
 use crate::error::{OrbitError, Result, code};
 use crate::github::client::{CreateIssueInput, UpdateIssueInput, client_from_env};
@@ -34,6 +35,7 @@ pub fn run(board: &Board, args: GitHubArgs) -> Result<crate::output::CommandOutp
                 GitHubCommand::Adopt(args) => cmd_adopt(board, args),
                 GitHubCommand::Create(args) => cmd_create(board, args),
                 GitHubCommand::Sync(args) => cmd_sync(board, args),
+                GitHubCommand::AutoPush(args) => cmd_auto_push(board, args),
                 GitHubCommand::Connect => unreachable!(),
                 GitHubCommand::Status => unreachable!(),
             }
@@ -1731,6 +1733,60 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
         human,
     );
     output.warnings = report.warnings;
+    Ok(output)
+}
+
+fn cmd_auto_push(board: &Board, args: GitHubAutoPushArgs) -> Result<crate::output::CommandOutput> {
+    let enabled = matches!(args.state, AutoPushState::On);
+    let previous = board.config.github.auto_push;
+    let changed = previous != enabled;
+    let mut warnings = Vec::new();
+    if changed {
+        let outcome = board.save_config(
+            if enabled {
+                "orbit: github auto-push on"
+            } else {
+                "orbit: github auto-push off"
+            },
+            |config| {
+                config.github.auto_push = enabled;
+                Ok(())
+            },
+        )?;
+        warnings.extend(crate::mutation::commit_warning(outcome));
+    }
+    if changed && enabled {
+        let repositories = crate::workspace::export_repositories(board)?
+            .unwrap_or_else(|| board.config.github.repositories.clone());
+        match repositories.len() {
+            1 => {}
+            0 => warnings.push(
+                "new Tasks will stay local: auto-push needs one available GitHub repository to create an Issue"
+                    .to_string(),
+            ),
+            count => warnings.push(format!(
+                "new Tasks will stay local: {count} repositories are available, so Issue creation has no single destination; keep one included repository or pass `--repo OWNER/REPO` to `orbit github create`"
+            )),
+        }
+    }
+    let state = if enabled { "on" } else { "off" };
+    let human = if changed {
+        format!("Auto-push turned {state}.")
+    } else {
+        format!("Auto-push is already {state}.")
+    };
+    let mut output = crate::output::CommandOutput::new(
+        json!({
+            "auto_push": {
+                "enabled": enabled,
+                "previous": previous,
+                "changed": changed,
+                "reserved_label": crate::github::status::IN_PROGRESS_LABEL,
+            }
+        }),
+        human,
+    );
+    output.warnings = warnings;
     Ok(output)
 }
 

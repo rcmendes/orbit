@@ -4,7 +4,8 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.10.4` — latest; `orbit list` marks Local, Linked, and detached Tasks in an `ISSUE` column with `--linked`/`--local` filters, and Task frontmatter parsing no longer ends early on an indented `---`
+- `v0.10.5` — latest; `orbit init .` initializes a repository-root target, and opt-in `[github] auto_push` publishes mapped Task changes to linked Issues
+- `v0.10.4` — `orbit list` marks Local, Linked, and detached Tasks in an `ISSUE` column with `--linked`/`--local` filters, and Task frontmatter parsing no longer ends early on an indented `---`
 - `v0.10.3` — agent setup preserves an `AGENTS.md` symlink, plus Windows-only test fixes
 - `v0.10.2` — Workspace migration preserves the legacy configuration; refresh infers the organization. GitHub Release, installers, and npm published; superseded by v0.10.3
 - `v0.10.1` — packaging patch after the v0.10.0 npm publish was skipped
@@ -86,7 +87,7 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
 `publish-npm` runs only after every artifact smoke job succeeds. If a runner is cancelled before it starts, publish the release's npm asset directly instead of re-running the whole release:
 
 ```bash
-gh release download v0.10.4 -p orbit-tracker-npm-package.tar.gz
+gh release download v0.10.5 -p orbit-tracker-npm-package.tar.gz
 tar -xzf orbit-tracker-npm-package.tar.gz
 npm publish --access public ./package
 ```

@@ -288,8 +288,8 @@ fn init_dot_print_reports_the_repository_orbit_folder() {
     assert_eq!(value["data"]["preview"], true);
     assert_eq!(value["data"]["storage"], "worktree");
     assert_eq!(
-        value["data"]["board"].as_str().unwrap(),
-        format!("{}/.orbit", canonical(repo.path()))
+        std::path::Path::new(value["data"]["board"].as_str().unwrap()),
+        dunce::canonicalize(repo.path()).unwrap().join(".orbit")
     );
     assert_eq!(value["data"]["exclude"], "/.orbit/");
     assert!(!repo.path().join(".orbit").exists());

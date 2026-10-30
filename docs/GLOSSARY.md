@@ -170,8 +170,22 @@ _Avoid_: Board, Task list, GitHub mirror
 A Task actively paired with one GitHub Issue by stable `owner/repo#number` identity. A
 new import copies the Issue fields; linking an existing Local Task preserves its
 Orbit values and previews differences. Orbit owns the Task's editable fields and
-lifecycle, while GitHub remains unchanged until an explicit sync writes it.
+lifecycle; GitHub remains unchanged until an explicit sync or an enabled
+**Auto-push** writes it.
 _Avoid_: Remote Issue, mirrored Issue
+
+**Auto-push**:
+An opt-in Board policy that publishes a Linked Task's changed mapped fields to
+its GitHub Issue after a local mutation. Auto-push is push-only: it never pulls,
+never resolves a conflict by overwriting, and never creates an Issue for an
+existing Local Task.
+_Avoid_: Auto-sync, bidirectional sync, mirror
+
+**Reserved status label**:
+The GitHub label `orbit:in-progress` that projects a Task's `in_progress` Status
+onto its Issue. Orbit manages it separately from user Labels; it is excluded from
+Label sync and is never read back as a Status.
+_Avoid_: Status label, claim label
 
 **GitHub Project**:
 A downstream GitHub view over Issues. Orbit does not read or write ProjectV2

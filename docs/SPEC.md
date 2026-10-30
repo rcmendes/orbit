@@ -917,3 +917,4 @@ Tagging `v*` triggers `.github/workflows/release.yml`: it plans, builds, creates
 - [0013. Claim checkpoints in task frontmatter](./adr/0013-claim-checkpoints.md)
 - [0014. GitHub Issue provider](./adr/0014-github-issue-provider.md)
 - [0015. GitHub Projects stay downstream of Issues](./adr/0015-github-projects-downstream.md)
+- [0016. Opt-in automatic push to GitHub Issues](./adr/0016-opt-in-auto-push.md)

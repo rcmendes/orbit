@@ -1778,7 +1778,7 @@ fn github_create_includes_configured_issue_fields_in_the_created_issue() {
 }
 
 #[test]
-fn github_create_requires_terminal_opt_in_and_closes_opted_in_tasks() {
+fn github_create_requires_closed_opt_in_and_closes_opted_in_tasks() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
     let repo = TestRepo::new();
@@ -1796,10 +1796,38 @@ fn github_create_requires_terminal_opt_in_and_closes_opted_in_tasks() {
         refused["data"]["tasks"][0]["error"]
             .as_str()
             .unwrap()
-            .contains("--include-terminal")
+            .contains("--include-closed")
     );
     let before: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
     assert_eq!(before["issues"].as_object().unwrap().len(), 1);
+
+    let result = repo.ok_json_with_env(
+        &[
+            "github",
+            "create",
+            &id,
+            "--include-closed",
+            "--apply",
+            "--json",
+        ],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(result["data"]["success_count"], 1);
+    assert_eq!(result["data"]["tasks"][0]["issue"]["state"], "closed");
+    assert!(repo.read_task(&id).contains("repo: acme/widget"));
+    let task = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(task["data"]["status"], "done");
+}
+
+#[test]
+fn github_create_accepts_legacy_terminal_alias() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    let id = repo.add("Closed export via legacy alias", &[]);
+    repo.ok_json(&["done", &id, "--by", "test", "--json"]);
 
     let result = repo.ok_json_with_env(
         &[
@@ -1814,9 +1842,6 @@ fn github_create_requires_terminal_opt_in_and_closes_opted_in_tasks() {
     );
     assert_eq!(result["data"]["success_count"], 1);
     assert_eq!(result["data"]["tasks"][0]["issue"]["state"], "closed");
-    assert!(repo.read_task(&id).contains("repo: acme/widget"));
-    let task = repo.ok_json(&["show", &id, "--json"]);
-    assert_eq!(task["data"]["status"], "done");
 }
 
 #[test]

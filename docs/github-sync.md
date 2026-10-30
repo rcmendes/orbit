@@ -328,7 +328,7 @@ mutation. Explicit `orbit github sync` is never suppressed.
 - **Adopt** an existing Issue from its URL: `orbit github adopt <task-id> https://github.com/acme-corp/widget/issues/42`
 - **Adopt** an Issue with the legacy form: `orbit github adopt <task-id> --repo acme-corp/widget --number 42`
 - **Preview** Issue creation for one or more Local Tasks with `orbit github create <task-id> [<task-id> ...]`. Preview shows repository, title, body, labels, Area, Verification, Task status, and the resulting open/closed Issue state. It does not write to Orbit or GitHub.
-- **Apply** a reviewed export with `orbit github create <task-id> --apply`. A batch uses an explicit list of Task IDs; it never exports the whole Board. Done and cancelled Tasks require `--include-terminal`.
+- **Apply** a reviewed export with `orbit github create <task-id> --apply`. A batch uses an explicit list of Task IDs; it never exports the whole Board. Done and cancelled Tasks require `--include-closed`; the former `--include-terminal` spelling is still accepted as a hidden alias.
 - Full mode includes Task `area` and `verification` values as organization Issue Fields when configured with `orbit github setup`. Basic mode rejects Tasks with those values instead of dropping them.
 - A repository is inferred only when exactly one repository is available. On a Workspace Board, run `orbit workspace refresh`; the included repository catalog is used. On a repository Board, link repositories with `orbit github repo link`. Pass `--repo OWNER/REPO` when the destination is ambiguous.
 - GitHub creates each Issue before Orbit persists the stable `owner/repo#number` link and sync baseline. Batch output reports each success or failure. If a Task already has a link, retry is refused and directs you to `orbit github sync`; this prevents a second Issue from being created.
@@ -340,7 +340,7 @@ Preview and apply examples:
 orbit github create orb-a7b2c9
 orbit github create orb-a7b2c9 --apply
 orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme-corp/widget --apply
-orbit github create orb-terminal --include-terminal --apply
+orbit github create orb-a7b2c9 --include-closed --apply
 ```
 
 When using a URL, Orbit reads `owner/repo` and the issue number from the standard GitHub Issue URL. Optional `--repo` or `--number` values can confirm the URL; if provided, they must match it. Without a URL, both legacy options are required. Titles and bodies are not used as identifiers.

@@ -1302,9 +1302,9 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             Some(format!(
                 "task {id} already links to a GitHub Issue; use `orbit github sync {id}` instead"
             ))
-        } else if task.front.status.is_terminal() && !args.include_terminal {
+        } else if task.front.status.is_terminal() && !args.include_closed {
             Some(format!(
-                "task {id} is {}; pass --include-terminal to export terminal Tasks",
+                "task {id} is {}; pass --include-closed to export done and cancelled Tasks",
                 task.front.status.as_str()
             ))
         } else if board.config.github.mode.is_basic()

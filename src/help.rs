@@ -924,7 +924,7 @@ relationships do not trigger a push; use `orbit --no-sync <command>` or
 requires Orbit 0.9.0 or newer; default release builds include the
 `github-provider` capability. `github create` previews one or more Local Tasks by
 default. Pass `--apply` to create Issues and persist their links; done and cancelled
-Tasks also require `--include-terminal`. Workspace Boards infer the destination
+Tasks also require `--include-closed`. Workspace Boards infer the destination
 from the included repository catalog when exactly one repository is available.";
 
 pub const GITHUB_EXAMPLES: &str = "\
@@ -940,7 +940,7 @@ Examples:
   orbit github create orb-a7b2c9                 # preview only
   orbit github create orb-a7b2c9 --apply
   orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
-  orbit github create orb-d4e5f6 --include-terminal --apply
+  orbit github create orb-d4e5f6 --include-closed --apply
   orbit github sync orb-a7b2c9
   orbit github sync orb-a7b2c9 --apply
   orbit github sync orb-a7b2c9 --resolve title=orbit --apply";
@@ -1129,7 +1129,7 @@ Examples:
   orbit github create orb-a7b2c9
   orbit github create orb-a7b2c9 --apply
   orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
-  orbit github create orb-d4e5f6 --include-terminal --apply";
+  orbit github create orb-d4e5f6 --include-closed --apply";
 
 pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\
 Examples:

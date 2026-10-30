@@ -1052,7 +1052,7 @@ orbit github adopt orb-a7b2c9 --repo acme/widget --number 42  # legacy form
 orbit github create orb-a7b2c9                 # preview only; uses the only linked repository
 orbit github create orb-a7b2c9 --apply         # create and link after review
 orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
-orbit github create orb-terminal --include-terminal --apply
+orbit github create orb-a7b2c9 --include-closed --apply
 orbit github sync orb-a7b2c9              # dry-run plan
 orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
 orbit --no-sync add "Local-only task"     # skip auto-push for one command

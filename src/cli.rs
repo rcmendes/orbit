@@ -1141,8 +1141,8 @@ pub struct GitHubCreateArgs {
     #[arg(long)]
     pub apply: bool,
     /// Include done and cancelled Tasks in the export.
-    #[arg(long)]
-    pub include_terminal: bool,
+    #[arg(long, alias = "include-terminal")]
+    pub include_closed: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]

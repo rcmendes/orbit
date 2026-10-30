@@ -819,7 +819,7 @@ Issue title/body, labels, Orbit status, and mapped open/closed state without
 writing. Pass `--apply` to create Issues and link each Task only after GitHub
 confirms creation. A batch reports each Task's result independently; linked Tasks
 are rejected on retry and should use `orbit github sync`. Done and cancelled
-Tasks require `--include-terminal`. From a Workspace Board, the sole included
+Tasks require `--include-closed`. From a Workspace Board, the sole included
 repository is inferred from `orbit workspace refresh`; when more than one is
 included, pass `--repo OWNER/REPO`.
 

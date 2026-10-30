@@ -655,7 +655,7 @@ immediately without a full catalog refresh. The upsert does not advance the
 repository's `last_refreshed_at`; an explicit `orbit workspace issues refresh`
 remains the source of truth for catalog completeness. A linked
 Task is rejected and directs the user to sync; done and cancelled Tasks require
-`--include-terminal` and create closed Issues. Each batch result reports success
+`--include-closed` and create closed Issues. Each batch result reports success
 or failure independently. Repository Boards infer a destination only when one
 repository is linked; Workspace Boards use the last refreshed included-repository
 catalog and require `--repo OWNER/REPO` when multiple repositories are included.

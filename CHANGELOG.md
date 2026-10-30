@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed repeated no-op label pushes in `orbit github sync`: labels were compared in list order, so a Task whose labels were sorted differently than the Issue looked changed on every sync (and could turn into a false conflict once both sides reordered). Labels are now compared as a set.
+
 ## 0.10.6 - 2026-10-30
 
 - Added `orbit github auto-push on|off` to toggle `[github] auto_push` without editing `config.toml`. The command writes and commits the Board config, reports the previous value, and warns when enabling with zero or multiple available repositories because new Tasks cannot infer a single Issue destination. Automatic push stays push-only; pulling still requires `orbit github sync --apply --direction pull`.

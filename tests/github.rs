@@ -1099,6 +1099,46 @@ fn orbit_title_edits_are_previewed_as_github_pushes() {
 }
 
 #[test]
+fn github_sync_treats_reordered_labels_as_unchanged() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Reordered labels");
+    // GitHub returns labels in its own order; Orbit keeps them sorted.
+    set_fixture_issue_field(
+        &fixture,
+        "labels",
+        serde_json::json!(["zeta", "beta", "alpha", "bug"]),
+    );
+    repo.ok_json(&["label", "add", id.as_str(), "zeta", "--json"]);
+    repo.ok_json(&["label", "add", id.as_str(), "alpha", "--json"]);
+    repo.ok_json(&["label", "add", id.as_str(), "beta", "--json"]);
+
+    let preview = repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(
+        preview["data"]["tasks"][0]["plan"]["push_labels"].is_null(),
+        "{preview}"
+    );
+    assert!(preview["data"]["tasks"][0]["plan"]["apply_labels"].is_null());
+
+    repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let again = repo.ok_json_with_env(
+        &["github", "sync", id.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert!(
+        again["data"]["tasks"][0]["plan"]["push_labels"].is_null(),
+        "{again}"
+    );
+}
+
+#[test]
 fn linked_task_status_labels_and_metadata_push_from_orbit() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);

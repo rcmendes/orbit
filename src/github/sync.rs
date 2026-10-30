@@ -73,9 +73,9 @@ pub fn plan_sync(
     plan_scalar(
         &mut plan,
         "labels",
-        baseline.map(|base| user_labels(&base.labels)),
-        orbit_labels.clone(),
-        user_labels(&issue.labels),
+        baseline.map(|base| comparable_labels(&base.labels)),
+        comparable_labels(&orbit_labels),
+        comparable_labels(&issue.labels),
         direction,
     );
     plan_scalar(
@@ -116,6 +116,14 @@ pub fn baseline_from(view: OrbitSyncView<'_>, issue: &IssueSnapshot) -> GitHubSy
         sub_issues: issue.blocking.clone(),
         blocked_by: issue.blocked_by.clone(),
     }
+}
+
+/// Label order carries no meaning: sort before comparing so a Task whose labels
+/// are merely listed in a different order does not push on every sync.
+fn comparable_labels(labels: &[String]) -> Vec<String> {
+    let mut labels = user_labels(labels);
+    labels.sort();
+    labels
 }
 
 fn plan_scalar<T>(

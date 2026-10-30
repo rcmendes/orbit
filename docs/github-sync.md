@@ -166,7 +166,9 @@ repositories = ["alice/widget"]
 Link repositories, adopt or create Issues, and explicitly sync linked Tasks or enable auto-push.
 Orbit owns title, body, status, and labels. A GitHub-only edit can be pulled when
 the matching Orbit field still equals its saved baseline; an Orbit-only edit is
-pushed. Concurrent edits to one field require a reviewed resolution. GitHub
+pushed. Concurrent edits to one field require a reviewed resolution. Label order
+is not a change: Orbit compares labels as a set, so a Task whose labels are
+listed in a different order than the Issue neither pushes nor conflicts. GitHub
 assignees remain informational and are never mapped to Orbit claims.
 
 Basic mode does **not** support organization Issue Fields: `area` and

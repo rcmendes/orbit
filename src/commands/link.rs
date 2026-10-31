@@ -61,23 +61,21 @@ pub(super) fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
     let mut refreshed = Vec::new();
     if !args.no_refresh {
         match crate::setup::refresh(&root) {
-            Ok(output) => {
-                refreshed = output.data["files"]
-                    .as_array()
-                    .map(|files| {
-                        files
-                            .iter()
-                            .filter(|file| {
-                                matches!(
-                                    file["action"].as_str(),
-                                    Some("created" | "updated" | "removed")
-                                )
-                            })
-                            .filter_map(|file| file["path"].as_str().map(str::to_string))
-                            .collect::<Vec<_>>()
+            Ok(outcome) => {
+                refreshed = outcome
+                    .files
+                    .iter()
+                    .filter(|file| {
+                        matches!(
+                            file.action,
+                            crate::setup::Action::Created
+                                | crate::setup::Action::Updated
+                                | crate::setup::Action::Removed
+                        )
                     })
-                    .unwrap_or_default();
-                warnings.extend(output.warnings);
+                    .map(|file| file.relative.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                warnings.extend(outcome.output.warnings);
             }
             Err(error) => warnings.push(format!(
                 "could not refresh agent configuration: {}; run `orbit setup <client>` to update MCP entries",
@@ -126,7 +124,7 @@ pub(super) fn cmd_unlink() -> Result<crate::output::CommandOutput> {
 
     if unlinked {
         match crate::setup::refresh(&root) {
-            Ok(output) => warnings.extend(output.warnings),
+            Ok(outcome) => warnings.extend(outcome.output.warnings),
             Err(error) => warnings.push(format!(
                 "could not refresh agent configuration: {}; run `orbit setup <client>` to update MCP entries",
                 error.message

@@ -1,17 +1,14 @@
 ---
 title: Remove Matt Pocock from orbit init agent discovery and selection
-status: in_progress
+status: done
 type: task
 priority: 1
 labels:
 - enhancement
 - ready-for-agent
 area: setup
-claimed_by: opencode
-claimed_at: 2026-10-31T12:45:34.069914Z
-lease_until: 2026-10-31T13:15:34.069914Z
 created_at: 2026-10-31T12:45:31.323349Z
-updated_at: 2026-10-31T12:45:34.069914Z
+updated_at: 2026-10-31T12:49:11.961156Z
 ---
 
 ## Goal

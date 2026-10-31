@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "orbit": {
+      "args": [
+        "mcp"
+      ],
+      "command": "/Users/rodrigomendes/.cargo/bin/orbit"
+    }
+  }
+}

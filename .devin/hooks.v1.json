@@ -1,0 +1,13 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "command": "/Users/rodrigomendes/.cargo/bin/orbit prime --hook-json --by devin",
+          "type": "command"
+        }
+      ],
+      "matcher": ""
+    }
+  ]
+}

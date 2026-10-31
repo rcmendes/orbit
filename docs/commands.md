@@ -123,7 +123,7 @@ orbit init --slug teramigo       # Task IDs become teramigo-…
 | --- | --- | --- |
 | `--dir PATH` / `ORBIT_DIR` | Override discovery with a Workspace root or Board directory. Positional `DIR` wins for `init`. | `orbit --dir ~/src/acme init` |
 | `--no-agents` | You want `--agents none` without the selector. | `orbit init --no-agents` |
-| `--hooks` | You also want the Claude Code SessionStart hook. | `orbit init --agents claude --hooks` |
+| `--hooks` | You also want the Claude or Devin SessionStart hook. | `orbit init --agents claude --hooks` |
 | `--portable-mcp` | MCP configs should call bare `orbit`; the editor's PATH must resolve it. | `orbit init --portable-mcp` |
 | `--mcp-bin PATH` | Record a specific Orbit binary; conflicts with `--portable-mcp`. | `orbit init --mcp-bin /usr/local/bin/orbit` |
 
@@ -348,11 +348,11 @@ replaced by another import or export.
 ### `orbit workspace setup` — reconcile child-repository agents
 
 Run setup after `orbit workspace refresh`. It uses the saved catalog of included
-child repositories, detects Claude Code, Cursor, Codex, and OpenCode across
-those repositories, and offers an interactive selection in a terminal. Select
+child repositories, detects Claude Code, Cursor, Codex, OpenCode, and Devin
+across those repositories, and offers an interactive selection in a terminal. Select
 explicitly with `--agents all`, `--agents auto`, `--agents none`, or a comma-
 separated list. `--print` previews without writing files or saving a selection.
-`--hooks` installs the Claude SessionStart hook; `--no-mcp` writes instructions
+`--hooks` installs the Claude and Devin SessionStart hooks; `--no-mcp` writes instructions
 only; `--portable-mcp` and `--mcp-bin PATH` choose the recorded Orbit command.
 An applied selection is stored in the Workspace Board and reused on later runs,
 so a newly discovered repository receives the same selected harnesses.
@@ -467,7 +467,10 @@ User scope writes Claude memory to `~/.claude/CLAUDE.md`, its hook to
 skill, and MCP to `~/.cursor/rules/orbit.mdc`, `~/.agents/skills/orbit/SKILL.md`,
 and `~/.cursor/mcp.json`; Codex to `~/.codex/AGENTS.md`, the shared skill, and
 `~/.codex/config.toml`; OpenCode to `~/.config/opencode/AGENTS.md` and
-`~/.config/opencode/opencode.json`; and the mattpocock tracker bridge to
+`~/.config/opencode/opencode.json`; Devin to `~/.devin/rules/orbit.md`,
+`~/.config/devin/skills/orbit/SKILL.md`, `~/.config/devin/mcp_config.json`,
+and the SessionStart hook in `~/.config/devin/config.json`; and the mattpocock
+tracker bridge to
 `~/.agents/issue-tracker.md` and `~/.agents/triage-labels.md`. `--print` names
 each exact file.
 
@@ -499,7 +502,7 @@ orbit setup all --remove       # remove only Orbit-managed content
 | `--check` | CI or a repair check: report installed, missing, or stale and exit non-zero on drift. | `orbit setup all --check` |
 | `--remove` | Remove only Orbit-managed files, sections, hooks, and MCP entries. | `orbit setup all --remove` |
 | `--no-mcp` | Write instruction and skill files without MCP entries. | `orbit setup codex --no-mcp` |
-| `--hooks` | Add the Claude Code SessionStart hook. | `orbit setup claude --hooks` |
+| `--hooks` | Add the Claude or Devin SessionStart hook. | `orbit setup claude --hooks` |
 | `--portable-mcp` | Write bare `orbit` in MCP configs; the editor's PATH must resolve it. | `orbit setup opencode --portable-mcp` |
 | `--print` | Preview the exact files that would be written or removed. | `orbit setup all --print` |
 
@@ -789,7 +792,7 @@ returns `data.root`, `data.tasks` with the root first, and `data.count`.
 
 Prints the agent workflow instructions, board counts, top ready tasks, Parent
 Tasks whose SubTasks are all resolved (close candidates), and stale claims. The
-Claude Code SessionStart hook runs `orbit prime --hook-json` automatically.
+Claude and Devin SessionStart hooks run `orbit prime --hook-json` automatically.
 
 **Good fit:** the first command of an agent session, a status prompt, or a quick
 health view of what is ready and what was abandoned.

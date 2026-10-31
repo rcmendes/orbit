@@ -80,7 +80,7 @@ fn init_mcp_configs_never_record_the_board_path() {
         "init",
         board_arg,
         "--agents",
-        "claude,cursor,codex,opencode",
+        "claude,cursor,codex,opencode,devin",
         "--json",
     ]);
 
@@ -108,6 +108,16 @@ fn init_mcp_configs_never_record_the_board_path() {
             .any(|arg| arg.as_str().is_some_and(|arg| arg.contains(board_arg))),
         "{opencode}"
     );
+
+    let devin = repo.read_json(".devin/mcp_config.json");
+    assert_eq!(
+        devin["mcpServers"]["orbit"]["args"],
+        serde_json::json!(["mcp"])
+    );
+    let command = devin["mcpServers"]["orbit"]["command"]
+        .as_str()
+        .expect("command is a string");
+    assert!(!command.contains(board_arg), "{command}");
 }
 
 #[test]
@@ -283,7 +293,7 @@ fn init_rejects_mattpocock_as_a_harness() {
         value["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("expected claude, cursor, codex, or opencode"),
+            .contains("expected claude, cursor, codex, opencode, or devin"),
         "{value}"
     );
 }

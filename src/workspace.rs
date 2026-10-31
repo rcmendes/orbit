@@ -307,7 +307,7 @@ fn setup(
         None
     };
     let hook_bin =
-        if !args.remove && args.hooks && selected.contains(&crate::setup::SetupClient::Claude) {
+        if !args.remove && args.hooks && selected.iter().any(|client| client.supports_hooks()) {
             Some(crate::setup::configured_hook_bin(args.mcp_bin.as_deref())?)
         } else {
             None
@@ -506,7 +506,7 @@ fn parse_workspace_harnesses(
                 } else {
                     crate::setup::SetupClient::harness_from_name(name).ok_or_else(|| {
                         OrbitError::invalid_argument(format!(
-                            "unknown harness `{name}`; expected claude, cursor, codex, or opencode"
+                            "unknown harness `{name}`; expected claude, cursor, codex, opencode, or devin"
                         ))
                     })?
                 };

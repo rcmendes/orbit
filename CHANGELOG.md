@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added a `devin` harness to `orbit init --agents` and `orbit setup`: project scope writes `.devin/rules/orbit.md`, `.devin/skills/orbit/SKILL.md`, and a `.devin/mcp_config.json` `mcpServers` entry; `--hooks` also installs the SessionStart hook in `.devin/hooks.v1.json` (user scope nests it under the `hooks` key of `~/.config/devin/config.json`). `setup all`, `orbit workspace setup`, detection, refresh, and `--check`/`--remove` cover Devin like the other harnesses.
 - Fixed `orbit workspace issues` ignoring custom Issue Field names: the remote catalog hardcoded `Area`/`Verification`, so repositories configured with different `area_name`/`verification_name` showed empty values.
 - Internal: consolidated duplicated health checks, comment-header handling, GitHub basic-mode gating, and sync field enumeration behind single-owner interfaces. No workflow changes.
 

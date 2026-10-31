@@ -292,7 +292,7 @@ pub(super) fn format_tree_line(task: &Task, graph: &Graph, root: bool) -> String
             let open_count = graph.open_children(&task.id).len();
             let resolved = subtask_count.saturating_sub(open_count);
             line.push_str(&format!("  {resolved}/{subtask_count} resolved"));
-            if open_count == 0 && !task.front.status.is_terminal() {
+            if graph.eligible_for_close(task) {
                 line.push_str("  (ready to close)");
             }
         }

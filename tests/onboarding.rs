@@ -199,7 +199,7 @@ fn init_without_agents_does_not_report_portable_mcp() {
 fn init_warns_when_no_selected_harness_uses_mcp() {
     let repo = TestRepo::new();
 
-    let value = repo.ok_json(&["init", "--agents", "mattpocock", "--portable-mcp", "--json"]);
+    let value = repo.ok_json(&["init", "--agents", "none", "--portable-mcp", "--json"]);
 
     assert_eq!(value["data"]["portable_mcp"], false);
     assert!(
@@ -267,7 +267,37 @@ fn init_all_wires_every_harness() {
     assert!(repo.exists(".agents/skills/orbit/SKILL.md"));
     assert!(repo.exists(".codex/config.toml"));
     assert!(repo.exists("opencode.json"));
-    assert!(repo.exists("docs/agents/issue-tracker.md"));
+    assert!(!repo.exists("docs/agents/issue-tracker.md"));
+    assert!(!repo.exists("docs/agents/triage-labels.md"));
+}
+
+#[test]
+fn init_rejects_mattpocock_as_a_harness() {
+    let repo = TestRepo::new();
+
+    let (status, value) = repo.json(&["init", "--agents", "mattpocock", "--json"]);
+
+    assert_eq!(status, 1, "{value}");
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("expected claude, cursor, codex, or opencode"),
+        "{value}"
+    );
+}
+
+#[test]
+fn init_auto_ignores_mattpocock_skills() {
+    let repo = TestRepo::new();
+    std::fs::create_dir_all(repo.path().join(".agents/skills/setup-matt-pocock-skills")).unwrap();
+
+    let value = repo.ok_json(&["init", "--agents", "auto", "--json"]);
+
+    assert_eq!(value["data"]["agents"], serde_json::json!([]));
+    assert!(!repo.exists("docs/agents/issue-tracker.md"));
+    assert!(!repo.exists("docs/agents/triage-labels.md"));
 }
 
 #[test]
@@ -592,18 +622,22 @@ fn link_refreshes_an_absolute_board_path_out_of_existing_configs() {
 }
 
 #[test]
-fn init_reports_a_custom_tracker_doc_as_skipped() {
+fn init_does_not_touch_a_custom_mattpocock_tracker_doc() {
     let repo = TestRepo::new();
     let custom = "# Issue tracker: Orbit\n\nHand-written guidance.\n";
     std::fs::create_dir_all(repo.path().join("docs/agents")).unwrap();
     std::fs::write(repo.path().join("docs/agents/issue-tracker.md"), custom).unwrap();
 
-    let value = repo.ok_json(&["init", "--agents", "mattpocock", "--json"]);
+    let value = repo.ok_json(&["init", "--agents", "all", "--json"]);
     assert_eq!(repo.read("docs/agents/issue-tracker.md"), custom);
-    let files = value["data"]["files"].as_array().unwrap();
-    assert!(files.iter().any(|file| {
-        file["path"] == "docs/agents/issue-tracker.md" && file["action"] == "skipped"
-    }));
+    assert!(!repo.exists("docs/agents/triage-labels.md"));
+    assert!(
+        !value["data"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == "docs/agents/issue-tracker.md")
+    );
 }
 
 #[test]

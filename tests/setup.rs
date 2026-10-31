@@ -228,8 +228,6 @@ fn setup_all_writes_every_integration_and_removes_it() {
         ".claude/settings.json",
         ".cursor/rules/orbit.mdc",
         ".agents/skills/orbit/SKILL.md",
-        "docs/agents/issue-tracker.md",
-        "docs/agents/triage-labels.md",
         ".mcp.json",
         ".cursor/mcp.json",
         ".codex/config.toml",
@@ -248,8 +246,6 @@ fn setup_all_writes_every_integration_and_removes_it() {
         "AGENTS.md",
         ".cursor/rules/orbit.mdc",
         ".agents/skills/orbit/SKILL.md",
-        "docs/agents/issue-tracker.md",
-        "docs/agents/triage-labels.md",
         ".mcp.json",
         ".cursor/mcp.json",
         ".codex/config.toml",
@@ -658,8 +654,6 @@ fn setup_user_scope_writes_user_files_and_honors_check_and_remove() {
         ".codex/config.toml",
         ".config/opencode/AGENTS.md",
         ".config/opencode/opencode.json",
-        ".agents/issue-tracker.md",
-        ".agents/triage-labels.md",
     ] {
         assert!(home.join(path).is_file(), "{path} was not written");
     }
@@ -710,8 +704,6 @@ fn setup_user_scope_writes_user_files_and_honors_check_and_remove() {
         ".codex/config.toml",
         ".config/opencode/AGENTS.md",
         ".config/opencode/opencode.json",
-        ".agents/issue-tracker.md",
-        ".agents/triage-labels.md",
     ] {
         assert!(!home.join(path).exists(), "{path} was not removed");
     }

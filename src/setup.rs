@@ -51,13 +51,7 @@ impl SetupClient {
     }
 
     pub fn all() -> Vec<SetupClient> {
-        vec![
-            SetupClient::Claude,
-            SetupClient::Cursor,
-            SetupClient::Codex,
-            SetupClient::Opencode,
-            SetupClient::Mattpocock,
-        ]
+        Self::harnesses()
     }
 
     /// Coding-agent harnesses only. Matt Pocock skills are a separate
@@ -666,14 +660,7 @@ pub fn detect(root: &Path) -> Vec<SetupClient> {
                     || home_has(".config/opencode")
                     || root.join("opencode.json").exists()
             }
-            SetupClient::Mattpocock => {
-                root.join("docs/agents").is_dir()
-                    || root
-                        .join(".agents/skills/setup-matt-pocock-skills")
-                        .is_dir()
-                    || home_has(".agents/skills/setup-matt-pocock-skills")
-            }
-            SetupClient::All => false,
+            SetupClient::Mattpocock | SetupClient::All => false,
         })
         .collect()
 }
@@ -732,9 +719,9 @@ fn parse_agents_with(
                 if token.is_empty() {
                     continue;
                 }
-                let client = SetupClient::from_name(token).ok_or_else(|| {
+                let client = SetupClient::harness_from_name(token).ok_or_else(|| {
                     OrbitError::invalid_argument(format!(
-                        "unknown harness `{token}`; expected claude, cursor, codex, opencode, or mattpocock"
+                        "unknown harness `{token}`; expected claude, cursor, codex, or opencode"
                     ))
                 })?;
                 if client == SetupClient::All {

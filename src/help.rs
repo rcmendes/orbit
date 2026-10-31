@@ -74,7 +74,8 @@ the stored prefix; an empty Board can change it, and a populated Board returns
 SLUG_LOCKED pointing at `orbit slug migrate`.
 
 Init then detects installed coding-agent harnesses (Claude Code, Cursor, Codex,
-OpenCode, and the mattpocock bridge) and writes only the integrations that apply.
+and OpenCode) and writes only the integrations that apply. Matt Pocock skills are
+a separate compatibility integration and are not part of init harness detection.
 Files carry a managed marker, so re-running reconciles integration instead of
 failing. A hand-written docs/agents/issue-tracker.md without the marker is
 reported as skipped and left alone. In a terminal, init asks which harnesses to

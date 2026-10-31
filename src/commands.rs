@@ -774,9 +774,7 @@ fn validate_workspace_layout(workspace: &Path) -> Result<()> {
 }
 
 fn home_dir() -> Result<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from)
+    crate::git::home_dir()
         .ok_or_else(|| OrbitError::config("HOME or USERPROFILE is not set"))
         .and_then(|home| {
             dunce::canonicalize(&home)

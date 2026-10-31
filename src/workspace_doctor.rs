@@ -247,7 +247,7 @@ fn diagnose_layout_and_repositories(
                         .with_cause("the child directory was moved or deleted after discovery")
                         .with_next_action("run `orbit workspace refresh`; the repository will become stale and its cache retained"),
                     );
-                } else if !crate::workspace::is_direct_git_repository(&path) {
+                } else if !crate::git::is_direct_git_repository(&path) {
                     issues.push(
                         Issue::new(
                             code::WORKSPACE_REPOSITORY_INACCESSIBLE,
@@ -546,10 +546,9 @@ fn local_boards(workspace: &Path) -> Vec<PathBuf> {
             found.push(dunce::canonicalize(&candidate).unwrap_or(candidate));
         }
     }
-    if let Ok(children) = std::fs::read_dir(workspace) {
-        for child in children.flatten() {
-            let path = child.path();
-            if !path.is_dir() || child.file_name() == ".orbit" {
+    if let Ok(children) = crate::git::child_directories(workspace, true) {
+        for path in children.flatten() {
+            if path.file_name() == Some(std::ffi::OsStr::new(".orbit")) {
                 continue;
             }
             if path.join(".git").exists() {

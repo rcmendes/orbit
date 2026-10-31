@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use clap::ValueEnum;
 use serde::Serialize;
@@ -631,7 +630,7 @@ fn expand(client: SetupClient) -> Vec<SetupClient> {
 }
 
 pub fn detect(root: &Path) -> Vec<SetupClient> {
-    let home = home_dir();
+    let home = crate::git::home_dir();
     let home_has = |relative: &str| {
         home.as_ref()
             .is_some_and(|home| home.join(relative).exists())
@@ -686,7 +685,8 @@ pub fn detect_harnesses(root: &Path) -> Vec<SetupClient> {
 /// documentation directories or from an existing Orbit tracker guide.
 pub fn detects_mattpocock_skills(root: &Path) -> bool {
     let skill = ".agents/skills/setup-matt-pocock-skills";
-    root.join(skill).is_dir() || home_dir().is_some_and(|home| home.join(skill).is_dir())
+    root.join(skill).is_dir()
+        || crate::git::home_dir().is_some_and(|home| home.join(skill).is_dir())
 }
 
 pub fn parse_agents(selector: &str, root: &Path) -> Result<Vec<SetupClient>> {
@@ -974,16 +974,10 @@ fn prompt_agents_from(
     }
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 fn scope_root(scope: SetupScope, project: &Path) -> Result<PathBuf> {
     match scope {
         SetupScope::Project => Ok(project.to_path_buf()),
-        SetupScope::User => home_dir()
+        SetupScope::User => crate::git::home_dir()
             .map(|home| dunce::canonicalize(&home).unwrap_or(home))
             .ok_or_else(|| {
                 OrbitError::config("HOME or USERPROFILE must be set for `setup --scope user`")
@@ -1497,7 +1491,10 @@ fn plan_mcp_json(
         }
     }
 
-    if !remove && scope == SetupScope::Project && absolute_command && is_git_tracked(root, relative)
+    if !remove
+        && scope == SetupScope::Project
+        && absolute_command
+        && crate::git::is_git_tracked(root, relative)
     {
         warnings.push(format!(
             "{relative} is tracked by git and will contain a machine-specific MCP command; keep it untracked or pass `--mcp-bin orbit` for a portable config"
@@ -1634,7 +1631,7 @@ fn plan_mcp_toml(
     if !remove
         && scope == SetupScope::Project
         && bin.is_absolute()
-        && is_git_tracked(root, relative)
+        && crate::git::is_git_tracked(root, relative)
     {
         warnings.push(format!(
             "{relative} is tracked by git and will contain a machine-specific MCP command; keep it untracked or pass `--mcp-bin orbit` for a portable config"
@@ -1709,18 +1706,6 @@ fn entry_command(entry: &Value) -> Option<&str> {
             .and_then(|command| command.first())
             .and_then(Value::as_str)
     })
-}
-
-fn is_git_tracked(root: &Path, relative: &str) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "--error-unmatch", "--", relative])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 fn is_orbit_mcp_entry(entry: &Value) -> bool {

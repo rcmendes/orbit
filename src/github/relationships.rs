@@ -217,7 +217,6 @@ mod tests {
 
     #[test]
     fn removes_previously_synced_relationships_that_disappeared_locally() {
-        let parent = task("orb-aaaaaa");
         let mut link = GitHubLink::new("acme/a".to_string(), 1);
         link.last_sync = Some(crate::github::link::GitHubSyncBaseline {
             at: chrono::Utc::now(),
@@ -282,7 +281,6 @@ mod tests {
 
     #[test]
     fn preserves_remote_only_relationships_without_a_baseline() {
-        let parent = task("orb-aaaaaa");
         let link = GitHubLink::new("acme/a".to_string(), 1);
         let issue = IssueSnapshot {
             repo: "acme/a".to_string(),
@@ -315,7 +313,6 @@ mod tests {
 
     #[test]
     fn reports_cross_repository_subtasks_as_unsupported() {
-        let parent = task("orb-aaaaaa");
         let parent_link = GitHubLink::new("acme/a".to_string(), 1);
         let child = task("orb-aaaaaa.bbbbbb");
         let child_link = GitHubLink::new("acme/b".to_string(), 2);

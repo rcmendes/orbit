@@ -3,8 +3,10 @@ title: GitHub status and full sync cost one API call per linked Task
 status: todo
 type: task
 priority: 1
+labels:
+- bug
 created_at: 2026-10-31T12:50:18.633126Z
-updated_at: 2026-10-31T12:50:18.633126Z
+updated_at: 2026-10-31T12:50:26.096088Z
 ---
 
 `orbit github status` and a whole-Board `orbit github sync` make one `gh api` call per linked Task, sequentially. On a real Workspace Board (teramigo: 6 repositories, 582 links) neither finishes in a useful time.

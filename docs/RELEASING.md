@@ -4,7 +4,8 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.10.7` — latest; `orbit github sync` compares labels as a set, so label order no longer causes repeated pushes or false conflicts
+- `v0.10.8` — latest; adds the `devin` harness to `orbit init`/`orbit setup`, and `orbit workspace issues` honors custom Issue Field names
+- `v0.10.7` — `orbit github sync` compares labels as a set, so label order no longer causes repeated pushes or false conflicts
 - `v0.10.6` — `orbit github auto-push on|off` toggles opt-in push, and `github create` uses `--include-closed`
 - `v0.10.5` — `orbit init .` initializes a repository-root target, and opt-in `[github] auto_push` publishes mapped Task changes to linked Issues
 - `v0.10.4` — `orbit list` marks Local, Linked, and detached Tasks in an `ISSUE` column with `--linked`/`--local` filters, and Task frontmatter parsing no longer ends early on an indented `---`

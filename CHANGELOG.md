@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.7 - 2026-10-30
 
 - Fixed repeated no-op label pushes in `orbit github sync`: labels were compared in list order, so a Task whose labels were sorted differently than the Issue looked changed on every sync (and could turn into a false conflict once both sides reordered). Labels are now compared as a set.
 

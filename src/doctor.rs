@@ -558,10 +558,7 @@ pub(crate) fn absolute_board_configs(root: &Path) -> Vec<PathBuf> {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .and_then(|home| dunce::canonicalize(home).ok())
+    crate::git::home_dir().and_then(|home| dunce::canonicalize(home).ok())
 }
 
 fn nested_value<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {

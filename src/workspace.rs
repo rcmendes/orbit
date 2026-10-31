@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -242,7 +241,7 @@ fn setup(
                 return None;
             }
             let root = workspace.join(relative);
-            is_direct_git_repository(&root).then(|| (entry.repository.clone(), root))
+            crate::git::is_direct_git_repository(&root).then(|| (entry.repository.clone(), root))
         })
         .collect::<Vec<_>>();
 
@@ -687,7 +686,7 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
             continue;
         }
         let child_path = child.path();
-        if !is_direct_git_repository(&child_path) {
+        if !crate::git::is_direct_git_repository(&child_path) {
             unavailable_paths.insert(
                 child_name.clone(),
                 "the previously discovered repository is no longer a Git repository".to_string(),
@@ -695,7 +694,7 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
             non_git_directories.push(child_name);
             continue;
         }
-        let origin = match git_output(&child_path, &["remote", "get-url", "origin"]) {
+        let origin = match crate::git::git_output(&child_path, &["remote", "get-url", "origin"]) {
             Ok(origin) if !origin.is_empty() => origin,
             _ => {
                 unavailable_paths.insert(
@@ -958,28 +957,6 @@ pub(crate) fn set_repository_detached(
         }
     }
     save_catalog(&path, &catalog)
-}
-
-pub(crate) fn is_direct_git_repository(path: &Path) -> bool {
-    let Ok(output) = git_output(path, &["rev-parse", "--show-toplevel"]) else {
-        return false;
-    };
-    let top = dunce::canonicalize(output.trim()).unwrap_or_else(|_| PathBuf::from(output.trim()));
-    let candidate = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    top == candidate
-}
-
-fn git_output(path: &Path, args: &[&str]) -> std::result::Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(args)
-        .output()
-        .map_err(|error| format!("could not run git: {error}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn resolve_organization(

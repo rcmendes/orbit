@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fixed `orbit workspace issues` ignoring custom Issue Field names: the remote catalog hardcoded `Area`/`Verification`, so repositories configured with different `area_name`/`verification_name` showed empty values.
+- Internal: consolidated duplicated health checks, comment-header handling, GitHub basic-mode gating, and sync field enumeration behind single-owner interfaces. No workflow changes.
+
 ## 0.10.7 - 2026-10-30
 
 - Fixed repeated no-op label pushes in `orbit github sync`: labels were compared in list order, so a Task whose labels were sorted differently than the Issue looked changed on every sync (and could turn into a false conflict once both sides reordered). Labels are now compared as a set.

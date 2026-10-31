@@ -1694,10 +1694,8 @@ impl GitHubClient for FixtureClient {
         // removals then drop the number when it is currently stored, so
         // a reference listed in both ends up absent.
         for relationship in desired {
-            let current = match relationship.kind {
-                "sub_issue" => &mut issue.blocking,
-                "blocked_by" => &mut issue.blocked_by,
-                _ => continue,
+            let Some(current) = relationship_field(&mut issue, relationship.kind) else {
+                continue;
             };
             if !current
                 .iter()
@@ -1707,18 +1705,26 @@ impl GitHubClient for FixtureClient {
             }
         }
         for removal in removals {
-            match removal.kind {
-                "sub_issue" => issue
-                    .blocking
-                    .retain(|item| item.number != removal.github.number),
-                "blocked_by" => issue
-                    .blocked_by
-                    .retain(|item| item.number != removal.github.number),
-                _ => {}
+            if let Some(current) = relationship_field(&mut issue, removal.kind) {
+                current.retain(|item| item.number != removal.github.number);
             }
         }
         store.issues.insert(key, issue);
         persist_fixture(&store)
+    }
+}
+
+/// Maps a relationship kind to the IssueSnapshot field it mutates:
+/// `sub_issue` relationships are tracked on the blocker's `blocking` list and
+/// `blocked_by` dependencies on the blocked Issue's `blocked_by` list.
+fn relationship_field<'a>(
+    issue: &'a mut IssueSnapshot,
+    kind: &str,
+) -> Option<&'a mut Vec<crate::github::model::IssueRef>> {
+    match kind {
+        "sub_issue" => Some(&mut issue.blocking),
+        "blocked_by" => Some(&mut issue.blocked_by),
+        _ => None,
     }
 }
 

@@ -29,7 +29,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         ));
     }
 
-    let home = home_dir().ok();
+    let home = resolve_home_dir().ok();
     if args.global && home.is_none() {
         return Err(OrbitError::config(
             "HOME or USERPROFILE must be set for `orbit init --global`",
@@ -113,6 +113,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     }
 
     let mut file_outcomes: Vec<crate::setup::FileOutcome> = Vec::new();
+    let mut files: Vec<Value> = Vec::new();
     let mut mcp_command = None;
     let mut reported_portable_mcp = false;
     if !clients.is_empty() {
@@ -141,11 +142,13 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         )?;
         file_outcomes = outcome.files;
         warnings.extend(outcome.output.warnings);
+        // `install` already serialized `files` with the same `args.print`
+        // content gating, so reuse its wire shape instead of re-serializing.
+        files = outcome.output.data["files"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
     }
-    let files: Vec<Value> = file_outcomes
-        .iter()
-        .map(|file| file.to_json(args.print))
-        .collect();
     if ignored_portable_mcp {
         warnings.push("no selected harness uses MCP; ignoring --portable-mcp".to_string());
     }
@@ -568,7 +571,7 @@ fn validate_workspace_layout(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-fn home_dir() -> Result<std::path::PathBuf> {
+fn resolve_home_dir() -> Result<std::path::PathBuf> {
     crate::git::home_dir()
         .ok_or_else(|| OrbitError::config("HOME or USERPROFILE is not set"))
         .and_then(|home| {

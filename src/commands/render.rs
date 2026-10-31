@@ -304,41 +304,6 @@ pub(super) fn format_tree_line(task: &Task, graph: &Graph, root: bool) -> String
     if root { line } else { format!("  {line}") }
 }
 
-pub(super) fn format_summary_value(value: &Value) -> String {
-    let id = value.get("id").and_then(Value::as_str).unwrap_or("?");
-    let status = value.get("status").and_then(Value::as_str).unwrap_or("?");
-    let priority = value.get("priority").and_then(Value::as_u64).unwrap_or(0);
-    let title = value.get("title").and_then(Value::as_str).unwrap_or("?");
-    let claim = value
-        .get("claimed_by")
-        .and_then(Value::as_str)
-        .map(|holder| format!("  claimed by {holder}"))
-        .unwrap_or_default();
-    let labels = value
-        .get("labels")
-        .and_then(Value::as_array)
-        .map(|labels| {
-            let labels = labels.iter().filter_map(Value::as_str).collect::<Vec<_>>();
-            if labels.is_empty() {
-                String::new()
-            } else {
-                format!("  [{}]", labels.join(", "))
-            }
-        })
-        .unwrap_or_default();
-    let parent = value
-        .get("parent")
-        .and_then(Value::as_str)
-        .map(|parent| format!("  (subtask of {parent})"))
-        .unwrap_or_default();
-    let type_prefix = value
-        .get("type")
-        .and_then(Value::as_str)
-        .filter(|task_type| *task_type != "task")
-        .map(|task_type| format!("{task_type}  "))
-        .unwrap_or_default();
-    format!("{id}  {status:<11}  P{priority}  {type_prefix}{title}{labels}{claim}{parent}")
-}
 
 fn push_field_lines(lines: &mut Vec<String>, label: &str, text: &str) {
     let mut text = text.lines();

@@ -516,39 +516,42 @@ fn diagnose_tasks(
 /// old setup that needs to run again.
 pub(crate) fn absolute_board_configs(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for relative in [
-        ".mcp.json",
-        ".claude.json",
-        ".cursor/mcp.json",
-        "opencode.json",
-        ".config/opencode/opencode.json",
-    ] {
-        let path = root.join(relative);
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_str::<Value>(&content) else {
-            continue;
-        };
-        let containers: &[&[&str]] = &[&["mcpServers"], &["mcp", "servers"], &["mcp"]];
-        if containers.iter().any(|container| {
-            nested_value(&value, container)
-                .and_then(|container| container.get("orbit"))
-                .is_some_and(json_entry_records_absolute_board)
-        }) {
-            files.push(path);
+    // Candidates come from setup's client layouts: adding a client there
+    // automatically extends this check.
+    for config in crate::setup::mcp_config_files() {
+        match config {
+            crate::setup::McpConfigFile::Json {
+                relative,
+                containers,
+            } => {
+                let path = root.join(relative);
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(value) = serde_json::from_str::<Value>(&content) else {
+                    continue;
+                };
+                if containers.iter().any(|container| {
+                    nested_value(&value, container)
+                        .and_then(|container| container.get("orbit"))
+                        .is_some_and(json_entry_records_absolute_board)
+                }) {
+                    files.push(path);
+                }
+            }
+            crate::setup::McpConfigFile::Toml { relative } => {
+                let path = root.join(relative);
+                if let Ok(content) = std::fs::read_to_string(&path)
+                    && let Ok(value) = toml::from_str::<toml::Value>(&content)
+                    && value
+                        .get("mcp_servers")
+                        .and_then(|servers| servers.get("orbit"))
+                        .is_some_and(toml_entry_records_absolute_board)
+                {
+                    files.push(path);
+                }
+            }
         }
-    }
-
-    let path = root.join(".codex/config.toml");
-    if let Ok(content) = std::fs::read_to_string(&path)
-        && let Ok(value) = toml::from_str::<toml::Value>(&content)
-        && value
-            .get("mcp_servers")
-            .and_then(|servers| servers.get("orbit"))
-            .is_some_and(toml_entry_records_absolute_board)
-    {
-        files.push(path);
     }
 
     files

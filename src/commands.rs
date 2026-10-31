@@ -325,7 +325,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         exclude = Board::ensure_excluded(&board_root)?;
     }
 
-    let mut files = json!([]);
+    let mut file_outcomes: Vec<crate::setup::FileOutcome> = Vec::new();
     let mut mcp_command = None;
     let mut reported_portable_mcp = false;
     if !clients.is_empty() {
@@ -340,7 +340,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         } else {
             None
         };
-        let output = crate::setup::install(
+        let outcome = crate::setup::install(
             &setup_root,
             crate::setup::InstallOptions {
                 scope: crate::setup::SetupScope::Project,
@@ -352,9 +352,13 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
                 remove: false,
             },
         )?;
-        files = output.data["files"].clone();
-        warnings.extend(output.warnings);
+        file_outcomes = outcome.files;
+        warnings.extend(outcome.output.warnings);
     }
+    let files: Vec<Value> = file_outcomes
+        .iter()
+        .map(|file| file.to_json(args.print))
+        .collect();
     if ignored_portable_mcp {
         warnings.push("no selected harness uses MCP; ignoring --portable-mcp".to_string());
     }
@@ -370,7 +374,7 @@ fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::output::Command
         exclude: exclude.as_deref(),
         global,
         clients: &clients,
-        files: &files,
+        files: &file_outcomes,
         mcp_command: mcp_command.as_deref(),
         portable_mcp: reported_portable_mcp,
         workspace: workspace_root,
@@ -407,7 +411,7 @@ struct InitReport<'a> {
     exclude: Option<&'a str>,
     global: bool,
     clients: &'a [crate::setup::SetupClient],
-    files: &'a Value,
+    files: &'a [crate::setup::FileOutcome],
     mcp_command: Option<&'a str>,
     portable_mcp: bool,
     workspace: bool,
@@ -501,16 +505,14 @@ fn render_init_human(report: &InitReport<'_>) -> String {
             human.push_str(&format!("   {:<9}Claude Code SessionStart\n", "hook"));
         }
         human.push_str("   files\n");
-        let files = report.files.as_array();
-        if files.is_none_or(|files| files.is_empty()) {
+        if report.files.is_empty() {
             human.push_str("     already up to date\n");
         } else {
-            for file in files.into_iter().flatten() {
-                let action = file["action"].as_str().unwrap_or("unknown");
-                let path = file["path"].as_str().unwrap_or("?");
+            for file in report.files {
+                let path = file.relative.to_string_lossy();
                 human.push_str(&format!(
                     "     {:<13}{path}\n",
-                    init_action_label(preview, action)
+                    init_action_label(preview, file.action.as_str())
                 ));
             }
         }
@@ -526,10 +528,16 @@ fn render_init_human(report: &InitReport<'_>) -> String {
 
     if preview {
         human.push_str("Re-run the same command without --print to apply these changes.\n");
-        if let Some(files) = report.files.as_array() {
-            let previews = files
+        {
+            let previews = report
+                .files
                 .iter()
-                .filter_map(|file| Some((file["path"].as_str()?, file["content"].as_str()?)))
+                .filter_map(|file| {
+                    Some((
+                        file.relative.to_string_lossy().into_owned(),
+                        file.content.as_deref()?,
+                    ))
+                })
                 .collect::<Vec<_>>();
             if !previews.is_empty() {
                 human.push_str("\nGenerated file previews:\n");
@@ -866,23 +874,21 @@ fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
     let mut refreshed = Vec::new();
     if !args.no_refresh {
         match crate::setup::refresh(&root) {
-            Ok(output) => {
-                refreshed = output.data["files"]
-                    .as_array()
-                    .map(|files| {
-                        files
-                            .iter()
-                            .filter(|file| {
-                                matches!(
-                                    file["action"].as_str(),
-                                    Some("created" | "updated" | "removed")
-                                )
-                            })
-                            .filter_map(|file| file["path"].as_str().map(str::to_string))
-                            .collect::<Vec<_>>()
+            Ok(outcome) => {
+                refreshed = outcome
+                    .files
+                    .iter()
+                    .filter(|file| {
+                        matches!(
+                            file.action,
+                            crate::setup::Action::Created
+                                | crate::setup::Action::Updated
+                                | crate::setup::Action::Removed
+                        )
                     })
-                    .unwrap_or_default();
-                warnings.extend(output.warnings);
+                    .map(|file| file.relative.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                warnings.extend(outcome.output.warnings);
             }
             Err(error) => warnings.push(format!(
                 "could not refresh agent configuration: {}; run `orbit setup <client>` to update MCP entries",
@@ -931,7 +937,7 @@ fn cmd_unlink() -> Result<crate::output::CommandOutput> {
 
     if unlinked {
         match crate::setup::refresh(&root) {
-            Ok(output) => warnings.extend(output.warnings),
+            Ok(outcome) => warnings.extend(outcome.output.warnings),
             Err(error) => warnings.push(format!(
                 "could not refresh agent configuration: {}; run `orbit setup <client>` to update MCP entries",
                 error.message

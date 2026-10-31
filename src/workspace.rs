@@ -269,7 +269,13 @@ fn setup(
     let mut warnings = Vec::new();
     let workspace_mattpocock = crate::setup::detects_mattpocock_skills(workspace);
     let workspace_files = crate::setup::workspace_guidance(workspace, args.print, args.remove)?;
-    collect_setup_output(None, workspace_files, &mut file_results, &mut warnings);
+    collect_setup_output(
+        None,
+        &workspace_files,
+        args.print,
+        &mut file_results,
+        &mut warnings,
+    );
     if workspace_mattpocock || args.remove {
         let mattpocock_files = crate::setup::install(
             workspace,
@@ -283,7 +289,13 @@ fn setup(
                 remove: args.remove,
             },
         )?;
-        collect_setup_output(None, mattpocock_files, &mut file_results, &mut warnings);
+        collect_setup_output(
+            None,
+            &mattpocock_files,
+            args.print,
+            &mut file_results,
+            &mut warnings,
+        );
     }
 
     let mcp_bin = if !args.remove && !args.no_mcp && selected.iter().any(|client| client.uses_mcp())
@@ -339,7 +351,8 @@ fn setup(
         )?;
         let files = collect_setup_output(
             Some(repository),
-            installed,
+            &installed,
+            args.print,
             &mut file_results,
             &mut warnings,
         );
@@ -421,20 +434,19 @@ fn setup(
 
 fn collect_setup_output(
     repository: Option<&str>,
-    output: crate::output::CommandOutput,
+    outcome: &crate::setup::InstallOutcome,
+    preview: bool,
     combined: &mut Vec<serde_json::Value>,
     warnings: &mut Vec<String>,
 ) -> Vec<serde_json::Value> {
     let mut files = Vec::new();
-    if let Some(entries) = output.data["files"].as_array() {
-        for entry in entries {
-            let mut file = entry.clone();
-            file["repository"] = json!(repository);
-            files.push(file.clone());
-            combined.push(file);
-        }
+    for entry in &outcome.files {
+        let mut file = entry.to_json(preview);
+        file["repository"] = json!(repository);
+        files.push(file.clone());
+        combined.push(file);
     }
-    warnings.extend(output.warnings);
+    warnings.extend(outcome.output.warnings.iter().cloned());
     files
 }
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -98,7 +98,7 @@ impl SetupScope {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum Action {
+pub enum Action {
     Created,
     Updated,
     Removed,
@@ -107,7 +107,7 @@ enum Action {
 }
 
 impl Action {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Action::Created => "created",
             Action::Updated => "updated",
@@ -131,17 +131,23 @@ struct McpJsonLayout {
 }
 
 impl McpJsonKind {
-    fn layout(self) -> McpJsonLayout {
+    /// Every container path — current layout first, then legacy — that may
+    /// hold the `orbit` server entry in this JSON flavor.
+    fn containers(self) -> &'static [&'static [&'static str]] {
         match self {
-            McpJsonKind::Servers => McpJsonLayout {
-                container_path: &["mcpServers"],
-                legacy_container_path: None,
-                schema: None,
-            },
-            McpJsonKind::Opencode => McpJsonLayout {
-                container_path: &["mcp", "servers"],
-                legacy_container_path: Some(&["mcp"]),
-                schema: Some("https://opencode.ai/config.json"),
+            McpJsonKind::Servers => &[&["mcpServers"]],
+            McpJsonKind::Opencode => &[&["mcp", "servers"], &["mcp"]],
+        }
+    }
+
+    fn layout(self) -> McpJsonLayout {
+        let containers = self.containers();
+        McpJsonLayout {
+            container_path: containers[0],
+            legacy_container_path: containers.get(1).copied(),
+            schema: match self {
+                McpJsonKind::Servers => None,
+                McpJsonKind::Opencode => Some("https://opencode.ai/config.json"),
             },
         }
     }
@@ -202,6 +208,51 @@ struct FilePlan {
     action: Action,
     content: Option<String>,
     warning: Option<String>,
+}
+
+/// The typed result for one file setup touched. Callers consume this instead
+/// of re-parsing the `files` array inside the JSON command output.
+#[derive(Debug, Clone)]
+pub struct FileOutcome {
+    pub relative: PathBuf,
+    pub action: Action,
+    pub content: Option<String>,
+    pub warning: Option<String>,
+}
+
+impl FileOutcome {
+    /// Serialize in the wire shape used by `data["files"]`. `content` is only
+    /// emitted for previews, matching the historical contract.
+    pub fn to_json(&self, include_content: bool) -> Value {
+        let mut value = json!({
+            "path": self.relative.to_string_lossy(),
+            "action": self.action,
+        });
+        if include_content
+            && let Some(content) = &self.content
+        {
+            value["content"] = json!(content);
+        }
+        value
+    }
+}
+
+impl From<FilePlan> for FileOutcome {
+    fn from(plan: FilePlan) -> Self {
+        FileOutcome {
+            relative: plan.relative,
+            action: plan.action,
+            content: plan.content,
+            warning: plan.warning,
+        }
+    }
+}
+
+/// Typed result of an install: per-file outcomes plus the rendered command
+/// output, so callers never round-trip through `output.data["files"]`.
+pub struct InstallOutcome {
+    pub files: Vec<FileOutcome>,
+    pub output: CommandOutput,
 }
 
 pub struct InstallOptions {
@@ -265,7 +316,7 @@ pub fn run(args: crate::cli::SetupArgs, _dir: Option<&Path>) -> Result<CommandOu
         return Ok(output);
     }
 
-    let mut output = install(
+    let mut outcome = install(
         &root,
         InstallOptions {
             scope: args.scope,
@@ -277,11 +328,11 @@ pub fn run(args: crate::cli::SetupArgs, _dir: Option<&Path>) -> Result<CommandOu
             remove: args.remove,
         },
     )?;
-    output.warnings.extend(warnings);
-    Ok(output)
+    outcome.output.warnings.extend(warnings);
+    Ok(outcome.output)
 }
 
-pub fn install(root: &Path, options: InstallOptions) -> Result<CommandOutput> {
+pub fn install(root: &Path, options: InstallOptions) -> Result<InstallOutcome> {
     let mut plan = BTreeMap::new();
     let mut warnings = Vec::new();
     let has_mcp_client = options.clients.iter().any(|client| client.uses_mcp());
@@ -318,26 +369,15 @@ pub fn install(root: &Path, options: InstallOptions) -> Result<CommandOutput> {
         }
     }
 
-    let files = if options.print {
-        plan.into_values().collect::<Vec<_>>()
+    let files: Vec<FileOutcome> = if options.print {
+        plan.into_values().map(FileOutcome::from).collect()
     } else {
         apply_plan(plan)?
     };
 
     let file_values: Vec<Value> = files
         .iter()
-        .map(|file| {
-            let mut value = json!({
-                "path": file.relative.to_string_lossy(),
-                "action": file.action,
-            });
-            if options.print
-                && let Some(content) = &file.content
-            {
-                value["content"] = json!(content);
-            }
-            value
-        })
+        .map(|file| file.to_json(options.print))
         .collect();
 
     for file in &files {
@@ -357,13 +397,13 @@ pub fn install(root: &Path, options: InstallOptions) -> Result<CommandOutput> {
         human,
     );
     output.warnings = warnings;
-    Ok(output)
+    Ok(InstallOutcome { files, output })
 }
 
 /// Install or remove only the Workspace-level agent instruction entry points.
 /// These files are guidance inherited by child repositories; the Workspace
 /// root does not need harness MCP configuration of its own.
-pub fn workspace_guidance(root: &Path, print: bool, remove: bool) -> Result<CommandOutput> {
+pub fn workspace_guidance(root: &Path, print: bool, remove: bool) -> Result<InstallOutcome> {
     let mut plan = BTreeMap::new();
     for relative in ["AGENTS.md", "CLAUDE.md"] {
         if remove {
@@ -372,56 +412,53 @@ pub fn workspace_guidance(root: &Path, print: bool, remove: bool) -> Result<Comm
             plan_section(root, relative, &workflow_section(), &mut plan)?;
         }
     }
-    let files = if print {
-        plan.into_values().collect::<Vec<_>>()
+    let files: Vec<FileOutcome> = if print {
+        plan.into_values().map(FileOutcome::from).collect()
     } else {
         apply_plan(plan)?
     };
     let file_values = files
         .iter()
-        .map(|file| {
-            let mut value = json!({
-                "path": file.relative.to_string_lossy(),
-                "action": file.action,
-            });
-            if print && let Some(content) = &file.content {
-                value["content"] = json!(content);
-            }
-            value
-        })
+        .map(|file| file.to_json(print))
         .collect::<Vec<_>>();
     let human = render_human(root, print, &files, SetupScope::Project);
-    Ok(CommandOutput::new(
-        json!({
-            "root": root.to_string_lossy(),
-            "scope": SetupScope::Project.name(),
-            "preview": print,
-            "files": file_values,
-        }),
-        human,
-    ))
-}
-
-pub fn refresh(root: &Path) -> Result<CommandOutput> {
-    let clients = configured_clients(root);
-    if clients.is_empty() {
-        return Ok(CommandOutput::new(
+    Ok(InstallOutcome {
+        files,
+        output: CommandOutput::new(
             json!({
                 "root": root.to_string_lossy(),
                 "scope": SetupScope::Project.name(),
-                "preview": false,
-                "files": [],
+                "preview": print,
+                "files": file_values,
             }),
-            "no agent integration to refresh\n",
-        ));
+            human,
+        ),
+    })
+}
+
+pub fn refresh(root: &Path) -> Result<InstallOutcome> {
+    let clients = configured_clients(root);
+    if clients.is_empty() {
+        return Ok(InstallOutcome {
+            files: Vec::new(),
+            output: CommandOutput::new(
+                json!({
+                    "root": root.to_string_lossy(),
+                    "scope": SetupScope::Project.name(),
+                    "preview": false,
+                    "files": [],
+                }),
+                "no agent integration to refresh\n",
+            ),
+        });
     }
 
-    let mut files = BTreeMap::new();
+    let mut files: BTreeMap<PathBuf, FileOutcome> = BTreeMap::new();
     let mut warnings = Vec::new();
     for client in clients {
         let portable = configured_portable_mcp(root, client).unwrap_or(false);
         let bin = configured_mcp_bin(portable, None)?;
-        let output = install(
+        let outcome = install(
             root,
             InstallOptions {
                 scope: SetupScope::Project,
@@ -433,41 +470,39 @@ pub fn refresh(root: &Path) -> Result<CommandOutput> {
                 remove: false,
             },
         )?;
-        if let Some(installed) = output.data["files"].as_array() {
-            for file in installed {
-                let Some(path) = file["path"].as_str().map(str::to_string) else {
-                    continue;
-                };
-                let entry = files.entry(path).or_insert_with(|| file.clone());
-                if entry["action"] == "unchanged" && file["action"] != "unchanged" {
-                    *entry = file.clone();
-                }
+        for file in outcome.files {
+            let entry = files
+                .entry(file.relative.clone())
+                .or_insert_with(|| file.clone());
+            if entry.action == Action::Unchanged && file.action != Action::Unchanged {
+                *entry = file;
             }
         }
-        warnings.extend(output.warnings);
+        warnings.extend(outcome.output.warnings);
     }
 
-    let files: Vec<Value> = files.into_values().collect();
+    let files: Vec<FileOutcome> = files.into_values().collect();
     let mut human = String::new();
     for file in &files {
         human.push_str(&format!(
             "{} {}\n",
-            file["action"].as_str().unwrap_or("unknown"),
-            file["path"].as_str().unwrap_or("")
+            file.action.as_str(),
+            file.relative.to_string_lossy()
         ));
     }
     warnings.sort();
     warnings.dedup();
+    let file_values: Vec<Value> = files.iter().map(|file| file.to_json(false)).collect();
     let mut output = CommandOutput::new(
         json!({
             "root": root.to_string_lossy(),
             "preview": false,
-            "files": files,
+            "files": file_values,
         }),
         human,
     );
     output.warnings = warnings;
-    Ok(output)
+    Ok(InstallOutcome { files, output })
 }
 
 pub(crate) fn has_orbit_hook(root: &Path) -> bool {
@@ -572,21 +607,21 @@ fn read_toml_orbit_command(root: &Path, relative: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn check_output(root: &Path, scope: SetupScope, preview: CommandOutput) -> CommandOutput {
-    let files = preview
-        .data
-        .get("files")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let status = check_status(&files);
+fn check_output(root: &Path, scope: SetupScope, preview: InstallOutcome) -> CommandOutput {
+    // The preview ran in print mode, so its files carry content like before.
+    let files: Vec<Value> = preview
+        .files
+        .iter()
+        .map(|file| file.to_json(true))
+        .collect();
+    let status = check_status(&preview.files);
 
     let mut human = format!("orbit setup check: {status}\n");
-    for file in &files {
+    for file in &preview.files {
         human.push_str(&format!(
             "{} {}\n",
-            file["action"].as_str().unwrap_or("unknown"),
-            display_path(root, scope, file["path"].as_str().unwrap_or(""))
+            file.action.as_str(),
+            display_path(root, scope, &file.relative.to_string_lossy())
         ));
     }
 
@@ -599,18 +634,18 @@ fn check_output(root: &Path, scope: SetupScope, preview: CommandOutput) -> Comma
         }),
         human,
     );
-    output.warnings = preview.warnings;
+    output.warnings = preview.output.warnings;
     output.exit_code = if status == "installed" { 0 } else { 1 };
     output
 }
 
-fn check_status(files: &[Value]) -> &'static str {
+fn check_status(files: &[FileOutcome]) -> &'static str {
     let mut created = false;
     let mut updated = false;
     for file in files {
-        match file["action"].as_str() {
-            Some("created") => created = true,
-            Some("updated") => updated = true,
+        match file.action {
+            Action::Created => created = true,
+            Action::Updated => updated = true,
             _ => {}
         }
     }
@@ -1081,6 +1116,47 @@ fn client_paths(client: SetupClient, scope: SetupScope) -> ClientPaths {
         },
         SetupClient::All => unreachable!("All is expanded before planning"),
     }
+}
+
+/// One MCP config file setup can write, with the locations the `orbit` server
+/// entry may occupy. Doctor uses this to scan managed files instead of keeping
+/// its own copy of the client layout.
+pub(crate) enum McpConfigFile {
+    Json {
+        relative: &'static str,
+        containers: &'static [&'static [&'static str]],
+    },
+    Toml {
+        relative: &'static str,
+    },
+}
+
+/// Every MCP config file any harness may write, across project and user
+/// scopes, deduplicated by relative path. Adding a client to `client_paths`
+/// automatically extends this list — and therefore the doctor checks that
+/// consume it.
+pub(crate) fn mcp_config_files() -> Vec<McpConfigFile> {
+    let mut files = Vec::new();
+    let mut seen = BTreeSet::new();
+    for client in SetupClient::harnesses() {
+        for scope in [SetupScope::Project, SetupScope::User] {
+            let paths = client_paths(client, scope);
+            if let Some((relative, kind)) = paths.mcp_json
+                && seen.insert(relative)
+            {
+                files.push(McpConfigFile::Json {
+                    relative,
+                    containers: kind.containers(),
+                });
+            }
+            if let Some(relative) = paths.mcp_toml
+                && seen.insert(relative)
+            {
+                files.push(McpConfigFile::Toml { relative });
+            }
+        }
+    }
+    files
 }
 
 #[derive(Clone, Copy)]
@@ -1960,7 +2036,7 @@ fn insert_plan(plan: &mut BTreeMap<PathBuf, FilePlan>, file: FilePlan) -> Result
     Ok(())
 }
 
-fn apply_plan(plan: BTreeMap<PathBuf, FilePlan>) -> Result<Vec<FilePlan>> {
+fn apply_plan(plan: BTreeMap<PathBuf, FilePlan>) -> Result<Vec<FileOutcome>> {
     let mut results = Vec::new();
     for file in plan.into_values() {
         match file.action {
@@ -1987,7 +2063,7 @@ fn apply_plan(plan: BTreeMap<PathBuf, FilePlan>) -> Result<Vec<FilePlan>> {
             },
             Action::Unchanged | Action::Skipped => {}
         }
-        results.push(file);
+        results.push(FileOutcome::from(file));
     }
     Ok(results)
 }
@@ -2312,7 +2388,7 @@ fn display_path(root: &Path, scope: SetupScope, relative: &str) -> String {
     }
 }
 
-fn render_human(root: &Path, preview: bool, files: &[FilePlan], scope: SetupScope) -> String {
+fn render_human(root: &Path, preview: bool, files: &[FileOutcome], scope: SetupScope) -> String {
     let mut output = String::new();
     if preview {
         output.push_str(&format!("setup preview (root: {})\n", root.display()));
@@ -2342,6 +2418,36 @@ fn render_human(root: &Path, preview: bool, files: &[FilePlan], scope: SetupScop
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_config_files_cover_every_client_scope_without_duplicates() {
+        let files = mcp_config_files();
+        let mut relatives = Vec::new();
+        for file in &files {
+            match file {
+                McpConfigFile::Json {
+                    relative,
+                    containers,
+                } => {
+                    relatives.push(*relative);
+                    assert!(!containers.is_empty(), "{relative} has no container");
+                }
+                McpConfigFile::Toml { relative } => relatives.push(*relative),
+            }
+        }
+        let unique: BTreeSet<&&str> = relatives.iter().collect();
+        assert_eq!(relatives.len(), unique.len(), "duplicate config paths");
+        for expected in [
+            ".mcp.json",
+            ".claude.json",
+            ".cursor/mcp.json",
+            ".codex/config.toml",
+            "opencode.json",
+            ".config/opencode/opencode.json",
+        ] {
+            assert!(relatives.contains(&expected), "missing {expected}");
+        }
+    }
 
     #[test]
     fn upsert_and_remove_section_round_trip() {

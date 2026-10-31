@@ -12,9 +12,9 @@ Solid arrows are calls or data flow. Dotted arrows are selection or lookup. The 
 flowchart LR
     subgraph Actors["Actors and harnesses"]
         DEV["Developer"]
-        AGENT["Coding agent<br/>Claude Code · Cursor · Codex · OpenCode"]
+        AGENT["Coding agent<br/>Claude Code · Cursor · Codex · OpenCode · Devin"]
         MCPC["MCP client"]
-        HOOK["Claude SessionStart hook"]
+        HOOK["SessionStart hook"]
     end
 
     subgraph Interfaces["Interfaces"]
@@ -62,7 +62,7 @@ flowchart LR
 
     subgraph Repo["Consumer repository"]
         WORKTREES["main and linked worktrees"]
-        HARNESSFILES["CLAUDE.md · AGENTS.md<br/>.cursor/rules · opencode.json<br/>.mcp.json · .codex/config.toml"]
+        HARNESSFILES["CLAUDE.md · AGENTS.md<br/>.cursor/rules · opencode.json<br/>.mcp.json · .codex/config.toml · .devin/"]
     end
 
     DEV --> CLI

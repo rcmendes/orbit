@@ -21,7 +21,7 @@
 
 **Orbit is a local issue tracker whose tasks are Markdown files in your Git repository.** Every task and comment lives on a dedicated orphan branch, so people and agents work from the same reviewable source of truth. Mutations are serialized by one lock and published with `fsync` + rename; meaningful changes are committed to Git. There is no database, daemon, server, or context-window tax.
 
-Claude Code, Cursor, Codex, OpenCode, and any shell-capable agent get a deterministic, dependency-aware ready queue through a strict JSON CLI or an MCP server. Every claim is atomic, so two agents never take the same task. Humans get readable Git diffs and exactly the same board.
+Claude Code, Cursor, Codex, OpenCode, Devin, and any shell-capable agent get a deterministic, dependency-aware ready queue through a strict JSON CLI or an MCP server. Every claim is atomic, so two agents never take the same task. Humans get readable Git diffs and exactly the same board.
 
 **1 binary · 0 daemons · 4 statuses · 17 MCP tools · 100% Markdown tasks**
 
@@ -78,7 +78,7 @@ Orbit is deliberately narrow. It is not a project-management suite, a time track
 ### Built for
 
 - **Solo builders** who want a fast local backlog that lives beside the code and never needs a server.
-- **Agent squads** running Claude Code, Cursor, Codex, and OpenCode in parallel against one product.
+- **Agent squads** running Claude Code, Cursor, Codex, OpenCode, and Devin in parallel against one product.
 - **Multi-repository products** where the API, web app, infrastructure, and agent tooling all need one dependency graph.
 
 ## Quick start
@@ -176,7 +176,7 @@ orbit init --global           # create the global Board at ~/.orbit
 | --- | --- | --- |
 | `--dir PATH` / `ORBIT_DIR` | Override discovery with a Workspace root or explicit Board directory. Positional `DIR` wins for `init`. | `orbit --dir ~/src/acme init` |
 | `--no-agents` | You want the same result as `--agents none` without spelling the selector. | `orbit init --no-agents` |
-| `--hooks` | You also want the Claude Code SessionStart hook. | `orbit init --agents claude --hooks` |
+| `--hooks` | You also want the Claude or Devin SessionStart hook. | `orbit init --agents claude --hooks` |
 | `--portable-mcp` | Generated MCP entries should call bare `orbit` instead of an absolute binary path. | `orbit init --portable-mcp` |
 | `--mcp-bin PATH` | You need to record a specific Orbit executable for MCP; conflicts with `--portable-mcp`. | `orbit init --mcp-bin /usr/local/bin/orbit` |
 
@@ -289,7 +289,7 @@ Orbit is one binary with two front doors: the JSON CLI and the MCP stdio server.
 flowchart LR
     subgraph Clients["Clients"]
         DEV["Developer"]
-        AGENT["Coding agent<br/>Claude Code · Cursor · Codex · OpenCode"]
+        AGENT["Coding agent<br/>Claude Code · Cursor · Codex · OpenCode · Devin"]
         MCPC["MCP client"]
     end
 
@@ -313,7 +313,7 @@ flowchart LR
     end
 
     subgraph Harness["Harness files"]
-        FILES["CLAUDE.md · AGENTS.md<br/>.mcp.json · opencode.json"]
+        FILES["CLAUDE.md · AGENTS.md<br/>.mcp.json · opencode.json · .devin/"]
         HOOK["SessionStart hook"]
     end
 
@@ -705,7 +705,7 @@ cached data is retained. Discovery does not create Orbit Tasks or GitHub Issues.
 
 `orbit workspace setup` uses the last refreshed catalog to preview and reconcile
 agent integrations in included child repositories. It supports Claude Code,
-Cursor, Codex, and OpenCode; the selected harnesses are saved on the Workspace
+Cursor, Codex, OpenCode, and Devin; the selected harnesses are saved on the Workspace
 Board and reused when a later refresh discovers new repositories. The Workspace
 root also gets managed `AGENTS.md` and `CLAUDE.md` entry points. Matt Pocock
 skills are detected separately and receive their Orbit tracker and triage-label
@@ -925,7 +925,7 @@ orbit --dir ~/src/acme mcp         # serve a Workspace Board
 
 MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent` and `type`; `update` accepts `type`; `checkpoint` records the active handoff state on a claimed task; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types`. The three `issue_*` tools refresh and browse the Workspace Remote Issue catalog without importing or claiming those Issues.
 
-Editors launch the server from their MCP configuration. `orbit setup` writes project-level configs for Claude, Cursor, Codex, and OpenCode by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. `--scope user` writes the harness's user-level locations instead. Generated configs record no Board path; discovery starts from the project directory, and `--dir`/`ORBIT_DIR` covers an editor that launches elsewhere. Use `--no-mcp` for instructions only, or `--portable-mcp` to write the bare `orbit` command instead; the editor or agent that launches the MCP server must then find Orbit on its `PATH`. A repair without `--portable-mcp` returns MCP entries to the absolute-path default.
+Editors launch the server from their MCP configuration. `orbit setup` writes project-level configs for Claude, Cursor, Codex, OpenCode, and Devin by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. `--scope user` writes the harness's user-level locations instead. Generated configs record no Board path; discovery starts from the project directory, and `--dir`/`ORBIT_DIR` covers an editor that launches elsewhere. Use `--no-mcp` for instructions only, or `--portable-mcp` to write the bare `orbit` command instead; the editor or agent that launches the MCP server must then find Orbit on its `PATH`. A repair without `--portable-mcp` returns MCP entries to the absolute-path default.
 
 ## Export the board
 
@@ -959,6 +959,7 @@ orbit setup claude --hooks   # CLAUDE.md + SessionStart hook + MCP
 orbit setup cursor           # .cursor/rules/orbit.mdc + skill + MCP
 orbit setup codex            # AGENTS.md + skill + MCP
 orbit setup opencode         # AGENTS.md + MCP
+orbit setup devin            # .devin/ rule + skill + MCP
 orbit setup mattpocock       # docs/agents/issue-tracker.md
 orbit setup all --scope user # machine-wide instruction and MCP files
 orbit setup all --check      # installed / missing / stale
@@ -976,7 +977,7 @@ orbit setup all --remove     # remove only Orbit-managed content
 | `--check` | CI or a repair check: report installed, missing, or stale and exit non-zero on drift. | `orbit setup all --check` |
 | `--remove` | Uninstall only what Orbit manages, leaving unrelated configuration alone. | `orbit setup all --remove` |
 | `--no-mcp` | Write instruction and skill files without MCP entries. | `orbit setup codex --no-mcp` |
-| `--hooks` | Add the Claude Code SessionStart hook. | `orbit setup claude --hooks` |
+| `--hooks` | Add the Claude or Devin SessionStart hook. | `orbit setup claude --hooks` |
 | `--portable-mcp` | Write bare `orbit` in MCP configs; the editor's PATH must resolve it. | `orbit setup opencode --portable-mcp` |
 | `--print` | Preview the exact files that would be written or removed. | `orbit setup all --print` |
 
@@ -986,15 +987,15 @@ A hand-written Matt Pocock guide is respected. If `docs/agents/issue-tracker.md`
 
 CI runs `orbit setup opencode --no-mcp --check` on every push and pull request, so the checked-in `AGENTS.md` managed block cannot drift from the generator. `--no-mcp` keeps the machine-local `opencode.json` out of the check.
 
-### Claude Code hook
+### SessionStart hooks
 
-`orbit setup claude --hooks` installs a SessionStart hook in `.claude/settings.json`. The hook records the absolute Orbit binary and runs:
+`orbit setup claude --hooks` installs a SessionStart hook in `.claude/settings.json`; `orbit setup devin --hooks` installs one in `.devin/hooks.v1.json`. Each hook records the absolute Orbit binary and runs:
 
 ```bash
-orbit prime --hook-json --by claude
+orbit prime --hook-json --by claude   # or --by devin
 ```
 
-`prime` prints the agent workflow, board counts, top ready tasks, close candidates, and stale claims — about 1k tokens of starting context. `--hook-json` wraps the same text in Claude Code's SessionStart envelope.
+`prime` prints the agent workflow, board counts, top ready tasks, close candidates, and stale claims — about 1k tokens of starting context. `--hook-json` wraps the same text in the SessionStart envelope both harnesses read.
 
 Because generated MCP commands are machine-specific, keep those config files untracked when possible. If one is committed, regenerate it after installing Orbit elsewhere, or use `--portable-mcp` so the committed command stays `orbit`.
 

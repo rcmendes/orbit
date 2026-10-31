@@ -179,7 +179,7 @@ pub struct InitArgs {
     #[arg(long = "no-agents", conflicts_with = "agents")]
     pub no_agents: bool,
 
-    /// Install the Claude Code SessionStart hook.
+    /// Install the SessionStart hook for Claude and Devin.
     #[arg(long)]
     pub hooks: bool,
 
@@ -782,7 +782,7 @@ pub struct SetupArgs {
     #[arg(long, value_enum, default_value_t = SetupScope::Project)]
     pub scope: SetupScope,
 
-    /// Install the Claude Code SessionStart hook. Other clients ignore it.
+    /// Install the SessionStart hook for Claude and Devin. Other clients ignore it.
     #[arg(long)]
     pub hooks: bool,
 
@@ -1012,7 +1012,7 @@ pub struct WorkspaceSetupArgs {
     #[arg(long, value_name = "SELECTOR", conflicts_with = "remove")]
     pub agents: Option<String>,
 
-    /// Install the Claude Code SessionStart hook in selected repositories.
+    /// Install the SessionStart hook for Claude and Devin in selected repositories.
     #[arg(long)]
     pub hooks: bool,
 

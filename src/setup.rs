@@ -21,6 +21,7 @@ pub enum SetupClient {
     Cursor,
     Codex,
     Opencode,
+    Devin,
     Mattpocock,
     All,
 }
@@ -32,6 +33,7 @@ impl SetupClient {
             SetupClient::Cursor => "cursor",
             SetupClient::Codex => "codex",
             SetupClient::Opencode => "opencode",
+            SetupClient::Devin => "devin",
             SetupClient::Mattpocock => "mattpocock",
             SetupClient::All => "all",
         }
@@ -43,6 +45,7 @@ impl SetupClient {
             "cursor" => Some(SetupClient::Cursor),
             "codex" => Some(SetupClient::Codex),
             "opencode" => Some(SetupClient::Opencode),
+            "devin" => Some(SetupClient::Devin),
             "mattpocock" => Some(SetupClient::Mattpocock),
             "all" => Some(SetupClient::All),
             _ => None,
@@ -61,18 +64,28 @@ impl SetupClient {
             SetupClient::Cursor,
             SetupClient::Codex,
             SetupClient::Opencode,
+            SetupClient::Devin,
         ]
     }
 
     pub fn is_harness(self) -> bool {
         matches!(
             self,
-            SetupClient::Claude | SetupClient::Cursor | SetupClient::Codex | SetupClient::Opencode
+            SetupClient::Claude
+                | SetupClient::Cursor
+                | SetupClient::Codex
+                | SetupClient::Opencode
+                | SetupClient::Devin
         )
     }
 
     pub fn harness_from_name(name: &str) -> Option<Self> {
         Self::from_name(name).filter(|client| client.is_harness())
+    }
+
+    /// Clients that accept a SessionStart hook running `orbit prime`.
+    pub fn supports_hooks(self) -> bool {
+        matches!(self, SetupClient::Claude | SetupClient::Devin)
     }
 
     pub fn uses_mcp(self) -> bool {
@@ -227,9 +240,7 @@ impl FileOutcome {
             "path": self.relative.to_string_lossy(),
             "action": self.action,
         });
-        if include_content
-            && let Some(content) = &self.content
-        {
+        if include_content && let Some(content) = &self.content {
             value["content"] = json!(content);
         }
         value
@@ -275,10 +286,12 @@ pub fn run(args: crate::cli::SetupArgs, _dir: Option<&Path>) -> Result<CommandOu
         warnings.push("mattpocock is not an MCP client; ignoring MCP options".to_string());
     }
 
-    let hooks =
-        args.hooks && !args.remove && matches!(args.client, SetupClient::Claude | SetupClient::All);
+    let hooks = args.hooks
+        && !args.remove
+        && (args.client == SetupClient::All || args.client.supports_hooks());
     if args.hooks && !args.remove && !hooks {
-        warnings.push("hooks are only supported for Claude in M1; ignoring --hooks".to_string());
+        warnings
+            .push("hooks are only supported for Claude and Devin; ignoring --hooks".to_string());
     }
 
     let mcp = !args.no_mcp;
@@ -505,15 +518,33 @@ pub fn refresh(root: &Path) -> Result<InstallOutcome> {
 }
 
 pub(crate) fn has_orbit_hook(root: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(root.join(".claude/settings.json")) else {
-        return false;
+    [
+        (".claude/settings.json", true),
+        (".devin/hooks.v1.json", false),
+    ]
+    .iter()
+    .any(|(relative, nested)| {
+        let Ok(content) = std::fs::read_to_string(root.join(relative)) else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&content) else {
+            return false;
+        };
+        session_start_has_orbit_hook(&value, *nested)
+    })
+}
+
+/// Whether the file's SessionStart groups include an Orbit hook. Settings
+/// files nest the event map under a `hooks` key; Devin's standalone
+/// `hooks.v1.json` is the event map itself.
+fn session_start_has_orbit_hook(value: &Value, nested: bool) -> bool {
+    let events = if nested {
+        value.get("hooks")
+    } else {
+        Some(value)
     };
-    let Ok(value) = serde_json::from_str::<Value>(&content) else {
-        return false;
-    };
-    value
-        .get("hooks")
-        .and_then(|hooks| hooks.get("SessionStart"))
+    events
+        .and_then(|events| events.get("SessionStart"))
         .and_then(Value::as_array)
         .is_some_and(|groups| {
             groups.iter().any(|group| {
@@ -550,6 +581,12 @@ pub(crate) fn configured_clients(root: &Path) -> Vec<SetupClient> {
     if contains("opencode.json", "\"orbit\"") {
         clients.push(SetupClient::Opencode);
     }
+    if contains(".devin/rules/orbit.md", BEGIN_MARKER)
+        || contains(".devin/mcp_config.json", "\"orbit\"")
+        || contains(".devin/hooks.v1.json", "orbit prime")
+    {
+        clients.push(SetupClient::Devin);
+    }
     if root.join("docs/agents/issue-tracker.md").is_file()
         || root.join("docs/agents/triage-labels.md").is_file()
     {
@@ -580,6 +617,9 @@ pub(crate) fn configured_mcp_command(root: &Path, client: SetupClient) -> Option
         SetupClient::Opencode => {
             read_json_orbit_command(root, "opencode.json", &["mcp", "servers", "orbit"])
                 .or_else(|| read_json_orbit_command(root, "opencode.json", &["mcp", "orbit"]))
+        }
+        SetupClient::Devin => {
+            read_json_orbit_command(root, ".devin/mcp_config.json", &["mcpServers", "orbit"])
         }
         SetupClient::Mattpocock | SetupClient::All => None,
     }
@@ -694,6 +734,12 @@ pub fn detect(root: &Path) -> Vec<SetupClient> {
                     || home_has(".config/opencode")
                     || root.join("opencode.json").exists()
             }
+            SetupClient::Devin => {
+                find_on_path("devin").is_some()
+                    || home_has(".config/devin")
+                    || home_has(".devin")
+                    || root.join(".devin").is_dir()
+            }
             SetupClient::Mattpocock | SetupClient::All => false,
         })
         .collect()
@@ -704,15 +750,7 @@ pub fn detect(root: &Path) -> Vec<SetupClient> {
 pub fn detect_harnesses(root: &Path) -> Vec<SetupClient> {
     detect(root)
         .into_iter()
-        .filter(|client| {
-            matches!(
-                client,
-                SetupClient::Claude
-                    | SetupClient::Cursor
-                    | SetupClient::Codex
-                    | SetupClient::Opencode
-            )
-        })
+        .filter(|client| client.is_harness())
         .collect()
 }
 
@@ -756,7 +794,7 @@ fn parse_agents_with(
                 }
                 let client = SetupClient::harness_from_name(token).ok_or_else(|| {
                     OrbitError::invalid_argument(format!(
-                        "unknown harness `{token}`; expected claude, cursor, codex, or opencode"
+                        "unknown harness `{token}`; expected claude, cursor, codex, opencode, or devin"
                     ))
                 })?;
                 if client == SetupClient::All {
@@ -906,13 +944,14 @@ fn prompt_agents(
     prompt_agents_from(&all, detected, input, prompt)
 }
 
-/// Prompt for the four agent harnesses supported by Workspace integration.
+/// Prompt for the agent harnesses supported by Workspace integration.
 pub fn prompt_workspace_harnesses(detected: &[SetupClient]) -> Result<Vec<SetupClient>> {
     let all = [
         SetupClient::Claude,
         SetupClient::Cursor,
         SetupClient::Codex,
         SetupClient::Opencode,
+        SetupClient::Devin,
     ];
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
@@ -1035,12 +1074,23 @@ struct PlanOptions<'a> {
     mcp_bin: Option<&'a Path>,
 }
 
+/// One file that can hold a SessionStart hook. Settings-style files nest the
+/// event map under a `hooks` key; Devin's standalone `hooks.v1.json` is the
+/// event map itself.
+#[derive(Clone, Copy)]
+struct HooksPath {
+    relative: &'static str,
+    nested: bool,
+}
+
+type RuleTemplate = (&'static str, fn() -> String);
+
 #[derive(Default)]
 struct ClientPaths {
     instructions: Option<&'static str>,
-    rule: Option<&'static str>,
+    rule: Option<RuleTemplate>,
     skill: Option<&'static str>,
-    hooks: Option<&'static str>,
+    hooks: Option<HooksPath>,
     mcp_json: Option<(&'static str, McpJsonKind)>,
     mcp_toml: Option<&'static str>,
     tracker: Option<&'static str>,
@@ -1056,7 +1106,10 @@ fn client_paths(client: SetupClient, scope: SetupScope) -> ClientPaths {
             } else {
                 "CLAUDE.md"
             }),
-            hooks: Some(".claude/settings.json"),
+            hooks: Some(HooksPath {
+                relative: ".claude/settings.json",
+                nested: true,
+            }),
             mcp_json: Some((
                 if user { ".claude.json" } else { ".mcp.json" },
                 McpJsonKind::Servers,
@@ -1064,7 +1117,7 @@ fn client_paths(client: SetupClient, scope: SetupScope) -> ClientPaths {
             ..ClientPaths::default()
         },
         SetupClient::Cursor => ClientPaths {
-            rule: Some(".cursor/rules/orbit.mdc"),
+            rule: Some((".cursor/rules/orbit.mdc", cursor_rule)),
             skill: Some(".agents/skills/orbit/SKILL.md"),
             mcp_json: Some((".cursor/mcp.json", McpJsonKind::Servers)),
             ..ClientPaths::default()
@@ -1092,6 +1145,36 @@ fn client_paths(client: SetupClient, scope: SetupScope) -> ClientPaths {
                     "opencode.json"
                 },
                 McpJsonKind::Opencode,
+            )),
+            ..ClientPaths::default()
+        },
+        SetupClient::Devin => ClientPaths {
+            // `~/.devin/rules/*.md` is the user-level location, so the same
+            // relative path serves both scopes.
+            rule: Some((".devin/rules/orbit.md", devin_rule)),
+            skill: Some(if user {
+                ".config/devin/skills/orbit/SKILL.md"
+            } else {
+                ".devin/skills/orbit/SKILL.md"
+            }),
+            hooks: Some(if user {
+                HooksPath {
+                    relative: ".config/devin/config.json",
+                    nested: true,
+                }
+            } else {
+                HooksPath {
+                    relative: ".devin/hooks.v1.json",
+                    nested: false,
+                }
+            }),
+            mcp_json: Some((
+                if user {
+                    ".config/devin/mcp_config.json"
+                } else {
+                    ".devin/mcp_config.json"
+                },
+                McpJsonKind::Servers,
             )),
             ..ClientPaths::default()
         },
@@ -1181,8 +1264,8 @@ fn plan_install(
     if let Some(instructions) = paths.instructions {
         plan_section(root, instructions, &workflow_section(), plan)?;
     }
-    if let Some(rule) = paths.rule {
-        plan_full_file(root, rule, &cursor_rule(), plan)?;
+    if let Some((rule, content)) = paths.rule {
+        plan_full_file(root, rule, &content(), plan)?;
     }
     if let Some(skill) = paths.skill {
         plan_full_file(root, skill, &skill_file(), plan)?;
@@ -1201,7 +1284,7 @@ fn plan_install(
     if options.hooks
         && let Some(hooks) = paths.hooks
     {
-        plan_claude_hooks(root, hooks, options.hook_bin, false, plan)?;
+        plan_hooks(root, hooks, options.hook_bin, client.name(), false, plan)?;
     }
     if mcp {
         if let Some((relative, kind)) = paths.mcp_json {
@@ -1232,7 +1315,7 @@ fn plan_remove(
     if let Some(instructions) = paths.instructions {
         plan_section_remove(root, instructions, plan)?;
     }
-    if let Some(rule) = paths.rule {
+    if let Some((rule, _)) = paths.rule {
         plan_full_file_remove(root, rule, plan)?;
     }
     if let Some(skill) = paths.skill {
@@ -1245,7 +1328,7 @@ fn plan_remove(
         plan_section_remove(root, triage_labels, plan)?;
     }
     if let Some(hooks) = paths.hooks {
-        plan_claude_hooks(root, hooks, None, true, plan)?;
+        plan_hooks(root, hooks, None, client.name(), true, plan)?;
     }
     if let Some((relative, kind)) = paths.mcp_json {
         let entry = match kind {
@@ -1405,13 +1488,15 @@ fn plan_full_file_remove(
     Ok(())
 }
 
-fn plan_claude_hooks(
+fn plan_hooks(
     root: &Path,
-    relative: &str,
+    hooks: HooksPath,
     bin: Option<&Path>,
+    agent: &str,
     remove: bool,
     plan: &mut BTreeMap<PathBuf, FilePlan>,
 ) -> Result<()> {
+    let relative = hooks.relative;
     let absolute = root.join(relative);
     let existing = read_optional(&absolute)?;
     let mut value: Value = match &existing {
@@ -1421,10 +1506,10 @@ fn plan_claude_hooks(
     };
 
     let changed = if remove {
-        remove_orbit_hook(&mut value)?
+        remove_orbit_hook(&mut value, hooks.nested, relative)?
     } else {
         let bin = bin.ok_or_else(|| OrbitError::config("hooks require a resolved Orbit binary"))?;
-        add_orbit_hook(&mut value, bin)?
+        add_orbit_hook(&mut value, bin, agent, hooks.nested, relative)?
     };
     if !changed {
         return Ok(());
@@ -2143,15 +2228,25 @@ fn remove_section(existing: &str, relative: &str) -> Result<(String, bool)> {
     }
 }
 
-fn add_orbit_hook(value: &mut Value, bin: &Path) -> Result<bool> {
-    let desired = hook_command(bin);
+fn add_orbit_hook(
+    value: &mut Value,
+    bin: &Path,
+    agent: &str,
+    nested: bool,
+    relative: &str,
+) -> Result<bool> {
+    let desired = hook_command(bin, agent);
     {
-        let object = value.as_object().ok_or_else(|| {
-            OrbitError::config(".claude/settings.json must contain a JSON object")
-        })?;
-        if let Some(groups) = object
-            .get("hooks")
-            .and_then(|hooks| hooks.get("SessionStart"))
+        let object = value
+            .as_object()
+            .ok_or_else(|| OrbitError::config(format!("{relative} must contain a JSON object")))?;
+        let events = if nested {
+            object.get("hooks").and_then(Value::as_object)
+        } else {
+            Some(object)
+        };
+        if let Some(groups) = events
+            .and_then(|events| events.get("SessionStart"))
             .and_then(Value::as_array)
             && groups.iter().any(|group| {
                 group
@@ -2169,23 +2264,30 @@ fn add_orbit_hook(value: &mut Value, bin: &Path) -> Result<bool> {
     }
 
     // Migrate away from a bare `orbit` command or a previous binary path.
-    remove_orbit_hook(value)?;
+    remove_orbit_hook(value, nested, relative)?;
 
     let object = value
         .as_object_mut()
-        .ok_or_else(|| OrbitError::config(".claude/settings.json must contain a JSON object"))?;
-    let hooks = object
-        .entry("hooks")
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .ok_or_else(|| OrbitError::config(".claude/settings.json hooks must be an object"))?;
-    let session_start = hooks
+        .ok_or_else(|| OrbitError::config(format!("{relative} must contain a JSON object")))?;
+    let events = if nested {
+        object
+            .entry("hooks")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| OrbitError::config(format!("{relative} hooks must be an object")))?
+    } else {
+        object
+    };
+    let event_path = if nested {
+        "hooks.SessionStart"
+    } else {
+        "SessionStart"
+    };
+    let session_start = events
         .entry("SessionStart")
         .or_insert_with(|| json!([]))
         .as_array_mut()
-        .ok_or_else(|| {
-            OrbitError::config(".claude/settings.json hooks.SessionStart must be an array")
-        })?;
+        .ok_or_else(|| OrbitError::config(format!("{relative} {event_path} must be an array")))?;
 
     session_start.push(json!({
         "matcher": "",
@@ -2196,44 +2298,53 @@ fn add_orbit_hook(value: &mut Value, bin: &Path) -> Result<bool> {
     Ok(true)
 }
 
-fn hook_command(bin: &Path) -> String {
+fn hook_command(bin: &Path, agent: &str) -> String {
     let rendered = bin.to_string_lossy();
     let rendered = if rendered.contains(' ') {
         format!("\"{rendered}\"")
     } else {
         rendered.to_string()
     };
-    format!("{rendered} prime --hook-json --by claude")
+    format!("{rendered} prime --hook-json --by {agent}")
 }
 
-fn remove_orbit_hook(value: &mut Value) -> Result<bool> {
+fn remove_orbit_hook(value: &mut Value, nested: bool, relative: &str) -> Result<bool> {
     let object = value
         .as_object_mut()
-        .ok_or_else(|| OrbitError::config(".claude/settings.json must contain a JSON object"))?;
-    let Some(hooks) = object.get_mut("hooks").and_then(Value::as_object_mut) else {
-        return Ok(false);
-    };
-    let Some(session_start) = hooks.get_mut("SessionStart").and_then(Value::as_array_mut) else {
-        return Ok(false);
-    };
-
-    let mut changed = false;
-    session_start.retain_mut(|group| {
-        let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
-            return true;
+        .ok_or_else(|| OrbitError::config(format!("{relative} must contain a JSON object")))?;
+    let (changed, remove_hooks_key) = {
+        let events = if nested {
+            match object.get_mut("hooks").and_then(Value::as_object_mut) {
+                Some(events) => events,
+                None => return Ok(false),
+            }
+        } else {
+            &mut *object
         };
-        let before = handlers.len();
-        handlers.retain(|handler| !is_orbit_hook(handler));
-        if handlers.len() != before {
-            changed = true;
-        }
-        !handlers.is_empty()
-    });
+        let Some(session_start) = events.get_mut("SessionStart").and_then(Value::as_array_mut)
+        else {
+            return Ok(false);
+        };
 
-    if session_start.is_empty() {
-        hooks.remove("SessionStart");
-    }
-    if hooks.is_empty() {
+        let mut changed = false;
+        session_start.retain_mut(|group| {
+            let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+                return true;
+            };
+            let before = handlers.len();
+            handlers.retain(|handler| !is_orbit_hook(handler));
+            if handlers.len() != before {
+                changed = true;
+            }
+            !handlers.is_empty()
+        });
+
+        if session_start.is_empty() {
+            events.remove("SessionStart");
+        }
+        (changed, nested && events.is_empty())
+    };
+    if remove_hooks_key {
         object.remove("hooks");
     }
     Ok(changed)
@@ -2291,6 +2402,19 @@ fn cursor_rule() -> String {
 description: \"Orbit task tracker workflow\"
 globs: [\"**/*\"]
 alwaysApply: true
+---
+
+{}
+",
+        workflow_section()
+    )
+}
+
+fn devin_rule() -> String {
+    format!(
+        "---
+description: \"Orbit task tracker workflow\"
+trigger: always_on
 ---
 
 {}
@@ -2429,6 +2553,8 @@ mod tests {
             ".codex/config.toml",
             "opencode.json",
             ".config/opencode/opencode.json",
+            ".devin/mcp_config.json",
+            ".config/devin/mcp_config.json",
         ] {
             assert!(relatives.contains(&expected), "missing {expected}");
         }
@@ -2703,16 +2829,40 @@ mod tests {
             "permissions": { "allow": ["Bash(git status)"] }
         });
         let bin = Path::new("/opt/orbit/bin/orbit");
-        assert!(add_orbit_hook(&mut value, bin).unwrap());
-        assert!(!add_orbit_hook(&mut value, bin).unwrap());
+        assert!(add_orbit_hook(&mut value, bin, "claude", true, ".claude/settings.json").unwrap());
+        assert!(!add_orbit_hook(&mut value, bin, "claude", true, ".claude/settings.json").unwrap());
         assert_eq!(
             value["hooks"]["SessionStart"][0]["hooks"][0]["command"],
             "/opt/orbit/bin/orbit prime --hook-json --by claude"
         );
         assert_eq!(value["permissions"]["allow"][0], "Bash(git status)");
 
-        assert!(remove_orbit_hook(&mut value).unwrap());
+        assert!(remove_orbit_hook(&mut value, true, ".claude/settings.json").unwrap());
         assert!(value.get("hooks").is_none());
         assert_eq!(value["permissions"]["allow"][0], "Bash(git status)");
+    }
+
+    #[test]
+    fn devin_hook_uses_the_top_level_event_map() {
+        let mut value = json!({
+            "PreToolUse": [
+                {
+                    "matcher": "exec",
+                    "hooks": [{ "type": "command", "command": "./check.sh" }]
+                }
+            ]
+        });
+        let bin = Path::new("/opt/orbit/bin/orbit");
+        assert!(add_orbit_hook(&mut value, bin, "devin", false, ".devin/hooks.v1.json").unwrap());
+        assert!(!add_orbit_hook(&mut value, bin, "devin", false, ".devin/hooks.v1.json").unwrap());
+        assert_eq!(
+            value["SessionStart"][0]["hooks"][0]["command"],
+            "/opt/orbit/bin/orbit prime --hook-json --by devin"
+        );
+        assert_eq!(value["PreToolUse"][0]["hooks"][0]["command"], "./check.sh");
+
+        assert!(remove_orbit_hook(&mut value, false, ".devin/hooks.v1.json").unwrap());
+        assert!(value.get("SessionStart").is_none());
+        assert_eq!(value["PreToolUse"][0]["hooks"][0]["command"], "./check.sh");
     }
 }

@@ -188,7 +188,7 @@ fn diagnose(
             crate::git::repo_root().unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
         if crate::setup::has_orbit_hook(&repo_root) {
             warnings.push(
-                "`orbit` is not the binary on PATH; the Claude SessionStart hook will not find it"
+                "`orbit` is not the binary on PATH; the SessionStart hook will not find it"
                     .to_string(),
             );
         }

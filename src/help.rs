@@ -74,7 +74,7 @@ the stored prefix; an empty Board can change it, and a populated Board returns
 SLUG_LOCKED pointing at `orbit slug migrate`.
 
 Init then detects installed coding-agent harnesses (Claude Code, Cursor, Codex,
-and OpenCode) and writes only the integrations that apply. Matt Pocock skills are
+OpenCode, and Devin) and writes only the integrations that apply. Matt Pocock skills are
 a separate compatibility integration and are not part of init harness detection.
 Files carry a managed marker, so re-running reconciles integration instead of
 failing. A hand-written docs/agents/issue-tracker.md without the marker is
@@ -736,12 +736,12 @@ Examples:
 pub const PRIME_LONG: &str = "\
 Prints the agent workflow instructions, Board counts, the top ready tasks, open
 Parent Tasks ready to close, and stale claims. This is the context an agent
-session starts with; the Claude Code SessionStart hook calls
+session starts with; the Claude and Devin SessionStart hooks call
 `orbit prime --hook-json` automatically.
 
 --repo NAME and repeatable --label scope the counts, ready tasks, close
 candidates, and stale claims to a repository or label set. --hook-json prints
-Claude Code's hook envelope instead of the normal output and cannot be combined
+the SessionStart hook envelope instead of the normal output and cannot be combined
 with --json.";
 
 pub const PRIME_EXAMPLES: &str = "\
@@ -775,15 +775,17 @@ Examples:
 
 pub const SETUP_LONG: &str = "\
 Installs or repairs one harness integration. Each client writes its instruction
-file, skill, and MCP configuration as appropriate; Claude can also receive the
-SessionStart hook with --hooks. Re-running is safe: only managed sections are
+file, skill, and MCP configuration as appropriate; Claude and Devin can also
+receive the SessionStart hook with --hooks. Re-running is safe: only managed
+sections are
 rewritten. A hand-written docs/agents/issue-tracker.md without the marker is
 reported as skipped and left alone.
 
 --scope project (the default) writes repository-level files. --scope user writes
 the same managed content under the user's home: Claude memory, settings, and
 ~/.claude.json; Cursor rules, skill, and mcp.json; Codex global AGENTS.md, skill,
-and config.toml; OpenCode's global config and AGENTS.md; and the user-level
+and config.toml; OpenCode's global config and AGENTS.md; Devin's global rules,
+skill, mcp_config.json, and config.json hook; and the user-level
 tracker guide. --print, --check, and --remove all operate on the selected scope.
 Generated configs never record the Board path, so moving the Orbit folder does
 not stale them.
@@ -846,7 +848,7 @@ reports LEGACY_LAYOUT, AMBIGUOUS_BOARD, ORPHAN_WORKTREE, STORAGE_MISMATCH, and
 ABSOLUTE_BOARD_PATH findings. When a Board resolves, it also checks malformed
 tasks, dangling dependencies, missing or nested parents, cycles, orphan or
 corrupt comments, stale temp files, uncommitted changes, the checked-out branch,
-and a Claude hook that cannot find the Orbit binary on PATH.
+and a SessionStart hook that cannot find the Orbit binary on PATH.
 
 From a Workspace root or any child repository it also reports the resolved
 Workspace and Board, repository discovery and access failures, stale or partial
@@ -964,7 +966,7 @@ a repository does not delete its cached catalog data. Discovery never creates
 Orbit Tasks or GitHub Issues.
 
 `setup` operates on the last explicitly refreshed catalog. It detects Claude
-Code, Cursor, Codex, and OpenCode across included child repositories, previews
+Code, Cursor, Codex, OpenCode, and Devin across included child repositories, previews
 with `--print`, and writes their native instructions and MCP entries in each
 selected repository. The chosen harnesses are saved in the Workspace Board for
 later setup runs after discovery finds new repositories. Workspace-level
@@ -1023,7 +1025,7 @@ Reconcile coding-agent integrations across the currently discovered Workspace re
 
 Setup uses the last explicit `orbit workspace refresh`; it does not poll GitHub
 or scan for newly cloned repositories. It detects Claude Code, Cursor, Codex,
-and OpenCode across included child repositories, and saves an applied selection
+OpenCode, and Devin across included child repositories, and saves an applied selection
 for later reconciliations. Use `--print` to preview without writing. The
 Workspace root receives managed `AGENTS.md` and `CLAUDE.md` entry points.
 

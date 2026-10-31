@@ -86,7 +86,7 @@ fn workspace_setup_installs_selected_harnesses_in_children_and_is_idempotent() {
     assert_eq!(status, 0, "{result}");
     assert_eq!(
         result["data"]["agents"],
-        json!(["claude", "cursor", "codex", "opencode"])
+        json!(["claude", "cursor", "codex", "opencode", "devin"])
     );
     for path in [
         "CLAUDE.md",
@@ -97,6 +97,9 @@ fn workspace_setup_installs_selected_harnesses_in_children_and_is_idempotent() {
         ".agents/skills/orbit/SKILL.md",
         ".codex/config.toml",
         "opencode.json",
+        ".devin/rules/orbit.md",
+        ".devin/skills/orbit/SKILL.md",
+        ".devin/mcp_config.json",
     ] {
         assert!(
             child.join(path).exists(),
@@ -260,6 +263,9 @@ fn workspace_setup_reconciles_newly_discovered_repositories_using_saved_selectio
         ".agents/skills/orbit/SKILL.md",
         ".codex/config.toml",
         "opencode.json",
+        ".devin/rules/orbit.md",
+        ".devin/skills/orbit/SKILL.md",
+        ".devin/mcp_config.json",
     ] {
         assert!(worker.join(path).exists(), "missing reconciled file {path}");
     }

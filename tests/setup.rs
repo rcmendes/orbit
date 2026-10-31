@@ -21,10 +21,14 @@ fn assert_orbit_command(value: &Value) {
 }
 
 fn assert_hook_command(value: &Value) {
+    assert_hook_command_for(value, "claude");
+}
+
+fn assert_hook_command_for(value: &Value, agent: &str) {
     let command = value.as_str().expect("command is a string");
-    let suffix = " prime --hook-json --by claude";
+    let suffix = format!(" prime --hook-json --by {agent}");
     let binary = command
-        .strip_suffix(suffix)
+        .strip_suffix(&suffix)
         .unwrap_or_else(|| panic!("unexpected hook command {command}"));
     assert!(
         Path::new(binary).is_absolute(),
@@ -79,6 +83,102 @@ fn setup_claude_preserves_settings_and_is_idempotent() {
     let settings = repo.read_json(".claude/settings.json");
     assert_eq!(settings["permissions"]["allow"][0], "Bash(git status)");
     assert!(settings.get("hooks").is_none());
+}
+
+#[test]
+fn setup_devin_writes_rule_skill_mcp_and_hook() {
+    let repo = TestRepo::new();
+    std::fs::create_dir_all(repo.path().join(".devin")).unwrap();
+    std::fs::write(
+        repo.path().join(".devin/hooks.v1.json"),
+        "{\n  \"PreToolUse\": [\n    {\n      \"matcher\": \"exec\",\n      \"hooks\": [\n        { \"type\": \"command\", \"command\": \"./scripts/check.sh\" }\n      ]\n    }\n  ]\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.path().join(".devin/mcp_config.json"),
+        "{\n  \"mcpServers\": {\n    \"other\": {\n      \"command\": \"other-server\"\n    }\n  }\n}\n",
+    )
+    .unwrap();
+
+    repo.ok_json(&["setup", "devin", "--hooks", "--json"]);
+
+    let rule = repo.read(".devin/rules/orbit.md");
+    assert!(rule.starts_with("---\n"));
+    assert!(rule.contains("trigger: always_on"));
+    assert!(rule.contains("BEGIN ORBIT INTEGRATION"));
+    assert!(rule.contains("orbit ready --claim"));
+
+    let skill = repo.read(".devin/skills/orbit/SKILL.md");
+    assert!(skill.starts_with("---\nname: orbit\n"));
+    assert!(skill.contains("BEGIN ORBIT INTEGRATION"));
+
+    let mcp = repo.read_json(".devin/mcp_config.json");
+    assert_orbit_command(&mcp["mcpServers"]["orbit"]["command"]);
+    assert_eq!(mcp["mcpServers"]["orbit"]["args"][0], "mcp");
+    assert_eq!(mcp["mcpServers"]["other"]["command"], "other-server");
+
+    let hooks = repo.read_json(".devin/hooks.v1.json");
+    assert_hook_command_for(&hooks["SessionStart"][0]["hooks"][0]["command"], "devin");
+    assert_eq!(
+        hooks["PreToolUse"][0]["hooks"][0]["command"],
+        "./scripts/check.sh"
+    );
+
+    repo.ok_json(&["setup", "devin", "--hooks", "--json"]);
+    let hooks = repo.read_json(".devin/hooks.v1.json");
+    assert_eq!(hooks["SessionStart"].as_array().unwrap().len(), 1);
+
+    let (status, value) = repo.json(&["setup", "devin", "--hooks", "--check", "--json"]);
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["status"], "installed");
+
+    repo.ok_json(&["setup", "devin", "--remove", "--json"]);
+    assert!(!repo.exists(".devin/rules/orbit.md"));
+    assert!(!repo.exists(".devin/skills/orbit/SKILL.md"));
+    let mcp = repo.read_json(".devin/mcp_config.json");
+    assert!(mcp["mcpServers"].get("orbit").is_none());
+    assert_eq!(mcp["mcpServers"]["other"]["command"], "other-server");
+    let hooks = repo.read_json(".devin/hooks.v1.json");
+    assert!(hooks.get("SessionStart").is_none());
+    assert_eq!(
+        hooks["PreToolUse"][0]["hooks"][0]["command"],
+        "./scripts/check.sh"
+    );
+}
+
+#[test]
+fn setup_devin_user_scope_writes_the_nested_config_hook() {
+    let repo = TestRepo::new();
+    let home = repo.home();
+    std::fs::create_dir_all(home.join(".config/devin")).unwrap();
+    std::fs::write(
+        home.join(".config/devin/config.json"),
+        "{\n  \"permissions\": {\n    \"allow\": [\"Exec(git status)\"]\n  }\n}\n",
+    )
+    .unwrap();
+
+    repo.ok_json(&["setup", "devin", "--scope", "user", "--hooks", "--json"]);
+
+    assert!(home.join(".devin/rules/orbit.md").is_file());
+    assert!(home.join(".config/devin/skills/orbit/SKILL.md").is_file());
+    let mcp = std::fs::read_to_string(home.join(".config/devin/mcp_config.json")).unwrap();
+    let mcp: Value = serde_json::from_str(&mcp).unwrap();
+    assert_orbit_command(&mcp["mcpServers"]["orbit"]["command"]);
+
+    let config = std::fs::read_to_string(home.join(".config/devin/config.json")).unwrap();
+    let config: Value = serde_json::from_str(&config).unwrap();
+    assert_eq!(config["permissions"]["allow"][0], "Exec(git status)");
+    assert_hook_command_for(
+        &config["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+        "devin",
+    );
+
+    repo.ok_json(&["setup", "devin", "--scope", "user", "--remove", "--json"]);
+    assert!(!home.join(".devin/rules/orbit.md").exists());
+    let config = std::fs::read_to_string(home.join(".config/devin/config.json")).unwrap();
+    let config: Value = serde_json::from_str(&config).unwrap();
+    assert_eq!(config["permissions"]["allow"][0], "Exec(git status)");
+    assert!(config.get("hooks").is_none());
 }
 
 #[test]
@@ -232,6 +332,10 @@ fn setup_all_writes_every_integration_and_removes_it() {
         ".cursor/mcp.json",
         ".codex/config.toml",
         "opencode.json",
+        ".devin/rules/orbit.md",
+        ".devin/skills/orbit/SKILL.md",
+        ".devin/mcp_config.json",
+        ".devin/hooks.v1.json",
     ] {
         assert!(repo.exists(path), "{path} was not written");
     }
@@ -250,6 +354,10 @@ fn setup_all_writes_every_integration_and_removes_it() {
         ".cursor/mcp.json",
         ".codex/config.toml",
         "opencode.json",
+        ".devin/rules/orbit.md",
+        ".devin/skills/orbit/SKILL.md",
+        ".devin/mcp_config.json",
+        ".devin/hooks.v1.json",
     ] {
         assert!(!repo.exists(path), "{path} was not removed");
     }
@@ -325,12 +433,17 @@ fn setup_all_writes_mcp_configs_for_every_client() {
     assert_eq!(orbit["command"][1], "mcp");
     assert!(orbit.get("enabled").is_none());
 
+    let devin = repo.read_json(".devin/mcp_config.json");
+    assert_orbit_command(&devin["mcpServers"]["orbit"]["command"]);
+    assert_eq!(devin["mcpServers"]["orbit"]["args"][0], "mcp");
+
     repo.ok_json(&["setup", "all", "--remove", "--json"]);
     assert!(!repo.exists(".mcp.json"));
     assert!(!repo.exists(".cursor/mcp.json"));
     assert!(!repo.exists(".codex/config.toml"));
     assert!(!repo.exists(".claude/settings.json"));
     assert!(!repo.exists("opencode.json"));
+    assert!(!repo.exists(".devin/mcp_config.json"));
 }
 
 #[test]
@@ -508,15 +621,20 @@ fn setup_portable_mcp_writes_bare_commands_and_is_idempotent() {
     let opencode = repo.read_json("opencode.json");
     assert_eq!(opencode["mcp"]["servers"]["orbit"]["command"][0], "orbit");
 
+    let devin = repo.read_json(".devin/mcp_config.json");
+    assert_eq!(devin["mcpServers"]["orbit"]["command"], "orbit");
+
     let claude_before = repo.read(".mcp.json");
     let cursor_before = repo.read(".cursor/mcp.json");
     let codex_before = repo.read(".codex/config.toml");
     let opencode_before = repo.read("opencode.json");
+    let devin_before = repo.read(".devin/mcp_config.json");
     let second = repo.ok_json(&["setup", "all", "--portable-mcp", "--json"]);
     assert_eq!(repo.read(".mcp.json"), claude_before);
     assert_eq!(repo.read(".cursor/mcp.json"), cursor_before);
     assert_eq!(repo.read(".codex/config.toml"), codex_before);
     assert_eq!(repo.read("opencode.json"), opencode_before);
+    assert_eq!(repo.read(".devin/mcp_config.json"), devin_before);
     assert!(
         second["data"]["files"]
             .as_array()
@@ -654,6 +772,10 @@ fn setup_user_scope_writes_user_files_and_honors_check_and_remove() {
         ".codex/config.toml",
         ".config/opencode/AGENTS.md",
         ".config/opencode/opencode.json",
+        ".devin/rules/orbit.md",
+        ".config/devin/skills/orbit/SKILL.md",
+        ".config/devin/mcp_config.json",
+        ".config/devin/config.json",
     ] {
         assert!(home.join(path).is_file(), "{path} was not written");
     }
@@ -662,6 +784,7 @@ fn setup_user_scope_writes_user_files_and_honors_check_and_remove() {
         ".mcp.json",
         ".codex/config.toml",
         "opencode.json",
+        ".devin/mcp_config.json",
     ] {
         assert!(!repo.exists(path), "{path} leaked into project scope");
     }
@@ -704,6 +827,10 @@ fn setup_user_scope_writes_user_files_and_honors_check_and_remove() {
         ".codex/config.toml",
         ".config/opencode/AGENTS.md",
         ".config/opencode/opencode.json",
+        ".devin/rules/orbit.md",
+        ".config/devin/skills/orbit/SKILL.md",
+        ".config/devin/mcp_config.json",
+        ".config/devin/config.json",
     ] {
         assert!(!home.join(path).exists(), "{path} was not removed");
     }

@@ -247,7 +247,7 @@ fn diagnose_layout_and_repositories(
                         .with_cause("the child directory was moved or deleted after discovery")
                         .with_next_action("run `orbit workspace refresh`; the repository will become stale and its cache retained"),
                     );
-                } else if !crate::workspace::is_direct_git_repository(&path) {
+                } else if !crate::git::is_direct_git_repository(&path) {
                     issues.push(
                         Issue::new(
                             code::WORKSPACE_REPOSITORY_INACCESSIBLE,
@@ -546,10 +546,9 @@ fn local_boards(workspace: &Path) -> Vec<PathBuf> {
             found.push(dunce::canonicalize(&candidate).unwrap_or(candidate));
         }
     }
-    if let Ok(children) = std::fs::read_dir(workspace) {
-        for child in children.flatten() {
-            let path = child.path();
-            if !path.is_dir() || child.file_name() == ".orbit" {
+    if let Ok(children) = crate::git::child_directories(workspace, true) {
+        for path in children.flatten() {
+            if path.file_name() == Some(std::ffi::OsStr::new(".orbit")) {
                 continue;
             }
             if path.join(".git").exists() {
@@ -798,8 +797,8 @@ fn diagnose_agent_setup(
         });
     if expects_workspace {
         match crate::setup::workspace_guidance(workspace, true, false) {
-            Ok(output) => {
-                record_setup_preview("Workspace root", workspace, &output, issues, warnings)
+            Ok(outcome) => {
+                record_setup_preview("Workspace root", workspace, &outcome, issues, warnings)
             }
             Err(error) => issues.push(
                 Issue::new(
@@ -870,26 +869,17 @@ fn check_repository_setup(
             },
         );
         match preview {
-            Ok(output) => {
-                let files = output
-                    .data
-                    .get("files")
-                    .and_then(serde_json::Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                for file in files {
-                    if let Some(action) = file["action"].as_str()
-                        && let Some(file_path) = file["path"].as_str()
-                    {
-                        match action {
-                            "created" | "updated" => {
-                                changed.insert(file_path.to_string());
-                            }
-                            "skipped" => {
-                                skipped.insert(file_path.to_string());
-                            }
-                            _ => {}
+            Ok(outcome) => {
+                for file in &outcome.files {
+                    let file_path = file.relative.to_string_lossy();
+                    match file.action {
+                        crate::setup::Action::Created | crate::setup::Action::Updated => {
+                            changed.insert(file_path.into_owned());
                         }
+                        crate::setup::Action::Skipped => {
+                            skipped.insert(file_path.into_owned());
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -983,17 +973,17 @@ fn check_matt_setup(
         },
     );
     match preview {
-        Ok(output) => {
-            let files = output
-                .data
-                .get("files")
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let changed = files
+        Ok(outcome) => {
+            let changed = outcome
+                .files
                 .iter()
-                .filter(|file| matches!(file["action"].as_str(), Some("created" | "updated")))
-                .filter_map(|file| file["path"].as_str().map(str::to_string))
+                .filter(|file| {
+                    matches!(
+                        file.action,
+                        crate::setup::Action::Created | crate::setup::Action::Updated
+                    )
+                })
+                .map(|file| file.relative.to_string_lossy().into_owned())
                 .collect::<Vec<_>>();
             if !changed.is_empty() {
                 warnings.push(format!(
@@ -1001,13 +991,17 @@ fn check_matt_setup(
                     changed.join(", ")
                 ));
             }
-            if let Some(conflict) = files.iter().find(|file| file["action"] == "skipped") {
+            if let Some(conflict) = outcome
+                .files
+                .iter()
+                .find(|file| file.action == crate::setup::Action::Skipped)
+            {
                 issues.push(
                     Issue::warning(
                         "MATTPOCOCK_SETUP_DRIFT",
                         format!(
                             "{repository} keeps custom tracker guidance at {}",
-                            conflict["path"].as_str().unwrap_or("docs/agents")
+                            conflict.relative.to_string_lossy()
                         ),
                     )
                     .with_repository(repository.to_string())
@@ -1026,20 +1020,20 @@ fn check_matt_setup(
 fn record_setup_preview(
     repository: &str,
     path: &Path,
-    output: &crate::output::CommandOutput,
+    outcome: &crate::setup::InstallOutcome,
     issues: &mut Vec<Issue>,
     warnings: &mut Vec<String>,
 ) {
-    let files = output
-        .data
-        .get("files")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let changed = files
+    let changed = outcome
+        .files
         .iter()
-        .filter(|file| matches!(file["action"].as_str(), Some("created" | "updated")))
-        .filter_map(|file| file["path"].as_str().map(str::to_string))
+        .filter(|file| {
+            matches!(
+                file.action,
+                crate::setup::Action::Created | crate::setup::Action::Updated
+            )
+        })
+        .map(|file| file.relative.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     if !changed.is_empty() {
         issues.push(
@@ -1058,7 +1052,8 @@ fn record_setup_preview(
         );
     }
     warnings.extend(
-        output
+        outcome
+            .output
             .warnings
             .iter()
             .map(|warning| format!("{}: {warning}", path.display())),

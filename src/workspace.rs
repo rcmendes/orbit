@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -242,7 +241,7 @@ fn setup(
                 return None;
             }
             let root = workspace.join(relative);
-            is_direct_git_repository(&root).then(|| (entry.repository.clone(), root))
+            crate::git::is_direct_git_repository(&root).then(|| (entry.repository.clone(), root))
         })
         .collect::<Vec<_>>();
 
@@ -269,7 +268,13 @@ fn setup(
     let mut warnings = Vec::new();
     let workspace_mattpocock = crate::setup::detects_mattpocock_skills(workspace);
     let workspace_files = crate::setup::workspace_guidance(workspace, args.print, args.remove)?;
-    collect_setup_output(None, workspace_files, &mut file_results, &mut warnings);
+    collect_setup_output(
+        None,
+        &workspace_files,
+        args.print,
+        &mut file_results,
+        &mut warnings,
+    );
     if workspace_mattpocock || args.remove {
         let mattpocock_files = crate::setup::install(
             workspace,
@@ -283,7 +288,13 @@ fn setup(
                 remove: args.remove,
             },
         )?;
-        collect_setup_output(None, mattpocock_files, &mut file_results, &mut warnings);
+        collect_setup_output(
+            None,
+            &mattpocock_files,
+            args.print,
+            &mut file_results,
+            &mut warnings,
+        );
     }
 
     let mcp_bin = if !args.remove && !args.no_mcp && selected.iter().any(|client| client.uses_mcp())
@@ -339,7 +350,8 @@ fn setup(
         )?;
         let files = collect_setup_output(
             Some(repository),
-            installed,
+            &installed,
+            args.print,
             &mut file_results,
             &mut warnings,
         );
@@ -421,20 +433,19 @@ fn setup(
 
 fn collect_setup_output(
     repository: Option<&str>,
-    output: crate::output::CommandOutput,
+    outcome: &crate::setup::InstallOutcome,
+    preview: bool,
     combined: &mut Vec<serde_json::Value>,
     warnings: &mut Vec<String>,
 ) -> Vec<serde_json::Value> {
     let mut files = Vec::new();
-    if let Some(entries) = output.data["files"].as_array() {
-        for entry in entries {
-            let mut file = entry.clone();
-            file["repository"] = json!(repository);
-            files.push(file.clone());
-            combined.push(file);
-        }
+    for entry in &outcome.files {
+        let mut file = entry.to_json(preview);
+        file["repository"] = json!(repository);
+        files.push(file.clone());
+        combined.push(file);
     }
-    warnings.extend(output.warnings);
+    warnings.extend(outcome.output.warnings.iter().cloned());
     files
 }
 
@@ -648,34 +659,20 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
     let mut missing_origins = Vec::new();
     let mut unsupported_origins = Vec::new();
     let mut unavailable_paths = BTreeMap::new();
-    let entries = std::fs::read_dir(workspace)
-        .map_err(|error| OrbitError::io(format!("scan {}", workspace.display()), error))?;
-    let mut children = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            OrbitError::io(
-                format!("read child entry in {}", workspace.display()),
-                error,
-            )
-        })?;
-        if entry
-            .file_type()
-            .map_err(|error| OrbitError::io(format!("inspect {}", entry.path().display()), error))?
-            .is_dir()
-        {
-            children.push(entry);
-        }
-    }
-    children.sort_by_key(|entry| entry.file_name());
+    let mut children: Vec<PathBuf> =
+        crate::git::child_directories(workspace, false)?.collect::<Result<Vec<_>>>()?;
+    children.sort_by_key(|path| path.file_name().map(|name| name.to_os_string()));
 
     let mut discovered = Vec::new();
-    for child in children {
-        let child_name = child.file_name().to_string_lossy().into_owned();
+    for child_path in children {
+        let child_name = child_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if child_name == ".orbit" {
             continue;
         }
-        let child_path = child.path();
-        if !is_direct_git_repository(&child_path) {
+        if !crate::git::is_direct_git_repository(&child_path) {
             unavailable_paths.insert(
                 child_name.clone(),
                 "the previously discovered repository is no longer a Git repository".to_string(),
@@ -683,7 +680,7 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
             non_git_directories.push(child_name);
             continue;
         }
-        let origin = match git_output(&child_path, &["remote", "get-url", "origin"]) {
+        let origin = match crate::git::git_output(&child_path, &["remote", "get-url", "origin"]) {
             Ok(origin) if !origin.is_empty() => origin,
             _ => {
                 unavailable_paths.insert(
@@ -946,28 +943,6 @@ pub(crate) fn set_repository_detached(
         }
     }
     save_catalog(&path, &catalog)
-}
-
-pub(crate) fn is_direct_git_repository(path: &Path) -> bool {
-    let Ok(output) = git_output(path, &["rev-parse", "--show-toplevel"]) else {
-        return false;
-    };
-    let top = dunce::canonicalize(output.trim()).unwrap_or_else(|_| PathBuf::from(output.trim()));
-    let candidate = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    top == candidate
-}
-
-fn git_output(path: &Path, args: &[&str]) -> std::result::Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(args)
-        .output()
-        .map_err(|error| format!("could not run git: {error}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn resolve_organization(

@@ -473,35 +473,9 @@ fn find_sources(workspace: &Path, destination: &Path) -> Result<Vec<PathBuf>> {
             found.insert(dunce::canonicalize(&legacy).unwrap_or(legacy));
         }
     }
-    let mut pending = vec![workspace.to_path_buf()];
-    while let Some(directory) = pending.pop() {
-        let entries = std::fs::read_dir(&directory)
-            .map_err(|error| OrbitError::io(format!("read {}", directory.display()), error))?;
-        for entry in entries {
-            let entry = entry
-                .map_err(|error| OrbitError::io(format!("read {}", directory.display()), error))?;
-            if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-                continue;
-            }
-            let path = entry.path();
-            let name = entry.file_name();
-            if name == ".git" || name == ".orbit" || name == ".board" {
-                continue;
-            }
-            if path.join(".git").exists() {
-                let local = path.join(".orbit");
-                if Board::is_board(&local) && local != destination {
-                    found.insert(dunce::canonicalize(&local).unwrap_or(local.clone()));
-                }
-                if let Ok(common) = crate::git::common_dir_at(&path) {
-                    let legacy = common.join("orbit/board");
-                    if Board::is_board(&legacy) && legacy != destination && legacy != local {
-                        found.insert(dunce::canonicalize(&legacy).unwrap_or(legacy));
-                    }
-                }
-                continue;
-            }
-            pending.push(path);
+    for board in crate::board::workspace_child_boards(workspace)? {
+        if board != destination {
+            found.insert(dunce::canonicalize(&board).unwrap_or(board));
         }
     }
     Ok(found.into_iter().collect())

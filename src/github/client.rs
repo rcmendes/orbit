@@ -174,6 +174,15 @@ pub trait GitHubClient: Send + Sync {
 
     fn label_exists(&self, repo: &str, name: &str) -> Result<bool>;
 
+    /// Reconcile an issue with its desired relationships.
+    ///
+    /// Entries are filtered by kind (sub_issue affects the sub-issue
+    /// list, blocked_by the blocker list) and matched by issue number
+    /// only: the sync planner guarantees same-repo references. Desired
+    /// relationships are ensured present (existing ones are left
+    /// untouched); removals are dropped only when currently present.
+    /// Relationships the caller does not mention are preserved, and a
+    /// reference listed in both ends up removed.
     fn update_relationships(
         &self,
         repo: &str,
@@ -1679,25 +1688,43 @@ impl GitHubClient for FixtureClient {
             .get(&key)
             .cloned()
             .ok_or_else(|| OrbitError::not_found(&key))?;
-        for removal in removals {
-            match removal.kind {
-                "sub_issue" => issue.blocking.retain(|item| item != &removal.github),
-                "blocked_by" => issue.blocked_by.retain(|item| item != &removal.github),
-                _ => {}
+        // Mirrors GhCliClient semantics: relationships are filtered by
+        // kind and matched by issue number only (the planner emits
+        // same-repo references). Desired entries are ensured present;
+        // removals then drop the number when it is currently stored, so
+        // a reference listed in both ends up absent.
+        for relationship in desired {
+            let Some(current) = relationship_field(&mut issue, relationship.kind) else {
+                continue;
+            };
+            if !current
+                .iter()
+                .any(|item| item.number == relationship.github.number)
+            {
+                current.push(relationship.github.clone());
             }
         }
-        for relationship in desired {
-            let (current, reference) = match relationship.kind {
-                "sub_issue" => (&mut issue.blocking, &relationship.github),
-                "blocked_by" => (&mut issue.blocked_by, &relationship.github),
-                _ => continue,
-            };
-            if !current.contains(reference) {
-                current.push(reference.clone());
+        for removal in removals {
+            if let Some(current) = relationship_field(&mut issue, removal.kind) {
+                current.retain(|item| item.number != removal.github.number);
             }
         }
         store.issues.insert(key, issue);
         persist_fixture(&store)
+    }
+}
+
+/// Maps a relationship kind to the IssueSnapshot field it mutates:
+/// `sub_issue` relationships are tracked on the blocker's `blocking` list and
+/// `blocked_by` dependencies on the blocked Issue's `blocked_by` list.
+fn relationship_field<'a>(
+    issue: &'a mut IssueSnapshot,
+    kind: &str,
+) -> Option<&'a mut Vec<crate::github::model::IssueRef>> {
+    match kind {
+        "sub_issue" => Some(&mut issue.blocking),
+        "blocked_by" => Some(&mut issue.blocked_by),
+        _ => None,
     }
 }
 
@@ -1752,4 +1779,175 @@ pub(crate) fn parse_auth_scopes(message: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::github::model::IssueRef;
+
+    fn issue_ref(repo: &str, number: u64) -> IssueRef {
+        IssueRef {
+            repo: repo.to_string(),
+            number,
+        }
+    }
+
+    fn snapshot(repo: &str, number: u64) -> IssueSnapshot {
+        IssueSnapshot {
+            repo: repo.to_string(),
+            number,
+            title: "Issue".into(),
+            body: String::new(),
+            state: IssueState::Open,
+            state_reason: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            updated_at: Utc::now(),
+            area: None,
+            verification: None,
+            parent_issue: Vec::new(),
+            blocked_by: Vec::new(),
+            blocking: Vec::new(),
+        }
+    }
+
+    fn desired(kind: &'static str, repo: &str, number: u64) -> SupportedRelationship {
+        SupportedRelationship {
+            kind,
+            orbit_task: "orb-aaaaaa".into(),
+            github: issue_ref(repo, number),
+        }
+    }
+
+    fn removal(kind: &'static str, repo: &str, number: u64) -> RelationshipChange {
+        RelationshipChange {
+            action: "remove",
+            kind,
+            github: issue_ref(repo, number),
+        }
+    }
+
+    fn fixture_client(issue: &IssueSnapshot) -> (tempfile::TempDir, FixtureClient) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fixture.json");
+        let store = serde_json::json!({
+            "issues": { format!("{}#{}", issue.repo, issue.number): issue }
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&store).unwrap()).unwrap();
+        (dir, FixtureClient::load(&path).expect("load fixture"))
+    }
+
+    #[test]
+    fn desired_relationships_are_matched_by_issue_number() {
+        let mut issue = snapshot("acme/widget", 42);
+        // The stored ref repo spelling differs; GhCliClient matches by
+        // issue number only, so this must not duplicate the relationship.
+        issue.blocking.push(issue_ref("ACME/Widget", 43));
+        let (_dir, client) = fixture_client(&issue);
+
+        client
+            .update_relationships(
+                "acme/widget",
+                42,
+                &[desired("sub_issue", "acme/widget", 43)],
+                &[],
+            )
+            .unwrap();
+
+        let updated = client.get_issue("acme/widget", 42, None).unwrap();
+        assert_eq!(updated.blocking, vec![issue_ref("ACME/Widget", 43)]);
+    }
+
+    #[test]
+    fn removals_drop_relationships_by_issue_number() {
+        let mut issue = snapshot("acme/widget", 42);
+        issue.blocked_by.push(issue_ref("ACME/Widget", 43));
+        let (_dir, client) = fixture_client(&issue);
+
+        client
+            .update_relationships(
+                "acme/widget",
+                42,
+                &[],
+                &[removal("blocked_by", "acme/widget", 43)],
+            )
+            .unwrap();
+
+        let updated = client.get_issue("acme/widget", 42, None).unwrap();
+        assert!(updated.blocked_by.is_empty());
+    }
+
+    #[test]
+    fn removals_are_noops_when_the_relationship_is_absent() {
+        let mut issue = snapshot("acme/widget", 42);
+        issue.blocking.push(issue_ref("acme/widget", 43));
+        let (_dir, client) = fixture_client(&issue);
+
+        client
+            .update_relationships(
+                "acme/widget",
+                42,
+                &[],
+                &[removal("sub_issue", "acme/widget", 44)],
+            )
+            .unwrap();
+
+        let updated = client.get_issue("acme/widget", 42, None).unwrap();
+        assert_eq!(updated.blocking, vec![issue_ref("acme/widget", 43)]);
+    }
+
+    #[test]
+    fn a_relationship_listed_as_desired_and_removed_ends_up_absent() {
+        let issue = snapshot("acme/widget", 42);
+        let (_dir, client) = fixture_client(&issue);
+
+        client
+            .update_relationships(
+                "acme/widget",
+                42,
+                &[desired("sub_issue", "acme/widget", 43)],
+                &[removal("sub_issue", "acme/widget", 43)],
+            )
+            .unwrap();
+
+        let updated = client.get_issue("acme/widget", 42, None).unwrap();
+        assert!(updated.blocking.is_empty());
+    }
+
+    #[test]
+    fn removals_only_apply_to_their_own_relationship_kind() {
+        let mut issue = snapshot("acme/widget", 42);
+        issue.blocked_by.push(issue_ref("acme/widget", 43));
+        let (_dir, client) = fixture_client(&issue);
+
+        client
+            .update_relationships(
+                "acme/widget",
+                42,
+                &[],
+                &[removal("sub_issue", "acme/widget", 43)],
+            )
+            .unwrap();
+
+        let updated = client.get_issue("acme/widget", 42, None).unwrap();
+        assert_eq!(updated.blocked_by, vec![issue_ref("acme/widget", 43)]);
+    }
+
+    #[test]
+    fn applying_the_same_update_twice_is_idempotent() {
+        let issue = snapshot("acme/widget", 42);
+        let (_dir, client) = fixture_client(&issue);
+        let desired = [desired("blocked_by", "acme/widget", 43)];
+
+        client
+            .update_relationships("acme/widget", 42, &desired, &[])
+            .unwrap();
+        client
+            .update_relationships("acme/widget", 42, &desired, &[])
+            .unwrap();
+
+        let updated = client.get_issue("acme/widget", 42, None).unwrap();
+        assert_eq!(updated.blocked_by, vec![issue_ref("acme/widget", 43)]);
+    }
 }

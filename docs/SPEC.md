@@ -49,7 +49,7 @@ flowchart LR
     end
 
     subgraph Application["Application"]
-        CMD["Command handlers<br/>src/commands.rs"]
+        CMD["Command handlers<br/>src/commands/"]
         MIGRATE["Slug migration<br/>src/migrate.rs"]
     end
 

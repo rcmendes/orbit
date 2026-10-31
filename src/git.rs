@@ -12,6 +12,94 @@ pub enum CommitOutcome {
     Failed(String),
 }
 
+/// Resolves an existing home, retaining the configured path when unavailable.
+/// Callers doing strict discovery may require canonicalization to succeed.
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .map(|home| dunce::canonicalize(&home).unwrap_or(home))
+}
+
+/// Walks nearest-first through an inclusive boundary, or to the root when the
+/// boundary is absent or outside the ancestor chain.
+pub(crate) fn ancestors_through<'a>(
+    start: &'a Path,
+    stop: Option<&'a Path>,
+) -> impl Iterator<Item = &'a Path> {
+    std::iter::successors(Some(start), move |path| {
+        if Some(*path) == stop {
+            None
+        } else {
+            path.parent()
+        }
+    })
+}
+
+/// Enumerates child directories with per-entry errors so callers can choose
+/// strict discovery or best-effort diagnostics. Recursive callers should not
+/// follow symlinks; shallow diagnostics can opt into following them.
+pub(crate) fn child_directories(
+    directory: &Path,
+    follow_symlinks: bool,
+) -> Result<impl Iterator<Item = Result<PathBuf>>> {
+    let entries = std::fs::read_dir(directory)
+        .map_err(|error| OrbitError::io(format!("read {}", directory.display()), error))?;
+    let directory = directory.to_path_buf();
+    Ok(entries.filter_map(move |entry| {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                return Some(Err(OrbitError::io(
+                    format!("read {}", directory.display()),
+                    error,
+                )));
+            }
+        };
+        let path = entry.path();
+        let is_directory = if follow_symlinks {
+            path.is_dir()
+        } else {
+            entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
+        };
+        is_directory.then_some(Ok(path))
+    }))
+}
+
+pub(crate) fn git_output(path: &Path, args: &[&str]) -> std::result::Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .map_err(|error| format!("could not run git: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub(crate) fn is_direct_git_repository(path: &Path) -> bool {
+    let Ok(output) = git_output(path, &["rev-parse", "--show-toplevel"]) else {
+        return false;
+    };
+    let top = dunce::canonicalize(output.trim()).unwrap_or_else(|_| PathBuf::from(output.trim()));
+    let candidate = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    top == candidate
+}
+
+pub(crate) fn is_git_tracked(root: &Path, relative: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--error-unmatch", "--", relative])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 pub fn common_dir() -> Result<PathBuf> {
     let cwd = std::env::current_dir()
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
@@ -558,6 +646,72 @@ fn git_failure(args: &[&str], output: &Output) -> OrbitError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ancestor_walk_includes_boundary_and_ignores_unrelated_boundary() {
+        let start = Path::new("workspace/group/repo");
+        let stop = Path::new("workspace");
+        assert_eq!(
+            ancestors_through(start, Some(stop)).collect::<Vec<_>>(),
+            vec![start, Path::new("workspace/group"), stop]
+        );
+        assert_eq!(
+            ancestors_through(start, Some(start)).collect::<Vec<_>>(),
+            vec![start]
+        );
+        assert_eq!(
+            ancestors_through(start, Some(Path::new("elsewhere"))).collect::<Vec<_>>(),
+            start.ancestors().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn child_directory_walk_is_shallow_and_reports_unreadable_roots() {
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("child");
+        std::fs::create_dir_all(child.join("nested")).unwrap();
+        std::fs::write(root.path().join("file"), "").unwrap();
+        assert_eq!(
+            child_directories(root.path(), false)
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap(),
+            vec![child]
+        );
+        assert!(child_directories(&root.path().join("missing"), false).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_directory_walk_follows_symlinks_only_when_requested() {
+        let root = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(target.path(), &link).unwrap();
+        assert_eq!(child_directories(root.path(), false).unwrap().count(), 0);
+        assert_eq!(
+            child_directories(root.path(), true)
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap(),
+            vec![link]
+        );
+    }
+
+    #[test]
+    fn repository_helpers_distinguish_roots_and_tracked_files() {
+        let root = tempfile::tempdir().unwrap();
+        run_git(Some(root.path()), &["init", "-q"], None).unwrap();
+        let nested = root.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        assert!(is_direct_git_repository(root.path()));
+        assert!(!is_direct_git_repository(&nested));
+        std::fs::write(root.path().join("tracked"), "content").unwrap();
+        assert!(!is_git_tracked(root.path(), "tracked"));
+        run_git(Some(root.path()), &["add", "tracked"], None).unwrap();
+        assert!(is_git_tracked(root.path(), "tracked"));
+        assert!(!is_git_tracked(root.path(), "missing"));
+    }
 
     #[test]
     fn exclude_entry_is_added_once() {

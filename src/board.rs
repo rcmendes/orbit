@@ -783,16 +783,15 @@ impl Board {
             return Ok(Some(legacy));
         }
 
-        let mut current = dir.parent();
-        while let Some(parent) = current {
+        for parent in dir
+            .parent()
+            .into_iter()
+            .flat_map(|parent| git::ancestors_through(parent, Some(repo_root.as_path())))
+        {
             let candidate = parent.join(".orbit");
             if candidate != dir && Self::is_board(&candidate) && !is_global_board(&candidate) {
                 return Ok(Some(candidate));
             }
-            if parent == repo_root {
-                break;
-            }
-            current = parent.parent();
         }
 
         for path in git::worktree_paths(&repo_root)? {
@@ -1372,10 +1371,7 @@ pub(crate) fn resolve_external(dir: &Path) -> Result<PathBuf> {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .and_then(|home| dunce::canonicalize(home).ok())
+    git::home_dir().and_then(|home| dunce::canonicalize(home).ok())
 }
 
 fn global_board(home: &Path) -> Option<PathBuf> {
@@ -1388,69 +1384,68 @@ fn is_global_board(path: &Path) -> bool {
 }
 
 fn nearest_orbit(start: &Path, stop: &Path, skip: Option<&Path>) -> Option<PathBuf> {
-    let mut current = Some(start);
-    while let Some(dir) = current {
+    for dir in git::ancestors_through(start, Some(stop)) {
         if skip != Some(dir) {
             let candidate = dir.join(".orbit");
             if Board::is_board(&candidate) {
                 return Some(candidate);
             }
         }
-        if dir == stop {
-            break;
-        }
-        current = dir.parent();
     }
     None
 }
 
 fn nearest_workspace_board(start: &Path) -> Option<PathBuf> {
-    let mut current = Some(start);
-    while let Some(directory) = current {
+    for directory in git::ancestors_through(start, None) {
         let candidate = directory.join(".orbit").join("board");
         if Board::is_board(&candidate) {
             return Some(candidate);
         }
-        current = directory.parent();
     }
     None
 }
 
 pub(crate) fn workspace_child_board(workspace: &Path) -> Result<Option<PathBuf>> {
+    Ok(workspace_child_boards(workspace)?.into_iter().next())
+}
+
+/// Enumerates every Board inside Git repositories nested under `workspace`,
+/// depth-first. Skips `.git`, `.orbit`, and `.board` directories and does not
+/// descend into nested repositories; for each child repository it reports the
+/// `.orbit` Board first, then the legacy common-dir `orbit/board`.
+pub(crate) fn workspace_child_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
     if !workspace.exists() {
-        return Ok(None);
+        return Ok(found);
     }
     let mut pending = vec![workspace.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        let entries = std::fs::read_dir(&directory)
-            .map_err(|error| OrbitError::io(format!("read {}", directory.display()), error))?;
-        for entry in entries {
-            let entry = entry
-                .map_err(|error| OrbitError::io(format!("read {}", directory.display()), error))?;
-            let path = entry.path();
-            if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-                continue;
-            }
-            let name = entry.file_name();
-            if name == ".orbit" || name == ".git" {
+        for path in git::child_directories(&directory, false)? {
+            let path = path?;
+            let name = path.file_name();
+            if name == Some(std::ffi::OsStr::new(".orbit"))
+                || name == Some(std::ffi::OsStr::new(".git"))
+                || name == Some(std::ffi::OsStr::new(".board"))
+            {
                 continue;
             }
             if path.join(".git").exists() {
                 let local = path.join(".orbit");
                 if Board::is_board(&local) {
-                    return Ok(Some(local));
+                    found.push(local.clone());
                 }
-                let common = git::common_dir_at(&path)?;
-                let legacy = common.join("orbit/board");
-                if Board::is_board(&legacy) {
-                    return Ok(Some(legacy));
+                if let Ok(common) = git::common_dir_at(&path) {
+                    let legacy = common.join("orbit/board");
+                    if Board::is_board(&legacy) && legacy != local {
+                        found.push(legacy);
+                    }
                 }
                 continue;
             }
             pending.push(path);
         }
     }
-    Ok(None)
+    Ok(found)
 }
 
 fn main_checkout_for(repo_root: &Path, common: &Path) -> PathBuf {

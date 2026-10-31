@@ -187,7 +187,7 @@ fn apply_proposal(
         ));
     }
 
-    task.front.updated_at = Utc::now();
+    task.touch(Utc::now());
     let outcome =
         crate::mutation::persist_task(board, &task, &format!("orbit: triage apply {id}"))?;
 

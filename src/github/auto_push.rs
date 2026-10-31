@@ -220,11 +220,7 @@ fn push_task(board: &Board, client: &dyn GitHubClient, task: &Task) -> Vec<Strin
     let Some(link) = task.github_link().cloned() else {
         return Vec::new();
     };
-    let mut issue = match client.get_issue(
-        &link.repo,
-        link.number,
-        (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
-    ) {
+    let issue = match execution::fetch_issue(board, client, &link.repo, link.number) {
         Ok(issue) => issue,
         Err(error) => {
             return vec![format!(
@@ -233,9 +229,6 @@ fn push_task(board: &Board, client: &dyn GitHubClient, task: &Task) -> Vec<Strin
             )];
         }
     };
-    if board.config.github.mode.is_basic() {
-        execution::omit_issue_fields(&mut issue);
-    }
     let mut plan = sync::plan_sync(
         sync::OrbitSyncView { task, link: &link },
         &issue,
@@ -261,12 +254,7 @@ fn push_task(board: &Board, client: &dyn GitHubClient, task: &Task) -> Vec<Strin
         .iter()
         .map(|conflict| conflict.field.clone())
         .collect();
-    let remote_pending = plan.apply_title.is_some()
-        || plan.apply_body.is_some()
-        || plan.apply_status.is_some()
-        || plan.apply_labels.is_some()
-        || plan.apply_area.is_some()
-        || plan.apply_verification.is_some();
+    let remote_pending = !plan.pull_changes().is_empty();
 
     // Auto-push never pulls. Keep only local changes.
     plan.apply_title = None;

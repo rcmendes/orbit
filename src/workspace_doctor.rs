@@ -12,6 +12,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 
 use crate::board::Board;
+use crate::error::code;
 use crate::github::status::status_from_issue;
 use crate::graph::{Graph, Issue, LoadMode};
 use crate::task::Status;
@@ -114,7 +115,7 @@ fn diagnose_layout_and_repositories(
     if board.exists() && !board.is_dir() {
         issues.push(
             Issue::new(
-                "WORKSPACE_LAYOUT",
+                code::WORKSPACE_LAYOUT,
                 None,
                 format!(
                     "Workspace Board path {} is not a directory",
@@ -131,7 +132,7 @@ fn diagnose_layout_and_repositories(
     } else if !board.exists() {
         issues.push(
             Issue::new(
-                "WORKSPACE_LAYOUT",
+                code::WORKSPACE_LAYOUT,
                 None,
                 format!(
                     "Workspace root {} has .orbit state but no Workspace Board",
@@ -146,7 +147,7 @@ fn diagnose_layout_and_repositories(
     if cache.exists() && !cache.is_dir() {
         issues.push(
             Issue::new(
-                "WORKSPACE_LAYOUT",
+                code::WORKSPACE_LAYOUT,
                 None,
                 format!(
                     "Workspace cache path {} is not a directory",
@@ -167,7 +168,7 @@ fn diagnose_layout_and_repositories(
         Err(error) => {
             issues.push(
                 Issue::new(
-                    "WORKSPACE_CACHE_CORRUPT",
+                    code::WORKSPACE_CACHE_CORRUPT,
                     None,
                     format!(
                         "could not read the Workspace repository catalog: {}",
@@ -194,7 +195,7 @@ fn diagnose_layout_and_repositories(
     } else if is_stale(catalog.last_refreshed_at) {
         issues.push(
             Issue::warning(
-                "WORKSPACE_CATALOG_STALE",
+                code::WORKSPACE_CATALOG_STALE,
                 "Workspace repository discovery is older than 24 hours",
             )
             .with_repository(workspace.display().to_string())
@@ -210,7 +211,7 @@ fn diagnose_layout_and_repositories(
     {
         issues.push(
             Issue::new(
-                "WORKSPACE_ORGANIZATION",
+                code::WORKSPACE_ORGANIZATION,
                 None,
                 "Workspace organization is empty",
             )
@@ -221,7 +222,7 @@ fn diagnose_layout_and_repositories(
     if catalog.repositories.is_empty() && catalog.last_refreshed_at.is_some() {
         issues.push(
             Issue::warning(
-                "WORKSPACE_REPOSITORIES_EMPTY",
+                code::WORKSPACE_REPOSITORIES_EMPTY,
                 "Workspace discovery found no included organization repositories",
             )
             .with_repository(workspace.display().to_string())
@@ -238,7 +239,7 @@ fn diagnose_layout_and_repositories(
                 if !entry.discovered || !path.exists() {
                     issues.push(
                         Issue::new(
-                            "WORKSPACE_REPOSITORY_MISSING",
+                            code::WORKSPACE_REPOSITORY_MISSING,
                             None,
                             format!("included repository {} is missing at {}", identity, path.display()),
                         )
@@ -249,7 +250,7 @@ fn diagnose_layout_and_repositories(
                 } else if !crate::workspace::is_direct_git_repository(&path) {
                     issues.push(
                         Issue::new(
-                            "WORKSPACE_REPOSITORY_INACCESSIBLE",
+                            code::WORKSPACE_REPOSITORY_INACCESSIBLE,
                             None,
                             format!("included repository {} is no longer a direct Git repository", identity),
                         )
@@ -261,7 +262,7 @@ fn diagnose_layout_and_repositories(
             }
             crate::workspace::RepositoryStatus::Stale => issues.push(
                 Issue::warning(
-                    "WORKSPACE_REPOSITORY_STALE",
+                    code::WORKSPACE_REPOSITORY_STALE,
                     format!("repository {identity} is stale; its last cache was retained"),
                 )
                 .with_repository(identity)
@@ -275,7 +276,7 @@ fn diagnose_layout_and_repositories(
             ),
             crate::workspace::RepositoryStatus::Inaccessible => issues.push(
                 Issue::new(
-                    "WORKSPACE_REPOSITORY_INACCESSIBLE",
+                    code::WORKSPACE_REPOSITORY_INACCESSIBLE,
                     None,
                     format!("repository {identity} is inaccessible"),
                 )
@@ -290,7 +291,7 @@ fn diagnose_layout_and_repositories(
             ),
             crate::workspace::RepositoryStatus::Removed => issues.push(
                 Issue::warning(
-                    "WORKSPACE_REPOSITORY_REMOVED",
+                    code::WORKSPACE_REPOSITORY_REMOVED,
                     format!("repository {identity} is no longer discovered; its cache is retained"),
                 )
                 .with_repository(identity)
@@ -304,7 +305,7 @@ fn diagnose_layout_and_repositories(
             ),
             crate::workspace::RepositoryStatus::UnsupportedOwner => issues.push(
                 Issue::warning(
-                    "WORKSPACE_REPOSITORY_UNSUPPORTED",
+                    code::WORKSPACE_REPOSITORY_UNSUPPORTED,
                     format!("repository {identity} is outside the single Workspace organization"),
                 )
                 .with_repository(identity)
@@ -338,7 +339,7 @@ fn diagnose_layout_and_repositories(
     for directory in &catalog.missing_origins {
         issues.push(
             Issue::warning(
-                "WORKSPACE_MISSING_ORIGIN",
+                code::WORKSPACE_MISSING_ORIGIN,
                 format!("child Git repository `{directory}` has no readable `origin` remote"),
             )
             .with_repository(directory)
@@ -349,7 +350,7 @@ fn diagnose_layout_and_repositories(
     for origin in &catalog.unsupported_origins {
         issues.push(
             Issue::warning(
-                "WORKSPACE_UNSUPPORTED_ORIGIN",
+                code::WORKSPACE_UNSUPPORTED_ORIGIN,
                 format!(
                     "child repository `{}` has an unsupported origin",
                     origin.path
@@ -372,7 +373,7 @@ fn diagnose_layout_and_repositories(
     {
         issues.push(
             Issue::warning(
-                "WORKSPACE_CONFIG_CONFLICT",
+                code::WORKSPACE_CONFIG_CONFLICT,
                 format!("repository catalog organization `{catalog}` differs from Board organization `{config}`"),
             )
             .with_repository(workspace.display().to_string())
@@ -399,7 +400,7 @@ fn board_organization(workspace: &Path, board: &Path, issues: &mut Vec<Issue>) -
         Err(error) => {
             issues.push(
                 Issue::new(
-                    "WORKSPACE_LAYOUT",
+                    code::WORKSPACE_LAYOUT,
                     None,
                     format!("Workspace Board at {} cannot be loaded: {}", board.display(), error.message),
                 )
@@ -424,7 +425,7 @@ fn diagnose_issue_cache(
         Err(error) => {
             issues.push(
                 Issue::new(
-                    "WORKSPACE_CACHE_CORRUPT",
+                    code::WORKSPACE_CACHE_CORRUPT,
                     None,
                     format!("could not read the Remote Issue catalog: {}", error.message),
                 )
@@ -466,12 +467,12 @@ fn diagnose_issue_cache(
             issues.push(
                 if stale {
                     Issue::warning(
-                        "WORKSPACE_ISSUES_STALE",
+                        code::WORKSPACE_ISSUES_STALE,
                         format!("Remote Issue cache for {repository} is stale after a failed refresh"),
                     )
                 } else {
                     Issue::new(
-                        "WORKSPACE_ISSUES_UNAVAILABLE",
+                        code::WORKSPACE_ISSUES_UNAVAILABLE,
                         None,
                         format!("Remote Issue cache for {repository} is unavailable"),
                     )
@@ -487,7 +488,7 @@ fn diagnose_issue_cache(
         } else if is_stale(cached.last_refreshed_at) {
             issues.push(
                 Issue::warning(
-                    "WORKSPACE_ISSUES_STALE",
+                    code::WORKSPACE_ISSUES_STALE,
                     format!("Remote Issue cache for {repository} is older than 24 hours"),
                 )
                 .with_repository(repository.clone())
@@ -506,7 +507,7 @@ fn diagnose_migration(workspace: &Path, issues: &mut Vec<Issue>, warnings: &mut 
     if state.exists() {
         issues.push(
             Issue::new(
-                "WORKSPACE_MIGRATION_INCOMPLETE",
+                code::WORKSPACE_MIGRATION_INCOMPLETE,
                 None,
                 "an interrupted Workspace Board migration has a saved state file",
             )
@@ -518,7 +519,7 @@ fn diagnose_migration(workspace: &Path, issues: &mut Vec<Issue>, warnings: &mut 
     if stage.exists() && !state.exists() {
         issues.push(
             Issue::warning(
-                "WORKSPACE_MIGRATION_STAGE",
+                code::WORKSPACE_MIGRATION_STAGE,
                 "a Workspace migration staging Board exists without a saved plan",
             )
             .with_repository(workspace.display().to_string())
@@ -582,7 +583,7 @@ fn diagnose_links(
         Err(error) => {
             issues.push(
                 Issue::new(
-                    "WORKSPACE_LINK_DIAGNOSTICS",
+                    code::WORKSPACE_LINK_DIAGNOSTICS,
                     None,
                     format!("could not inspect Linked Tasks: {}", error.message),
                 )
@@ -802,7 +803,7 @@ fn diagnose_agent_setup(
             }
             Err(error) => issues.push(
                 Issue::new(
-                    "WORKSPACE_AGENT_CONFIG",
+                    code::WORKSPACE_AGENT_CONFIG,
                     None,
                     format!(
                         "could not inspect Workspace agent guidance: {}",
@@ -895,7 +896,7 @@ fn check_repository_setup(
             Err(error) => {
                 issues.push(
                     Issue::new(
-                        "WORKSPACE_AGENT_CONFIG",
+                        code::WORKSPACE_AGENT_CONFIG,
                         None,
                         format!(
                             "could not inspect agent setup in {repository}: {}",
@@ -916,7 +917,7 @@ fn check_repository_setup(
         let changed = changed.into_iter().collect::<Vec<_>>();
         issues.push(
             Issue::warning(
-                "WORKSPACE_AGENT_DRIFT",
+                code::WORKSPACE_AGENT_DRIFT,
                 format!(
                     "managed agent setup in {repository} is missing or stale: {}",
                     changed.join(", ")
@@ -935,7 +936,7 @@ fn check_repository_setup(
         let skipped = skipped.into_iter().collect::<Vec<_>>();
         issues.push(
             Issue::new(
-                "WORKSPACE_AGENT_CONFLICT",
+                code::WORKSPACE_AGENT_CONFLICT,
                 None,
                 format!(
                     "{} keeps unmanaged agent content; Orbit did not overwrite it",
@@ -1043,7 +1044,7 @@ fn record_setup_preview(
     if !changed.is_empty() {
         issues.push(
             Issue::warning(
-                "WORKSPACE_AGENT_DRIFT",
+                code::WORKSPACE_AGENT_DRIFT,
                 format!(
                     "managed agent guidance at {repository} is missing or stale: {}",
                     changed.join(", ")

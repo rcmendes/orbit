@@ -441,25 +441,8 @@ fn diagnose_tasks(
         .iter()
         .any(|issue| issue.code == code::PREFIX_MISMATCH);
 
-    match board.comment_ids() {
-        Ok(ids) => {
-            for id in ids {
-                if !graph.tasks.contains_key(&id) {
-                    issues.push(Issue::new(
-                        code::ORPHAN_COMMENT,
-                        Some(&id),
-                        format!("comments/{id}.md has no matching task"),
-                    ));
-                    continue;
-                }
-                if let Err(error) = board.read_comments(&id) {
-                    issues.push(Issue::new(error.code, Some(&id), error.message));
-                }
-            }
-        }
-        Err(error) => {
-            issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message));
-        }
+    if let Err(error) = crate::health::comment_files(board, &graph, false, issues) {
+        issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message));
     }
 
     for task in graph.stale_tasks() {
@@ -478,45 +461,6 @@ fn diagnose_tasks(
             .is_some_and(|claim| !claim.has_times());
         if no_times || task.front.stray_claim_times.is_some() {
             warnings.push(format!("{}: claim metadata is incomplete", task.id));
-        }
-
-        // A prefix mismatch means the IDs use the observed prefix; comparing
-        // them with the configured prefix would flag every SubTask.
-        if !prefix_mismatch {
-            let encoded_parent = board.config.id.parent_id(&task.id);
-            match (&task.front.parent, encoded_parent) {
-                (Some(parent), Some(encoded)) if parent != &encoded => {
-                    issues.push(Issue::new(
-                        code::PARENT_MISMATCH,
-                        Some(&task.id),
-                        format!(
-                            "{} has parent {parent} but its ID encodes {encoded}",
-                            task.id
-                        ),
-                    ));
-                }
-                (None, Some(encoded)) => {
-                    issues.push(Issue::new(
-                        code::PARENT_MISMATCH,
-                        Some(&task.id),
-                        format!(
-                            "{} is a SubTask ID but has no parent; expected {encoded}",
-                            task.id
-                        ),
-                    ));
-                }
-                (Some(parent), None) => {
-                    issues.push(Issue::new(
-                        code::PARENT_MISMATCH,
-                        Some(&task.id),
-                        format!(
-                            "{} has parent {parent} but its ID is not a SubTask ID",
-                            task.id
-                        ),
-                    ));
-                }
-                _ => {}
-            }
         }
 
         if task.front.status == crate::task::Status::Done {
@@ -539,6 +483,12 @@ fn diagnose_tasks(
         }
     }
 
+    // A prefix mismatch means the IDs use the observed prefix; comparing them
+    // with the configured prefix would flag every SubTask.
+    if !prefix_mismatch {
+        crate::health::parent_id_agreement(board, &graph, issues);
+    }
+
     match crate::git::status_porcelain(&board.root) {
         Ok(status) if !status.trim().is_empty() => {
             warnings.push("the board has uncommitted changes; run `orbit sync`".to_string());
@@ -547,18 +497,7 @@ fn diagnose_tasks(
         Err(error) => issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message)),
     }
 
-    match crate::git::current_branch(&board.root) {
-        Ok(branch) if branch != board.config.board.branch => issues.push(Issue::new(
-            code::BOARD_CORRUPT,
-            None,
-            format!(
-                "board is on branch {branch}, expected {}",
-                board.config.board.branch
-            ),
-        )),
-        Ok(_) => {}
-        Err(error) => issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message)),
-    }
+    crate::health::branch_mismatch(board, issues);
 
     let mut stale_temps = atomic::stale_temps(&board.tasks_dir(), Duration::ZERO);
     stale_temps.extend(atomic::stale_temps(&board.comments_dir(), Duration::ZERO));

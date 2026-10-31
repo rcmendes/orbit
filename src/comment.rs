@@ -69,8 +69,40 @@ pub fn parse_comments(content: &str) -> Result<Vec<Comment>> {
     Ok(comments)
 }
 
+/// The `# Comments: {id}` header that opens every comments file. Anything that
+/// reads or rewrites the header derives it here so the format has one owner.
+pub fn header(id: &str) -> String {
+    format!("# Comments: {id}")
+}
+
+/// True when `content` opens with the `# Comments: {id}` header. `lines()`
+/// strips a trailing `\r`, so CRLF files match too.
+pub fn has_header(content: &str, id: &str) -> bool {
+    content.lines().next().unwrap_or_default() == header(id)
+}
+
+/// Rewrites the `# Comments: {old_id}` header to `new_id`, preserving the
+/// original line ending. Errors when the first line is not the expected header.
+pub fn rewrite_header(content: &str, old_id: &str, new_id: &str) -> Result<String> {
+    let expected = header(old_id);
+    let newline = content.find('\n');
+    let (first, rest) = match newline {
+        Some(index) => (&content[..index], &content[index..]),
+        None => (content, ""),
+    };
+    let first_without_cr = first.strip_suffix('\r').unwrap_or(first);
+    if first_without_cr != expected {
+        return Err(OrbitError::new(
+            code::CORRUPT_COMMENT,
+            format!("comments/{old_id}.md does not start with `{expected}`"),
+        ));
+    }
+    let carriage_return = if first.ends_with('\r') { "\r" } else { "" };
+    Ok(format!("{}{carriage_return}{rest}", header(new_id)))
+}
+
 pub fn render_comments_file(task_id: &str, comments: &[Comment]) -> String {
-    let mut output = format!("# Comments: {task_id}\n");
+    let mut output = format!("{}\n", header(task_id));
     for comment in comments {
         output.push('\n');
         output.push_str(&render_block(comment));
@@ -169,5 +201,35 @@ mod tests {
     fn rejects_empty_and_marker_bearing_bodies() {
         assert!(validate_body("  \n ").is_err());
         assert!(validate_body("contains <!-- /orbit:comment -->").is_err());
+    }
+
+    #[test]
+    fn header_round_trips_and_tolerates_crlf() {
+        assert!(has_header("# Comments: orb-a7b2c9\n\nbody\n", "orb-a7b2c9"));
+        assert!(has_header("# Comments: orb-a7b2c9\r\n\r\nbody\r\n", "orb-a7b2c9"));
+        assert!(has_header("# Comments: orb-a7b2c9", "orb-a7b2c9"));
+        assert!(!has_header("# Notes: orb-a7b2c9\nbody\n", "orb-a7b2c9"));
+        assert!(!has_header("", "orb-a7b2c9"));
+    }
+
+    #[test]
+    fn rewrite_header_preserves_body_and_line_endings() {
+        let content = "# Comments: orb-a7b2c9\n\n<!-- orbit:comment x -->\nbody\n";
+        let updated = rewrite_header(content, "orb-a7b2c9", "atlas-a7b2c9").unwrap();
+        assert_eq!(
+            updated,
+            "# Comments: atlas-a7b2c9\n\n<!-- orbit:comment x -->\nbody\n"
+        );
+
+        let crlf = "# Comments: orb-a7b2c9\r\n\r\nbody\r\n";
+        let updated = rewrite_header(crlf, "orb-a7b2c9", "atlas-a7b2c9").unwrap();
+        assert_eq!(updated, "# Comments: atlas-a7b2c9\r\n\r\nbody\r\n");
+    }
+
+    #[test]
+    fn rewrite_header_refuses_a_mismatch() {
+        let error = rewrite_header("# Notes: orb-a7b2c9\nbody\n", "orb-a7b2c9", "atlas-a7b2c9")
+            .unwrap_err();
+        assert_eq!(error.code, code::CORRUPT_COMMENT);
     }
 }

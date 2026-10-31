@@ -11,7 +11,7 @@ use crate::cli::{
     WorkspaceIssuesImportArgs, WorkspaceIssuesListArgs,
 };
 use crate::error::{OrbitError, Result};
-use crate::github::client::{IssueCatalogItem, IssueComment, client_from_env};
+use crate::github::client::{IssueCatalogItem, client_from_env};
 use crate::github::model::{IssueSnapshot, IssueState};
 use crate::graph::{Graph, LoadMode};
 use crate::task::{self, Status, Task, TaskArea, TaskFrontmatter, TaskType};
@@ -136,7 +136,12 @@ fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::CommandOutp
     let mut refreshed_count = 0;
 
     for repository in repositories {
-        let result = fetch_repository(client.as_ref(), &repository);
+        let result = fetch_repository(
+            client.as_ref(),
+            &repository,
+            (!board.config.github.mode.is_basic())
+                .then_some(&board.config.github.issue_fields),
+        );
         let entry = catalog.repositories.entry(repository.clone()).or_default();
         match result {
             Ok(issues) => {
@@ -176,18 +181,11 @@ fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::CommandOutp
 fn fetch_repository(
     client: &dyn crate::github::GitHubClient,
     repository: &str,
+    issue_fields: Option<&crate::github::config::IssueFieldConfig>,
 ) -> Result<Vec<IssueCatalogItem>> {
-    let mut page = 1;
     let mut issues = BTreeMap::new();
-    loop {
-        let results = client.list_issues_page(repository, page)?;
-        if results.is_empty() {
-            break;
-        }
-        for issue in results {
-            issues.insert(issue.number, issue);
-        }
-        page += 1;
+    for issue in client.list_all_issues(repository, issue_fields)? {
+        issues.insert(issue.number, issue);
     }
     Ok(issues.into_values().collect())
 }
@@ -309,21 +307,9 @@ fn inspect(
         .find(|issue| issue.number == number)
         .ok_or_else(|| OrbitError::not_found(&args.identity))?;
     let client = client_from_env()?;
-    let detail = client.get_issue(
-        &repository,
-        number,
-        (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
-    )?;
-    let mut comments = Vec::<IssueComment>::new();
-    let mut page = 1;
-    loop {
-        let results = client.issue_comments_page(&repository, number, page)?;
-        if results.is_empty() {
-            break;
-        }
-        comments.extend(results);
-        page += 1;
-    }
+    let detail =
+        crate::github::execution::fetch_issue(board, client.as_ref(), &repository, number)?;
+    let comments = client.issue_comments(&repository, number)?;
     let linked = linked_identities(board)?.contains(&item.identity().to_ascii_lowercase());
     let data = json!({
         "identity": item.identity(),
@@ -491,10 +477,11 @@ fn import(
             None
         };
 
-        let issue = match client.get_issue(
+        let issue = match crate::github::execution::fetch_issue(
+            board,
+            client.as_ref(),
             &repository,
             number,
-            (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
         ) {
             Ok(issue) => issue,
             Err(error) => {
@@ -567,7 +554,7 @@ fn import(
                 }
                 ImportAction::Link(prepared, task) => {
                     let mut task = *task;
-                    task.front.updated_at = Utc::now();
+                    task.touch(Utc::now());
                     task.front.github = Some(crate::github::GitHubLink::new(
                         prepared.issue.repo.to_ascii_lowercase(),
                         prepared.issue.number,
@@ -830,7 +817,7 @@ pub(crate) fn detach_repository(
             let link = task.front.github.as_mut().expect("active link exists");
             let identity = format!("{}#{}", link.repo, link.number);
             link.active = false;
-            task.front.updated_at = Utc::now();
+            task.touch(Utc::now());
             let rendered = task::render_task(&task)?;
             crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
             detached.push(json!({
@@ -944,14 +931,15 @@ pub(crate) fn reattach_repository(
     };
     let mut previews = Vec::new();
     for (task, link) in &inactive {
-        let issue = client
-            .as_ref()
-            .expect("client loaded when inactive links exist")
-            .get_issue(
-                &repository,
-                link.number,
-                (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
-            )?;
+        let issue = crate::github::execution::fetch_issue(
+            board,
+            client
+                .as_ref()
+                .expect("client loaded when inactive links exist")
+                .as_ref(),
+            &repository,
+            link.number,
+        )?;
         validate_issue_identity(&issue, &repository, link.number)?;
         let plan = crate::github::sync::plan_sync(
             crate::github::sync::OrbitSyncView { task, link },
@@ -996,7 +984,7 @@ pub(crate) fn reattach_repository(
                 .expect("inactive provenance exists");
             // The selected Task was matched on the exact normalized repository and number.
             stored.active = true;
-            task.front.updated_at = Utc::now();
+            task.touch(Utc::now());
             let rendered = task::render_task(&task)?;
             crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
             reattached.push(json!({
@@ -1095,7 +1083,7 @@ fn detach_task(
             let linked_repo = link.repo.clone();
             let linked_number = link.number;
             link.active = false;
-            task.front.updated_at = Utc::now();
+            task.touch(Utc::now());
             let rendered = task::render_task(&task)?;
             crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
             detached.push(json!({
@@ -1189,11 +1177,8 @@ fn reattach_task(
         )));
     }
     let client = client_from_env()?;
-    let issue = client.get_issue(
-        &repository,
-        number,
-        (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
-    )?;
+    let issue =
+        crate::github::execution::fetch_issue(board, client.as_ref(), &repository, number)?;
     validate_issue_identity(&issue, &repository, number)?;
     let link = task
         .front
@@ -1221,7 +1206,7 @@ fn reattach_task(
             .as_mut()
             .expect("inactive provenance exists")
             .active = true;
-        task.front.updated_at = Utc::now();
+        task.touch(Utc::now());
         let rendered = task::render_task(&task)?;
         crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
         if let Some(archived) = catalog

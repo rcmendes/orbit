@@ -1,10 +1,6 @@
 use crate::error::{OrbitError, Result};
 use crate::task::TaskArea;
 
-pub fn area_to_str(area: TaskArea) -> &'static str {
-    area.as_str()
-}
-
 pub fn parse_area(value: &str) -> Result<TaskArea> {
     let normalized = value.trim();
     TaskArea::all()

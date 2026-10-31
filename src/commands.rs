@@ -1237,7 +1237,7 @@ fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput>
     };
 
     crate::mutation::create_task(board, &task)?;
-    graph.tasks.insert(id.clone(), task.clone());
+    graph.insert(task.clone());
 
     let type_prefix = if task_type == TaskType::Task {
         String::new()
@@ -1367,20 +1367,18 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         }
     }
 
+    let filters = ReadyFilters {
+        parent: args.parent.as_deref(),
+        labels: &label_filters,
+        excluded: &excluded_labels,
+        types: &args.task_type,
+        excluded_types: &args.exclude_type,
+        areas: &args.area,
+        excluded_areas: &args.exclude_area,
+    };
     if args.claim {
         let agent = resolve_agent(args.by)?;
-        let ready = ready_for_filters(
-            graph.ready_tasks(),
-            ReadyFilters {
-                parent: args.parent.as_deref(),
-                labels: &label_filters,
-                excluded: &excluded_labels,
-                types: &args.task_type,
-                excluded_types: &args.exclude_type,
-                areas: &args.area,
-                excluded_areas: &args.exclude_area,
-            },
-        );
+        let ready = ready_for_filters(graph.ready_tasks(), filters);
         if ready.is_empty() {
             return Ok(
                 crate::output::CommandOutput::new(Value::Null, "no ready tasks")
@@ -1389,7 +1387,7 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         }
 
         let id = ready[0].id.clone();
-        let result = crate::mutation::execute(
+        let result = crate::mutation::execute_in(
             board,
             graph,
             &id,
@@ -1409,18 +1407,7 @@ fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOut
         return Ok(output);
     }
 
-    let mut ready = ready_for_filters(
-        graph.ready_tasks(),
-        ReadyFilters {
-            parent: args.parent.as_deref(),
-            labels: &label_filters,
-            excluded: &excluded_labels,
-            types: &args.task_type,
-            excluded_types: &args.exclude_type,
-            areas: &args.area,
-            excluded_areas: &args.exclude_area,
-        },
-    );
+    let mut ready = ready_for_filters(graph.ready_tasks(), filters);
     if let Some(limit) = args.limit {
         ready.truncate(limit);
     }
@@ -1501,11 +1488,9 @@ fn mutation_output(
 }
 
 fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output::CommandOutput> {
-    let graph = Graph::load(board, LoadMode::Strict)?.0;
     let agent = resolve_agent(args.by)?;
     let result = crate::mutation::execute(
         board,
-        graph,
         &args.id,
         crate::mutation::Lifecycle::Claim {
             agent: &agent,
@@ -1525,11 +1510,9 @@ fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output::CommandOut
 }
 
 fn cmd_release(board: &Board, args: ReleaseArgs) -> Result<crate::output::CommandOutput> {
-    let graph = Graph::load(board, LoadMode::Strict)?.0;
     let caller = optional_agent(args.by);
     let result = crate::mutation::execute(
         board,
-        graph,
         &args.id,
         crate::mutation::Lifecycle::Release {
             caller: caller.as_deref(),
@@ -1547,11 +1530,9 @@ fn cmd_release(board: &Board, args: ReleaseArgs) -> Result<crate::output::Comman
 }
 
 fn cmd_heartbeat(board: &Board, args: HeartbeatArgs) -> Result<crate::output::CommandOutput> {
-    let graph = Graph::load(board, LoadMode::Strict)?.0;
     let agent = resolve_agent(args.by)?;
     let result = crate::mutation::execute(
         board,
-        graph,
         &args.id,
         crate::mutation::Lifecycle::Heartbeat { agent: &agent },
         Utc::now(),
@@ -1565,7 +1546,6 @@ fn cmd_heartbeat(board: &Board, args: HeartbeatArgs) -> Result<crate::output::Co
 }
 
 fn cmd_checkpoint(board: &Board, args: CheckpointArgs) -> Result<crate::output::CommandOutput> {
-    let graph = Graph::load(board, LoadMode::Strict)?.0;
     let agent = resolve_agent(args.by)?;
     let update = CheckpointUpdate {
         progress: args.progress,
@@ -1574,7 +1554,6 @@ fn cmd_checkpoint(board: &Board, args: CheckpointArgs) -> Result<crate::output::
     };
     let result = crate::mutation::execute(
         board,
-        graph,
         &args.id,
         crate::mutation::Lifecycle::Checkpoint {
             agent: &agent,
@@ -1755,7 +1734,7 @@ fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandO
         } else if verification.is_some() {
             task.front.verification = verification;
         }
-        task.front.updated_at = Utc::now();
+        task.touch(Utc::now());
         task.clone()
     };
 
@@ -1787,22 +1766,11 @@ fn mutate_labels(
 
     let (task, changed) = {
         let task = graph.get_mut(&args.id)?;
-        let before = task.front.labels.clone();
-        if add {
-            for label in &labels {
-                if !task.front.labels.contains(label) {
-                    task.front.labels.push(label.clone());
-                }
-            }
+        let changed = if add {
+            task.add_labels(&labels, now)
         } else {
-            task.front.labels.retain(|label| !labels.contains(label));
-        }
-        task.front.labels.sort();
-        task.front.labels.dedup();
-        let changed = task.front.labels != before;
-        if changed {
-            task.front.updated_at = now;
-        }
+            task.remove_labels(&labels, now)
+        };
         (task.clone(), changed)
     };
 
@@ -1888,7 +1856,7 @@ fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output:
     let comment = comments.last().expect("a comment was appended").clone();
     let task = {
         let task = graph.get_mut(&args.id)?;
-        task.front.updated_at = now;
+        task.touch(now);
         task.clone()
     };
     let warning = crate::mutation::save(board, &task, &format!("orbit: comment {}", args.id))?;
@@ -1980,8 +1948,7 @@ fn cmd_depend(board: &Board, args: DependArgs) -> Result<crate::output::CommandO
 
     let task = {
         let task = graph.get_mut(&args.id)?;
-        task.front.depends_on.push(args.dep_id.clone());
-        task.front.updated_at = Utc::now();
+        task.add_dependency(&args.dep_id, Utc::now());
         task.clone()
     };
     let warning = crate::mutation::save(board, &task, &format!("orbit: depend {}", args.id))?;
@@ -2011,8 +1978,7 @@ fn cmd_undepend(board: &Board, args: UndependArgs) -> Result<crate::output::Comm
 
     let task = {
         let task = graph.get_mut(&args.id)?;
-        task.front.depends_on.retain(|dep| dep != &args.dep_id);
-        task.front.updated_at = Utc::now();
+        task.remove_dependency(&args.dep_id, Utc::now());
         task.clone()
     };
     let warning = crate::mutation::save(board, &task, &format!("orbit: undepend {}", args.id))?;
@@ -2100,8 +2066,7 @@ fn delete_subtree(
         for dependent in &dependent_ids {
             let updated = {
                 let task = graph.get_mut(dependent)?;
-                task.front.depends_on.retain(|dep| dep != id);
-                task.front.updated_at = now;
+                task.remove_dependency(id, now);
                 task.clone()
             };
             crate::mutation::write_task(board, &updated)?;
@@ -2121,7 +2086,7 @@ fn delete_subtree(
     }
 
     crate::mutation::remove_task(board, id)?;
-    graph.tasks.remove(id);
+    graph.remove(id);
     deleted.push(id.to_string());
     Ok(())
 }
@@ -2333,6 +2298,7 @@ fn generate_unique_id(board: &Board, parent: Option<&str>) -> Result<String> {
     ))
 }
 
+#[derive(Clone, Copy)]
 struct ReadyFilters<'a> {
     parent: Option<&'a str>,
     labels: &'a [String],
@@ -2526,7 +2492,7 @@ fn list_sort_key<'a>(
         .front
         .parent
         .as_deref()
-        .and_then(|parent_id| graph.tasks.get(parent_id))
+        .and_then(|parent_id| graph.get(parent_id).ok())
         .unwrap_or(task);
     (
         root.front.priority,

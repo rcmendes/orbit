@@ -1,5 +1,5 @@
 use super::execution::{
-    omit_issue_fields, reject_basic_metadata, repository_available, require_repository_available,
+    fetch_issue, reject_basic_metadata, repository_available, require_repository_available,
     set_baseline,
 };
 use crate::github::execution::SyncOutcome;
@@ -54,9 +54,9 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let username = auth
         .username
         .clone()
-        .or_else(|| parse_auth_username(&auth.message));
+        .or_else(|| crate::github::client::parse_auth_username(&auth.message));
     let scopes = if auth.scopes.is_empty() {
-        parse_auth_scopes(&auth.message)
+        crate::github::client::parse_auth_scopes(&auth.message)
     } else {
         auth.scopes.clone()
     };
@@ -180,30 +180,15 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
                 }
                 Err(error) => {
                     field_validation_failed = true;
-                    let message = error.message.clone();
-                    if message.contains(&format!(
-                        "missing Issue Field `{}`",
-                        github.issue_fields.area_name
-                    )) {
-                        area_resolved = Some(false);
-                    } else if message.contains(&format!(
-                        "missing Issue Field `{}`",
-                        github.issue_fields.verification_name
-                    )) {
-                        area_resolved = Some(true);
+                    let missing = missing_field_names(&error);
+                    if !missing.is_empty() {
+                        area_resolved =
+                            Some(!missing.contains(&github.issue_fields.area_name.as_str()));
+                        verification_resolved = Some(
+                            !missing.contains(&github.issue_fields.verification_name.as_str()),
+                        );
                     }
-                    if message.contains(&format!(
-                        "missing Issue Field `{}`",
-                        github.issue_fields.verification_name
-                    )) {
-                        verification_resolved = Some(false);
-                    } else if message.contains(&format!(
-                        "missing Issue Field `{}`",
-                        github.issue_fields.area_name
-                    )) {
-                        verification_resolved = Some(true);
-                    }
-                    issues.push(json!({ "code": error.code, "message": message }));
+                    issues.push(json!({ "code": error.code, "message": error.message }));
                 }
             }
         }
@@ -250,26 +235,9 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
                     .map(|dep_link| (dependency.clone(), dep_link.clone()))
             })
             .collect();
-        let empty_issue = IssueSnapshot {
-            repo: link.repo.clone(),
-            number: link.number,
-            title: String::new(),
-            body: String::new(),
-            state: crate::github::model::IssueState::Open,
-            state_reason: None,
-            labels: Vec::new(),
-            assignees: Vec::new(),
-            updated_at: Utc::now(),
-            area: None,
-            verification: None,
-            parent_issue: Vec::new(),
-            blocked_by: Vec::new(),
-            blocking: Vec::new(),
-        };
         let relationships = relationships::plan_relationship_sync(
-            task,
             link,
-            &empty_issue,
+            &relationships::RemoteRelations::EMPTY,
             &children,
             &dependencies,
         );
@@ -283,15 +251,8 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
         if !auth.authenticated || !linked_repo {
             continue;
         }
-        match client.get_issue(
-            &link.repo,
-            link.number,
-            (!basic_mode).then_some(&board.config.github.issue_fields),
-        ) {
-            Ok(mut issue) => {
-                if basic_mode {
-                    omit_issue_fields(&mut issue);
-                }
+        match fetch_issue(board, client.as_ref(), &link.repo, link.number) {
+            Ok(issue) => {
                 let direction = if basic_mode {
                     SyncDirection::Pull
                 } else {
@@ -446,26 +407,15 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     Ok(crate::output::CommandOutput::new(data, human))
 }
 
-pub(crate) fn parse_auth_username(message: &str) -> Option<String> {
-    message
-        .lines()
-        .find_map(|line| line.split_once("account ").map(|(_, account)| account))
-        .and_then(|account| account.split_whitespace().next())
-        .map(str::to_string)
-}
-
-pub(crate) fn parse_auth_scopes(message: &str) -> Vec<String> {
-    message
-        .lines()
-        .find_map(|line| line.split_once("Token scopes:").map(|(_, scopes)| scopes))
-        .map(|scopes| {
-            scopes
-                .split(',')
-                .map(|scope| scope.trim().trim_matches('\'').trim_matches('"'))
-                .filter(|scope| !scope.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
+/// The Issue Field names reported missing by `validate_org_fields`, read from
+/// the error's structured details rather than its message text.
+fn missing_field_names(error: &OrbitError) -> Vec<&str> {
+    error
+        .details
+        .as_ref()
+        .and_then(|details| details.get("fields"))
+        .and_then(|fields| fields.as_array())
+        .map(|fields| fields.iter().filter_map(|field| field.as_str()).collect())
         .unwrap_or_default()
 }
 
@@ -527,7 +477,7 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
         return issues;
     }
     let scopes = if auth.scopes.is_empty() {
-        parse_auth_scopes(&auth.message)
+        crate::github::client::parse_auth_scopes(&auth.message)
     } else {
         auth.scopes
     };
@@ -641,32 +591,11 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
 }
 
 fn count_pull_changes(plan: &SyncPlan) -> usize {
-    [
-        plan.apply_title.is_some(),
-        plan.apply_body.is_some(),
-        plan.apply_status.is_some(),
-        plan.apply_labels.is_some(),
-        plan.apply_area.is_some(),
-        plan.apply_verification.is_some(),
-    ]
-    .into_iter()
-    .filter(|pending| *pending)
-    .count()
+    plan.pull_changes().len()
 }
 
 fn count_push_changes(plan: &SyncPlan) -> usize {
-    [
-        plan.push_labels.is_some(),
-        plan.push_title.is_some(),
-        plan.push_body.is_some(),
-        plan.push_area.is_some(),
-        plan.push_verification.is_some(),
-        plan.push_state.is_some(),
-        plan.push_status_label,
-    ]
-    .into_iter()
-    .filter(|pending| *pending)
-    .count()
+    plan.push_changes().len()
 }
 
 fn render_status(data: &Value) -> String {
@@ -947,16 +876,12 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
     let setup = match client.validate_org_fields(organization, &board.config.github.issue_fields) {
         Ok(setup) => setup,
         Err(error) => {
-            let message = error.message;
-            let area_missing = message.contains(&format!(
-                "missing Issue Field `{}`",
-                board.config.github.issue_fields.area_name
-            ));
-            let verification_missing = message.contains(&format!(
-                "missing Issue Field `{}`",
-                board.config.github.issue_fields.verification_name
-            ));
-            let fields_missing = area_missing || verification_missing;
+            let message = error.message.clone();
+            let missing = missing_field_names(&error);
+            let area_missing = missing.contains(&board.config.github.issue_fields.area_name.as_str());
+            let verification_missing =
+                missing.contains(&board.config.github.issue_fields.verification_name.as_str());
+            let fields_missing = !missing.is_empty();
             let area_status = if area_missing {
                 "missing"
             } else if fields_missing {
@@ -1204,14 +1129,7 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
     let (repo, number) = resolve_adopt_identifier(&args)?;
     require_repository_available(board, &repo)?;
     let client = client_from_env()?;
-    let mut issue = client.get_issue(
-        &repo,
-        number,
-        (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
-    )?;
-    if board.config.github.mode.is_basic() {
-        omit_issue_fields(&mut issue);
-    }
+    let issue = fetch_issue(board, client.as_ref(), &repo, number)?;
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let task = graph.get(&args.task)?.clone();
     if task.front.github.as_ref().is_some_and(|link| !link.active) {

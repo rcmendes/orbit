@@ -339,6 +339,60 @@ impl Task {
             .iter()
             .any(|label| self.front.labels.iter().any(|candidate| candidate == label))
     }
+
+    /// Marks the Task as modified at `now`. Every field mutation ends here so
+    /// callers never write `front.updated_at` directly.
+    pub fn touch(&mut self, now: DateTime<Utc>) {
+        self.front.updated_at = now;
+    }
+
+    /// Adds labels, preserving the sorted, deduplicated invariant the parser
+    /// establishes. Returns true when the set changed; only then does the
+    /// Task record a modification.
+    pub fn add_labels(&mut self, labels: &[String], now: DateTime<Utc>) -> bool {
+        let before = self.front.labels.clone();
+        self.front.labels.extend(labels.iter().cloned());
+        self.front.labels.sort();
+        self.front.labels.dedup();
+        let changed = self.front.labels != before;
+        if changed {
+            self.touch(now);
+        }
+        changed
+    }
+
+    /// Removes labels. Returns true when the set changed.
+    pub fn remove_labels(&mut self, labels: &[String], now: DateTime<Utc>) -> bool {
+        let before = self.front.labels.clone();
+        self.front.labels.retain(|label| !labels.contains(label));
+        let changed = self.front.labels != before;
+        if changed {
+            self.touch(now);
+        }
+        changed
+    }
+
+    /// Adds a dependency edge. Returns true when the edge is new; an existing
+    /// edge leaves the Task untouched.
+    pub fn add_dependency(&mut self, dep: &str, now: DateTime<Utc>) -> bool {
+        if self.front.depends_on.iter().any(|existing| existing == dep) {
+            return false;
+        }
+        self.front.depends_on.push(dep.to_string());
+        self.touch(now);
+        true
+    }
+
+    /// Removes a dependency edge. Returns true when an edge was removed.
+    pub fn remove_dependency(&mut self, dep: &str, now: DateTime<Utc>) -> bool {
+        let before = self.front.depends_on.len();
+        self.front.depends_on.retain(|existing| existing != dep);
+        let changed = self.front.depends_on.len() != before;
+        if changed {
+            self.touch(now);
+        }
+        changed
+    }
 }
 
 pub fn normalize_verification(verification: Option<String>) -> Result<Option<String>> {

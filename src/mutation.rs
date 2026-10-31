@@ -210,9 +210,20 @@ pub enum Lifecycle<'a> {
     },
 }
 
+/// Executes a lifecycle operation on a freshly loaded snapshot.
+pub fn execute(
+    board: &Board,
+    id: &str,
+    operation: Lifecycle<'_>,
+    now: DateTime<Utc>,
+) -> Result<MutationResult> {
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    execute_in(board, graph, id, operation, now)
+}
+
 /// Executes a lifecycle operation against an already loaded snapshot. Used by
 /// claim-next so selection and claim remain inside the same exclusive scope.
-pub fn execute(
+pub fn execute_in(
     board: &Board,
     mut graph: Graph,
     id: &str,

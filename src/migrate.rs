@@ -14,6 +14,7 @@ use serde::Serialize;
 use tempfile::Builder;
 
 use crate::board::{Board, Config};
+use crate::comment;
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
 use crate::graph::{Graph, Issue, LoadMode};
@@ -193,93 +194,12 @@ pub fn health_issues(board: &Board, graph: &Graph) -> Result<Vec<Issue>> {
 
 fn health_issues_inner(board: &Board, graph: &Graph, check_branch: bool) -> Result<Vec<Issue>> {
     let mut issues = Vec::new();
-
-    for id in board.comment_ids()? {
-        if !graph.tasks.contains_key(&id) {
-            issues.push(Issue::new(
-                code::ORPHAN_COMMENT,
-                Some(&id),
-                format!("comments/{id}.md has no matching task"),
-            ));
-            continue;
-        }
-        if let Err(error) = board.read_comments(&id) {
-            issues.push(Issue::new(error.code, Some(&id), error.message));
-            continue;
-        }
-        match comment_header_matches(&board.comment_path(&id), &id) {
-            Ok(true) => {}
-            Ok(false) => issues.push(Issue::new(
-                code::CORRUPT_COMMENT,
-                Some(&id),
-                format!(
-                    "comments/{id}.md does not start with `# Comments: {id}`; repair the header before migrating"
-                ),
-            )),
-            Err(error) => issues.push(Issue::new(error.code, Some(&id), error.message)),
-        }
-    }
-
-    for task in graph.tasks.values() {
-        let encoded_parent = board.config.id.parent_id(&task.id);
-        match (&task.front.parent, encoded_parent) {
-            (Some(parent), Some(encoded)) if parent != &encoded => {
-                issues.push(Issue::new(
-                    code::PARENT_MISMATCH,
-                    Some(&task.id),
-                    format!(
-                        "{} has parent {parent} but its ID encodes {encoded}",
-                        task.id
-                    ),
-                ));
-            }
-            (None, Some(encoded)) => {
-                issues.push(Issue::new(
-                    code::PARENT_MISMATCH,
-                    Some(&task.id),
-                    format!(
-                        "{} is a SubTask ID but has no parent; expected {encoded}",
-                        task.id
-                    ),
-                ));
-            }
-            (Some(parent), None) => {
-                issues.push(Issue::new(
-                    code::PARENT_MISMATCH,
-                    Some(&task.id),
-                    format!(
-                        "{} has parent {parent} but its ID is not a SubTask ID",
-                        task.id
-                    ),
-                ));
-            }
-            _ => {}
-        }
-    }
-
+    crate::health::comment_files(board, graph, true, &mut issues)?;
+    crate::health::parent_id_agreement(board, graph, &mut issues);
     if check_branch {
-        match git::current_branch(&board.root) {
-            Ok(branch) if branch != board.config.board.branch => issues.push(Issue::new(
-                code::BOARD_CORRUPT,
-                None,
-                format!(
-                    "board is on branch {branch}, expected {}",
-                    board.config.board.branch
-                ),
-            )),
-            Ok(_) => {}
-            Err(error) => issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message)),
-        }
+        crate::health::branch_mismatch(board, &mut issues);
     }
-
     Ok(issues)
-}
-
-fn comment_header_matches(path: &Path, id: &str) -> Result<bool> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|error| OrbitError::io(format!("read {}", path.display()), error))?;
-    let first = content.lines().next().unwrap_or_default();
-    Ok(first == format!("# Comments: {id}"))
 }
 
 pub fn blocked_by_issues(issues: Vec<Issue>) -> OrbitError {
@@ -457,7 +377,7 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
         let new_id = mapped(&old_to_new, old_id)?;
         let content = std::fs::read_to_string(board.comment_path(old_id))
             .map_err(|error| OrbitError::io(format!("read comments/{old_id}.md"), error))?;
-        let updated = rewrite_comment_header(&content, old_id, new_id)?;
+        let updated = comment::rewrite_header(&content, old_id, new_id)?;
         std::fs::create_dir_all(root.join("comments"))
             .map_err(|error| OrbitError::io("create comments directory", error))?;
         std::fs::write(
@@ -522,29 +442,6 @@ fn mapped<'a>(old_to_new: &'a BTreeMap<&str, &str>, id: &str) -> Result<&'a str>
     })
 }
 
-fn rewrite_comment_header(content: &str, old_id: &str, new_id: &str) -> Result<String> {
-    let expected = format!("# Comments: {old_id}");
-    let Some(newline) = content.find('\n') else {
-        return Err(OrbitError::new(
-            code::CORRUPT_COMMENT,
-            format!("comments/{old_id}.md is missing the `{expected}` header"),
-        ));
-    };
-    let first = &content[..newline];
-    let first_without_cr = first.strip_suffix('\r').unwrap_or(first);
-    if first_without_cr != expected {
-        return Err(OrbitError::new(
-            code::CORRUPT_COMMENT,
-            format!("comments/{old_id}.md does not start with `{expected}`"),
-        ));
-    }
-    let carriage_return = if first.ends_with('\r') { "\r" } else { "" };
-    Ok(format!(
-        "# Comments: {new_id}{carriage_return}{}",
-        &content[newline..]
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,27 +473,5 @@ mod tests {
         assert_eq!(collisions.len(), 1);
         assert_eq!(collisions[0].id, "b-one");
         assert_eq!(collisions[0].sources, vec!["a-one", "c-one"]);
-    }
-
-    #[test]
-    fn comment_header_rewrite_preserves_body_and_line_endings() {
-        let content = "# Comments: orb-a7b2c9\n\n<!-- orbit:comment x -->\nbody\n";
-        let updated = rewrite_comment_header(content, "orb-a7b2c9", "atlas-a7b2c9").unwrap();
-        assert_eq!(
-            updated,
-            "# Comments: atlas-a7b2c9\n\n<!-- orbit:comment x -->\nbody\n"
-        );
-
-        let crlf = "# Comments: orb-a7b2c9\r\n\r\nbody\r\n";
-        let updated = rewrite_comment_header(crlf, "orb-a7b2c9", "atlas-a7b2c9").unwrap();
-        assert_eq!(updated, "# Comments: atlas-a7b2c9\r\n\r\nbody\r\n");
-    }
-
-    #[test]
-    fn comment_header_rewrite_refuses_a_mismatch() {
-        let error =
-            rewrite_comment_header("# Notes: orb-a7b2c9\nbody\n", "orb-a7b2c9", "atlas-a7b2c9")
-                .unwrap_err();
-        assert_eq!(error.code, code::CORRUPT_COMMENT);
     }
 }

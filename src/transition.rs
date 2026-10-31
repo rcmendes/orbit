@@ -183,10 +183,6 @@ impl Task {
             .is_some_and(|claim| claim.is_stale(now))
     }
 
-    pub fn touch(&mut self, now: DateTime<Utc>) {
-        self.front.updated_at = now;
-    }
-
     /// A live Claim held by someone else blocks the caller unless forced; a Stale one does not.
     pub fn authorize_live(
         &self,

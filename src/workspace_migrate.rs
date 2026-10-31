@@ -353,28 +353,16 @@ fn make_plan(workspace: &Path) -> Result<MigrationPlan> {
                     format!("{} is not UTF-8: {error}", source_path.display()),
                 )
             })?;
-            let old_header = format!("# Comments: {id}");
-            let Some(remainder) = content.strip_prefix(&old_header) else {
+            if !crate::comment::has_header(content, &id) {
                 return Err(OrbitError::new(
                     crate::error::code::CORRUPT_COMMENT,
                     format!("{} has a mismatched comment header", source_path.display()),
-                ));
-            };
-            if !remainder.is_empty()
-                && !remainder.starts_with('\n')
-                && !remainder.starts_with("\r\n")
-            {
-                return Err(OrbitError::new(
-                    crate::error::code::CORRUPT_COMMENT,
-                    format!("{} has a malformed comment header", source_path.display()),
                 ));
             }
             let content = if target_id == id {
                 bytes
             } else {
-                let mut rewritten = format!("# Comments: {target_id}").into_bytes();
-                rewritten.extend_from_slice(remainder.as_bytes());
-                rewritten
+                crate::comment::rewrite_header(content, &id, &target_id)?.into_bytes()
             };
             plan_files.push(PlannedFile {
                 path: PathBuf::from("comments").join(format!("{target_id}.md")),

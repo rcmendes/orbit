@@ -110,7 +110,32 @@ pub trait GitHubClient: Send + Sync {
         issue_fields: Option<&IssueFieldConfig>,
     ) -> Result<IssueSnapshot>;
 
-    fn list_issues_page(&self, repo: &str, page: usize) -> Result<Vec<IssueCatalogItem>>;
+    fn list_issues_page(
+        &self,
+        repo: &str,
+        page: usize,
+        issue_fields: Option<&IssueFieldConfig>,
+    ) -> Result<Vec<IssueCatalogItem>>;
+
+    /// Lists every issue in the repository, following pages until exhausted.
+    /// Pagination stays inside the seam; callers see the whole catalog.
+    fn list_all_issues(
+        &self,
+        repo: &str,
+        issue_fields: Option<&IssueFieldConfig>,
+    ) -> Result<Vec<IssueCatalogItem>> {
+        let mut issues = Vec::new();
+        let mut page = 1;
+        loop {
+            let results = self.list_issues_page(repo, page, issue_fields)?;
+            if results.is_empty() {
+                break;
+            }
+            issues.extend(results);
+            page += 1;
+        }
+        Ok(issues)
+    }
 
     fn issue_comments_page(
         &self,
@@ -118,6 +143,21 @@ pub trait GitHubClient: Send + Sync {
         number: u64,
         page: usize,
     ) -> Result<Vec<IssueComment>>;
+
+    /// Lists every comment on an issue, following pages until exhausted.
+    fn issue_comments(&self, repo: &str, number: u64) -> Result<Vec<IssueComment>> {
+        let mut comments = Vec::new();
+        let mut page = 1;
+        loop {
+            let results = self.issue_comments_page(repo, number, page)?;
+            if results.is_empty() {
+                break;
+            }
+            comments.extend(results);
+            page += 1;
+        }
+        Ok(comments)
+    }
 
     fn create_issue(&self, repo: &str, input: &CreateIssueInput) -> Result<IssueSnapshot>;
 
@@ -157,18 +197,21 @@ impl GitHubClient for GhCliClient {
         use std::process::Command;
 
         match Command::new("gh").args(["auth", "status"]).output() {
-            Ok(output) => AuthStatus {
-                authenticated: output.status.success(),
-                message: String::from_utf8_lossy(if output.status.success() {
+            Ok(output) => {
+                let message = String::from_utf8_lossy(if output.status.success() {
                     &output.stdout
                 } else {
                     &output.stderr
                 })
                 .trim()
-                .to_string(),
-                username: None,
-                scopes: Vec::new(),
-            },
+                .to_string();
+                AuthStatus {
+                    authenticated: output.status.success(),
+                    username: parse_auth_username(&message),
+                    scopes: parse_auth_scopes(&message),
+                    message,
+                }
+            }
             Err(error) => AuthStatus {
                 authenticated: false,
                 message: format!("could not run `gh auth status`: {error}"),
@@ -341,7 +384,12 @@ impl GitHubClient for GhCliClient {
         Ok(issue)
     }
 
-    fn list_issues_page(&self, repo: &str, page: usize) -> Result<Vec<IssueCatalogItem>> {
+    fn list_issues_page(
+        &self,
+        repo: &str,
+        page: usize,
+        issue_fields: Option<&IssueFieldConfig>,
+    ) -> Result<Vec<IssueCatalogItem>> {
         let path = format!("/repos/{repo}/issues?state=all&per_page=100&page={page}");
         let output = gh_api(&["api", &path])?;
         let issues: Vec<RestCatalogIssue> = serde_json::from_slice(&output).map_err(|error| {
@@ -355,7 +403,7 @@ impl GitHubClient for GhCliClient {
             .into_iter()
             .filter(|issue| issue.pull_request.is_none())
         {
-            let issue_fields = list_issue_field_values(repo, issue.number)?;
+            let field_values = list_issue_field_values(repo, issue.number)?;
             summaries.push(IssueCatalogItem {
                 identity: format!("{repo}#{}", issue.number),
                 repo: repo.to_string(),
@@ -371,11 +419,14 @@ impl GitHubClient for GhCliClient {
                 url: issue.html_url,
                 created_at: issue.created_at,
                 updated_at: issue.updated_at,
-                area: issue.area.or_else(|| string_field(&issue_fields, "Area")),
-                verification: issue
-                    .verification
-                    .or_else(|| string_field(&issue_fields, "Verification")),
-                issue_fields,
+                area: issue.area.or_else(|| {
+                    issue_fields.and_then(|fields| string_field(&field_values, &fields.area_name))
+                }),
+                verification: issue.verification.or_else(|| {
+                    issue_fields
+                        .and_then(|fields| string_field(&field_values, &fields.verification_name))
+                }),
+                issue_fields: field_values,
             });
         }
         Ok(summaries)
@@ -1441,7 +1492,12 @@ impl GitHubClient for FixtureClient {
         })
     }
 
-    fn list_issues_page(&self, repo: &str, page: usize) -> Result<Vec<IssueCatalogItem>> {
+    fn list_issues_page(
+        &self,
+        repo: &str,
+        page: usize,
+        issue_fields: Option<&IssueFieldConfig>,
+    ) -> Result<Vec<IssueCatalogItem>> {
         let store = self.store.lock().expect("fixture lock");
         if let Some(message) = store.catalog_errors.get(repo) {
             return Err(OrbitError::new(code::GITHUB_NOT_CONFIGURED, message));
@@ -1474,12 +1530,16 @@ impl GitHubClient for FixtureClient {
                 }),
                 created_at: issue.created_at,
                 updated_at: issue.updated_at,
-                area: issue
-                    .area
-                    .or_else(|| string_field(&issue.issue_fields, "Area")),
-                verification: issue
-                    .verification
-                    .or_else(|| string_field(&issue.issue_fields, "Verification")),
+                area: issue.area.or_else(|| {
+                    issue_fields.and_then(|fields| {
+                        string_field(&issue.issue_fields, &fields.area_name)
+                    })
+                }),
+                verification: issue.verification.or_else(|| {
+                    issue_fields.and_then(|fields| {
+                        string_field(&issue.issue_fields, &fields.verification_name)
+                    })
+                }),
                 issue_fields: issue.issue_fields,
             })
             .collect())
@@ -1666,4 +1726,30 @@ fn fixture_created_field_id(name: &str, area: bool) -> String {
             })
             .collect::<String>()
     )
+}
+
+/// Parses the account name from `gh auth status` output. The adapter fills
+/// `AuthStatus.username` so consumers never re-parse the message.
+pub(crate) fn parse_auth_username(message: &str) -> Option<String> {
+    message
+        .lines()
+        .find_map(|line| line.split_once("account ").map(|(_, account)| account))
+        .and_then(|account| account.split_whitespace().next())
+        .map(str::to_string)
+}
+
+/// Parses the granted scopes from `gh auth status` output.
+pub(crate) fn parse_auth_scopes(message: &str) -> Vec<String> {
+    message
+        .lines()
+        .find_map(|line| line.split_once("Token scopes:").map(|(_, scopes)| scopes))
+        .map(|scopes| {
+            scopes
+                .split(',')
+                .map(|scope| scope.trim().trim_matches('\'').trim_matches('"'))
+                .filter(|scope| !scope.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }

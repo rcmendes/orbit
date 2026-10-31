@@ -100,20 +100,41 @@ impl SyncPlan {
         !self.conflicts.is_empty()
     }
 
+    /// Field names with a pending pull into Orbit. The single list that
+    /// `is_noop`, change counts, and previews share so a new synced field is
+    /// registered in one place.
+    pub fn pull_changes(&self) -> Vec<&'static str> {
+        [
+            ("title", self.apply_title.is_some()),
+            ("body", self.apply_body.is_some()),
+            ("status", self.apply_status.is_some()),
+            ("labels", self.apply_labels.is_some()),
+            ("area", self.apply_area.is_some()),
+            ("verification", self.apply_verification.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, pending)| pending.then_some(name))
+        .collect()
+    }
+
+    /// Field names with a pending push to GitHub.
+    pub fn push_changes(&self) -> Vec<&'static str> {
+        [
+            ("title", self.push_title.is_some()),
+            ("body", self.push_body.is_some()),
+            ("labels", self.push_labels.is_some()),
+            ("area", self.push_area.is_some()),
+            ("verification", self.push_verification.is_some()),
+            ("state", self.push_state.is_some()),
+            ("status_label", self.push_status_label),
+        ]
+        .into_iter()
+        .filter_map(|(name, pending)| pending.then_some(name))
+        .collect()
+    }
+
     pub fn is_noop(&self) -> bool {
-        self.apply_title.is_none()
-            && self.apply_body.is_none()
-            && self.apply_status.is_none()
-            && self.apply_labels.is_none()
-            && self.apply_area.is_none()
-            && self.apply_verification.is_none()
-            && self.push_title.is_none()
-            && self.push_body.is_none()
-            && self.push_labels.is_none()
-            && self.push_area.is_none()
-            && self.push_verification.is_none()
-            && self.push_state.is_none()
-            && !self.push_status_label
+        self.pull_changes().is_empty() && self.push_changes().is_empty()
     }
 }
 

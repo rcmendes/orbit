@@ -217,6 +217,16 @@ impl Graph {
             .ok_or_else(|| OrbitError::not_found(id))
     }
 
+    /// Inserts a Task keyed by its own id so the map cannot be desynced.
+    pub fn insert(&mut self, task: Task) {
+        self.tasks.insert(task.id.clone(), task);
+    }
+
+    /// Removes and returns the Task, if present.
+    pub fn remove(&mut self, id: &str) -> Option<Task> {
+        self.tasks.remove(id)
+    }
+
     pub fn validate(&self) -> Vec<Issue> {
         let mut issues = Vec::new();
 

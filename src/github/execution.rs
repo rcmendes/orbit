@@ -1,8 +1,9 @@
 //! Synchronization policy and execution behind one injected GitHub seam.
 //! The caller holds the Board lock for this complete operation.
 use super::client::{GitHubClient, UpdateIssueInput};
+use super::config::IssueFieldConfig;
 use super::fields::parse_area;
-use super::link::{GitHubLink, GitHubSyncBaseline};
+use super::link::GitHubLink;
 use super::model::{IssueSnapshot, SyncDirection, SyncPlan, SyncResolution};
 use super::sync::OrbitSyncView;
 use super::{relationships, sync};
@@ -93,14 +94,7 @@ pub fn synchronize(
         if board.config.github.mode.is_basic() && direction != SyncDirection::Pull {
             reject_basic_metadata(task)?;
         }
-        let mut issue = client.get_issue(
-            &link.repo,
-            link.number,
-            (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
-        )?;
-        if board.config.github.mode.is_basic() {
-            omit_issue_fields(&mut issue);
-        }
+        let issue = fetch_issue(board, client, &link.repo, link.number)?;
         let mut plan = sync::plan_sync(OrbitSyncView { task, link: &link }, &issue, direction);
         resolved_fields.extend(resolve_sync_conflicts(
             &mut plan,
@@ -129,7 +123,7 @@ pub fn synchronize(
             })
             .collect();
         let mut relationship =
-            relationships::plan_relationship_sync(task, &link, &issue, &children, &dependencies);
+            relationships::plan_relationship_sync(&link, &(&issue).into(), &children, &dependencies);
         if direction == SyncDirection::Pull {
             relationship.changes.clear();
         }
@@ -414,8 +408,7 @@ pub(crate) fn apply_plan(
                         .unwrap_or_else(|| issue.verification.clone())
                 }),
                 organization: board.config.github.organization.clone(),
-                issue_fields: (!board.config.github.mode.is_basic())
-                    .then_some(board.config.github.issue_fields.clone()),
+                issue_fields: issue_fields_for(board).cloned(),
             },
         )?;
     }
@@ -436,11 +429,7 @@ pub(crate) fn apply_plan(
         return Ok(None);
     }
 
-    let refreshed = client.get_issue(
-        &link.repo,
-        link.number,
-        (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
-    )?;
+    let refreshed = fetch_issue(board, client, &link.repo, link.number)?;
     set_baseline(&mut task, &refreshed);
     let outcome = persist_task(board, &task, commit_message)?;
     Ok(crate::mutation::commit_warning(outcome))
@@ -507,24 +496,38 @@ pub(crate) fn omit_issue_fields(issue: &mut IssueSnapshot) {
     issue.verification = None;
 }
 
-pub(crate) fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {
-    if let Some(link) = task.front.github.as_mut() {
-        link.last_sync = Some(GitHubSyncBaseline {
-            at: Utc::now(),
-            issue_updated_at: issue.updated_at,
-            orbit_updated_at: task.front.updated_at,
-            title: issue.title.clone(),
-            body: issue.body.clone(),
-            labels: crate::github::status::user_labels(&issue.labels),
-            area: task.front.area.map(|area| area.as_str().to_string()),
-            verification: task.front.verification.clone(),
-            status: Some(task.front.status),
-            issue_state: Some(issue.state),
-            issue_state_reason: issue.state_reason,
-            sub_issues: issue.blocking.clone(),
-            blocked_by: issue.blocked_by.clone(),
-        });
+/// The configured Issue Fields, or `None` in basic mode where they are never
+/// requested. One expression for the mode gate every remote read shares.
+pub(crate) fn issue_fields_for(board: &Board) -> Option<&IssueFieldConfig> {
+    (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields)
+}
+
+/// Reads a remote Issue honoring the Board's mode: basic mode never requests
+/// configured Issue Fields and strips any that arrive anyway.
+pub(crate) fn fetch_issue(
+    board: &Board,
+    client: &dyn GitHubClient,
+    repo: &str,
+    number: u64,
+) -> Result<IssueSnapshot> {
+    let mut issue = client.get_issue(repo, number, issue_fields_for(board))?;
+    if board.config.github.mode.is_basic() {
+        omit_issue_fields(&mut issue);
     }
+    Ok(issue)
+}
+
+pub(crate) fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {
+    let Some(link) = task.front.github.as_ref() else {
+        return;
+    };
+    let baseline =
+        crate::github::sync::baseline_from(crate::github::sync::OrbitSyncView { task, link }, issue);
+    task.front
+        .github
+        .as_mut()
+        .expect("link existed above")
+        .last_sync = Some(baseline);
 }
 
 use crate::mutation::persist_task;

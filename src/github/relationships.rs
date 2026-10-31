@@ -1,7 +1,34 @@
-use crate::error::{OrbitError, Result};
 use crate::github::link::GitHubLink;
 use crate::github::model::{IssueRef, IssueSnapshot};
 use crate::task::Task;
+
+/// The remote Issue's current relationships — the only part of an
+/// `IssueSnapshot` the planner reads.
+#[derive(Debug, Clone, Copy)]
+pub struct RemoteRelations<'a> {
+    pub parent_issue: &'a [IssueRef],
+    pub blocking: &'a [IssueRef],
+    pub blocked_by: &'a [IssueRef],
+}
+
+impl RemoteRelations<'_> {
+    /// Empty remote state for previews where no issue was fetched.
+    pub const EMPTY: RemoteRelations<'static> = RemoteRelations {
+        parent_issue: &[],
+        blocking: &[],
+        blocked_by: &[],
+    };
+}
+
+impl<'a> From<&'a IssueSnapshot> for RemoteRelations<'a> {
+    fn from(issue: &'a IssueSnapshot) -> Self {
+        Self {
+            parent_issue: &issue.parent_issue,
+            blocking: &issue.blocking,
+            blocked_by: &issue.blocked_by,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RelationshipReport {
@@ -25,9 +52,8 @@ pub struct RelationshipChange {
 }
 
 pub fn plan_relationship_sync(
-    task: &Task,
     link: &GitHubLink,
-    issue: &IssueSnapshot,
+    remote: &RemoteRelations,
     child_links: &[(Task, GitHubLink)],
     dependency_links: &[(Task, GitHubLink)],
 ) -> RelationshipReport {
@@ -50,7 +76,7 @@ pub fn plan_relationship_sync(
                 repo: child_link.repo.clone(),
                 number: child_link.number,
             };
-            if !issue.blocking.contains(&reference) {
+            if !remote.blocking.contains(&reference) {
                 changes.push(RelationshipChange {
                     action: "add",
                     kind: "sub_issue",
@@ -79,7 +105,7 @@ pub fn plan_relationship_sync(
                 repo: dep_link.repo.clone(),
                 number: dep_link.number,
             };
-            if !issue.blocked_by.contains(&reference) {
+            if !remote.blocked_by.contains(&reference) {
                 changes.push(RelationshipChange {
                     action: "add",
                     kind: "blocked_by",
@@ -94,7 +120,7 @@ pub fn plan_relationship_sync(
         }
     }
 
-    for parent in &issue.parent_issue {
+    for parent in remote.parent_issue {
         if parent.repo != link.repo || parent.number != link.number {
             unsupported.push(format!(
                 "GitHub parent issue {}/#{} is not represented on this Orbit Board",
@@ -103,7 +129,7 @@ pub fn plan_relationship_sync(
         }
     }
 
-    for remote_child in &issue.blocking {
+    for remote_child in remote.blocking {
         if supported.iter().any(|relationship| {
             relationship.kind == "sub_issue" && relationship.github == *remote_child
         }) {
@@ -123,7 +149,7 @@ pub fn plan_relationship_sync(
             ));
         }
     }
-    for remote_dependency in &issue.blocked_by {
+    for remote_dependency in remote.blocked_by {
         if supported.iter().any(|relationship| {
             relationship.kind == "blocked_by" && relationship.github == *remote_dependency
         }) {
@@ -145,26 +171,10 @@ pub fn plan_relationship_sync(
         }
     }
 
-    let _ = task;
     RelationshipReport {
         supported,
         unsupported,
         changes,
-    }
-}
-
-pub fn ensure_same_repo(left: &GitHubLink, right: &GitHubLink) -> Result<()> {
-    if left.repo.eq_ignore_ascii_case(&right.repo) {
-        Ok(())
-    } else {
-        Err(OrbitError::new(
-            crate::error::code::GITHUB_UNSUPPORTED_RELATIONSHIP,
-            format!(
-                "cannot relate {} and {} across repositories",
-                left.identity(),
-                right.identity()
-            ),
-        ))
     }
 }
 
@@ -253,7 +263,7 @@ mod tests {
             }],
         };
 
-        let report = plan_relationship_sync(&parent, &link, &issue, &[], &[]);
+        let report = plan_relationship_sync(&link, &RemoteRelations::from(&issue), &[], &[]);
 
         let removals = report
             .changes
@@ -266,7 +276,7 @@ mod tests {
 
         issue.blocking.clear();
         issue.blocked_by.clear();
-        let report = plan_relationship_sync(&parent, &link, &issue, &[], &[]);
+        let report = plan_relationship_sync(&link, &RemoteRelations::from(&issue), &[], &[]);
         assert!(report.changes.is_empty());
     }
 
@@ -297,7 +307,7 @@ mod tests {
             }],
         };
 
-        let report = plan_relationship_sync(&parent, &link, &issue, &[], &[]);
+        let report = plan_relationship_sync(&link, &RemoteRelations::from(&issue), &[], &[]);
 
         assert!(report.changes.is_empty());
         assert_eq!(report.unsupported.len(), 2);
@@ -328,7 +338,7 @@ mod tests {
             blocking: vec![],
         };
         let report =
-            plan_relationship_sync(&parent, &parent_link, &issue, &[(child, child_link)], &[]);
+            plan_relationship_sync(&parent_link, &RemoteRelations::from(&issue), &[(child, child_link)], &[]);
         assert_eq!(report.supported.len(), 0);
         assert_eq!(report.unsupported.len(), 1);
     }

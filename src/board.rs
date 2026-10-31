@@ -1406,8 +1406,17 @@ fn nearest_workspace_board(start: &Path) -> Option<PathBuf> {
 }
 
 pub(crate) fn workspace_child_board(workspace: &Path) -> Result<Option<PathBuf>> {
+    Ok(workspace_child_boards(workspace)?.into_iter().next())
+}
+
+/// Enumerates every Board inside Git repositories nested under `workspace`,
+/// depth-first. Skips `.git`, `.orbit`, and `.board` directories and does not
+/// descend into nested repositories; for each child repository it reports the
+/// `.orbit` Board first, then the legacy common-dir `orbit/board`.
+pub(crate) fn workspace_child_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
     if !workspace.exists() {
-        return Ok(None);
+        return Ok(found);
     }
     let mut pending = vec![workspace.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -1416,25 +1425,27 @@ pub(crate) fn workspace_child_board(workspace: &Path) -> Result<Option<PathBuf>>
             let name = path.file_name();
             if name == Some(std::ffi::OsStr::new(".orbit"))
                 || name == Some(std::ffi::OsStr::new(".git"))
+                || name == Some(std::ffi::OsStr::new(".board"))
             {
                 continue;
             }
             if path.join(".git").exists() {
                 let local = path.join(".orbit");
                 if Board::is_board(&local) {
-                    return Ok(Some(local));
+                    found.push(local.clone());
                 }
-                let common = git::common_dir_at(&path)?;
-                let legacy = common.join("orbit/board");
-                if Board::is_board(&legacy) {
-                    return Ok(Some(legacy));
+                if let Ok(common) = git::common_dir_at(&path) {
+                    let legacy = common.join("orbit/board");
+                    if Board::is_board(&legacy) && legacy != local {
+                        found.push(legacy);
+                    }
                 }
                 continue;
             }
             pending.push(path);
         }
     }
-    Ok(None)
+    Ok(found)
 }
 
 fn main_checkout_for(repo_root: &Path, common: &Path) -> PathBuf {

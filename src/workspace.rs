@@ -659,33 +659,19 @@ pub(crate) fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::
     let mut missing_origins = Vec::new();
     let mut unsupported_origins = Vec::new();
     let mut unavailable_paths = BTreeMap::new();
-    let entries = std::fs::read_dir(workspace)
-        .map_err(|error| OrbitError::io(format!("scan {}", workspace.display()), error))?;
-    let mut children = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            OrbitError::io(
-                format!("read child entry in {}", workspace.display()),
-                error,
-            )
-        })?;
-        if entry
-            .file_type()
-            .map_err(|error| OrbitError::io(format!("inspect {}", entry.path().display()), error))?
-            .is_dir()
-        {
-            children.push(entry);
-        }
-    }
-    children.sort_by_key(|entry| entry.file_name());
+    let mut children: Vec<PathBuf> =
+        crate::git::child_directories(workspace, false)?.collect::<Result<Vec<_>>>()?;
+    children.sort_by_key(|path| path.file_name().map(|name| name.to_os_string()));
 
     let mut discovered = Vec::new();
-    for child in children {
-        let child_name = child.file_name().to_string_lossy().into_owned();
+    for child_path in children {
+        let child_name = child_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if child_name == ".orbit" {
             continue;
         }
-        let child_path = child.path();
         if !crate::git::is_direct_git_repository(&child_path) {
             unavailable_paths.insert(
                 child_name.clone(),

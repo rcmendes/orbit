@@ -24,7 +24,7 @@ flowchart LR
     end
 
     subgraph Application["Application"]
-        CMD["Command handlers<br/>src/commands.rs"]
+        CMD["Command handlers<br/>src/commands/"]
         PRIME["prime context"]
         DOCTOR["doctor and sync"]
         GITHUB["GitHub provider<br/>src/github/commands.rs"]
@@ -138,7 +138,7 @@ flowchart LR
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
-| Application | `src/commands.rs`, `src/migrate.rs`, `src/workspace_migrate.rs`, `src/workspace.rs`, `src/issue_catalog.rs`, `src/workspace_doctor.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. Workspace commands reconcile repositories and Remote Issue snapshots explicitly. GitHub commands provide status diagnostics, export previews, Issue creation, and synchronization; `doctor` adds read-only Workspace, repository/cache, migration, link, and managed-agent diagnostics when configured. Prefix migration rewrites one Board; Workspace migration validates, combines, and activates multiple Boards. |
+| Application | `src/commands/`, `src/migrate.rs`, `src/workspace_migrate.rs`, `src/workspace.rs`, `src/issue_catalog.rs`, `src/workspace_doctor.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. Workspace commands reconcile repositories and Remote Issue snapshots explicitly. GitHub commands provide status diagnostics, export previews, Issue creation, and synchronization; `doctor` adds read-only Workspace, repository/cache, migration, link, and managed-agent diagnostics when configured. Prefix migration rewrites one Board; Workspace migration validates, combines, and activates multiple Boards. |
 | Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Execution | `src/mutation.rs`, `src/github/execution.rs` | Board mutation execution (lifecycle, terminal, reopen, shared Task persistence and commit warnings) and GitHub sync execution behind an injected `GitHubClient`; both run inside the caller's Board access scope. |
@@ -900,11 +900,11 @@ sequenceDiagram
 
 | Change | Start here | Also update |
 | --- | --- | --- |
-| Add a CLI command | `src/cli.rs`, then the dispatch in `src/commands.rs` | `tests/cli.rs`, `SPEC.md`, and this command map |
+| Add a CLI command | `src/cli.rs`, then the dispatch in `src/commands/mod.rs` | `tests/cli.rs`, `SPEC.md`, and this command map |
 | Change a status transition | The Task transition in `src/transition.rs`, plus `Graph::is_ready` or `blocking_ids` if readiness changes | `tests/properties.rs`, the state machine in this document, and `SPEC.md` |
 | Add a task field | `TaskFrontmatter` and parsing in `src/task.rs` | `graph::task_summary` and `task_detail`, plus round-trip tests |
 | Add an MCP tool | `tool_definitions` and `dispatch_tool` in `src/mcp.rs` | `tests/mcp.rs`, the MCP bridge section, and `SPEC.md` |
-| Change human `list` output | `format_table` and `truncate` in `src/commands.rs` | The human-output note here, `docs/commands.md`, and the README example |
+| Change human `list` output | `format_table` in `src/commands/render.rs` and `truncate` in `src/commands/mod.rs` | The human-output note here, `docs/commands.md`, and the README example |
 | Add a harness | `SetupClient` and the install and remove plans in `src/setup.rs` | Detection tests in `tests/setup.rs`, onboarding tests, and `docs/agents/` |
 | Change board storage | `src/board.rs` and the init path | [ADR 0001](adr/0001-markdown-board-on-orphan-branch.md), [ADR 0002](adr/0002-single-writer-lock-and-atomic-rename.md), [ADR 0012](adr/0012-orbit-folder.md), and the component map here |
 

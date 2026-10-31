@@ -139,8 +139,7 @@ fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::CommandOutp
         let result = fetch_repository(
             client.as_ref(),
             &repository,
-            (!board.config.github.mode.is_basic())
-                .then_some(&board.config.github.issue_fields),
+            (!board.config.github.mode.is_basic()).then_some(&board.config.github.issue_fields),
         );
         let entry = catalog.repositories.entry(repository.clone()).or_default();
         match result {
@@ -1177,8 +1176,7 @@ fn reattach_task(
         )));
     }
     let client = client_from_env()?;
-    let issue =
-        crate::github::execution::fetch_issue(board, client.as_ref(), &repository, number)?;
+    let issue = crate::github::execution::fetch_issue(board, client.as_ref(), &repository, number)?;
     validate_issue_identity(&issue, &repository, number)?;
     let link = task
         .front

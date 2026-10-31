@@ -31,7 +31,10 @@ pub(super) fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output:
     ))
 }
 
-pub(super) fn cmd_release(board: &Board, args: ReleaseArgs) -> Result<crate::output::CommandOutput> {
+pub(super) fn cmd_release(
+    board: &Board,
+    args: ReleaseArgs,
+) -> Result<crate::output::CommandOutput> {
     let caller = optional_agent(args.by);
     let result = crate::mutation::execute(
         board,
@@ -51,7 +54,10 @@ pub(super) fn cmd_release(board: &Board, args: ReleaseArgs) -> Result<crate::out
     Ok(mutation_output(result, format!("released {}", args.id)))
 }
 
-pub(super) fn cmd_heartbeat(board: &Board, args: HeartbeatArgs) -> Result<crate::output::CommandOutput> {
+pub(super) fn cmd_heartbeat(
+    board: &Board,
+    args: HeartbeatArgs,
+) -> Result<crate::output::CommandOutput> {
     let agent = resolve_agent(args.by)?;
     let result = crate::mutation::execute(
         board,
@@ -67,7 +73,10 @@ pub(super) fn cmd_heartbeat(board: &Board, args: HeartbeatArgs) -> Result<crate:
     .with_meta(json!({"committed": false})))
 }
 
-pub(super) fn cmd_checkpoint(board: &Board, args: CheckpointArgs) -> Result<crate::output::CommandOutput> {
+pub(super) fn cmd_checkpoint(
+    board: &Board,
+    args: CheckpointArgs,
+) -> Result<crate::output::CommandOutput> {
     let agent = resolve_agent(args.by)?;
     let update = CheckpointUpdate {
         progress: args.progress,
@@ -169,7 +178,6 @@ fn terminal_command(
     }
     Ok(output)
 }
-
 
 pub(super) fn cmd_reopen(board: &Board, args: ReopenArgs) -> Result<crate::output::CommandOutput> {
     let result = crate::mutation::reopen(board, &args.id, args.force, Utc::now())?;

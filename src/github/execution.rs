@@ -122,8 +122,12 @@ pub fn synchronize(
                     .map(|dependency_link| (dependency.clone(), dependency_link.clone()))
             })
             .collect();
-        let mut relationship =
-            relationships::plan_relationship_sync(&link, &(&issue).into(), &children, &dependencies);
+        let mut relationship = relationships::plan_relationship_sync(
+            &link,
+            &(&issue).into(),
+            &children,
+            &dependencies,
+        );
         if direction == SyncDirection::Pull {
             relationship.changes.clear();
         }
@@ -521,8 +525,10 @@ pub(crate) fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {
     let Some(link) = task.front.github.as_ref() else {
         return;
     };
-    let baseline =
-        crate::github::sync::baseline_from(crate::github::sync::OrbitSyncView { task, link }, issue);
+    let baseline = crate::github::sync::baseline_from(
+        crate::github::sync::OrbitSyncView { task, link },
+        issue,
+    );
     task.front
         .github
         .as_mut()

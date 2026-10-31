@@ -337,8 +337,12 @@ mod tests {
             blocked_by: vec![],
             blocking: vec![],
         };
-        let report =
-            plan_relationship_sync(&parent_link, &RemoteRelations::from(&issue), &[(child, child_link)], &[]);
+        let report = plan_relationship_sync(
+            &parent_link,
+            &RemoteRelations::from(&issue),
+            &[(child, child_link)],
+            &[],
+        );
         assert_eq!(report.supported.len(), 0);
         assert_eq!(report.unsupported.len(), 1);
     }

@@ -7,8 +7,8 @@ use crate::graph::LoadMode;
 use crate::setup::COMPLETION_LINE;
 use crate::task::TaskType;
 
-use super::*;
 use super::render::*;
+use super::*;
 
 pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;

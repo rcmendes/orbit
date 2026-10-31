@@ -102,7 +102,10 @@ fn list_labels(board: &Board) -> Result<crate::output::CommandOutput> {
     )
 }
 
-pub(super) fn cmd_comment(board: &Board, args: CommentArgs) -> Result<crate::output::CommandOutput> {
+pub(super) fn cmd_comment(
+    board: &Board,
+    args: CommentArgs,
+) -> Result<crate::output::CommandOutput> {
     match args.command {
         CommentCommand::Add(args) => cmd_comment_add(board, args),
         CommentCommand::List(args) => cmd_comment_list(board, args),
@@ -224,7 +227,10 @@ pub(super) fn cmd_depend(board: &Board, args: DependArgs) -> Result<crate::outpu
     ))
 }
 
-pub(super) fn cmd_undepend(board: &Board, args: UndependArgs) -> Result<crate::output::CommandOutput> {
+pub(super) fn cmd_undepend(
+    board: &Board,
+    args: UndependArgs,
+) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Lenient)?;
 
     let changed = {

@@ -878,7 +878,8 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
         Err(error) => {
             let message = error.message.clone();
             let missing = missing_field_names(&error);
-            let area_missing = missing.contains(&board.config.github.issue_fields.area_name.as_str());
+            let area_missing =
+                missing.contains(&board.config.github.issue_fields.area_name.as_str());
             let verification_missing =
                 missing.contains(&board.config.github.issue_fields.verification_name.as_str());
             let fields_missing = !missing.is_empty();

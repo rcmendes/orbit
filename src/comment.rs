@@ -206,7 +206,10 @@ mod tests {
     #[test]
     fn header_round_trips_and_tolerates_crlf() {
         assert!(has_header("# Comments: orb-a7b2c9\n\nbody\n", "orb-a7b2c9"));
-        assert!(has_header("# Comments: orb-a7b2c9\r\n\r\nbody\r\n", "orb-a7b2c9"));
+        assert!(has_header(
+            "# Comments: orb-a7b2c9\r\n\r\nbody\r\n",
+            "orb-a7b2c9"
+        ));
         assert!(has_header("# Comments: orb-a7b2c9", "orb-a7b2c9"));
         assert!(!has_header("# Notes: orb-a7b2c9\nbody\n", "orb-a7b2c9"));
         assert!(!has_header("", "orb-a7b2c9"));

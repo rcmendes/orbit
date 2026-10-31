@@ -1540,9 +1540,8 @@ impl GitHubClient for FixtureClient {
                 created_at: issue.created_at,
                 updated_at: issue.updated_at,
                 area: issue.area.or_else(|| {
-                    issue_fields.and_then(|fields| {
-                        string_field(&issue.issue_fields, &fields.area_name)
-                    })
+                    issue_fields
+                        .and_then(|fields| string_field(&issue.issue_fields, &fields.area_name))
                 }),
                 verification: issue.verification.or_else(|| {
                     issue_fields.and_then(|fields| {

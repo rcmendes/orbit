@@ -304,7 +304,6 @@ pub(super) fn format_tree_line(task: &Task, graph: &Graph, root: bool) -> String
     if root { line } else { format!("  {line}") }
 }
 
-
 fn push_field_lines(lines: &mut Vec<String>, label: &str, text: &str) {
     let mut text = text.lines();
     if let Some(first) = text.next() {

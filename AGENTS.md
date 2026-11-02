@@ -24,6 +24,26 @@ From any child repository in a Workspace, these commands resolve the shared Work
 Parse the JSON envelope: `ok`, `data`, `error.code`, and `error.retryable`. If a command returns `LOCKED`, retry after a short backoff. Never infer state from prose.
 <!-- END ORBIT INTEGRATION -->
 
+## Worktrees for Orbit tasks
+
+Implement every Orbit task in a dedicated git worktree — never in the main
+checkout, so parallel agent sessions and reviews stay undisturbed.
+
+1. Claim the task, then create the worktree and branch:
+
+   ```bash
+   git worktree add .worktrees/<task-id> -b ticket/<task-id> <base>
+   ```
+
+   `<base>` is the repo's default branch, or the base branch the task specifies.
+   `.worktrees/` is gitignored.
+2. Do all work — edits, builds, tests, commits — inside `.worktrees/<task-id>`.
+   `orbit` commands resolve the shared board from inside the worktree.
+3. Commit, push, and open the PR from the `ticket/<task-id>` branch.
+4. Keep the worktree while review is pending; after merge or `orbit done`,
+   remove it with `git worktree remove .worktrees/<task-id>`.
+
+
 ## Documentation
 
 Always update the documentation after committing a change that affects behavior,

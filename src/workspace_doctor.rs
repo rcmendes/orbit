@@ -527,47 +527,12 @@ fn diagnose_migration(workspace: &Path, issues: &mut Vec<Issue>, warnings: &mut 
             .with_next_action("inspect the staging Board and remove it only after confirming no migration is pending"),
         );
     }
-    for source in local_boards(workspace) {
+    for source in crate::board::workspace_local_boards(workspace).unwrap_or_default() {
         warnings.push(format!(
             "local Board at {} remains beside the Workspace Board; run `orbit workspace migrate --dry-run` to review any unmigrated Work, or keep it as the documented backup",
             source.display()
         ));
     }
-}
-
-fn local_boards(workspace: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    for candidate in [
-        workspace.join(".board"),
-        workspace.join("board"),
-        workspace.join(".orbit"),
-    ] {
-        if Board::is_board(&candidate) {
-            found.push(dunce::canonicalize(&candidate).unwrap_or(candidate));
-        }
-    }
-    if let Ok(children) = crate::git::child_directories(workspace, true) {
-        for path in children.flatten() {
-            if path.file_name() == Some(std::ffi::OsStr::new(".orbit")) {
-                continue;
-            }
-            if path.join(".git").exists() {
-                let local = path.join(".orbit");
-                if Board::is_board(&local) {
-                    found.push(dunce::canonicalize(&local).unwrap_or(local));
-                }
-                if let Ok(common) = crate::git::common_dir_at(&path) {
-                    let legacy = common.join("orbit/board");
-                    if Board::is_board(&legacy) {
-                        found.push(dunce::canonicalize(&legacy).unwrap_or(legacy));
-                    }
-                }
-            }
-        }
-    }
-    found.sort();
-    found.dedup();
-    found
 }
 
 fn diagnose_links(

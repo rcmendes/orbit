@@ -463,22 +463,12 @@ fn workspace_config_source(workspace: &Path, destination: &Path) -> Option<PathB
 }
 
 fn find_sources(workspace: &Path, destination: &Path) -> Result<Vec<PathBuf>> {
-    let mut found = BTreeSet::new();
-    for legacy in [
-        workspace.join(".board"),
-        workspace.join("board"),
-        workspace.join(".orbit"),
-    ] {
-        if legacy != destination && Board::is_board(&legacy) {
-            found.insert(dunce::canonicalize(&legacy).unwrap_or(legacy));
-        }
-    }
-    for board in crate::board::workspace_child_boards(workspace)? {
-        if board != destination {
-            found.insert(dunce::canonicalize(&board).unwrap_or(board));
-        }
-    }
-    Ok(found.into_iter().collect())
+    let destination =
+        dunce::canonicalize(destination).unwrap_or_else(|_| destination.to_path_buf());
+    Ok(crate::board::workspace_local_boards(workspace)?
+        .into_iter()
+        .filter(|board| *board != destination)
+        .collect())
 }
 
 fn ensure_unique_github_links(

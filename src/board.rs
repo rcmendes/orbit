@@ -1420,6 +1420,30 @@ pub(crate) fn workspace_child_board(workspace: &Path) -> Result<Option<PathBuf>>
     Ok(workspace_child_boards(workspace)?.into_iter().next())
 }
 
+/// Directory names that locate a Board relative to a Workspace or repository.
+pub(crate) const ORBIT_DIR: &str = ".orbit";
+pub(crate) const BOARD_DIR: &str = "board";
+pub(crate) const LEGACY_BOARD_DIR: &str = ".board";
+
+/// Every Board that sits beside or under `workspace` other than its Workspace
+/// Board: the workspace-level legacy layouts plus child-repository Boards.
+/// Canonical, sorted, and deduplicated.
+pub(crate) fn workspace_local_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
+    let mut found: Vec<PathBuf> = [LEGACY_BOARD_DIR, BOARD_DIR, ORBIT_DIR]
+        .iter()
+        .map(|name| workspace.join(name))
+        .filter(|candidate| Board::is_board(candidate))
+        .collect();
+    found.extend(workspace_child_boards(workspace)?);
+    let mut found: Vec<PathBuf> = found
+        .into_iter()
+        .map(|path| dunce::canonicalize(&path).unwrap_or(path))
+        .collect();
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
 /// Enumerates every Board inside Git repositories nested under `workspace`,
 /// depth-first. Skips `.git`, `.orbit`, and `.board` directories and does not
 /// descend into nested repositories; for each child repository it reports the
@@ -1434,19 +1458,19 @@ pub(crate) fn workspace_child_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
         for path in git::child_directories(&directory, false)? {
             let path = path?;
             let name = path.file_name();
-            if name == Some(std::ffi::OsStr::new(".orbit"))
+            if name == Some(std::ffi::OsStr::new(ORBIT_DIR))
                 || name == Some(std::ffi::OsStr::new(".git"))
-                || name == Some(std::ffi::OsStr::new(".board"))
+                || name == Some(std::ffi::OsStr::new(LEGACY_BOARD_DIR))
             {
                 continue;
             }
             if path.join(".git").exists() {
-                let local = path.join(".orbit");
+                let local = path.join(ORBIT_DIR);
                 if Board::is_board(&local) {
                     found.push(local.clone());
                 }
                 if let Ok(common) = git::common_dir_at(&path) {
-                    let legacy = common.join("orbit/board");
+                    let legacy = common.join("orbit").join(BOARD_DIR);
                     if Board::is_board(&legacy) && legacy != local {
                         found.push(legacy);
                     }
@@ -1616,6 +1640,34 @@ pub(crate) fn already_initialized(path: &Path) -> OrbitError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_local_boards_finds_legacy_and_nested_child_boards() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        let board = |path: PathBuf| {
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("config.toml"), "").unwrap();
+        };
+        board(workspace.join(LEGACY_BOARD_DIR));
+        for repo in ["alpha", "group/beta"] {
+            std::fs::create_dir_all(workspace.join(repo).join(".git")).unwrap();
+            board(workspace.join(repo).join(ORBIT_DIR));
+        }
+        // The Workspace Board itself and a repository without a Board are not sources.
+        board(workspace.join(ORBIT_DIR).join(BOARD_DIR));
+        std::fs::create_dir_all(workspace.join("gamma/.git")).unwrap();
+
+        let found = workspace_local_boards(workspace).unwrap();
+        let root = dunce::canonicalize(workspace).unwrap();
+        let mut expected = vec![
+            root.join(LEGACY_BOARD_DIR),
+            root.join("alpha").join(ORBIT_DIR),
+            root.join("group/beta").join(ORBIT_DIR),
+        ];
+        expected.sort();
+        assert_eq!(found, expected);
+    }
 
     #[test]
     fn failed_commit_sets_commit_failed() {

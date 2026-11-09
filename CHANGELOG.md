@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed `orbit doctor` on Windows missing absolute `--dir` Board paths in MCP configs whose command name differs in case from `orbit`/`orbit.exe` (for example `C:\Tools\Orbit.EXE`). Doctor now uses the same case-insensitive orbit-command match as `orbit setup`.
+- Changed `orbit workspace doctor` to find local Boards with the same walk as `orbit workspace migrate`: it now reports Boards in repositories nested more than one level under the Workspace, and no longer follows symlinked directories. Internal: Board directory names (`.orbit`, `board`, `.board`) used by Workspace discovery are named constants.
 
 ## 0.10.8 - 2026-10-31
 

@@ -593,7 +593,7 @@ fn toml_entry_records_absolute_board(entry: &toml::Value) -> bool {
     if !entry
         .get("command")
         .and_then(toml::Value::as_str)
-        .is_some_and(is_orbit_command_text)
+        .is_some_and(crate::setup::is_orbit_command)
     {
         return false;
     }
@@ -619,21 +619,13 @@ fn is_orbit_entry(command: Option<&Value>) -> bool {
         return false;
     };
     if let Some(command) = command.as_str() {
-        return is_orbit_command_text(command);
+        return crate::setup::is_orbit_command(command);
     }
     command
         .as_array()
         .and_then(|command| command.first())
         .and_then(Value::as_str)
-        .is_some_and(is_orbit_command_text)
-}
-
-fn is_orbit_command_text(command: &str) -> bool {
-    Path::new(command)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "orbit" || name == "orbit.exe")
-        || command == "orbit"
+        .is_some_and(crate::setup::is_orbit_command)
 }
 
 fn tokens_from_value(value: Option<&Value>) -> Vec<String> {
@@ -659,4 +651,33 @@ fn contains_absolute_board_path(tokens: &[String]) -> bool {
     tokens
         .windows(2)
         .any(|pair| pair[0] == "--dir" && Path::new(pair[1].trim_matches('"')).is_absolute())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(command: &str) -> Value {
+        let board = std::env::temp_dir().join("board");
+        serde_json::json!({
+            "command": command,
+            "args": ["mcp", "--dir", board.to_string_lossy()],
+        })
+    }
+
+    #[test]
+    fn absolute_board_check_recognizes_orbit_commands() {
+        assert!(json_entry_records_absolute_board(&entry("orbit")));
+        assert!(json_entry_records_absolute_board(&entry("orbit.exe")));
+        assert!(!json_entry_records_absolute_board(&entry("not-orbit")));
+    }
+
+    /// Doctor shares setup's matcher, so Windows command names match case-insensitively.
+    #[cfg(windows)]
+    #[test]
+    fn absolute_board_check_ignores_case_on_windows() {
+        assert!(json_entry_records_absolute_board(&entry(
+            r"C:\Tools\Orbit.EXE"
+        )));
+    }
 }

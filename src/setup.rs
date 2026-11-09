@@ -1905,7 +1905,7 @@ fn is_orbit_toml_entry(entry: &toml::Value) -> bool {
     command_is_orbit && has_mcp
 }
 
-fn is_orbit_command(command: &str) -> bool {
+pub(crate) fn is_orbit_command(command: &str) -> bool {
     if command == "orbit" || command == "orbit.exe" {
         return true;
     }

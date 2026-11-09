@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed `orbit doctor` on Windows missing absolute `--dir` Board paths in MCP configs whose command name differs in case from `orbit`/`orbit.exe` (for example `C:\Tools\Orbit.EXE`). Doctor now uses the same case-insensitive orbit-command match as `orbit setup`.
+
 ## 0.10.8 - 2026-10-31
 
 - Added a `devin` harness to `orbit init --agents` and `orbit setup`: project scope writes `.devin/rules/orbit.md`, `.devin/skills/orbit/SKILL.md`, and a `.devin/mcp_config.json` `mcpServers` entry; `--hooks` also installs the SessionStart hook in `.devin/hooks.v1.json` (user scope nests it under the `hooks` key of `~/.config/devin/config.json`). `setup all`, `orbit workspace setup`, detection, refresh, and `--check`/`--remove` cover Devin like the other harnesses.

@@ -3,17 +3,12 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chrono::Utc;
-
 use crate::board::Board;
-use crate::github::client::{CreateIssueInput, GitHubClient, client_from_env};
-use crate::github::execution;
-use crate::github::link::GitHubLink;
+use crate::github::client::{GitHubClient, client_from_env};
+use crate::github::execution::{self, CreateFollowUp};
 use crate::github::model::SyncDirection;
-use crate::github::status::labels_for_status;
 use crate::github::{relationships, sync};
 use crate::graph::{Graph, LoadMode};
-use crate::mutation;
 use crate::task::Task;
 
 static SUPPRESSED: AtomicBool = AtomicBool::new(false);
@@ -155,63 +150,38 @@ fn auto_create(board: &Board, client: &dyn GitHubClient, task: &Task) -> Vec<Str
             )];
         }
     };
-    if let Err(error) = execution::require_repository_available(board, &repo) {
-        return vec![format!(
-            "GITHUB_AUTO_PUSH_FAILED: task {}: {}",
-            task.id, error.message
-        )];
-    }
-    if board.config.github.mode.is_basic()
-        && let Err(error) = execution::reject_basic_metadata(task)
-    {
-        return vec![format!(
-            "GITHUB_AUTO_PUSH_FAILED: task {}: {}",
-            task.id, error.message
-        )];
-    }
-
-    let issue = match client.create_issue(
+    let created = match execution::create_and_link(
+        board,
+        client,
         &repo,
-        &CreateIssueInput {
-            title: task.front.title.clone(),
-            body: task.body.clone(),
-            labels: labels_for_status(&task.front.labels, task.front.status),
-            area: task.front.area.map(|area| area.as_str().to_string()),
-            verification: task.front.verification.clone(),
-            organization: board.config.github.organization.clone(),
-            issue_fields: board.config.github.issue_fields.clone(),
-        },
+        task,
+        &format!("orbit: github auto-create {}", task.id),
     ) {
-        Ok(issue) => issue,
+        Ok(created) => created,
         Err(error) => {
             return vec![format!(
-                "GITHUB_AUTO_PUSH_FAILED: task {}: could not create an Issue: {}",
+                "GITHUB_AUTO_PUSH_FAILED: task {}: {}",
                 task.id, error.message
             )];
         }
     };
-
-    let mut task = task.clone();
-    task.front.github = Some(GitHubLink::new(repo.clone(), issue.number));
-    task.front.updated_at = Utc::now();
-    execution::set_baseline(&mut task, &issue);
-    let mut warnings = Vec::new();
-    if let Err(error) = mutation::persist_task(
-        board,
-        &task,
-        &format!("orbit: github auto-create {}", task.id),
-    ) {
-        warnings.push(format!(
-            "GITHUB_AUTO_PUSH_FAILED: task {}: created {repo}#{} but could not persist the link: {}",
-            task.id, issue.number, error.message
-        ));
-        return warnings;
-    }
-    if let Err(error) = crate::issue_catalog::remember_created_issue(board, &repo, &issue) {
-        warnings.push(format!(
-            "task {}: created {repo}#{} but could not update the Remote Issue cache: {}; run `orbit workspace issues refresh`",
-            task.id, issue.number, error.message
-        ));
+    let number = created.issue.number;
+    let mut warnings = created.warnings;
+    for failure in created.failures {
+        warnings.push(match failure {
+            CreateFollowUp::LinkNotPersisted(error) => format!(
+                "GITHUB_AUTO_PUSH_FAILED: task {}: created {repo}#{number} but could not persist the link: {}",
+                task.id, error.message
+            ),
+            CreateFollowUp::CloseFailed(error) => format!(
+                "GITHUB_AUTO_PUSH_FAILED: task {}: created {repo}#{number} but could not close it: {}",
+                task.id, error.message
+            ),
+            CreateFollowUp::CatalogUpdateFailed(error) => format!(
+                "task {}: created {repo}#{number} but could not update the Remote Issue cache: {}; run `orbit workspace issues refresh`",
+                task.id, error.message
+            ),
+        });
     }
     warnings
 }

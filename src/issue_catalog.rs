@@ -569,13 +569,15 @@ fn import(
                     (task, false)
                 }
             };
-            let path = board.task_path(&task.id);
-            let rendered = task::render_task(&task)?;
-            writes.push((path, rendered, task.clone(), created, candidate.identity));
+            writes.push((task, created, candidate.identity));
         }
 
-        for (path, rendered, task, created, identity) in &writes {
-            crate::atomic::write_atomic(path, rendered.as_bytes(), !created)?;
+        for (task, created, identity) in &writes {
+            if *created {
+                crate::mutation::create_task(board, task)?;
+            } else {
+                crate::mutation::write_task(board, task)?;
+            }
             imported.push(json!({
                 "identity": identity,
                 "task": task.id,
@@ -817,8 +819,7 @@ pub(crate) fn detach_repository(
             let identity = format!("{}#{}", link.repo, link.number);
             link.active = false;
             task.touch(Utc::now());
-            let rendered = task::render_task(&task)?;
-            crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
+            crate::mutation::write_task(board, &task)?;
             detached.push(json!({
                 "task": task.id,
                 "identity": identity,
@@ -984,8 +985,7 @@ pub(crate) fn reattach_repository(
             // The selected Task was matched on the exact normalized repository and number.
             stored.active = true;
             task.touch(Utc::now());
-            let rendered = task::render_task(&task)?;
-            crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
+            crate::mutation::write_task(board, &task)?;
             reattached.push(json!({
                 "task": task.id,
                 "identity": format!("{}#{}", link.repo, link.number),
@@ -1083,8 +1083,7 @@ fn detach_task(
             let linked_number = link.number;
             link.active = false;
             task.touch(Utc::now());
-            let rendered = task::render_task(&task)?;
-            crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
+            crate::mutation::write_task(board, &task)?;
             detached.push(json!({
                 "task": task.id,
                 "identity": format!("{linked_repo}#{linked_number}"),
@@ -1205,8 +1204,7 @@ fn reattach_task(
             .expect("inactive provenance exists")
             .active = true;
         task.touch(Utc::now());
-        let rendered = task::render_task(&task)?;
-        crate::atomic::write_atomic(&board.task_path(&task.id), rendered.as_bytes(), true)?;
+        crate::mutation::write_task(board, &task)?;
         if let Some(archived) = catalog
             .archived_issues
             .get_mut(&repository)

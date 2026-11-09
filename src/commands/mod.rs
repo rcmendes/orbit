@@ -206,11 +206,7 @@ where
     .then(|| crate::github::auto_push::snapshot(board));
     let mut output = f(board)?;
     if let Some(before) = snapshot {
-        if output
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("COMMIT_FAILED"))
-        {
+        if board.commit_failed() {
             output.warnings.push(
                 "auto-push skipped because the local Board commit failed; retry after `orbit sync`"
                     .to_string(),

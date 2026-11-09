@@ -1333,10 +1333,15 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                         warnings.push(warning);
                     }
                 }
-                other => failure = Some(other),
+                // A link failure outranks a close failure: it decides the recovery step.
+                other if !matches!(failure, Some(CreateFollowUp::LinkNotPersisted(_))) => {
+                    failure = Some(other)
+                }
+                _ => {}
             }
         }
         if let Some(follow_up) = failure {
+            warnings.append(&mut commit_warnings);
             let (linked, error, next_action, summary) = match follow_up {
                 CreateFollowUp::LinkNotPersisted(error) => (
                     false,
@@ -1361,7 +1366,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             results.push(json!({
                 "task": task.id,
                 "repository": repo,
-                "github": task.front.github,
+                "github": if linked { json!(task.front.github) } else { Value::Null },
                 "issue": final_issue,
                 "success": false,
                 "created": true,

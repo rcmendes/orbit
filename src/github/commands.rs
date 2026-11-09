@@ -2,7 +2,7 @@ use super::execution::{
     fetch_issue, reject_basic_metadata, repository_available, require_repository_available,
     set_baseline,
 };
-use crate::github::execution::SyncOutcome;
+use crate::github::execution::{CreateFollowUp, SyncOutcome, create_and_link};
 use crate::mutation::persist_task;
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -14,7 +14,7 @@ use crate::cli::{
     GitHubSyncDirection,
 };
 use crate::error::{OrbitError, Result, code};
-use crate::github::client::{CreateIssueInput, UpdateIssueInput, client_from_env};
+use crate::github::client::client_from_env;
 use crate::github::fields::parse_area;
 use crate::github::link::GitHubLink;
 use crate::github::model::{IssueSnapshot, SyncDirection, SyncPlan};
@@ -1194,18 +1194,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         ));
     }
     let repo = select_create_repo(&repositories, args.repo.as_deref())?;
-    if workspace_repositories.is_some() {
-        if !repositories
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(&repo))
-        {
-            return Err(OrbitError::invalid_argument(format!(
-                "repository `{repo}` is not included in the Workspace catalog; run `orbit workspace refresh` or choose an included repository"
-            )));
-        }
-    } else {
-        board.config.github.require_linked_repo(&repo)?;
-    }
+    require_repository_available(board, &repo)?;
 
     let mut plans = Vec::new();
     let mut selected = std::collections::HashSet::new();
@@ -1298,22 +1287,14 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         }
 
         let client = client.as_ref().expect("apply initialized GitHub client");
-        let issue = match client.create_issue(
+        let created = match create_and_link(
+            board,
+            &**client,
             &repo,
-            &CreateIssueInput {
-                title: task.front.title.clone(),
-                body: task.body.clone(),
-                labels: crate::github::status::labels_for_status(
-                    &task.front.labels,
-                    task.front.status,
-                ),
-                area: task.front.area.map(|area| area.as_str().to_string()),
-                verification: task.front.verification.clone(),
-                organization: board.config.github.organization.clone(),
-                issue_fields: board.config.github.issue_fields.clone(),
-            },
+            &task,
+            &format!("orbit: github create {}", task.id),
         ) {
-            Ok(issue) => issue,
+            Ok(created) => created,
             Err(error) => {
                 results.push(json!({
                     "task": task.id,
@@ -1337,83 +1318,70 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                 continue;
             }
         };
-
-        task.front.github = Some(GitHubLink::new(repo.clone(), issue.number));
-        task.front.updated_at = Utc::now();
-        set_baseline(&mut task, &issue);
-        warnings.extend(crate::mutation::commit_warning(persist_task(
-            board,
-            &task,
-            &format!("orbit: github create {}", task.id),
-        )?));
-
-        let mut commit_warnings = Vec::new();
-        let task_id = task.id.clone();
-        let mut remember_issue = |issue: &IssueSnapshot| {
-            if let Err(error) = crate::issue_catalog::remember_created_issue(board, &repo, issue) {
-                let warning = format!(
-                    "{task_id}: created {}/#{} but could not update the Remote Issue cache: {}; run `orbit workspace issues refresh`",
-                    repo, issue.number, error.message
-                );
-                if !warnings.contains(&warning) {
-                    warnings.push(warning);
+        task = created.task;
+        let final_issue = created.issue;
+        let mut commit_warnings = created.warnings;
+        let mut failure = None;
+        for follow_up in created.failures {
+            match follow_up {
+                CreateFollowUp::CatalogUpdateFailed(error) => {
+                    let warning = format!(
+                        "{}: created {}/#{} but could not update the Remote Issue cache: {}; run `orbit workspace issues refresh`",
+                        task.id, repo, final_issue.number, error.message
+                    );
+                    if !warnings.contains(&warning) {
+                        warnings.push(warning);
+                    }
                 }
+                // A link failure outranks a close failure: it decides the recovery step.
+                other if !matches!(failure, Some(CreateFollowUp::LinkNotPersisted(_))) => {
+                    failure = Some(other)
+                }
+                _ => {}
             }
-        };
-        remember_issue(&issue);
-
-        let final_issue = if task.front.status.is_terminal() {
-            match client.update_issue(
-                &repo,
-                issue.number,
-                &UpdateIssueInput {
-                    state: Some(crate::github::model::IssueState::Closed),
-                    state_reason: crate::github::status::issue_state_reason_from_status(
-                        task.front.status,
+        }
+        if let Some(follow_up) = failure {
+            warnings.append(&mut commit_warnings);
+            let (linked, error, next_action, summary) = match follow_up {
+                CreateFollowUp::LinkNotPersisted(error) => (
+                    false,
+                    error,
+                    format!(
+                        "run `orbit github adopt {} https://github.com/{repo}/issues/{}` to link the created Issue",
+                        task.id, final_issue.number
                     ),
-                    title: None,
-                    body: None,
-                    labels: None,
-                    area: None,
-                    verification: None,
-                    organization: None,
-                    issue_fields: None,
-                },
-            ) {
-                Ok(closed) => {
-                    set_baseline(&mut task, &closed);
-                    commit_warnings.extend(crate::mutation::commit_warning(persist_task(
-                        board,
-                        &task,
-                        &format!("orbit: github create {}", task.id),
-                    )?));
-                    remember_issue(&closed);
-                    closed
-                }
-                Err(error) => {
-                    results.push(json!({
-                        "task": task.id,
-                        "repository": repo,
-                        "github": task.front.github,
-                        "issue": issue,
-                        "success": false,
-                        "created": true,
-                        "linked": true,
-                        "error": error.message,
-                        "error_code": error.code,
-                        "next_action": format!("run `orbit github sync {} --apply` to close the Issue", task.id),
-                    }));
-                    human.push(format!(
-                        "{}\n  Result: created and linked, but could not close Issue — {}",
-                        format_create_preview(&task, &repo, issue_state),
-                        error.message
-                    ));
-                    continue;
-                }
-            }
-        } else {
-            issue
-        };
+                    "created, but could not link the Task",
+                ),
+                CreateFollowUp::CloseFailed(error) => (
+                    true,
+                    error,
+                    format!(
+                        "run `orbit github sync {} --apply` to close the Issue",
+                        task.id
+                    ),
+                    "created and linked, but could not close Issue",
+                ),
+                CreateFollowUp::CatalogUpdateFailed(_) => unreachable!("handled above"),
+            };
+            results.push(json!({
+                "task": task.id,
+                "repository": repo,
+                "github": if linked { json!(task.front.github) } else { Value::Null },
+                "issue": final_issue,
+                "success": false,
+                "created": true,
+                "linked": linked,
+                "error": error.message,
+                "error_code": error.code,
+                "next_action": next_action,
+            }));
+            human.push(format!(
+                "{}\n  Result: {summary} — {}",
+                format_create_preview(&task, &repo, issue_state),
+                error.message
+            ));
+            continue;
+        }
         warnings.append(&mut commit_warnings);
         results.push(json!({
             "task": task.id,

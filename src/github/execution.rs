@@ -1,10 +1,10 @@
 //! Synchronization policy and execution behind one injected GitHub seam.
 //! The caller holds the Board lock for this complete operation.
-use super::client::{GitHubClient, UpdateIssueInput};
+use super::client::{CreateIssueInput, GitHubClient, UpdateIssueInput};
 use super::config::IssueFieldConfig;
 use super::fields::parse_area;
 use super::link::GitHubLink;
-use super::model::{IssueSnapshot, SyncDirection, SyncPlan, SyncResolution};
+use super::model::{IssueSnapshot, IssueState, SyncDirection, SyncPlan, SyncResolution};
 use super::sync::OrbitSyncView;
 use super::{relationships, sync};
 use crate::board::Board;
@@ -536,4 +536,233 @@ pub(crate) fn set_baseline(task: &mut Task, issue: &IssueSnapshot) {
         .last_sync = Some(baseline);
 }
 
+/// A follow-up step that failed after the Issue already existed.
+pub enum CreateFollowUp {
+    /// The link and baseline were not written; the Issue exists but is unlinked.
+    LinkNotPersisted(OrbitError),
+    /// The Task is terminal but the Issue could not be closed.
+    CloseFailed(OrbitError),
+    /// The Remote Issue cache was not updated.
+    CatalogUpdateFailed(OrbitError),
+}
+
+pub struct CreatedIssue {
+    /// The Task with its link (and baseline, when persisted).
+    pub task: Task,
+    /// The Issue as last known: closed when the Task is terminal and the close succeeded.
+    pub issue: IssueSnapshot,
+    pub failures: Vec<CreateFollowUp>,
+    /// Commit warnings from the writes that did persist.
+    pub warnings: Vec<String>,
+}
+
+/// Creates the Issue for an unlinked Task, links it, and closes it when the Task is
+/// terminal. `Err` means nothing was created; later failures are in `failures`.
+pub(crate) fn create_and_link(
+    board: &Board,
+    client: &dyn GitHubClient,
+    repo: &str,
+    task: &Task,
+    commit_message: &str,
+) -> Result<CreatedIssue> {
+    require_repository_available(board, repo)?;
+    if board.config.github.mode.is_basic() {
+        reject_basic_metadata(task)?;
+    }
+    let mut issue = client.create_issue(
+        repo,
+        &CreateIssueInput {
+            title: task.front.title.clone(),
+            body: task.body.clone(),
+            labels: super::status::labels_for_status(&task.front.labels, task.front.status),
+            area: task.front.area.map(|area| area.as_str().to_string()),
+            verification: task.front.verification.clone(),
+            organization: board.config.github.organization.clone(),
+            issue_fields: board.config.github.issue_fields.clone(),
+        },
+    )?;
+
+    let mut task = task.clone();
+    let mut failures = Vec::new();
+    let mut warnings = Vec::new();
+    task.front.github = Some(GitHubLink::new(repo.to_string(), issue.number));
+    task.front.updated_at = Utc::now();
+    set_baseline(&mut task, &issue);
+    match persist_task(board, &task, commit_message) {
+        Ok(outcome) => warnings.extend(crate::mutation::commit_warning(outcome)),
+        Err(error) => failures.push(CreateFollowUp::LinkNotPersisted(error)),
+    }
+    let linked = failures.is_empty();
+
+    let remember = |issue: &IssueSnapshot, failures: &mut Vec<CreateFollowUp>| {
+        if let Err(error) = crate::issue_catalog::remember_created_issue(board, repo, issue)
+            && !failures
+                .iter()
+                .any(|failure| matches!(failure, CreateFollowUp::CatalogUpdateFailed(_)))
+        {
+            failures.push(CreateFollowUp::CatalogUpdateFailed(error));
+        }
+    };
+    remember(&issue, &mut failures);
+
+    if task.front.status.is_terminal() {
+        let close = client.update_issue(
+            repo,
+            issue.number,
+            &UpdateIssueInput {
+                state: Some(IssueState::Closed),
+                state_reason: super::status::issue_state_reason_from_status(task.front.status),
+                title: None,
+                body: None,
+                labels: None,
+                area: None,
+                verification: None,
+                organization: None,
+                issue_fields: None,
+            },
+        );
+        match close {
+            Ok(closed) => {
+                issue = closed;
+                if linked {
+                    set_baseline(&mut task, &issue);
+                    match persist_task(board, &task, commit_message) {
+                        Ok(outcome) => warnings.extend(crate::mutation::commit_warning(outcome)),
+                        Err(error) => warnings.push(format!(
+                            "task {}: closed {repo}#{} but could not record the sync baseline: {}; run `orbit github sync {} --apply`",
+                            task.id, issue.number, error.message, task.id
+                        )),
+                    }
+                }
+                remember(&issue, &mut failures);
+            }
+            Err(error) => failures.push(CreateFollowUp::CloseFailed(error)),
+        }
+    }
+    Ok(CreatedIssue {
+        task,
+        issue,
+        failures,
+        warnings,
+    })
+}
+
 use crate::mutation::persist_task;
+
+#[cfg(test)]
+mod create_tests {
+    use super::*;
+    use crate::board::Config;
+    use crate::github::client::FixtureClient;
+    use crate::task::{Status, TaskFrontmatter, TaskType};
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    const REPO: &str = "acme/widget";
+
+    fn task(status: Status) -> Task {
+        Task {
+            id: "orb-a7b2c9".to_string(),
+            front: TaskFrontmatter {
+                title: "Ship it".to_string(),
+                status,
+                task_type: TaskType::Task,
+                priority: 1,
+                labels: Vec::new(),
+                depends_on: Vec::new(),
+                parent: None,
+                waiting_on: None,
+                checkpoint: None,
+                area: None,
+                verification: None,
+                github: None,
+                claim: None,
+                stray_claim_times: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                extra: BTreeMap::new(),
+            },
+            body: "Body".to_string(),
+        }
+    }
+
+    /// A Board over a plain temp dir (commits report `Failed`, which is a warning)
+    /// and a fixture client whose store is `fixture`.
+    fn setup(root: &Path, fixture: serde_json::Value) -> (Board, FixtureClient) {
+        let mut config = Config::default();
+        config.github.repositories = vec![REPO.to_string()];
+        let board = Board {
+            root: root.to_path_buf(),
+            lock_path: root.join(".lock"),
+            config,
+            warnings: Vec::new(),
+            commit_failed: Default::default(),
+        };
+        let path = root.join("fixture.json");
+        std::fs::write(&path, fixture.to_string()).unwrap();
+        (board, FixtureClient::load(&path).unwrap())
+    }
+
+    #[test]
+    fn plain_create_links_the_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let (board, client) = setup(dir.path(), json!({}));
+        let created = create_and_link(&board, &client, REPO, &task(Status::Todo), "msg").unwrap();
+        assert!(created.failures.is_empty());
+        assert_eq!(created.issue.state, IssueState::Open);
+        let link = created.task.front.github.as_ref().unwrap();
+        assert_eq!(
+            (link.repo.as_str(), link.number),
+            (REPO, created.issue.number)
+        );
+        assert!(link.last_sync.is_some());
+        assert!(board.task_path("orb-a7b2c9").exists());
+    }
+
+    #[test]
+    fn terminal_create_closes_the_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        let (board, client) = setup(dir.path(), json!({}));
+        let created = create_and_link(&board, &client, REPO, &task(Status::Done), "msg").unwrap();
+        assert!(created.failures.is_empty());
+        assert_eq!(created.issue.state, IssueState::Closed);
+        let remote = client.get_issue(REPO, created.issue.number, None).unwrap();
+        assert_eq!(remote.state, IssueState::Closed);
+    }
+
+    #[test]
+    fn close_failure_keeps_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let (board, client) = setup(dir.path(), json!({"update_failures": {REPO: "nope"}}));
+        let created = create_and_link(&board, &client, REPO, &task(Status::Done), "msg").unwrap();
+        assert!(matches!(
+            created.failures.as_slice(),
+            [CreateFollowUp::CloseFailed(_)]
+        ));
+        assert!(created.task.front.github.is_some());
+        assert!(board.task_path("orb-a7b2c9").exists());
+    }
+
+    #[test]
+    fn link_persist_failure_reports_the_created_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut board, client) = setup(dir.path(), json!({}));
+        // A file where the Board root should be makes every Task write fail.
+        let blocker = dir.path().join("not-a-dir");
+        std::fs::write(&blocker, "").unwrap();
+        board.root = blocker;
+        let created = create_and_link(&board, &client, REPO, &task(Status::Todo), "msg").unwrap();
+        assert!(matches!(
+            created.failures.as_slice(),
+            [CreateFollowUp::LinkNotPersisted(_)]
+        ));
+        assert_eq!(created.issue.number, 1);
+    }
+
+    #[test]
+    fn create_failure_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let (board, client) = setup(dir.path(), json!({"create_failures": {REPO: "denied"}}));
+        assert!(create_and_link(&board, &client, REPO, &task(Status::Todo), "msg").is_err());
+    }
+}

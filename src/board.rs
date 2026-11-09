@@ -387,6 +387,8 @@ pub struct Board {
     pub lock_path: PathBuf,
     pub config: Config,
     pub warnings: Vec<String>,
+    /// Set when a non-forced commit failed during this process.
+    pub(crate) commit_failed: std::cell::Cell<bool>,
 }
 
 /// Opening policy includes discovery side effects and lock lifetime.
@@ -485,6 +487,7 @@ impl Board {
             lock_path,
             config,
             warnings,
+            commit_failed: Default::default(),
         })
     }
 
@@ -732,9 +735,17 @@ impl Board {
         }
         match git::commit(&self.root, message) {
             Ok(outcome) => Ok(outcome),
-            Err(error) if !force => Ok(CommitOutcome::Failed(error.message)),
+            Err(error) if !force => {
+                self.commit_failed.set(true);
+                Ok(CommitOutcome::Failed(error.message))
+            }
             Err(error) => Err(error),
         }
+    }
+
+    /// Whether any non-forced commit on this Board failed in this process.
+    pub fn commit_failed(&self) -> bool {
+        self.commit_failed.get()
     }
 
     pub fn init_dir(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
@@ -1605,6 +1616,26 @@ pub(crate) fn already_initialized(path: &Path) -> OrbitError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_commit_sets_commit_failed() {
+        // A directory outside any Git repository makes `git status` fail.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("task.md"), "x").unwrap();
+        let board = Board {
+            root: dir.path().to_path_buf(),
+            lock_path: dir.path().join(".lock"),
+            config: Config::default(),
+            warnings: Vec::new(),
+            commit_failed: Default::default(),
+        };
+        assert!(!board.commit_failed());
+        assert!(matches!(
+            board.commit("orbit: test", false).unwrap(),
+            CommitOutcome::Failed(_)
+        ));
+        assert!(board.commit_failed());
+    }
 
     #[test]
     fn config_round_trips() {

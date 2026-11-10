@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.9 - 2026-11-09
 
 - Fixed `orbit github create --apply` aborting the whole batch, and losing the created Issue number, when the Task link could not be written after the Issue was created. The failure is now reported per Task (`created: true`, with the Issue and an `orbit github adopt` next step) and the remaining Tasks continue. Internal: `orbit github create` and auto-push share one create-and-link path; auto-push now also closes the Issue for a terminal Task.
 - Fixed `orbit doctor` on Windows missing absolute `--dir` Board paths in MCP configs whose command name differs in case from `orbit`/`orbit.exe` (for example `C:\Tools\Orbit.EXE`). Doctor now uses the same case-insensitive orbit-command match as `orbit setup`.

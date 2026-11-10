@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.10.6`](https://github.com/rcmendes/orbit/releases/tag/v0.10.6) is the latest release. It adds `orbit github auto-push on|off` to toggle opt-in Issue publishing without editing `config.toml`, and renames `orbit github create --include-terminal` to `--include-closed` (the old spelling remains a hidden alias). GitHub sync requires Orbit v0.9.0 or newer. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.10.10`](https://github.com/rcmendes/orbit/releases/tag/v0.10.10) is the latest release; it has no source or behavior changes from v0.10.9. GitHub sync requires Orbit v0.9.0 or newer. The **Orbit folder** design from v0.8.1 is unchanged: one delegated `DIR` (default `.orbit`), a single `orbit init [DIR]`, scoped path-free agent setup, and a resumable legacy migration. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -1072,7 +1072,7 @@ See [ADR 0009](./docs/adr/0009-keep-task-vocabulary.md) and [ADR 0010](./docs/ad
 
 ## Install details
 
-Prebuilt binaries are the primary path. `v0.10.2` is the latest release. Every persistent route requires Git 2.31+ at runtime.
+Prebuilt binaries are the primary path. `v0.10.10` is the latest release. Every persistent route requires Git 2.31+ at runtime.
 
 | Route | Prerequisites | Command |
 | --- | --- | --- |

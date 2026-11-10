@@ -4,7 +4,8 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
-- `v0.10.9` — latest; `orbit doctor` matches orbit MCP commands case-insensitively on Windows, and `orbit workspace doctor` finds nested local Boards like `workspace migrate`
+- `v0.10.10` — maintenance republish of v0.10.9; no source or behavior changes
+- `v0.10.9` — `orbit doctor` matches orbit MCP commands case-insensitively on Windows, and `orbit workspace doctor` finds nested local Boards like `workspace migrate`
 - `v0.10.8` — adds the `devin` harness to `orbit init`/`orbit setup`, and `orbit workspace issues` honors custom Issue Field names
 - `v0.10.7` — `orbit github sync` compares labels as a set, so label order no longer causes repeated pushes or false conflicts
 - `v0.10.6` — `orbit github auto-push on|off` toggles opt-in push, and `github create` uses `--include-closed`

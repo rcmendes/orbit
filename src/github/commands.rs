@@ -1011,7 +1011,8 @@ fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::Comm
     let org = board.config.github.require_organization()?;
     let client = client_from_env()?;
     let setup = if args.create_fields {
-        client.create_org_fields(org, &board.config.github.issue_fields)?
+        let area_options = super::client::area_field_options(&board.config.board.areas);
+        client.create_org_fields(org, &board.config.github.issue_fields, &area_options)?
     } else {
         client.validate_org_fields(org, &board.config.github.issue_fields)?
     };

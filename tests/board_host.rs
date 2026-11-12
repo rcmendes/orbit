@@ -628,3 +628,41 @@ fn no_sync_disables_host_auto_sync() {
         "--no-sync did not suppress host auto-sync"
     );
 }
+
+#[test]
+fn host_sync_auto_runs_at_prime() {
+    let repo = TestRepo::new();
+    repo.init();
+    let host = bare_host(&repo, "host.git");
+    repo.ok_json(&["board", "host", &host_arg(&host), "--json"]);
+
+    let config_path = repo.board_path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(
+        &config_path,
+        config.replace("auto_commit", "host_sync = \"auto\"\nauto_commit"),
+    )
+    .unwrap();
+
+    // Publish once so the host serves `orbit`, then a peer adds a Task.
+    repo.add("Local task", &[]);
+    assert!(remote_tip(&repo, &host).is_some());
+    let peer = peer_clone(&repo, &host);
+    let peer_id = "orb-ffffff";
+    peer_write(
+        &peer,
+        &format!("tasks/{peer_id}.md"),
+        "---\ntitle: Peer task\nstatus: todo\ntype: task\npriority: 2\nlabels: []\ndepends_on: []\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n",
+    );
+    peer_commit(&repo, &peer, "peer task");
+
+    // `orbit prime` syncs first, so the primed Board already has the Task.
+    repo.ok_json(&["prime", "--json"]);
+    assert!(
+        repo.board_path()
+            .join("tasks")
+            .join(format!("{peer_id}.md"))
+            .exists(),
+        "prime did not pull the host's Task"
+    );
+}

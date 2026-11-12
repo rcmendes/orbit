@@ -273,10 +273,14 @@ pub struct InstallOptions {
     pub mcp_bin: Option<PathBuf>,
     pub print: bool,
     pub remove: bool,
+    /// Whether the Board shows Remote Tracker material, so generated agent
+    /// guidance documents the `ISSUE` column and link filters only then.
+    pub remote_details: bool,
 }
 
-pub fn run(args: crate::cli::SetupArgs, _dir: Option<&Path>) -> Result<CommandOutput> {
+pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOutput> {
     let project = project_root()?;
+    let remote_details = crate::remote::details_visible_for(dir);
     let root = scope_root(args.scope, &project)?;
     let mut warnings = Vec::new();
 
@@ -321,6 +325,7 @@ pub fn run(args: crate::cli::SetupArgs, _dir: Option<&Path>) -> Result<CommandOu
                 mcp_bin: mcp_bin.clone(),
                 print: true,
                 remove: false,
+                remote_details,
             },
         )?;
         let mut output = check_output(&root, args.scope, preview);
@@ -338,6 +343,7 @@ pub fn run(args: crate::cli::SetupArgs, _dir: Option<&Path>) -> Result<CommandOu
             mcp_bin,
             print: args.print,
             remove: args.remove,
+            remote_details,
         },
     )?;
     outcome.output.warnings.extend(warnings);
@@ -374,6 +380,7 @@ pub fn install(root: &Path, options: InstallOptions) -> Result<InstallOutcome> {
                     hooks: options.hooks,
                     hook_bin: options.hook_bin.as_deref(),
                     mcp_bin: options.mcp_bin.as_deref(),
+                    remote_details: options.remote_details,
                 },
                 &mut plan,
                 &mut warnings,
@@ -412,16 +419,17 @@ pub fn install(root: &Path, options: InstallOptions) -> Result<InstallOutcome> {
     Ok(InstallOutcome { files, output })
 }
 
-/// Install or remove only the Workspace-level agent instruction entry points.
-/// These files are guidance inherited by child repositories; the Workspace
-/// root does not need harness MCP configuration of its own.
+/// Install or remove only the anchor-level agent instruction entry points.
+/// These files are guidance inherited by member Repositories; the Board
+/// anchor does not need harness MCP configuration of its own.
 pub fn workspace_guidance(root: &Path, print: bool, remove: bool) -> Result<InstallOutcome> {
     let mut plan = BTreeMap::new();
+    let remote_details = crate::remote::details_visible_for(Some(root));
     for relative in ["AGENTS.md", "CLAUDE.md"] {
         if remove {
             plan_section_remove(root, relative, &mut plan)?;
         } else {
-            plan_section(root, relative, &workflow_section(), &mut plan)?;
+            plan_section(root, relative, &workflow_section(remote_details), &mut plan)?;
         }
     }
     let files: Vec<FileOutcome> = if print {
@@ -480,6 +488,10 @@ pub fn refresh(root: &Path) -> Result<InstallOutcome> {
                 mcp_bin: Some(bin),
                 print: false,
                 remove: false,
+                // `root` is a member Repository, which has no Board of its
+                // own; the governing Board resolves from the
+                // directory the refresh was triggered in.
+                remote_details: crate::remote::details_visible_for(None),
             },
         )?;
         for file in outcome.files {
@@ -944,7 +956,7 @@ fn prompt_agents(
     prompt_agents_from(&all, detected, input, prompt)
 }
 
-/// Prompt for the agent harnesses supported by Workspace integration.
+/// Prompt for the agent harnesses supported by Board-anchor integration.
 pub fn prompt_workspace_harnesses(detected: &[SetupClient]) -> Result<Vec<SetupClient>> {
     let all = [
         SetupClient::Claude,
@@ -1072,6 +1084,7 @@ struct PlanOptions<'a> {
     hooks: bool,
     hook_bin: Option<&'a Path>,
     mcp_bin: Option<&'a Path>,
+    remote_details: bool,
 }
 
 /// One file that can hold a SessionStart hook. Settings-style files nest the
@@ -1083,7 +1096,7 @@ struct HooksPath {
     nested: bool,
 }
 
-type RuleTemplate = (&'static str, fn() -> String);
+type RuleTemplate = (&'static str, fn(bool) -> String);
 
 #[derive(Default)]
 struct ClientPaths {
@@ -1262,16 +1275,26 @@ fn plan_install(
     };
 
     if let Some(instructions) = paths.instructions {
-        plan_section(root, instructions, &workflow_section(), plan)?;
+        plan_section(
+            root,
+            instructions,
+            &workflow_section(options.remote_details),
+            plan,
+        )?;
     }
     if let Some((rule, content)) = paths.rule {
-        plan_full_file(root, rule, &content(), plan)?;
+        plan_full_file(root, rule, &content(options.remote_details), plan)?;
     }
     if let Some(skill) = paths.skill {
-        plan_full_file(root, skill, &skill_file(), plan)?;
+        plan_full_file(root, skill, &skill_file(options.remote_details), plan)?;
     }
     if let Some(tracker) = paths.tracker {
-        plan_section_unless_custom(root, tracker, &mattpocock_section(), plan)?;
+        plan_section_unless_custom(
+            root,
+            tracker,
+            &mattpocock_section(options.remote_details),
+            plan,
+        )?;
     }
     if let Some(triage_labels) = paths.triage_labels {
         plan_section_unless_custom(
@@ -2366,14 +2389,26 @@ fn is_orbit_hook(handler: &Value) -> bool {
         .is_some_and(|name| name == "orbit" || name == "orbit.exe")
 }
 
-fn workflow_section() -> String {
+/// The `orbit list` bullet shared by the managed agent sections. Remote
+/// Tracker material — the `ISSUE` column and the link filters — is only
+/// documented when the Board can actually show it.
+fn list_guidance(remote_details: bool) -> &'static str {
+    if remote_details {
+        "- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines."
+    } else {
+        "- `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines."
+    }
+}
+
+fn workflow_section(remote_details: bool) -> String {
+    let list = list_guidance(remote_details);
     format!(
         "{BEGIN_MARKER}
 ## Orbit task tracking
 
 Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
 
-From any child repository in a Workspace, these commands resolve the shared Workspace Board across the Git boundary. Tasks, dependencies, and claims are shared across its repositories.
+From any member Repository, these commands resolve the shared Board across the Git boundary. Tasks, dependencies, and claims are shared across its Repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
@@ -2384,19 +2419,19 @@ From any child repository in a Workspace, these commands resolve the shared Work
 - Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
-- In a multi-repository workspace, add `--repo <name>` to `orbit ready` or `orbit list`.
+- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Tasks; `--all` widens to the whole Board.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.
 - Run `orbit prime` at session start for ready work, stale claims, and counts.
-- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
+{list}
 
 Parse the JSON envelope: `ok`, `data`, `error.code`, and `error.retryable`. If a command returns `LOCKED`, retry after a short backoff. Never infer state from prose.
 {END_MARKER}"
     )
 }
 
-fn cursor_rule() -> String {
+fn cursor_rule(remote_details: bool) -> String {
     format!(
         "---
 description: \"Orbit task tracker workflow\"
@@ -2406,11 +2441,11 @@ alwaysApply: true
 
 {}
 ",
-        workflow_section()
+        workflow_section(remote_details)
     )
 }
 
-fn devin_rule() -> String {
+fn devin_rule(remote_details: bool) -> String {
     format!(
         "---
 description: \"Orbit task tracker workflow\"
@@ -2419,11 +2454,11 @@ trigger: always_on
 
 {}
 ",
-        workflow_section()
+        workflow_section(remote_details)
     )
 }
 
-fn skill_file() -> String {
+fn skill_file(remote_details: bool) -> String {
     format!(
         "---
 name: orbit
@@ -2432,11 +2467,12 @@ description: \"Use the Orbit CLI to claim, track, and complete tasks in this rep
 
 {}
 ",
-        workflow_section()
+        workflow_section(remote_details)
     )
 }
 
-fn mattpocock_section() -> String {
+fn mattpocock_section(remote_details: bool) -> String {
+    let list = list_guidance(remote_details);
     format!(
         "{BEGIN_MARKER}
 ## Orbit
@@ -2454,13 +2490,13 @@ We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdo
 - Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
-- In a multi-repository workspace, add `--repo <NAME>` to `orbit ready` or `orbit list`.
+- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Tasks; `--all` widens to the whole Board.
 - To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`.
 - To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.
 - The hold labels `needs-triage`, `needs-info`, and `ready-for-human` keep tasks out of the ready queue and prevent claims until removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.
 - Never edit task frontmatter directly; that bypasses dependency validation, leases, and the write lock.
 - Use `orbit show <ID>` to read acceptance criteria.
-- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
+{list}
 {END_MARKER}"
     )
 }
@@ -2521,6 +2557,16 @@ fn render_human(root: &Path, preview: bool, files: &[FileOutcome], scope: SetupS
             }
         }
     }
+    if !preview
+        && files.iter().any(|file| {
+            matches!(
+                file.action,
+                Action::Created | Action::Updated | Action::Removed
+            )
+        })
+    {
+        output.push_str("commit the generated files so agent guidance stays in sync\n");
+    }
     output
 }
 
@@ -2563,7 +2609,7 @@ mod tests {
     #[test]
     fn upsert_and_remove_section_round_trip() {
         let existing = "# Project\n\nExisting instructions.\n";
-        let section = workflow_section();
+        let section = workflow_section(true);
         let updated = upsert_section(existing, &section, "CLAUDE.md").unwrap();
         assert!(updated.contains("Existing instructions."));
         assert!(updated.contains(BEGIN_MARKER));
@@ -2580,14 +2626,14 @@ mod tests {
         // Windows checkouts may use CRLF; compare normalized text.
         let agents = include_str!("../AGENTS.md").replace("\r\n", "\n");
         assert!(
-            agents.contains(workflow_section().as_str()),
+            agents.contains(workflow_section(crate::remote::details_visible_for(None)).as_str()),
             "AGENTS.md is stale; run `orbit setup opencode --no-mcp` to refresh the managed block"
         );
     }
 
     #[test]
     fn upsert_is_idempotent() {
-        let section = workflow_section();
+        let section = workflow_section(true);
         let first = upsert_section("", &section, "AGENTS.md").unwrap();
         let second = upsert_section(&first, &section, "AGENTS.md").unwrap();
         assert_eq!(first, second);
@@ -2596,7 +2642,7 @@ mod tests {
 
     #[test]
     fn upsert_does_not_accumulate_trailing_blank_lines() {
-        let section = workflow_section();
+        let section = workflow_section(true);
         let existing = format!("Before.\n\n{section}\n\nAfter.\n\n\n");
         let first = upsert_section(&existing, &section, "AGENTS.md").unwrap();
         let second = upsert_section(&first, &section, "AGENTS.md").unwrap();
@@ -2619,13 +2665,14 @@ mod tests {
     fn init_args(print: bool, agents: Option<&str>) -> crate::cli::InitArgs {
         crate::cli::InitArgs {
             target: None,
-            global: false,
             agents: agents.map(str::to_string),
             no_agents: false,
             hooks: false,
             mcp_bin: None,
             portable_mcp: false,
             slug: None,
+            visible: None,
+            host: None,
             print,
         }
     }

@@ -198,7 +198,8 @@ fn init_dir_rejects_an_invalid_slug_with_a_suggestion() {
 fn reruns_preserve_the_prefix_and_same_slug_does_not_commit() {
     let repo = TestRepo::new();
     let named = repo.named_repo("teramigo");
-    let board = named.join(".orbit");
+    // Commits land in the standalone Board repository at `.orbit/board`.
+    let board = named.join(".orbit/board");
 
     let first = repo.ok_json_in(&named, &["init", "--agents", "none", "--json"]);
     assert_eq!(first["data"]["prefix"], "teramigo-");
@@ -251,20 +252,30 @@ fn a_legacy_no_dash_prefix_treats_the_same_slug_as_a_no_op() {
 }
 
 #[test]
-fn init_after_unlink_uses_the_current_directory_slug() {
+fn init_after_repo_remove_uses_the_current_directory_slug() {
     let repo = TestRepo::new();
     let named = repo.named_repo("teramigo");
     let shared = tempfile::tempdir().unwrap();
     let shared_board = shared.path().join("board");
+    let board_arg = shared_board.to_str().unwrap();
 
-    let other = TestRepo::new();
-    other.init_at(&shared_board);
-    repo.ok_json_in(&named, &["link", shared_board.to_str().unwrap(), "--json"]);
-    repo.ok_json_in(&named, &["unlink", "--json"]);
+    let owner = TestRepo::new();
+    owner.init_at(&shared_board);
+    owner.ok_json(&[
+        "--dir",
+        board_arg,
+        "repo",
+        "add",
+        named.to_str().unwrap(),
+        "--name",
+        "teramigo",
+        "--json",
+    ]);
+    owner.ok_json(&["--dir", board_arg, "repo", "remove", "teramigo", "--json"]);
 
     let local = repo.ok_json_in(&named, &["init", "--agents", "none", "--json"]);
     assert_eq!(local["data"]["prefix"], "teramigo-");
-    assert_eq!(local["data"]["storage"], "worktree");
+    assert_eq!(local["data"]["storage"], "repository");
 
     let changed = repo.ok_json_in(
         &named,
@@ -375,9 +386,9 @@ fn export_carries_the_prefix_and_prime_does_not() {
     let prime = repo.ok_json(&["prime", "--json"]);
     assert!(prime["data"].get("prefix").is_none());
 
-    let named = repo.named_repo("teramigo");
-    repo.ok_json_in(&named, &["init", "--agents", "none", "--json"]);
-    let export = repo.ok_json_in(&named, &["export", "--json"]);
+    let named = TestRepo::new();
+    named.ok_json(&["init", "--agents", "none", "--slug", "teramigo", "--json"]);
+    let export = named.ok_json(&["export", "--json"]);
     assert_eq!(export["data"]["board"]["prefix"], "teramigo-");
 }
 
@@ -399,38 +410,6 @@ fn init_in_a_secondary_worktree_targets_the_main_checkout_orbit_folder() {
 }
 
 #[test]
-fn init_global_warns_on_stderr_when_the_anchor_is_home() {
-    let repo = TestRepo::new();
-    let home = tempfile::tempdir().unwrap();
-    let home_str = home.path().to_str().unwrap();
-
-    let output = repo.orbit_with_env(
-        &["init", "--global", "--agents", "none", "--json"],
-        &[("HOME", home_str), ("USERPROFILE", home_str)],
-    );
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("global Board uses the orb prefix"),
-        "{stderr}"
-    );
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["data"]["prefix"], "orb-");
-    assert_eq!(value["data"]["storage"], "repository");
-    assert!(
-        value["meta"]["warnings"][0]
-            .as_str()
-            .unwrap()
-            .contains("global Board uses the orb prefix")
-    );
-}
-
-#[test]
 fn init_in_a_named_orbit_folder_uses_the_parent_slug() {
     let repo = TestRepo::new();
     let named = repo.named_repo("teramigo");
@@ -442,8 +421,8 @@ fn init_in_a_named_orbit_folder_uses_the_parent_slug() {
     );
 
     assert_eq!(value["data"]["prefix"], "work-");
-    assert_eq!(value["data"]["storage"], "worktree");
-    assert!(dir.join("config.toml").is_file());
+    assert_eq!(value["data"]["storage"], "repository");
+    assert!(dir.join("board/config.toml").is_file());
 }
 
 #[test]

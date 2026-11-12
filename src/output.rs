@@ -129,10 +129,10 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
     };
     let remediation = match error.code {
         crate::error::code::GITHUB_NOT_CONFIGURED => Some(
-            "In a Workspace, run `orbit workspace refresh` to infer the organization when every child repository shares one owner. Otherwise run `orbit github connect` from the repository checkout with the intended GitHub origin. If `gh` is not authenticated, run `gh auth login` first.".to_string(),
+            "Run `orbit remote connect` from the repository checkout with the intended GitHub origin. If `gh` is not authenticated, run `gh auth login` first.".to_string(),
         ),
         crate::error::code::GITHUB_SETUP_INCOMPLETE => Some(
-            "Run `orbit github setup` to resolve and store the configured Issue Field ids. If the named field is missing, create it in the organization at Settings > Projects > Issue fields, or run `orbit github setup --create-fields` as an organization administrator; if the organization is unset, run `orbit github connect`.".to_string(),
+            "Run `orbit remote connect --fields` to resolve and store the configured Issue Field ids. If the named field is missing, create it in the organization at Settings > Projects > Issue fields, or run `orbit remote connect --fields --create-fields` as an organization administrator; if the organization is unset, run `orbit remote connect`.".to_string(),
         ),
         crate::error::code::GITHUB_REPO_NOT_LINKED => {
             let repository = details
@@ -140,25 +140,45 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
                 .and_then(Value::as_str)
                 .unwrap_or("OWNER/REPO");
             Some(format!(
-                "Link this repository to the Board with `orbit github repo link {repository}`, then retry."
+                "Link this repository to the Board with `orbit remote connect {repository}`, then retry."
             ))
         }
-        crate::error::code::GITHUB_ISSUE_CONFLICT => {
+        crate::error::code::REMOTE_PROJECT_NOT_LINKED => {
+            let tracker = details
+                .get("tracker")
+                .and_then(Value::as_str)
+                .unwrap_or("<tracker>")
+                .to_string();
+            let project = details
+                .get("project")
+                .and_then(Value::as_str)
+                .unwrap_or("<project>")
+                .to_string();
+            Some(format!(
+                "Remote Project `{project}` on tracker `{tracker}` is not linked to this Board. Link it with `orbit remote connect {tracker}:{project}`, then retry."
+            ))
+        }
+        crate::error::code::REMOTE_ISSUE_CONFLICT => {
             let task = details
                 .get("task")
                 .and_then(Value::as_str)
                 .unwrap_or("<task-id>")
                 .to_string();
-            let repo = details
-                .get("repository")
+            let tracker = details
+                .get("tracker")
                 .and_then(Value::as_str)
-                .unwrap_or("OWNER/REPO")
+                .unwrap_or("<tracker>")
                 .to_string();
-            let number = details
-                .get("number")
-                .and_then(Value::as_u64)
-                .map(|number| number.to_string())
-                .unwrap_or_else(|| "<issue-number>".to_string());
+            let project = details
+                .get("project")
+                .and_then(Value::as_str)
+                .unwrap_or("<project>")
+                .to_string();
+            let id = details
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("<issue-id>")
+                .to_string();
             let fields = details
                 .get("conflicts")
                 .and_then(Value::as_array)
@@ -172,17 +192,9 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
                 .filter(|fields| !fields.is_empty())
                 .unwrap_or_else(|| "one or more fields".to_string());
             details.insert("conflicting_fields".to_string(), json!(fields));
+            let sync_command = format!("orbit remote sync {task}");
             Some(format!(
-                "Task {task} conflicts with GitHub Issue {repo}#{number} in {fields}. Review with `orbit github sync {task}`, choose each side with `--resolve FIELD=orbit` or `--resolve FIELD=github`, then apply with `orbit github sync {task} --resolve FIELD=orbit|github --apply`."
-            ))
-        }
-        crate::error::code::TRIAGE_NOT_LINKED => {
-            let task = details
-                .get("task")
-                .and_then(Value::as_str)
-                .unwrap_or("<task-id>");
-            Some(format!(
-                "Adopt the intended GitHub Issue for Task {task} with `orbit github adopt {task} <issue-url>`, then retry triage."
+                "Task {task} conflicts with {tracker} Issue {project}#{id} in {fields}. Review with `{sync_command}`, choose each side with `--resolve FIELD=orbit` or `--resolve FIELD=remote`, then apply with `{sync_command} --resolve FIELD=orbit|remote --apply`."
             ))
         }
         crate::error::code::TRIAGE_APPROVAL_REQUIRED => {

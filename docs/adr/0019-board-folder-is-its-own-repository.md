@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # ADR 0019: Every Board folder is its own Git repository, with an optional Board host

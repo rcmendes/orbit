@@ -462,15 +462,15 @@ impl Graph {
     }
 
     pub fn counts(&self) -> Counts {
-        self.counts_matching(&[])
+        self.counts_where(|_| true)
     }
 
-    pub fn counts_matching(&self, labels: &[String]) -> Counts {
+    pub fn counts_where(&self, matches: impl Fn(&Task) -> bool) -> Counts {
         let now = Utc::now();
         let mut counts = Counts::default();
 
         for task in self.tasks.values() {
-            if !task.has_labels(labels) {
+            if !matches(task) {
                 continue;
             }
 
@@ -652,9 +652,10 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
             .checkpoint
             .as_ref()
             .map(|_| task.front.status.is_terminal()),
-        "area": task.front.area,
+        "area": task.front.area.as_deref(),
         "verification": task.front.verification,
-        "github": task.front.github,
+        "github": crate::remote::link::github_compat_json(task),
+        "remote": crate::remote::link::link_json(task),
         "claimed_by": task.holder(),
         "claimed_at": task.claimed_at(),
         "lease_until": task.lease_until(),
@@ -713,6 +714,8 @@ mod tests {
                 area: None,
                 verification: None,
                 github: None,
+                remote: None,
+                repo: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: now,

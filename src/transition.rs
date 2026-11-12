@@ -568,6 +568,8 @@ mod tests {
                 area: None,
                 verification: None,
                 github: None,
+                remote: None,
+                repo: None,
                 stray_claim_times: None,
                 claim: lease_until.map(|lease_until| Claim {
                     holder: "alice".to_string(),

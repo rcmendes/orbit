@@ -78,36 +78,23 @@ fn init_and_setup_explain_the_portable_mcp_choice() {
 }
 
 #[test]
-fn workspace_issue_import_help_explains_review_apply_and_existing_task_links() {
+fn repo_help_documents_member_repository_commands() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"))
-        .args(["workspace", "issues", "import", "--help"])
+        .args(["repo", "--help"])
         .output()
         .unwrap();
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
-    assert!(help.contains("--apply"), "{help}");
-    assert!(help.contains("--link"), "{help}");
-    assert!(help.contains("default is a preview"), "{help}");
-    assert!(help.contains("acme/api#42=orb-a7b2c9"), "{help}");
-}
+    for expected in ["add", "remove", "list", "refresh"] {
+        assert!(help.contains(expected), "{expected}: {help}");
+    }
 
-#[test]
-fn workspace_setup_help_explains_selection_and_reconciliation() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"))
-        .args(["workspace", "setup", "--help"])
+        .args(["repo", "add", "--help"])
         .output()
         .unwrap();
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
-    assert!(help.contains("--agents"), "{help}");
-    assert!(help.contains("--print"), "{help}");
-    assert!(help.contains("--remove"), "{help}");
-    assert!(
-        help.contains("Matt Pocock skills are detected separately"),
-        "{help}"
-    );
-    assert!(
-        help.contains("orbit workspace setup --agents all"),
-        "{help}"
-    );
+    assert!(help.contains("--name"), "{help}");
+    assert!(help.contains("Examples:"), "{help}");
 }

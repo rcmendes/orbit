@@ -1,5 +1,10 @@
 # ADR 0016: Opt-in automatic push to GitHub Issues
 
+> **Superseded by [ADR 0018](./0018-remote-trackers-behind-an-orbit-port.md).**
+> Auto-push is now provider-neutral: `[remote] auto_push`, toggled with
+> `orbit remote auto-push on|off`, applies to any Remote Tracker adapter. This
+> document is kept for history.
+
 ## Context
 
 The GitHub Issue provider is explicitly synchronized. Task edits stay on the

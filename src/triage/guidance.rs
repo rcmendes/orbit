@@ -5,11 +5,15 @@ use crate::board::Board;
 pub const RELATIVE_GUIDANCE_PATH: &str = "docs/agents/project-guidance.md";
 
 pub fn guidance_path(board: &Board) -> PathBuf {
-    board
-        .root
-        .parent()
-        .unwrap_or(&board.root)
-        .join(RELATIVE_GUIDANCE_PATH)
+    // Project guidance lives in the repository or Workspace that anchors the
+    // Board: the Orbit folder's parent for `.orbit/board` and pointer Boards,
+    // the Board folder's parent for unanchored legacy layouts.
+    let anchor = board
+        .resolved_orbit_dir()
+        .and_then(|orbit| orbit.parent().map(|parent| parent.to_path_buf()))
+        .or_else(|| board.root.parent().map(|parent| parent.to_path_buf()))
+        .unwrap_or_else(|| board.root.clone());
+    anchor.join(RELATIVE_GUIDANCE_PATH)
 }
 
 pub fn read_project_guidance(board: &Board) -> (Option<String>, Option<PathBuf>) {

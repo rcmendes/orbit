@@ -1,5 +1,11 @@
 # ADR 0014: GitHub Issue provider
 
+> **Superseded by [ADR 0018](./0018-remote-trackers-behind-an-orbit-port.md).**
+> GitHub is now one adapter behind the provider-neutral Remote Tracker port:
+> `[remote]`/`[[remote.projects]]` configuration, `remote:` links, and the
+> `orbit remote` commands replace `[github]` and `orbit github`. This document
+> is kept for history.
+
 ## Context
 
 Orbit needs explicit, multi-repository synchronization with GitHub Issues while keeping Orbit-owned workflow semantics (claims, checkpoints, readiness) on the Board.

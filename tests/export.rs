@@ -147,7 +147,8 @@ fn repo_and_label_filters_scope_list_ready_and_prime() {
     assert_eq!(ready["data"]["tasks"][0]["id"], api.as_str());
 
     let prime = repo.ok_json(&["prime", "--repo", "api", "--json"]);
-    assert_eq!(prime["data"]["labels"], serde_json::json!(["repo:api"]));
+    assert_eq!(prime["data"]["labels"], serde_json::json!([]));
+    assert_eq!(prime["data"]["repo"], "api");
     assert_eq!(prime["data"]["counts"]["total"], 2);
     assert_eq!(prime["data"]["counts"]["ready"], 2);
     let prime_ids = ids(&prime["data"]["ready"]);

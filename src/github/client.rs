@@ -12,6 +12,21 @@ use crate::github::relationships::{RelationshipChange, SupportedRelationship};
 
 const AREA_FIELD_OPTIONS: [&str; 6] = ["board", "cli", "mcp", "setup", "docs", "release"];
 
+/// The option list for a newly created Area Issue Field: the Board's
+/// configured `board.areas`, or the canonical six when the Board defines no
+/// Areas. GitHub single-select fields need a fixed option list, so an
+/// unrestricted Board still gets the canonical defaults.
+pub(crate) fn area_field_options(board_areas: &[String]) -> Vec<String> {
+    if board_areas.is_empty() {
+        AREA_FIELD_OPTIONS
+            .iter()
+            .map(|area| area.to_string())
+            .collect()
+    } else {
+        board_areas.to_vec()
+    }
+}
+
 pub struct FieldSetup {
     pub area_id: String,
     pub verification_id: String,
@@ -101,7 +116,12 @@ pub trait GitHubClient: Send + Sync {
 
     fn validate_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup>;
 
-    fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup>;
+    fn create_org_fields(
+        &self,
+        org: &str,
+        fields: &IssueFieldConfig,
+        area_options: &[String],
+    ) -> Result<FieldSetup>;
 
     fn get_issue(
         &self,
@@ -301,7 +321,12 @@ impl GitHubClient for GhCliClient {
         })
     }
 
-    fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
+    fn create_org_fields(
+        &self,
+        org: &str,
+        fields: &IssueFieldConfig,
+        area_options: &[String],
+    ) -> Result<FieldSetup> {
         validate_org_admin(org)?;
         let query = "query($org: String!) { organization(login: $org) { id issueFields(first: 100) { nodes { ... on IssueFieldDate { id name } ... on IssueFieldMultiSelect { id name } ... on IssueFieldNumber { id name } ... on IssueFieldSingleSelect { id name } ... on IssueFieldText { id name } } } } }";
         let output = gh_api(&[
@@ -329,11 +354,12 @@ impl GitHubClient for GhCliClient {
             find_field_id(&organization.issue_fields.nodes, &fields.verification_name);
         let mut created_fields = Vec::new();
         if area_id.is_none() {
+            let options: Vec<&str> = area_options.iter().map(String::as_str).collect();
             area_id = Some(create_issue_field(
                 &organization.id,
                 &fields.area_name,
                 "SINGLE_SELECT",
-                Some(&AREA_FIELD_OPTIONS),
+                Some(options.as_slice()),
             )?);
             created_fields.push(fields.area_name.clone());
         }
@@ -479,7 +505,7 @@ impl GitHubClient for GhCliClient {
             {
                 return Err(OrbitError::new(
                     code::GITHUB_SETUP_INCOMPLETE,
-                    "issue field values require resolved ids from `orbit github setup`",
+                    "issue field values require resolved ids from `orbit remote connect --fields`",
                 ));
             }
             let org = input
@@ -489,7 +515,7 @@ impl GitHubClient for GhCliClient {
                 .ok_or_else(|| {
                     OrbitError::new(
                         code::GITHUB_SETUP_INCOMPLETE,
-                        "issue field values require `github.organization` and `orbit github setup`",
+                        "issue field values require `github.organization` and `orbit remote connect --fields`",
                     )
                 })?;
             let fields = list_rest_issue_fields(org)?;
@@ -497,7 +523,7 @@ impl GitHubClient for GhCliClient {
                 let field_id = rest_issue_field_id(&fields, &input.issue_fields.area_name).ok_or_else(|| {
                     OrbitError::new(
                         code::GITHUB_SETUP_INCOMPLETE,
-                        format!("organization `{org}` is missing Issue Field `{}`; run `orbit github setup`", input.issue_fields.area_name),
+                        format!("organization `{org}` is missing Issue Field `{}`; run `orbit remote connect --fields`", input.issue_fields.area_name),
                     )
                 })?;
                 field_values.push(serde_json::json!({ "field_id": field_id, "value": area }));
@@ -506,7 +532,7 @@ impl GitHubClient for GhCliClient {
                 let field_id = rest_issue_field_id(&fields, &input.issue_fields.verification_name).ok_or_else(|| {
                     OrbitError::new(
                         code::GITHUB_SETUP_INCOMPLETE,
-                        format!("organization `{org}` is missing Issue Field `{}`; run `orbit github setup`", input.issue_fields.verification_name),
+                        format!("organization `{org}` is missing Issue Field `{}`; run `orbit remote connect --fields`", input.issue_fields.verification_name),
                     )
                 })?;
                 field_values
@@ -563,13 +589,13 @@ impl GitHubClient for GhCliClient {
             let issue_fields = input.issue_fields.as_ref().ok_or_else(|| {
                 OrbitError::new(
                     code::GITHUB_SETUP_INCOMPLETE,
-                    "issue field updates require configured field names from `orbit github setup`",
+                    "issue field updates require configured field names from `orbit remote connect --fields`",
                 )
             })?;
             let organization = input.organization.as_deref().ok_or_else(|| {
                 OrbitError::new(
                     code::GITHUB_SETUP_INCOMPLETE,
-                    "issue field updates require github.organization and `orbit github setup`",
+                    "issue field updates require github.organization and `orbit remote connect --fields`",
                 )
             })?;
             update_rest_issue_field_values(
@@ -785,7 +811,7 @@ fn update_rest_issue_field_values(
             OrbitError::new(
                 code::GITHUB_SETUP_INCOMPLETE,
                 format!(
-                    "organization `{organization}` is missing Issue Field `{}`; run `orbit github setup`",
+                    "organization `{organization}` is missing Issue Field `{}`; run `orbit remote connect --fields`",
                     config.area_name
                 ),
             )
@@ -798,7 +824,7 @@ fn update_rest_issue_field_values(
             OrbitError::new(
                 code::GITHUB_SETUP_INCOMPLETE,
                 format!(
-                    "organization `{organization}` is missing Issue Field `{}`; run `orbit github setup`",
+                    "organization `{organization}` is missing Issue Field `{}`; run `orbit remote connect --fields`",
                     config.verification_name
                 ),
             )
@@ -886,7 +912,7 @@ fn validate_org_admin(org: &str) -> Result<()> {
         OrbitError::new(
             code::GITHUB_SETUP_INCOMPLETE,
             format!(
-                "could not verify organization administrator access for `{org}`: {}. Refresh `gh` with `gh auth refresh --hostname github.com --scopes read:org`, then retry; an organization administrator can create the fields in GitHub and run `orbit github setup`.",
+                "could not verify organization administrator access for `{org}`: {}. Refresh `gh` with `gh auth refresh --hostname github.com --scopes read:org`, then retry; an organization administrator can create the fields in GitHub and run `orbit remote connect --fields`.",
                 error.message
             ),
         )
@@ -1000,7 +1026,7 @@ fn create_issue_field(
         OrbitError::new(
             code::GITHUB_SETUP_INCOMPLETE,
             format!(
-                "GitHub could not create Issue Field `{}`: {}. Confirm `gh` is authenticated as an organization administrator and can create organization Issue Fields, then retry `orbit github setup --create-fields`; alternatively create the fields in GitHub and run `orbit github setup`.",
+                "GitHub could not create Issue Field `{}`: {}. Confirm `gh` is authenticated as an organization administrator and can create organization Issue Fields, then retry `orbit remote connect --fields --create-fields`; alternatively create the fields in GitHub and run `orbit remote connect --fields`.",
                 name.trim_matches('"'),
                 error.message
             ),
@@ -1020,7 +1046,7 @@ fn missing_org_admin_permission(org: &str) -> OrbitError {
     OrbitError::new(
         code::GITHUB_SETUP_INCOMPLETE,
         format!(
-            "creating GitHub Issue Fields for `{org}` requires organization administrator access. Ask an organization administrator to run `orbit github setup --create-fields`, or create the fields in GitHub and run `orbit github setup`."
+            "creating GitHub Issue Fields for `{org}` requires organization administrator access. Ask an organization administrator to run `orbit remote connect --fields --create-fields`, or create the fields in GitHub and run `orbit remote connect --fields`."
         ),
     )
 }
@@ -1409,7 +1435,12 @@ impl GitHubClient for FixtureClient {
         })
     }
 
-    fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
+    fn create_org_fields(
+        &self,
+        org: &str,
+        fields: &IssueFieldConfig,
+        area_options: &[String],
+    ) -> Result<FieldSetup> {
         let mut store = self.store.lock().expect("fixture lock");
         if !store.organization_admin {
             return Err(missing_org_admin_permission(org));
@@ -1424,7 +1455,7 @@ impl GitHubClient for FixtureClient {
             store.created_fields.push(serde_json::json!({
                 "name": fields.area_name,
                 "data_type": "SINGLE_SELECT",
-                "options": AREA_FIELD_OPTIONS,
+                "options": area_options,
             }));
             created_fields.push(fields.area_name.clone());
             id

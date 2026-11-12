@@ -120,9 +120,9 @@ fn human_output_marks_non_task_types() {
     assert!(human.lines().next().unwrap().contains("TYPE"), "{human}");
     let row = human.lines().nth(1).unwrap();
     let cells: Vec<&str> = row.split_whitespace().collect();
+    // A Board with no Remote Project and no links hides the ISSUE column.
     assert_eq!(cells[3], "epic", "{human}");
-    assert_eq!(cells[4], "-", "{human}");
-    assert_eq!(cells[5], "Epic", "{human}");
+    assert_eq!(cells[4], "Epic", "{human}");
 
     let output = repo.orbit(&["show", &epic]);
     assert!(output.status.success());

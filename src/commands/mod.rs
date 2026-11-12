@@ -1,31 +1,31 @@
+mod board;
 mod crud;
 mod init;
 mod lifecycle;
-mod link;
 mod query;
 mod relations;
 mod render;
+mod repo;
 mod slug;
 
-use clap::ValueEnum;
 use serde_json::Value;
 use std::io::Read;
 use std::path::Path;
 
 use crate::board::Board;
-use crate::cli::{Cli, Command, CommentCommand, LabelCommand, SlugCommand, WorkspaceCommand};
+use crate::cli::{Cli, Command, CommentCommand, LabelCommand, SlugCommand};
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{self, Graph};
-use crate::task::{self, Task, TaskArea};
+use crate::task::{self, Task};
 
 use crud::{cmd_add, cmd_delete, cmd_update};
 use init::cmd_init;
 use lifecycle::{
     cmd_cancel, cmd_checkpoint, cmd_claim, cmd_done, cmd_heartbeat, cmd_release, cmd_reopen,
 };
-use link::{cmd_link, cmd_unlink};
 use query::{cmd_export, cmd_list, cmd_prime, cmd_ready, cmd_show, cmd_sync, cmd_tree};
 use relations::{cmd_comment, cmd_depend, cmd_label, cmd_undepend};
+use repo::run as cmd_repo;
 use slug::cmd_slug;
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
@@ -36,7 +36,8 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         command,
     } = cli;
     if no_sync {
-        crate::github::auto_push::suppress();
+        crate::remote::auto_push::suppress();
+        crate::board_sync::suppress();
     }
 
     if json && matches!(&command, Command::Prime(args) if args.hook_json) {
@@ -46,9 +47,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     }
 
     match command {
+        Command::Migrate(args) => crate::board_migrate::cmd_migrate(&args, dir.as_deref()),
         Command::Init(args) => cmd_init(args, dir.as_deref()),
-        Command::Link(args) => cmd_link(args),
-        Command::Unlink => cmd_unlink(),
+        Command::Repo(args) => with_board(dir.as_deref(), true, |board| cmd_repo(board, args)),
         Command::Slug(args) => {
             let exclusive = matches!(args.command, SlugCommand::Migrate(_));
             with_board(dir.as_deref(), exclusive, |board| cmd_slug(board, args))
@@ -96,53 +97,73 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             with_board(dir.as_deref(), true, |board| cmd_undepend(board, args))
         }
         Command::Delete(args) => with_board(dir.as_deref(), true, |board| cmd_delete(board, args)),
-        Command::Prime(args) => with_board(dir.as_deref(), false, |board| cmd_prime(board, args)),
+        Command::Prime(args) => prime_with_host_sync(dir.as_deref(), args),
         Command::Export => with_board(dir.as_deref(), false, cmd_export),
         Command::Setup(args) => crate::setup::run(args, dir.as_deref()),
         Command::Mcp => crate::mcp::serve(dir.as_deref())
             .map(|()| crate::output::CommandOutput::new(Value::Null, "").with_silent()),
         Command::Doctor(args) => crate::doctor::run(dir.as_deref(), args),
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
-        Command::GitHub(args) => {
-            if matches!(
-                &args.command,
-                crate::cli::GitHubCommand::Status
-                    | crate::cli::GitHubCommand::Create(crate::cli::GitHubCreateArgs {
-                        apply: false,
-                        ..
+        Command::Board(args) => match &args.command {
+            crate::cli::BoardCommand::Host(host_args) => {
+                if host_args.target.is_none() && !host_args.none {
+                    with_board(dir.as_deref(), false, |board| {
+                        board::cmd_host(board, host_args)
                     })
-            ) {
-                return with_board_read_only(dir.as_deref(), |board| {
-                    crate::github::commands::run(board, args)
-                });
-            }
-            with_board(dir.as_deref(), true, |board| {
-                crate::github::commands::run(board, args)
-            })
-        }
-        Command::Workspace(args) => match args.command {
-            WorkspaceCommand::Migrate(args) => crate::workspace_migrate::run(dir.as_deref(), args),
-            command => {
-                let args = crate::cli::WorkspaceArgs { command };
-                if matches!(
-                    &args.command,
-                    crate::cli::WorkspaceCommand::Status
-                        | crate::cli::WorkspaceCommand::Issues(crate::cli::WorkspaceIssuesArgs {
-                            command: crate::cli::WorkspaceIssuesCommand::List(_)
-                                | crate::cli::WorkspaceIssuesCommand::Inspect(_)
-                        })
-                ) {
-                    with_board_read_only(dir.as_deref(), |board| crate::workspace::run(board, args))
                 } else {
                     with_board(dir.as_deref(), true, |board| {
-                        crate::workspace::run(board, args)
+                        board::cmd_host(board, host_args)
                     })
                 }
             }
+            crate::cli::BoardCommand::Sync(sync_args) => {
+                // The command performs the sync itself; do not auto-sync again.
+                crate::board_sync::suppress();
+                // `sync` takes the Board lock itself, only around local steps.
+                let board = crate::board::BoardAccess::open(
+                    dir.as_deref(),
+                    crate::board::AccessMode::Write,
+                )?
+                .into_board();
+                let mut output = board::cmd_sync(&board, sync_args)?;
+                output.warnings.extend(board.warnings.iter().cloned());
+                Ok(output)
+            }
         },
+        Command::Remote(args) => {
+            if remote_is_read_only(&args) {
+                return with_board_read_only(dir.as_deref(), |board| {
+                    crate::remote::commands::run(board, args)
+                });
+            }
+            with_board(dir.as_deref(), true, |board| {
+                crate::remote::commands::run(board, args)
+            })
+        }
         Command::Triage(args) => with_task_board(dir.as_deref(), true, |board| {
             crate::triage::commands::run(board, args, json)
         }),
+    }
+}
+
+/// `orbit remote` previews and read-only views run without the exclusive
+/// Board lock; anything that writes configuration, the catalog, or Tasks
+/// keeps the normal write path.
+fn remote_is_read_only(args: &crate::cli::RemoteArgs) -> bool {
+    use crate::cli::{RemoteCommand, RemoteIssuesCommand};
+    match &args.command {
+        RemoteCommand::Status | RemoteCommand::List => true,
+        RemoteCommand::Issues(issues) => {
+            !matches!(issues.command, Some(RemoteIssuesCommand::Refresh))
+        }
+        RemoteCommand::Import(args) => !args.apply,
+        RemoteCommand::Detach(args) | RemoteCommand::Reattach(args) => !args.apply,
+        RemoteCommand::Create(args) => !args.apply,
+        RemoteCommand::Sync(args) => !args.apply,
+        RemoteCommand::Connect(_)
+        | RemoteCommand::Disconnect(_)
+        | RemoteCommand::Link(_)
+        | RemoteCommand::AutoPush(_) => false,
     }
 }
 
@@ -201,9 +222,9 @@ where
     let board = access.board();
     let snapshot = (auto_push == AutoPush::On
         && matches!(mode, crate::board::AccessMode::Write)
-        && board.config.github.auto_push
-        && !crate::github::auto_push::suppressed())
-    .then(|| crate::github::auto_push::snapshot(board));
+        && crate::remote::auto_push::enabled(board)
+        && !crate::remote::auto_push::suppressed())
+    .then(|| crate::remote::auto_push::snapshot(board));
     let mut output = f(board)?;
     if let Some(before) = snapshot {
         if board.commit_failed() {
@@ -214,11 +235,53 @@ where
         } else {
             output
                 .warnings
-                .extend(crate::github::auto_push::after_command(board, &before));
+                .extend(crate::remote::auto_push::after_command_default(
+                    board, &before,
+                ));
         }
+    }
+    // Host sync does network I/O: release the Board lock first.
+    let board = access.into_board();
+    if matches!(mode, crate::board::AccessMode::Write) {
+        output
+            .warnings
+            .extend(crate::board_sync::auto_after(&board));
     }
     output.warnings.extend(board.warnings.iter().cloned());
     Ok(output)
+}
+
+/// `orbit prime` syncs the Board host first when `board.host_sync = auto`,
+/// so the primed view already includes the host's changes. Failures surface
+/// as warnings; prime itself never fails because of the host.
+fn prime_with_host_sync(
+    dir: Option<&Path>,
+    args: crate::cli::PrimeArgs,
+) -> Result<crate::output::CommandOutput> {
+    if host_sync_at_prime(dir) {
+        // `sync` takes the Board lock itself, only around local steps.
+        let board =
+            crate::board::BoardAccess::open(dir, crate::board::AccessMode::Write)?.into_board();
+        let mut warnings = crate::board_sync::auto_after(&board);
+        let mut output = with_board(dir, false, |board| cmd_prime(board, args))?;
+        warnings.append(&mut output.warnings);
+        output.warnings = warnings;
+        return Ok(output);
+    }
+    with_board(dir, false, |board| cmd_prime(board, args))
+}
+
+fn host_sync_at_prime(dir: Option<&Path>) -> bool {
+    if crate::board_sync::suppressed() {
+        return false;
+    }
+    let Ok(board) = Board::discover(dir) else {
+        return false;
+    };
+    let Ok(config) = crate::board::Config::load(&board.root) else {
+        return false;
+    };
+    config.board.host_sync == crate::board::HostSyncMode::Auto && config.board.host.is_some()
 }
 
 fn mutation_output(
@@ -261,18 +324,29 @@ fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {
     Ok(normalized)
 }
 
-fn normalize_label_filters(labels: &[String], repo: Option<&str>) -> Result<Vec<String>> {
-    let mut normalized = normalize_labels(labels)?;
-    if let Some(repo) = repo {
+fn normalize_repo_filter(repo: Option<&str>) -> Result<Option<String>> {
+    repo.map(|repo| {
         let repo = repo.trim();
         if repo.is_empty() {
             return Err(OrbitError::invalid_argument("--repo must not be empty"));
         }
-        normalized.push(task::normalize_label(&format!("repo:{repo}"))?);
-    }
-    normalized.sort();
-    normalized.dedup();
-    Ok(normalized)
+        // Keep the same validation as legacy repo labels, without turning
+        // the Repository field filter into a required label.
+        task::normalize_label(&format!("repo:{repo}"))?;
+        Ok(repo.to_string())
+    })
+    .transpose()
+}
+
+fn matches_repo(task: &Task, repo: Option<&str>) -> bool {
+    repo.is_none_or(|repo| {
+        task.front.repo.as_deref() == Some(repo)
+            || task
+                .front
+                .labels
+                .iter()
+                .any(|label| label.eq_ignore_ascii_case(&format!("repo:{repo}")))
+    })
 }
 
 fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {
@@ -290,26 +364,26 @@ fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {
     }
 }
 
-fn parse_area_option(area: Option<String>) -> Result<Option<TaskArea>> {
+fn parse_area_option(board: &Board, area: Option<String>) -> Result<Option<String>> {
     match area {
         None => Ok(None),
-        Some(value) => Ok(Some(parse_area_value(&value)?)),
+        Some(value) => Ok(Some(parse_area_value(board, &value)?)),
     }
 }
 
-fn parse_area_value(value: &str) -> Result<TaskArea> {
-    let value = value.trim();
-    TaskArea::from_str(value, true).map_err(|_| {
-        let allowed = TaskArea::all()
-            .iter()
-            .map(|area| area.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        OrbitError::new(
-            code::INVALID_AREA,
-            format!("unknown area `{value}`; expected one of: {allowed}"),
-        )
-    })
+/// Normalizes one Area filter value and validates it against the Board's
+/// `board.areas` list; `task::normalize_area` treats an empty list as
+/// unrestricted.
+fn parse_area_value(board: &Board, value: &str) -> Result<String> {
+    task::normalize_area(value, &board.config.board.areas)
+}
+
+/// Normalizes repeatable Area filter flags the same way as `--area`.
+fn normalize_areas(board: &Board, areas: &[String]) -> Result<Vec<String>> {
+    areas
+        .iter()
+        .map(|area| parse_area_value(board, area))
+        .collect()
 }
 
 fn resolve_body(body: Option<String>, file: Option<std::path::PathBuf>) -> Result<String> {

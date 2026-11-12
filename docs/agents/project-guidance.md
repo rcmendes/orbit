@@ -5,9 +5,20 @@ agent session unless a Task explicitly narrows or extends them.
 
 ## Work areas (`area`)
 
-Each Task may carry one optional `area` value that classifies where the change
-primarily lands. Use a controlled value from this table; do not invent ad hoc
-strings or store personal preferences in `area`.
+Each Task may carry one optional `area` value: a short lowercase slug
+(letters, digits, `-`) classifying where the change primarily lands. Areas are
+per-Board vocabulary, configured in `config.toml`:
+
+```toml
+[board]
+areas = ["board", "cli", "mcp", "setup", "docs", "release"]
+```
+
+When `board.areas` is empty the Board defines no Areas and any lowercase slug
+is accepted. Do not store personal preferences or session-local state in
+`area`.
+
+For this repository the suggested values are:
 
 | Area | Typical scope |
 | --- | --- |
@@ -20,7 +31,8 @@ strings or store personal preferences in `area`.
 
 Filter with `orbit list --area cli` or `orbit ready --exclude-area docs`. The
 same values appear in JSON (`area`) and in MCP `create`, `update`, `list`, and
-`ready`.
+`ready`. `orbit triage context` reports the Board's configured `allowed_areas`
+(`null` when unrestricted).
 
 ## Verification guidance
 

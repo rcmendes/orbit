@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
-use crate::task::{Status, TaskArea, TaskType};
+use crate::task::{Status, TaskType};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -19,12 +19,13 @@ pub struct Cli {
     #[arg(global = true, long)]
     pub json: bool,
 
-    /// Workspace root or Orbit Board directory override. Also read from ORBIT_DIR.
+    /// Board anchor or Orbit Board directory override. Also read from ORBIT_DIR.
     #[arg(global = true, long, env = "ORBIT_DIR", value_name = "PATH")]
     pub dir: Option<PathBuf>,
 
-    /// Do not auto-push task changes to GitHub for this command.
-    #[arg(global = true, long = "no-sync")]
+    /// Do not auto-push task changes to the Remote Tracker or sync the Board
+    /// host for this command. Hidden from help; still functional.
+    #[arg(global = true, long = "no-sync", hide = true)]
     pub no_sync: bool,
 
     #[command(subcommand)]
@@ -37,23 +38,29 @@ pub enum Command {
     #[command(long_about = help::INIT_LONG, after_long_help = help::INIT_EXAMPLES)]
     Init(InitArgs),
 
-    /// Point this repository at a shared Board.
-    #[command(long_about = help::LINK_LONG, after_long_help = help::LINK_EXAMPLES)]
-    Link(LinkArgs),
-
-    /// Return this repository to its own Board.
-    #[command(long_about = help::UNLINK_LONG, after_long_help = help::UNLINK_EXAMPLES)]
-    Unlink,
+    /// Manage the Board's member Repositories.
+    #[command(long_about = help::REPO_LONG, after_long_help = help::REPO_EXAMPLES)]
+    Repo(RepoArgs),
 
     /// Show or migrate the Board's Task-ID slug.
     #[command(long_about = help::SLUG_LONG, after_long_help = help::SLUG_EXAMPLES)]
     Slug(SlugArgs),
 
+    /// Convert a pre-ADR-0019 Board into a standalone Board folder.
+    ///
+    /// Previews the migration by default; pass --apply to convert the Board
+    /// into its own Git repository on branch `orbit` under `.orbit/board`
+    /// (or a visible folder anchored by `.orbit`), rewriting `github:` links
+    /// to `remote:`, `[github]` to remote project entries, `repo:*` labels to
+    /// the `repo` field, and seeding `board.areas` — all in one commit.
+    #[command(long_about = help::BOARD_MIGRATE_LONG, after_long_help = help::BOARD_MIGRATE_EXAMPLES)]
+    Migrate(BoardMigrateArgs),
+
     /// Create a task.
     #[command(long_about = help::ADD_LONG, after_long_help = help::ADD_EXAMPLES)]
     Add(AddArgs),
 
-    /// List tasks with filters. Closed work is hidden unless --all.
+    /// List tasks with filters. Closed work is hidden unless --include-closed.
     #[command(long_about = help::LIST_LONG, after_long_help = help::LIST_EXAMPLES)]
     List(ListArgs),
 
@@ -145,15 +152,15 @@ pub enum Command {
     #[command(long_about = help::SYNC_LONG, after_long_help = help::SYNC_EXAMPLES)]
     Sync,
 
-    /// Link GitHub repositories and synchronize Issues with Tasks.
-    #[command(name = "github", long_about = help::GITHUB_LONG, after_long_help = help::GITHUB_EXAMPLES)]
-    GitHub(GitHubArgs),
+    /// Configure and synchronize the Board's host repository.
+    #[command(long_about = help::BOARD_LONG, after_long_help = help::BOARD_EXAMPLES)]
+    Board(BoardArgs),
 
-    /// Discover and manage repositories in a Workspace.
-    #[command(long_about = help::WORKSPACE_LONG, after_long_help = help::WORKSPACE_EXAMPLES)]
-    Workspace(WorkspaceArgs),
+    /// Connect Remote Trackers and synchronize Remote Issues with Tasks.
+    #[command(name = "remote", long_about = help::REMOTE_LONG, after_long_help = help::REMOTE_EXAMPLES)]
+    Remote(RemoteArgs),
 
-    /// Review and apply agent triage proposals for GitHub-linked Tasks.
+    /// Review and apply agent triage proposals for Tasks.
     #[command(long_about = help::TRIAGE_LONG, after_long_help = help::TRIAGE_EXAMPLES)]
     Triage(TriageArgs),
 }
@@ -166,10 +173,6 @@ pub struct InitArgs {
     /// that checkout's ./.orbit instead of using the root as the Board directory.
     #[arg(value_name = "DIR")]
     pub target: Option<PathBuf>,
-
-    /// Create or reuse the global Board at ~/.orbit.
-    #[arg(long, conflicts_with = "target")]
-    pub global: bool,
 
     /// Which harnesses to wire: auto, all, none, ask, or a comma-separated list.
     #[arg(long, value_name = "SELECTOR", conflicts_with = "no_agents")]
@@ -200,6 +203,27 @@ pub struct InitArgs {
     #[arg(long, value_name = "SLUG")]
     pub slug: Option<String>,
 
+    /// Use a visible Board folder instead of the hidden .orbit/board layout.
+    ///
+    /// Bare `--visible` names the folder `board`; `--visible=NAME` picks the
+    /// name. Only applies when the target resolves to a repository or Board
+    /// anchor — an explicit directory is already a visible Board folder.
+    #[arg(
+        long,
+        value_name = "NAME",
+        num_args = 0..=1,
+        require_equals = true
+    )]
+    pub visible: Option<Option<String>>,
+
+    /// Set the Board host to a member Repository name/path or git URL whose
+    /// remote stores the Board's `orbit` branch.
+    ///
+    /// Bare `--host` prompts in a terminal; `--host=REPO|URL` sets it without
+    /// prompting. An existing host branch with a different Slug is refused.
+    #[arg(long, value_name = "REPO|URL", num_args = 0..=1, require_equals = true)]
+    pub host: Option<Option<String>>,
+
     /// Preview the files that would change without writing them; harness
     /// selection does not prompt unless --agents ask is given.
     #[arg(long)]
@@ -207,29 +231,44 @@ pub struct InitArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct LinkArgs {
-    /// Orbit folder (DIR), or a legacy Board or workspace directory.
-    #[arg(value_name = "PATH")]
-    pub path: PathBuf,
+pub struct RepoArgs {
+    #[command(subcommand)]
+    pub command: RepoCommand,
+}
 
-    /// Do not refresh existing agent configuration.
-    #[arg(long = "no-refresh")]
-    pub no_refresh: bool,
+#[derive(Debug, Subcommand)]
+pub enum RepoCommand {
+    /// Add a Repository as an explicit member of this Board.
+    #[command(after_long_help = help::REPO_EXAMPLES)]
+    Add(RepoAddArgs),
+    /// Remove an explicitly added member Repository.
+    #[command(after_long_help = help::REPO_EXAMPLES)]
+    Remove(RepoRemoveArgs),
+    /// List the Board's member Repositories.
+    #[command(after_long_help = help::REPO_EXAMPLES)]
+    List,
+    /// Rescan child Repositories and rebuild the Repository inventory.
+    #[command(after_long_help = help::REPO_EXAMPLES)]
+    Refresh,
 }
 
 #[derive(Debug, Args)]
-pub struct WorkspaceMigrateArgs {
-    /// Workspace root. Defaults to the current directory.
-    #[arg(value_name = "WORKSPACE")]
-    pub workspace: Option<PathBuf>,
+pub struct RepoAddArgs {
+    /// Repository path or its main checkout. Defaults to the current directory.
+    #[arg(value_name = "PATH")]
+    pub path: Option<PathBuf>,
 
-    /// Preview the migration without changing the Workspace Board or sources.
-    #[arg(long, conflicts_with = "resume")]
-    pub dry_run: bool,
+    /// Member name Tasks record in their `repo` field. Defaults to the
+    /// repository directory name.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+}
 
-    /// Resume an interrupted migration from its saved plan.
-    #[arg(long)]
-    pub resume: bool,
+#[derive(Debug, Args)]
+pub struct RepoRemoveArgs {
+    /// Member name or repository path recorded by `orbit repo add`.
+    #[arg(value_name = "REPOSITORY")]
+    pub repository: String,
 }
 
 #[derive(Debug, Args)]
@@ -253,6 +292,17 @@ pub enum SlugCommand {
         after_long_help = help::SLUG_MIGRATE_EXAMPLES
     )]
     Migrate(SlugMigrateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BoardMigrateArgs {
+    /// Apply the migration. Without this flag the command only previews.
+    #[arg(long, conflicts_with = "dry_run")]
+    pub apply: bool,
+
+    /// Preview the migration without writing anything (the default).
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -298,7 +348,8 @@ pub struct AddArgs {
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
 
-    /// Stable work area: board, cli, mcp, setup, docs, or release.
+    /// Optional work-area slug. Restricted to the Board's `board.areas` when
+    /// the Board configures them; any lowercase slug otherwise.
     #[arg(long, value_name = "AREA")]
     pub area: Option<String>,
 
@@ -341,13 +392,13 @@ pub struct ListArgs {
     #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
     pub exclude_type: Vec<TaskType>,
 
-    /// Filter by work area. Repeatable; matches any listed area.
-    #[arg(long, value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
-    pub area: Vec<TaskArea>,
+    /// Filter by work area slug. Repeatable; matches any listed area.
+    #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
+    pub area: Vec<String>,
 
     /// Exclude tasks with any listed area.
-    #[arg(long = "exclude-area", value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
-    pub exclude_area: Vec<TaskArea>,
+    #[arg(long = "exclude-area", value_name = "AREA", action = clap::ArgAction::Append)]
+    pub exclude_area: Vec<String>,
 
     /// Filter by label. Repeatable; every label must match.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -357,7 +408,7 @@ pub struct ListArgs {
     #[arg(long = "exclude-label", value_name = "LABEL", action = clap::ArgAction::Append)]
     pub exclude_label: Vec<String>,
 
-    /// Filter by repository label. Shorthand for --label repo:NAME.
+    /// Filter by repository label. Filter by Repository field or legacy repo:NAME label.
     #[arg(long, value_name = "NAME")]
     pub repo: Option<String>,
 
@@ -369,11 +420,11 @@ pub struct ListArgs {
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
-    /// Only Tasks with an active GitHub Issue link.
+    /// Only Tasks with an active Remote Issue link.
     #[arg(long, conflicts_with = "local")]
     pub linked: bool,
 
-    /// Only Tasks without an active GitHub Issue link. Includes detached provenance.
+    /// Only Tasks without an active Remote Issue link. Includes detached provenance.
     #[arg(long, conflicts_with = "linked")]
     pub local: bool,
 
@@ -381,9 +432,15 @@ pub struct ListArgs {
     #[arg(long)]
     pub group: bool,
 
-    /// Include done and cancelled tasks.
+    /// Include Tasks from every Repository. Inside a member Repository or its
+    /// worktree the list is scoped to that Repository plus Board-wide Tasks
+    /// by default; --all widens it to the whole Board.
     #[arg(long)]
     pub all: bool,
+
+    /// Include done and cancelled tasks.
+    #[arg(long)]
+    pub include_closed: bool,
 }
 
 #[derive(Debug, Args)]
@@ -396,9 +453,15 @@ pub struct ReadyArgs {
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
-    /// Only Ready tasks with this repository label. Shorthand for --label repo:NAME.
+    /// Only Ready tasks with this repository label. Filter by Repository field or legacy repo:NAME label.
     #[arg(long, value_name = "NAME")]
     pub repo: Option<String>,
+
+    /// Include Ready tasks from every Repository. Inside a member Repository
+    /// or its worktree the queue is scoped to that Repository plus Board-wide
+    /// Tasks by default; --all widens it to the whole Board.
+    #[arg(long)]
+    pub all: bool,
 
     /// Only Ready tasks with one of these work shapes. Repeatable.
     #[arg(long = "type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
@@ -409,12 +472,12 @@ pub struct ReadyArgs {
     pub exclude_type: Vec<TaskType>,
 
     /// Only Ready tasks with any listed work area. Repeatable.
-    #[arg(long, value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
-    pub area: Vec<TaskArea>,
+    #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
+    pub area: Vec<String>,
 
     /// Exclude Ready tasks with any listed work area. Repeatable.
-    #[arg(long = "exclude-area", value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
-    pub exclude_area: Vec<TaskArea>,
+    #[arg(long = "exclude-area", value_name = "AREA", action = clap::ArgAction::Append)]
+    pub exclude_area: Vec<String>,
 
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -604,7 +667,8 @@ pub struct UpdateArgs {
     #[arg(long = "clear-waiting")]
     pub clear_waiting: bool,
 
-    /// New work area: board, cli, mcp, setup, docs, or release.
+    /// New work area slug. Restricted to the Board's `board.areas` when the
+    /// Board configures them; any lowercase slug otherwise.
     #[arg(long, value_name = "AREA", conflicts_with = "clear_area")]
     pub area: Option<String>,
 
@@ -745,12 +809,8 @@ pub struct CommentListArgs {
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
     /// Remove stale temp files and re-attach an orphaned orbit worktree.
-    #[arg(long, conflicts_with = "migrate")]
+    #[arg(long)]
     pub fix: bool,
-
-    /// Move a legacy Board to the Orbit folder. Resumable.
-    #[arg(long, conflicts_with = "fix")]
-    pub migrate: bool,
 }
 
 #[derive(Debug, Args)]
@@ -763,7 +823,7 @@ pub struct PrimeArgs {
     #[arg(long, value_name = "NAME")]
     pub by: Option<String>,
 
-    /// Only Ready tasks with this repository label. Shorthand for --label repo:NAME.
+    /// Only Ready tasks with this repository label. Filter by Repository field or legacy repo:NAME label.
     #[arg(long, value_name = "NAME")]
     pub repo: Option<String>,
 
@@ -837,10 +897,10 @@ pub enum TriageCommand {
         #[arg(value_name = "TASK")]
         task: String,
     },
-    /// Validate and review a proposal JSON file or stdin without writing to GitHub.
+    /// Validate and review a proposal JSON file or stdin without publishing.
     #[command(after_long_help = help::TRIAGE_REVIEW_EXAMPLES)]
     Review(TriageReviewArgs),
-    /// Apply an approved proposal to Orbit (not GitHub).
+    /// Apply an approved proposal to Orbit only.
     #[command(after_long_help = help::TRIAGE_APPLY_EXAMPLES)]
     Apply(TriageApplyArgs),
 }
@@ -866,60 +926,97 @@ pub struct TriageApplyArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubArgs {
+pub struct RemoteArgs {
     #[command(subcommand)]
-    pub command: GitHubCommand,
-}
-
-#[derive(Debug, Args)]
-pub struct WorkspaceArgs {
-    #[command(subcommand)]
-    pub command: WorkspaceCommand,
-}
-
-#[derive(Debug, Args)]
-pub struct WorkspaceIssuesArgs {
-    #[command(subcommand)]
-    pub command: WorkspaceIssuesCommand,
+    pub command: RemoteCommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum WorkspaceIssuesCommand {
-    /// Refresh every included repository's local Remote Issue snapshot.
-    #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
-    Refresh,
-    /// List cached Remote Issues without fetching their bodies or comments.
-    #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
-    List(WorkspaceIssuesListArgs),
-    /// Fetch one Remote Issue's body and comments from GitHub.
-    #[command(after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
-    Inspect(WorkspaceIssueInspectArgs),
+pub enum RemoteCommand {
+    /// Report Remote Tracker health without changing the Board or tracker.
+    #[command(after_long_help = help::REMOTE_STATUS_EXAMPLES)]
+    Status,
+    /// Detect the origin Remote Project and connect its Remote Tracker, or
+    /// configure the connected tracker's mapped fields.
+    #[command(after_long_help = help::REMOTE_CONNECT_EXAMPLES)]
+    Connect(RemoteConnectArgs),
+    /// Disconnect a Remote Project from this Board.
+    #[command(after_long_help = help::REMOTE_DISCONNECT_EXAMPLES)]
+    Disconnect(RemoteProjectArgs),
+    /// List the Remote Projects connected to this Board.
+    #[command(after_long_help = help::REMOTE_LIST_EXAMPLES)]
+    List,
+    /// Browse and refresh the Remote Issue catalog.
+    #[command(after_long_help = help::REMOTE_ISSUES_EXAMPLES)]
+    Issues(RemoteIssuesArgs),
     /// Preview selected Remote Issues or explicitly apply their import.
-    #[command(
-        long_about = help::WORKSPACE_ISSUE_IMPORT_LONG,
-        after_long_help = help::WORKSPACE_ISSUES_EXAMPLES
-    )]
-    Import(WorkspaceIssuesImportArgs),
-    /// Preview or explicitly detach a Linked Task from its GitHub Issue.
-    #[command(
-        long_about = help::WORKSPACE_ISSUE_DETACH_LONG,
-        after_long_help = help::WORKSPACE_ISSUES_EXAMPLES
-    )]
-    Detach(WorkspaceIssueMutationArgs),
-    /// Preview or explicitly reattach a Local Task by its inactive GitHub identity.
-    #[command(
-        long_about = help::WORKSPACE_ISSUE_REATTACH_LONG,
-        after_long_help = help::WORKSPACE_ISSUES_EXAMPLES
-    )]
-    Reattach(WorkspaceIssueMutationArgs),
+    #[command(after_long_help = help::REMOTE_IMPORT_EXAMPLES)]
+    Import(RemoteImportArgs),
+    /// Link a Local Task to a Remote Issue.
+    #[command(after_long_help = help::REMOTE_LINK_EXAMPLES)]
+    Link(RemoteLinkArgs),
+    /// Preview or create Remote Issues for selected Local Tasks.
+    #[command(after_long_help = help::REMOTE_CREATE_EXAMPLES)]
+    Create(RemoteCreateArgs),
+    /// Preview or detach a Linked Task from its Remote Issue.
+    #[command(after_long_help = help::REMOTE_DETACH_EXAMPLES)]
+    Detach(RemoteMutationArgs),
+    /// Preview or reattach a Local Task by its inactive Remote provenance.
+    #[command(after_long_help = help::REMOTE_REATTACH_EXAMPLES)]
+    Reattach(RemoteMutationArgs),
+    /// Preview or apply synchronization for Linked Tasks.
+    #[command(after_long_help = help::REMOTE_SYNC_EXAMPLES)]
+    Sync(RemoteSyncArgs),
+    /// Enable or disable automatic push of Task changes to Remote Issues.
+    #[command(after_long_help = help::REMOTE_AUTO_PUSH_EXAMPLES)]
+    AutoPush(RemoteAutoPushArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct WorkspaceIssuesListArgs {
-    /// Filter by OWNER/REPO.
-    #[arg(long, value_name = "OWNER/REPO")]
-    pub repo: Option<String>,
-    /// Filter by GitHub state.
+pub struct RemoteConnectArgs {
+    /// Remote Project to connect: `TRACKER:PROJECT` or `PROJECT` when the
+    /// tracker is unambiguous. Omit to detect the `origin` remote instead.
+    #[arg(value_name = "REMOTE_PROJECT")]
+    pub project: Option<String>,
+    /// Configure the connected Remote Tracker's mapped fields instead of
+    /// detecting `origin`; resolves and stores field ids.
+    #[arg(long)]
+    pub fields: bool,
+    /// Validate configuration without writing field ids.
+    #[arg(long, conflicts_with = "create_fields")]
+    pub validate_only: bool,
+    /// Create missing organization Issue Fields (requires organization admin access).
+    #[arg(long)]
+    pub create_fields: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteProjectArgs {
+    /// Remote Project identity: `TRACKER:PROJECT` or `PROJECT` when the
+    /// tracker is unambiguous (for GitHub, `owner/repo`).
+    #[arg(value_name = "REMOTE_PROJECT")]
+    pub project: String,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteIssuesArgs {
+    #[command(subcommand)]
+    pub command: Option<RemoteIssuesCommand>,
+    /// Filters for the default listing; `issues list` accepts the same
+    /// flags directly.
+    #[command(flatten)]
+    pub filters: RemoteIssueFilters,
+}
+
+#[derive(Debug, Default, Args)]
+pub struct RemoteIssueFilters {
+    /// Filter by Remote Tracker.
+    #[arg(long, value_name = "TRACKER")]
+    pub tracker: Option<String>,
+    /// Filter by Remote Project.
+    #[arg(long, value_name = "PROJECT")]
+    pub project: Option<String>,
+    /// Filter by Remote Issue state.
     #[arg(long, value_parser = ["open", "closed"])]
     pub state: Option<String>,
     /// Require each label. Repeat to require more than one label.
@@ -936,197 +1033,53 @@ pub struct WorkspaceIssuesListArgs {
     pub unlinked: bool,
 }
 
-#[derive(Debug, Args)]
-pub struct WorkspaceIssueInspectArgs {
-    /// Stable GitHub identity: OWNER/REPO#NUMBER.
-    #[arg(value_name = "OWNER/REPO#NUMBER")]
-    pub identity: String,
-}
-
-#[derive(Debug, Args)]
-pub struct WorkspaceIssuesImportArgs {
-    /// Explicit Remote Issue identities to review; repeat for a batch.
-    #[arg(value_name = "OWNER/REPO#NUMBER", required = true, num_args = 1..)]
-    pub identities: Vec<String>,
-    /// Link this selected Issue to a specific Local Task. Repeat as IDENTITY=TASK.
-    #[arg(long, value_name = "OWNER/REPO#NUMBER=TASK", action = clap::ArgAction::Append)]
-    pub link: Vec<String>,
-    /// Apply the reviewed selection to the Orbit Board. GitHub is never written.
-    #[arg(long)]
-    pub apply: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct WorkspaceIssueMutationArgs {
-    /// Exact GitHub identity: OWNER/REPO#NUMBER.
-    #[arg(value_name = "OWNER/REPO#NUMBER")]
-    pub identity: String,
-    /// Apply the reviewed operation. Without this flag, nothing is written.
-    #[arg(long)]
-    pub apply: bool,
-}
-
 #[derive(Debug, Subcommand)]
-pub enum WorkspaceCommand {
-    /// Combine existing Workspace and child-repository Boards.
-    #[command(long_about = help::WORKSPACE_MIGRATE_LONG, after_long_help = help::WORKSPACE_MIGRATE_EXAMPLES)]
-    Migrate(WorkspaceMigrateArgs),
-    /// Show the last explicitly refreshed repository catalog.
-    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
-    Status,
-    /// Discover direct child repositories and check GitHub access.
-    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
+pub enum RemoteIssuesCommand {
+    /// Refresh every connected Remote Project's catalog snapshot.
+    #[command(after_long_help = help::REMOTE_ISSUES_REFRESH_EXAMPLES)]
     Refresh,
-    /// Include an organization-owned repository in the Workspace.
-    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
-    Include(WorkspaceRepositoryArgs),
-    /// Exclude an organization-owned repository from the Workspace.
-    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
-    Exclude(WorkspaceRepositoryArgs),
-    /// Preview or explicitly detach a repository and its Linked Tasks.
-    #[command(
-        long_about = help::WORKSPACE_DETACH_LONG,
-        after_long_help = help::WORKSPACE_EXAMPLES
-    )]
-    Detach(WorkspaceRepositoryMutationArgs),
-    /// Preview or explicitly reattach a repository by exact GitHub identity.
-    #[command(
-        long_about = help::WORKSPACE_REATTACH_LONG,
-        after_long_help = help::WORKSPACE_EXAMPLES
-    )]
-    Reattach(WorkspaceRepositoryMutationArgs),
-    /// Preview, install, or remove managed agent integrations in child repositories.
-    #[command(
-        long_about = help::WORKSPACE_SETUP_LONG,
-        after_long_help = help::WORKSPACE_EXAMPLES
-    )]
-    Setup(WorkspaceSetupArgs),
-    /// Browse the local Remote Issue catalog; refresh is explicit.
-    #[command(long_about = help::WORKSPACE_ISSUES_LONG, after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
-    Issues(WorkspaceIssuesArgs),
+    /// List cached Remote Issues without fetching their bodies.
+    #[command(after_long_help = help::REMOTE_ISSUES_LIST_EXAMPLES)]
+    List(RemoteIssueFilters),
+    /// Show one Remote Issue, fetched live from its Remote Tracker.
+    #[command(after_long_help = help::REMOTE_ISSUES_SHOW_EXAMPLES)]
+    Show(RemoteIssueRefArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct WorkspaceSetupArgs {
-    /// Harnesses to configure: auto, all, none, ask, or a comma-separated list.
-    #[arg(long, value_name = "SELECTOR", conflicts_with = "remove")]
-    pub agents: Option<String>,
-
-    /// Install the SessionStart hook for Claude and Devin in selected repositories.
-    #[arg(long)]
-    pub hooks: bool,
-
-    /// Skip MCP configuration and install instructions only.
-    #[arg(long, conflicts_with_all = ["portable_mcp", "mcp_bin"])]
-    pub no_mcp: bool,
-
-    /// Write MCP configs with the portable `orbit` command instead of an absolute path.
-    #[arg(long, conflicts_with = "mcp_bin")]
-    pub portable_mcp: bool,
-
-    /// Orbit executable to record in MCP configs.
-    #[arg(long = "mcp-bin", value_name = "PATH")]
-    pub mcp_bin: Option<PathBuf>,
-
-    /// Preview all changes without writing files or saving the selection.
-    #[arg(long, conflicts_with = "remove")]
-    pub print: bool,
-
-    /// Remove only Orbit-managed Workspace and child-repository integrations.
-    #[arg(long, conflicts_with = "print")]
-    pub remove: bool,
+pub struct RemoteIssueRefArgs {
+    /// Remote Issue identity: `TRACKER:PROJECT#ID`, `PROJECT#ID`, or a
+    /// Remote Tracker Issue URL (for GitHub, `OWNER/REPO#NUMBER` or
+    /// `https://github.com/OWNER/REPO/issues/NUMBER`).
+    #[arg(value_name = "REMOTE_ISSUE")]
+    pub issue: String,
 }
 
 #[derive(Debug, Args)]
-pub struct WorkspaceRepositoryArgs {
-    #[arg(value_name = "OWNER/REPO")]
-    pub repository: String,
-}
-
-#[derive(Debug, Args)]
-pub struct WorkspaceRepositoryMutationArgs {
-    /// Exact repository identity: OWNER/REPO.
-    #[arg(value_name = "OWNER/REPO")]
-    pub repository: String,
-    /// Apply the reviewed operation. Without this flag, nothing is written.
+pub struct RemoteImportArgs {
+    /// Explicit Remote Issue identities to review; repeat for a batch.
+    #[arg(value_name = "REMOTE_ISSUE", required = true, num_args = 1..)]
+    pub issues: Vec<String>,
+    /// Link this selected Issue to a specific Local Task. Repeat as IDENTITY=TASK.
+    #[arg(long, value_name = "REMOTE_ISSUE=TASK", action = clap::ArgAction::Append)]
+    pub link: Vec<String>,
+    /// Apply the reviewed selection to the Orbit Board. The tracker is never written.
     #[arg(long)]
     pub apply: bool,
 }
 
-#[derive(Debug, Subcommand)]
-pub enum GitHubCommand {
-    /// Report GitHub integration health without changing the Board or GitHub.
-    #[command(after_long_help = help::GITHUB_STATUS_EXAMPLES)]
-    Status,
-    /// Detect the origin repository and configure GitHub for this Board.
-    #[command(after_long_help = help::GITHUB_CONNECT_EXAMPLES)]
-    Connect,
-    /// Validate org Issue Fields, optionally create missing fields, and persist their ids.
-    #[command(after_long_help = help::GITHUB_SETUP_EXAMPLES)]
-    Setup(GitHubSetupArgs),
-    /// Manage explicitly linked GitHub repositories.
-    #[command(subcommand, after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
-    Repo(GitHubRepoCommand),
-    /// Adopt an existing GitHub Issue for a Task.
-    #[command(after_long_help = help::GITHUB_ADOPT_EXAMPLES)]
-    Adopt(GitHubAdoptArgs),
-    /// Preview or create GitHub Issues for selected Local Tasks.
-    #[command(after_long_help = help::GITHUB_CREATE_EXAMPLES)]
-    Create(GitHubCreateArgs),
-    /// Preview or apply bidirectional sync for linked Tasks.
-    #[command(after_long_help = help::GITHUB_SYNC_CMD_EXAMPLES)]
-    Sync(GitHubSyncArgs),
-    /// Enable or disable automatic push of Task changes to linked Issues.
-    #[command(after_long_help = help::GITHUB_AUTO_PUSH_EXAMPLES)]
-    AutoPush(GitHubAutoPushArgs),
-}
-
-#[derive(Debug, Subcommand)]
-pub enum GitHubRepoCommand {
-    /// Link a repository to this Board.
-    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
-    Link(GitHubRepoLinkArgs),
-    /// Remove a linked repository.
-    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
-    Unlink(GitHubRepoLinkArgs),
-    /// List linked repositories.
-    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
-    List,
-}
-
 #[derive(Debug, Args)]
-pub struct GitHubSetupArgs {
-    /// Validate configuration without writing field ids.
-    #[arg(long, conflicts_with = "create_fields")]
-    pub validate_only: bool,
-    /// Create missing organization Issue Fields (requires organization admin access).
-    #[arg(long)]
-    pub create_fields: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct GitHubRepoLinkArgs {
-    #[arg(value_name = "OWNER/REPO")]
-    pub repository: String,
-}
-
-#[derive(Debug, Args)]
-pub struct GitHubAdoptArgs {
+pub struct RemoteLinkArgs {
     #[arg(value_name = "TASK")]
     pub task: String,
-    /// Standard GitHub Issue URL, for example https://github.com/acme/widget/issues/42.
-    #[arg(value_name = "GITHUB_ISSUE_URL")]
-    pub issue_url: Option<String>,
-    /// Repository for the legacy --repo/--number form, or to confirm the URL.
-    #[arg(long, value_name = "OWNER/REPO")]
-    pub repo: Option<String>,
-    /// Issue number for the legacy --repo/--number form, or to confirm the URL.
-    #[arg(long)]
-    pub number: Option<u64>,
+    /// Remote Issue identity or URL: `TRACKER:PROJECT#ID`, `PROJECT#ID`,
+    /// or a Remote Tracker Issue URL.
+    #[arg(value_name = "REMOTE_ISSUE")]
+    pub issue: String,
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubCreateArgs {
+pub struct RemoteCreateArgs {
     #[arg(
         value_name = "TASK",
         required = true,
@@ -1136,10 +1089,10 @@ pub struct GitHubCreateArgs {
     pub tasks: Vec<String>,
     #[arg(
         long,
-        value_name = "OWNER/REPO",
-        help = "Choose an included repository (inferred only when one is available)"
+        value_name = "REMOTE_PROJECT",
+        help = "Choose a connected Remote Project (inferred only when one is available)"
     )]
-    pub repo: Option<String>,
+    pub project: Option<String>,
     /// Create Issues and link Tasks. Without this flag, show a read-only preview.
     #[arg(long)]
     pub apply: bool,
@@ -1149,7 +1102,40 @@ pub struct GitHubCreateArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubAutoPushArgs {
+pub struct RemoteMutationArgs {
+    /// Remote Issue identity (`TRACKER:PROJECT#ID`, `PROJECT#ID`) or a Task
+    /// id whose Remote link should be detached or reattached.
+    #[arg(value_name = "REMOTE_ISSUE|TASK")]
+    pub target: String,
+    /// Apply the reviewed operation. Without this flag, nothing is written.
+    #[arg(long)]
+    pub apply: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum RemoteSyncDirection {
+    #[default]
+    Both,
+    Pull,
+    Push,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteSyncArgs {
+    #[arg(value_name = "TASK")]
+    pub task: Option<String>,
+    #[arg(long, value_enum, default_value_t = RemoteSyncDirection::Both)]
+    pub direction: RemoteSyncDirection,
+    /// Apply the planned sync. Without this flag the command is a dry run.
+    #[arg(long)]
+    pub apply: bool,
+    /// Resolve a field conflict as `FIELD=orbit` or `FIELD=remote`. Repeat as needed.
+    #[arg(long = "resolve", value_name = "FIELD=orbit|remote", action = clap::ArgAction::Append)]
+    pub resolutions: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteAutoPushArgs {
     /// Turn automatic push on or off.
     #[arg(value_name = "STATE")]
     pub state: AutoPushState,
@@ -1163,24 +1149,99 @@ pub enum AutoPushState {
     Off,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, Default)]
-pub enum GitHubSyncDirection {
-    #[default]
-    Both,
-    Pull,
-    Push,
+#[derive(Debug, Args)]
+pub struct BoardArgs {
+    #[command(subcommand)]
+    pub command: BoardCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BoardCommand {
+    /// Show, set, or clear the Board host repository.
+    ///
+    /// The host is a member Repository name/path or another git URL whose
+    /// remote stores this Board's `orbit` branch. With no argument the current
+    /// host is shown; `--none` clears it without deleting the remote branch.
+    #[command(long_about = help::BOARD_HOST_LONG, after_long_help = help::BOARD_HOST_EXAMPLES)]
+    Host(BoardHostArgs),
+
+    /// Fetch the host, merge Orbit-aware, and push the `orbit` branch.
+    ///
+    /// Different Tasks and different fields merge; Comments union; the earlier
+    /// Claim wins and the loser is told; a same-field conflict stops the sync
+    /// until `--resolve FIELD=local|host` picks a side. History is merged,
+    /// never rebased or force-pushed.
+    #[command(long_about = help::BOARD_SYNC_LONG, after_long_help = help::BOARD_SYNC_EXAMPLES)]
+    Sync(BoardSyncArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubSyncArgs {
-    #[arg(value_name = "TASK")]
-    pub task: Option<String>,
-    #[arg(long, value_enum, default_value_t = GitHubSyncDirection::Both)]
-    pub direction: GitHubSyncDirection,
-    /// Apply the planned sync. Without this flag the command is a dry run.
-    #[arg(long)]
-    pub apply: bool,
-    /// Resolve a field conflict as `FIELD=orbit` or `FIELD=github`. Repeat as needed.
-    #[arg(long = "resolve", value_name = "FIELD=orbit|github", action = clap::ArgAction::Append)]
+pub struct BoardHostArgs {
+    /// Member Repository name/path or git URL to host the Board.
+    #[arg(value_name = "REPO|URL")]
+    pub target: Option<String>,
+
+    /// Clear the host without deleting the remote `orbit` branch.
+    #[arg(long, conflicts_with = "target")]
+    pub none: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct BoardSyncArgs {
+    /// Resolve a field conflict as `FIELD=local` or `FIELD=host`. Repeat as needed.
+    #[arg(long = "resolve", value_name = "FIELD=local|host", action = clap::ArgAction::Append)]
     pub resolutions: Vec<String>,
+}
+
+/// Parse the process arguments. `orbit list --help` (and `orbit help list`)
+/// drops the Remote Tracker flags and remote column docs when the resolved
+/// Board has no Remote material; the flags themselves keep working.
+pub fn parse() -> Cli {
+    let mut command = Cli::command();
+    let (list_help, dir) = pre_scan();
+    if list_help && !crate::remote::details_visible_for(dir.as_deref()) {
+        command = command.mut_subcommand("list", |list| {
+            list.mut_arg("linked", |arg| arg.hide(true))
+                .mut_arg("local", |arg| arg.hide(true))
+                .long_about(help::LIST_LONG_UNCONNECTED)
+                .after_long_help(help::LIST_EXAMPLES_UNCONNECTED)
+        });
+    }
+    let matches = command.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+}
+
+/// Best-effort scan of the raw arguments for a `list` help request and the
+/// `--dir`/`ORBIT_DIR` override, so help can hide Remote Tracker material
+/// before clap renders it. Anything clap would reject is left for clap to
+/// report; a missed detection only means the full help is shown.
+fn pre_scan() -> (bool, Option<PathBuf>) {
+    let mut dir = std::env::var_os("ORBIT_DIR").map(PathBuf::from);
+    let mut subcommand: Option<String> = None;
+    let mut list_help = false;
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        let arg = arg.to_string_lossy().into_owned();
+        if arg == "--dir" {
+            if let Some(value) = args.next() {
+                dir = Some(PathBuf::from(value));
+            }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--dir=") {
+            dir = Some(PathBuf::from(value));
+            continue;
+        }
+        let Some(name) = subcommand.as_deref() else {
+            if !arg.starts_with('-') {
+                subcommand = Some(arg);
+            }
+            continue;
+        };
+        match (name, arg.as_str()) {
+            ("list", "--help" | "-h") | ("help", "list") => list_help = true,
+            _ => {}
+        }
+    }
+    (list_help, dir)
 }

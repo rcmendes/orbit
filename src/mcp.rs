@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::error::{OrbitError, Result};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
-const INSTRUCTIONS: &str = "Orbit is the task tracker for this repository. Use `ready` with `claim:true` and a stable `by` to take work, `heartbeat` with the same `by` while working, and `finish` with `by` when done. Use `checkpoint` with the same `by` to record progress, the next action, and blockers for a handoff. `create`, `update`, `link`, and `delete` shape the board. Workspace tools `issue_refresh`, `issue_list`, and `issue_inspect` browse Remote Issues; they do not import or claim them. Never edit task files directly.";
+const INSTRUCTIONS: &str = "Orbit is the task tracker for this repository. Use `ready` with `claim:true` and a stable `by` to take work, `heartbeat` with the same `by` while working, and `finish` with `by` when done. Use `checkpoint` with the same `by` to record progress, the next action, and blockers for a handoff. `create`, `update`, `link`, and `delete` shape the board. Never edit task files directly.";
 
 pub fn serve(dir: Option<&Path>) -> Result<()> {
     let executable = std::env::current_exe()
@@ -147,14 +147,15 @@ fn tool_definitions() -> Vec<Value> {
                 "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
                 "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
                 "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
-                "areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Only tasks with any of these work areas." },
-                "exclude_areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Exclude tasks with any of these work areas." }
+                "areas": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these work-area slugs; restricted to the Board's configured areas when set." },
+                "exclude_areas": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these work-area slugs." },
+                "all": { "type": "boolean", "description": "Include Ready tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." }
             }),
             &[],
         ),
         tool(
             "list",
-            "List tasks with filters. Terminal tasks are hidden unless all=true.",
+            "List tasks with filters. Terminal tasks are hidden unless include_closed=true; all=true widens Repository scope.",
             json!({
                 "status": { "type": "string", "enum": ["todo", "in_progress", "done", "cancelled"] },
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
@@ -168,11 +169,12 @@ fn tool_definitions() -> Vec<Value> {
                 "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
                 "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
                 "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
-                "areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Only tasks with any of these work areas." },
-                "exclude_areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Exclude tasks with any of these work areas." },
-                "all": { "type": "boolean", "description": "Include done and cancelled tasks." },
-                "linked": { "type": "boolean", "description": "Only Tasks with an active GitHub Issue link." },
-                "local": { "type": "boolean", "description": "Only Tasks without an active GitHub Issue link; includes detached provenance." }
+                "areas": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these work-area slugs; restricted to the Board's configured areas when set." },
+                "exclude_areas": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these work-area slugs." },
+                "all": { "type": "boolean", "description": "Include tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." },
+                "include_closed": { "type": "boolean", "description": "Include done and cancelled tasks." },
+                "linked": { "type": "boolean", "description": "Only Tasks with an active Remote Issue link." },
+                "local": { "type": "boolean", "description": "Only Tasks without an active Remote Issue link; includes detached provenance." }
             }),
             &[],
         ),
@@ -193,7 +195,7 @@ fn tool_definitions() -> Vec<Value> {
                 "depends_on": { "type": "array", "items": { "type": "string" } },
                 "parent": { "type": "string", "description": "Create a SubTask under this Parent Task." },
                 "waiting_on": { "type": "string", "description": "External blocker." },
-                "area": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"], "description": "Stable work area classification." },
+                "area": { "type": "string", "description": "Optional work-area slug; restricted to the Board's configured areas when set." },
                 "verification": { "type": "string", "description": "Concise checks or commands for agents." },
                 "body": { "type": "string", "description": "Markdown body and acceptance criteria." }
             }),
@@ -210,7 +212,7 @@ fn tool_definitions() -> Vec<Value> {
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
                 "waiting_on": { "type": "string" },
                 "clear_waiting": { "type": "boolean" },
-                "area": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] },
+                "area": { "type": "string", "description": "New work-area slug; restricted to the Board's configured areas when set." },
                 "clear_area": { "type": "boolean" },
                 "verification": { "type": "string" },
                 "clear_verification": { "type": "boolean" }
@@ -312,30 +314,6 @@ fn tool_definitions() -> Vec<Value> {
                 "by": { "type": "string" }
             }),
             &["action"],
-        ),
-        tool(
-            "issue_refresh",
-            "Explicitly refresh the Workspace Remote Issue catalog. This performs GitHub reads only and never imports Tasks.",
-            json!({}),
-            &[],
-        ),
-        tool(
-            "issue_list",
-            "List cached Remote Issues without fetching bodies or comments.",
-            json!({
-                "repo": { "type": "string", "description": "Filter by OWNER/REPO." },
-                "state": { "type": "string", "enum": ["open", "closed"] },
-                "labels": { "type": "array", "items": { "type": "string" }, "description": "Require every listed label." },
-                "text": { "type": "string", "description": "Case-insensitive title search." },
-                "linked": { "type": "string", "enum": ["any", "linked", "unlinked"], "description": "Filter by whether an Orbit Task is linked." }
-            }),
-            &[],
-        ),
-        tool(
-            "issue_inspect",
-            "Fetch a Remote Issue body and comments on demand by OWNER/REPO#NUMBER.",
-            json!({ "identity": { "type": "string", "description": "Stable identity such as acme/api#42." } }),
-            &["identity"],
         ),
     ]
 }
@@ -573,6 +551,9 @@ fn dispatch_tool(
                     args.push(area.to_string());
                 }
             }
+            if bool_arg(arguments, "all") {
+                args.push("--all".to_string());
+            }
         }
         "list" => {
             args.push("list".to_string());
@@ -668,6 +649,9 @@ fn dispatch_tool(
             }
             if bool_arg(arguments, "all") {
                 args.push("--all".to_string());
+            }
+            if bool_arg(arguments, "include_closed") {
+                args.push("--include-closed".to_string());
             }
         }
         "get" => {
@@ -966,49 +950,6 @@ fn dispatch_tool(
                 _ => return tool_invalid("`action` must be `add` or `list`"),
             }
         }
-        "issue_refresh" => args.extend(["workspace".into(), "issues".into(), "refresh".into()]),
-        "issue_list" => {
-            args.extend(["workspace".into(), "issues".into(), "list".into()]);
-            if let Some(repo) = optional_str(arguments, "repo") {
-                args.extend(["--repo".into(), repo]);
-            }
-            if let Some(state) = optional_str(arguments, "state") {
-                if !matches!(state.as_str(), "open" | "closed") {
-                    return tool_invalid("`state` must be `open` or `closed`");
-                }
-                args.extend(["--state".into(), state]);
-            }
-            if let Some(text) = optional_str(arguments, "text") {
-                args.extend(["--text".into(), text]);
-            }
-            if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
-                for label in labels {
-                    let Some(label) = label.as_str() else {
-                        return tool_invalid("`labels` must be an array of strings");
-                    };
-                    args.extend(["--label".into(), label.to_string()]);
-                }
-            } else if arguments.get("labels").is_some() {
-                return tool_invalid("`labels` must be an array of strings");
-            }
-            match optional_str(arguments, "linked").as_deref() {
-                Some("linked") => args.push("--linked".into()),
-                Some("unlinked") => args.push("--unlinked".into()),
-                Some("any") | None => {}
-                Some(_) => return tool_invalid("`linked` must be `any`, `linked`, or `unlinked`"),
-            }
-        }
-        "issue_inspect" => {
-            let Some(identity) = required_str(arguments, "identity") else {
-                return tool_invalid("missing or invalid `identity`");
-            };
-            args.extend([
-                "workspace".into(),
-                "issues".into(),
-                "inspect".into(),
-                identity,
-            ]);
-        }
         other => return tool_invalid(format!("unknown tool `{other}`")),
     }
 
@@ -1037,7 +978,13 @@ fn dispatch_tool(
 }
 
 fn resources_list(executable: &Path, dir: Option<&Path>) -> Value {
-    let args = vec!["list".to_string(), "--all".to_string()];
+    // `--all` keeps every Repository in scope and `--include-closed` keeps
+    // terminal Tasks, matching the resources list's previous coverage.
+    let args = vec![
+        "list".to_string(),
+        "--all".to_string(),
+        "--include-closed".to_string(),
+    ];
     let mut resources = Vec::new();
 
     if let Ok(run) = run_orbit(executable, dir, &args, true)
@@ -1185,9 +1132,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_list_contains_task_and_remote_issue_tools() {
+    fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 14);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -1207,9 +1154,6 @@ mod tests {
             "delete",
             "label",
             "comment",
-            "issue_refresh",
-            "issue_list",
-            "issue_inspect",
         ] {
             assert!(names.contains(&expected), "{expected}");
         }

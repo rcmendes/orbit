@@ -2,8 +2,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{OrbitError, Result, code};
-use crate::github::fields::{parse_area, validate_verification};
-use crate::task::{Task, normalize_label, normalize_verification};
+use crate::task::{Task, normalize_area, normalize_label, normalize_verification};
 use crate::triage::labels::{validate_category_roles, validate_label_list, validate_state_roles};
 
 const FORBIDDEN_FIELDS: &[&str] = &["title", "body", "status", "state"];
@@ -46,7 +45,7 @@ impl TriageProposal {
         })
     }
 
-    pub fn normalize(&mut self) -> Result<()> {
+    pub fn normalize(&mut self, allowed_areas: &[String]) -> Result<()> {
         if self.clear_area && self.area.is_some() {
             return Err(OrbitError::new(
                 code::TRIAGE_INVALID_PROPOSAL,
@@ -78,26 +77,11 @@ impl TriageProposal {
         self.labels_remove = remove;
 
         if let Some(area) = self.area.take() {
-            let parsed = parse_area(&area).map_err(|_| {
-                let allowed = crate::task::TaskArea::all()
-                    .iter()
-                    .map(|area| area.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                OrbitError::new(
-                    code::INVALID_AREA,
-                    format!("unknown area `{area}`; expected one of: {allowed}"),
-                )
-            })?;
-            self.area = Some(parsed.as_str().to_string());
+            self.area = Some(normalize_area(&area, allowed_areas)?);
         }
 
         if let Some(verification) = self.verification.take() {
-            let normalized = normalize_verification(Some(verification))?;
-            if let Some(value) = normalized {
-                validate_verification(&value)?;
-                self.verification = Some(value);
-            }
+            self.verification = normalize_verification(Some(verification))?;
         }
 
         Ok(())
@@ -130,13 +114,13 @@ impl TriageProposal {
                 changes.insert(
                     "area".into(),
                     json!({
-                        "from": task.front.area.map(|area| area.as_str()),
+                        "from": task.front.area.as_deref(),
                         "to": null
                     }),
                 );
             }
         } else if let Some(area) = &self.area {
-            let current = task.front.area.map(|area| area.as_str());
+            let current = task.front.area.as_deref();
             if current != Some(area.as_str()) {
                 changes.insert("area".into(), json!({ "from": current, "to": area }));
             }
@@ -199,7 +183,7 @@ impl TriageProposal {
         if self.clear_area {
             task.front.area = None;
         } else if let Some(area) = &self.area {
-            task.front.area = Some(parse_area(area)?);
+            task.front.area = Some(area.clone());
         }
 
         if self.clear_verification {

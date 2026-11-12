@@ -42,18 +42,23 @@ fn assert_warning(value: &serde_json::Value, code: &str) {
 }
 
 #[test]
-fn init_creates_the_orbit_folder_worktree_and_excludes_it() {
+fn init_creates_the_orbit_folder_board_and_excludes_it() {
     let repo = TestRepo::new();
 
     let value = repo.ok_json(&["init", "--agents", "none", "--slug", "orb", "--json"]);
 
-    let dir = repo.path().join(".orbit");
-    assert_eq!(value["data"]["storage"], "worktree");
+    let orbit = repo.path().join(".orbit");
+    let dir = orbit.join("board");
+    assert_eq!(value["data"]["storage"], "repository");
     assert!(dir.join("config.toml").is_file());
     assert!(!repo.path().join(".git/orbit/board").exists());
+    // The Board folder is a standalone repository on branch `orbit`.
+    assert!(dir.join(".git").exists());
+    let branch = repo.git_in(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(String::from_utf8_lossy(&branch.stdout).trim(), "orbit");
 
     let config = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-    assert!(config.contains("storage = \"worktree\""), "{config}");
+    assert!(!config.contains("storage"), "{config}");
 
     let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude")).unwrap();
     assert!(exclude.lines().any(|line| line == "/.orbit/"), "{exclude}");
@@ -130,34 +135,31 @@ fn the_data_lock_lives_inside_the_orbit_folder() {
 
     repo.ok_json(&["list", "--json"]);
 
-    assert!(repo.path().join(".orbit/.lock").is_file());
+    assert!(repo.path().join(".orbit/board/.lock").is_file());
     assert!(!repo.path().join(".git/orbit/lock").exists());
 }
 
 #[test]
-fn a_legacy_local_board_resolves_with_a_warning_and_keeps_its_lock() {
+fn a_legacy_local_board_is_gated_until_migrate() {
     let repo = TestRepo::new();
     write_legacy_board(&repo);
 
-    let value = repo.ok_json(&["list", "--json"]);
+    let (status, value) = repo.json(&["list", "--json"]);
 
-    assert_eq!(value["data"]["count"], 0);
-    assert_warning(&value, "LEGACY_LAYOUT");
-    assert!(repo.path().join(".git/orbit/lock").is_file());
-    assert!(!repo.path().join(".git/orbit/board/.lock").exists());
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "BOARD_NOT_MIGRATED");
 }
 
 #[test]
-fn an_explicit_legacy_local_board_keeps_its_old_lock() {
+fn an_explicit_legacy_local_board_is_gated_until_migrate() {
     let repo = TestRepo::new();
     write_legacy_board(&repo);
     let board = repo.legacy_board_path();
 
-    let value = repo.ok_json(&["--dir", board.to_str().unwrap(), "list", "--json"]);
+    let (status, value) = repo.json(&["--dir", board.to_str().unwrap(), "list", "--json"]);
 
-    assert_warning(&value, "LEGACY_LAYOUT");
-    assert!(repo.path().join(".git/orbit/lock").is_file());
-    assert!(!board.join(".lock").exists());
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "BOARD_NOT_MIGRATED");
 }
 
 #[test]
@@ -229,45 +231,46 @@ fn a_repository_mode_board_records_its_storage() {
 
     assert_eq!(value["data"]["storage"], "repository");
     let config = std::fs::read_to_string(internal.join("config.toml")).unwrap();
-    assert!(config.contains("storage = \"repository\""), "{config}");
+    assert!(!config.contains("storage"), "{config}");
 }
 
 #[test]
-fn init_reattaches_an_orphaned_worktree_without_losing_tasks() {
+fn init_recreates_a_deleted_board_folder() {
     let repo = TestRepo::new();
     repo.init();
-    let id = repo.add("Survives a forced clean", &[]);
+    repo.add("Does not survive deletion", &[]);
     let dir = repo.path().join(".orbit");
 
+    // A standalone Board folder has no worktree branch to re-attach; deleting
+    // it deletes the Board, and `init` starts a fresh one.
     std::fs::remove_dir_all(&dir).unwrap();
     repo.ok_json(&["init", "--agents", "none", "--json"]);
 
-    assert!(dir.join("config.toml").is_file());
+    assert!(dir.join("board/config.toml").is_file());
     let listed = repo.ok_json(&["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["count"], 0);
 }
 
 #[test]
-fn the_global_orbit_folder_is_a_last_resort() {
+fn a_board_in_the_home_directory_resolves_from_its_subdirectories() {
     let repo = TestRepo::new();
     let home = tempfile::tempdir().unwrap();
     let home_str = home.path().to_str().unwrap();
-    let global = home.path().join(".orbit");
     let env = [("HOME", home_str), ("USERPROFILE", home_str)];
 
-    let output = repo.orbit_with_env(&["init", "--global", "--agents", "none", "--json"], &env);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let init: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(init["data"]["storage"], "repository");
-    assert_eq!(init["data"]["global"], true);
+    // `init` outside Git anchors a Board at <dir>/.orbit/board; running it
+    // with the home directory as the working directory places an ordinary
+    // Board in ~ — there is no distinct global layout.
+    let (status, init) =
+        repo.json_in_with_env(home.path(), &["init", "--agents", "none", "--json"], &env);
+    assert_eq!(status, 0, "{init}");
     assert_eq!(init["data"]["prefix"], "orb-");
-    assert!(global.join("config.toml").is_file());
+    assert_eq!(init["data"]["storage"], "repository");
+    assert!(home.path().join(".orbit/board/config.toml").is_file());
 
-    let (status, value) = repo.json_with_env(&["list", "--json"], &env);
+    let nested = home.path().join("projects/api");
+    std::fs::create_dir_all(&nested).unwrap();
+    let (status, value) = repo.json_in_with_env(&nested, &["list", "--json"], &env);
 
     assert_eq!(status, 0, "{value}");
     assert_eq!(value["data"]["count"], 0);
@@ -285,42 +288,57 @@ fn an_explicit_legacy_board_root_is_still_rejected_when_it_has_no_board() {
 }
 
 #[test]
-fn link_accepts_an_orbit_folder_directly() {
+fn repo_add_links_another_repository_to_the_board() {
     let first = TestRepo::new();
     first.init();
     let id = first.add("Shared from .orbit", &[]);
     let dir = first.path().join(".orbit");
 
     let second = TestRepo::new();
-    second.ok_json(&["link", dir.to_str().unwrap(), "--json"]);
+    // `orbit repo add` records the member Repository and writes the link
+    // pointer that makes discovery inside it resolve this Board.
+    let added = first.ok_json(&[
+        "--dir",
+        dir.to_str().unwrap(),
+        "repo",
+        "add",
+        second.path().to_str().unwrap(),
+        "--name",
+        "second",
+        "--json",
+    ]);
+    assert_eq!(added["data"]["repository"]["name"], "second");
+    assert!(second.path().join(".git/orbit/link").is_file());
 
     let listed = second.ok_json(&["list", "--all", "--json"]);
     assert_eq!(listed["data"]["tasks"][0]["id"], id);
 }
 
 #[test]
-fn a_legacy_workspace_root_link_resolves_the_nested_board_with_a_warning() {
-    let creator = TestRepo::new();
+fn a_linked_legacy_workspace_board_is_gated_until_migrate() {
     let parent = tempfile::tempdir().unwrap();
     let workspace = parent.path().join("acme");
-    creator.ok_json_in(
-        parent.path(),
-        &["init", "acme/board", "--agents", "none", "--json"],
-    );
+    // A pre-ADR-0019 Workspace Board: `board/` directly under the Workspace
+    // root with no `.orbit` Orbit folder.
+    let nested = workspace.join("board");
+    std::fs::create_dir_all(nested.join("tasks")).unwrap();
+    std::fs::create_dir_all(nested.join("comments")).unwrap();
+    std::fs::write(
+        nested.join("config.toml"),
+        "[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"orb-\"\n",
+    )
+    .unwrap();
 
+    // The link pointer still resolves the nested legacy Board; commands are
+    // gated until `orbit migrate` converts it.
     let joiner = TestRepo::new();
-    let linked = joiner.ok_json(&["link", workspace.to_str().unwrap(), "--json"]);
-    assert_eq!(
-        linked["data"]["board"].as_str().unwrap(),
-        dunce::canonicalize(workspace.join("board"))
-            .unwrap()
-            .to_str()
-            .unwrap()
-    );
-    assert_warning(&linked, "LEGACY_LAYOUT");
+    let link = joiner.path().join(".git/orbit/link");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::fs::write(&link, format!("{}\n", workspace.display())).unwrap();
 
-    let listed = joiner.ok_json(&["list", "--json"]);
-    assert_eq!(listed["data"]["count"], 0);
+    let (status, listed) = joiner.json(&["list", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(listed["error"]["code"], "BOARD_NOT_MIGRATED");
 }
 
 #[test]
@@ -343,7 +361,7 @@ fn a_new_board_whose_path_ends_in_orbit_board_uses_its_own_lock() {
 }
 
 #[test]
-fn a_legacy_config_without_storage_still_loads_without_a_command_warning() {
+fn a_legacy_config_without_storage_is_gated_until_migrate() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let board = parent.path().join("old-board");
@@ -355,8 +373,23 @@ fn a_legacy_config_without_storage_still_loads_without_a_command_warning() {
     )
     .unwrap();
 
-    let value = repo.ok_json(&["--dir", board.to_str().unwrap(), "list", "--json"]);
+    // A Board folder without its own `.git` predates ADR 0019 and refuses
+    // commands until `orbit migrate` makes it a standalone repository.
+    let (status, value) = repo.json(&["--dir", board.to_str().unwrap(), "list", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "BOARD_NOT_MIGRATED");
 
+    let migrated = repo.ok_json(&[
+        "--dir",
+        board.to_str().unwrap(),
+        "migrate",
+        "--apply",
+        "--json",
+    ]);
+    assert_eq!(migrated["data"]["applied"], true);
+    assert!(board.join(".git").exists());
+
+    let value = repo.ok_json(&["--dir", board.to_str().unwrap(), "list", "--json"]);
     assert_eq!(value["data"]["count"], 0);
     assert!(value["meta"].get("warnings").is_none(), "{value}");
 }
@@ -482,7 +515,7 @@ fn dir_and_orbit_dir_accept_a_workspace_root() {
 }
 
 #[test]
-fn an_outside_repository_can_link_to_the_workspace_root() {
+fn an_outside_repository_can_join_the_workspace_board_as_a_member() {
     let creator = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let workspace = parent.path().join("acme");
@@ -497,18 +530,28 @@ fn an_outside_repository_can_link_to_the_workspace_root() {
             "--json",
         ],
     );
-    let added = creator.ok_json_in(&workspace, &["add", "Linked Workspace task", "--json"]);
+    let added = creator.ok_json_in(&workspace, &["add", "Member task", "--json"]);
     let id = added["data"]["id"].as_str().unwrap();
 
     let outside = TestRepo::new();
-    outside.ok_json(&["link", workspace.to_str().unwrap(), "--json"]);
+    creator.ok_json_in(
+        &workspace,
+        &[
+            "repo",
+            "add",
+            outside.path().to_str().unwrap(),
+            "--name",
+            "outside",
+            "--json",
+        ],
+    );
     let listed = outside.ok_json(&["list", "--all", "--json"]);
 
     assert_eq!(listed["data"]["tasks"][0]["id"], id);
 }
 
 #[test]
-fn workspace_init_refuses_to_shadow_a_child_repository_board() {
+fn workspace_init_merges_a_child_repository_board() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let workspace = parent.path().join("acme");
@@ -516,8 +559,14 @@ fn workspace_init_refuses_to_shadow_a_child_repository_board() {
     let child = workspace.join("api");
     init_child_repo(&repo, &child);
     repo.ok_json_in(&child, &["init", "--agents", "none", "--json"]);
+    let child_task = repo.ok_json_in(&child, &["add", "Child task", "--json"])["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
-    let (status, value) = repo.json_in(
+    // `init` on the anchor detects the child Board, merges its Tasks into the
+    // new Board, and keeps the child Board as a backup.
+    let value = repo.ok_json_in(
         parent.path(),
         &[
             "init",
@@ -528,14 +577,82 @@ fn workspace_init_refuses_to_shadow_a_child_repository_board() {
         ],
     );
 
-    assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "ALREADY_INITIALIZED");
-    let message = value["error"]["message"].as_str().unwrap();
+    let board = workspace.join(".orbit/board");
+    assert_eq!(value["data"]["created"], true);
+    assert!(board.join("config.toml").is_file());
     assert!(
-        message.contains(&format!("api{}.orbit", std::path::MAIN_SEPARATOR)),
-        "unexpected message: {message}"
+        workspace.join(".orbit/backups/api/config.toml").is_file(),
+        "child Board should be relocated under .orbit/backups"
     );
-    assert!(!workspace.join(".orbit/board/config.toml").exists());
+    assert!(!child.join(".orbit/board").exists());
+    assert_warning(&value, "merged");
+
+    // The merged Task keeps its ID and records its Repository.
+    let listed = repo.ok_json_in(&workspace, &["list", "--all", "--json"]);
+    let tasks = listed["data"]["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 1, "{listed}");
+    assert_eq!(tasks[0]["id"], child_task);
+    let content =
+        std::fs::read_to_string(board.join("tasks").join(format!("{child_task}.md"))).unwrap();
+    assert!(content.contains("repo: api"), "{content}");
+
+    // The child repository now discovers the merged Board and is a member.
+    let members = repo.ok_json_in(&workspace, &["repo", "list", "--json"]);
+    let repositories = members["data"]["repositories"].as_array().unwrap();
+    assert!(
+        repositories
+            .iter()
+            .any(|entry| entry["name"] == "api" && entry["kind"] == "child"),
+        "{members}"
+    );
+    let from_child = repo.ok_json_in(&child, &["list", "--all", "--json"]);
+    assert_eq!(from_child["data"]["tasks"][0]["id"], child_task);
+}
+
+#[test]
+fn a_child_repository_under_the_anchor_is_a_member_repository() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("acme");
+    std::fs::create_dir(&workspace).unwrap();
+    repo.ok_json_in(
+        parent.path(),
+        &[
+            "init",
+            workspace.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+    let child = workspace.join("api");
+    init_child_repo(&repo, &child);
+    let nested = child.join("src/deep");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    // `init` inside the child reuses the anchor Board; no second Board is
+    // created and no ambiguity is reported.
+    let initialized = repo.ok_json_in(&child, &["init", "--agents", "none", "--json"]);
+    assert_eq!(initialized["data"]["created"], false);
+    assert_eq!(
+        initialized["data"]["board"],
+        dunce::canonicalize(workspace.join(".orbit/board"))
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert!(!child.join(".orbit").exists());
+
+    // Tasks created inside the member Repository record it in `repo`.
+    let added = repo.ok_json_in(&child, &["add", "Child task", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap().to_string();
+    let content = std::fs::read_to_string(
+        workspace
+            .join(".orbit/board/tasks")
+            .join(format!("{id}.md")),
+    )
+    .unwrap();
+    assert!(content.contains("repo: api"), "{content}");
 }
 
 #[test]
@@ -563,7 +680,7 @@ fn workspace_init_refuses_an_unrecognized_orbit_layout() {
 }
 
 #[test]
-fn a_child_repository_board_is_reported_as_ambiguous_after_workspace_init() {
+fn a_child_board_under_the_anchor_is_merged_not_ambiguous() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let workspace = parent.path().join("acme");
@@ -580,14 +697,17 @@ fn a_child_repository_board_is_reported_as_ambiguous_after_workspace_init() {
     );
     let child = workspace.join("api");
     init_child_repo(&repo, &child);
-    repo.ok_json_in(&child, &["init", ".orbit", "--agents", "none", "--json"]);
+
+    // A child repository cannot shadow the anchor Board with its own: `init`
+    // inside it reuses the anchor Board, and `repo list` reports it as a
+    // member Repository.
+    repo.ok_json_in(&child, &["init", "--agents", "none", "--json"]);
     let added = repo.ok_json_in(&workspace, &["add", "Workspace task", "--json"]);
     let id = added["data"]["id"].as_str().unwrap();
 
     let listed = repo.ok_json_in(&child, &["list", "--all", "--json"]);
-
     assert_eq!(listed["data"]["tasks"][0]["id"], id);
-    assert_warning(&listed, "AMBIGUOUS_BOARD");
+    assert!(listed["meta"].get("warnings").is_none(), "{listed}");
 }
 
 #[test]
@@ -626,8 +746,9 @@ fn workspace_init_reports_the_legacy_dot_orbit_board_for_migration() {
     assert!(legacy.join("config.toml").is_file());
     assert!(!workspace.join(".orbit/board").exists());
 
-    let compatible = repo.ok_json(&["--dir", legacy.to_str().unwrap(), "list", "--json"]);
-    assert_eq!(compatible["data"]["count"], 0);
+    let (status, compatible) = repo.json(&["--dir", legacy.to_str().unwrap(), "list", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(compatible["error"]["code"], "BOARD_NOT_MIGRATED");
 }
 
 #[test]
@@ -635,7 +756,7 @@ fn scoped_board_access_holds_and_releases_the_selected_lock() {
     use orbit_tracker::board::{AccessMode, BoardAccess};
     let repo = TestRepo::new();
     repo.init();
-    let root = repo.path().join(".orbit");
+    let root = repo.board_path();
     let access = BoardAccess::open(Some(&root), AccessMode::Write).unwrap();
     assert_eq!(access.board().root, dunce::canonicalize(&root).unwrap());
     assert!(access.board().lock_shared().is_err());

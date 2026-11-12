@@ -65,9 +65,12 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
     }
 
     let waiting_on = normalize_waiting(args.waiting_on)?;
-    let area = parse_area_option(args.area)?;
+    let area = parse_area_option(board, args.area)?;
     let verification = task::normalize_verification(args.verification)?;
     let body = resolve_body(args.body, args.body_file)?;
+    // Record the member Repository the command runs in; a worktree resolves
+    // to its main checkout's Repository.
+    let repo = crate::repository::current_member_name(board)?;
     let id = generate_unique_id(board, parent.as_deref())?;
     let now = Utc::now();
 
@@ -86,6 +89,8 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
             area,
             verification,
             github: None,
+            remote: None,
+            repo,
             claim: None,
             stray_claim_times: None,
             created_at: now,
@@ -158,7 +163,7 @@ pub(super) fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::outpu
         None
     };
     let waiting_on = normalize_waiting(args.waiting_on)?;
-    let area = parse_area_option(args.area)?;
+    let area = parse_area_option(board, args.area)?;
     let verification = task::normalize_verification(args.verification)?;
 
     let task = {

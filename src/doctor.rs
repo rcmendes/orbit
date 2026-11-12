@@ -15,7 +15,6 @@ use crate::graph::{Graph, Issue, LoadMode};
 
 pub fn run(dir: Option<&Path>, args: DoctorArgs) -> Result<crate::output::CommandOutput> {
     let mut fixed = Vec::new();
-    let mut migration = None;
 
     // A failed repair must still say where discovery looked, since `doctor` is
     // the command people run when resolution is already broken.
@@ -30,23 +29,8 @@ pub fn run(dir: Option<&Path>, args: DoctorArgs) -> Result<crate::output::Comman
     if args.fix {
         fixed = fix(dir).map_err(with_trace)?;
     }
-    if args.migrate {
-        migration = Some(crate::legacy::migrate(dir).map_err(with_trace)?);
-    }
 
-    diagnose(dir, &args, fixed, migration)
-}
-
-fn workspace_root(dir: Option<&Path>, board: Option<&Board>) -> Option<PathBuf> {
-    if let Some(board) = board
-        && let Some(root) = crate::workspace::workspace_root_if_board(board)
-    {
-        return Some(root);
-    }
-    let start = dir
-        .map(Path::to_path_buf)
-        .or_else(|| std::env::current_dir().ok())?;
-    crate::workspace::candidate_workspace_root(&start)
+    diagnose(dir, &args, fixed)
 }
 
 fn fix(dir: Option<&Path>) -> Result<Vec<String>> {
@@ -154,7 +138,6 @@ fn diagnose(
     dir: Option<&Path>,
     args: &DoctorArgs,
     fixed: Vec<String>,
-    migration: Option<crate::legacy::MigrationReport>,
 ) -> Result<crate::output::CommandOutput> {
     let discovery = Board::discovery(dir);
     let mut issues = Vec::new();
@@ -172,15 +155,6 @@ fn diagnose(
     };
 
     layout_issues(&discovery, board.as_ref(), &mut issues);
-
-    let workspace_root = workspace_root(dir, board.as_ref());
-    let workspace_diagnosis = workspace_root
-        .as_deref()
-        .map(|workspace| crate::workspace_doctor::diagnose(workspace, board.as_ref()));
-    if let Some(diagnosis) = &workspace_diagnosis {
-        issues.extend(diagnosis.issues.iter().cloned());
-        warnings.extend(diagnosis.warnings.iter().cloned());
-    }
 
     let on_path = orbit_on_path();
     if !on_path {
@@ -202,20 +176,11 @@ fn diagnose(
         None => 0,
     };
     if let Some(board) = &board {
-        issues.extend(crate::github::commands::doctor_issues(board));
+        issues.extend(crate::remote::commands::doctor_issues(board));
     }
 
     let healthy = issues.is_empty();
     let discovery_json = discovery_json(&discovery);
-    let workspace_json = workspace_diagnosis
-        .as_ref()
-        .map(crate::workspace_doctor::WorkspaceDiagnosis::json)
-        .unwrap_or(Value::Null);
-    let migration_json = migration
-        .as_ref()
-        .map(|report| serde_json::to_value(report).unwrap_or(Value::Null))
-        .unwrap_or(Value::Null);
-
     let mut human = String::new();
     if healthy {
         human.push_str("orbit doctor: healthy\n");
@@ -248,24 +213,12 @@ fn diagnose(
         }
     }
     human.push_str(&format!("tasks: {task_count}\n"));
-    if let Some(workspace) = workspace_root.as_ref() {
-        human.push_str(&format!("workspace: {}\n", workspace.display()));
-        if let Some(diagnosis) = &workspace_diagnosis {
-            human.push_str(&format!(
-                "workspace repositories: {} discovered, {} included\n",
-                diagnosis.repositories, diagnosis.included_repositories
-            ));
-        }
-    }
     human.push_str(&render_discovery(&discovery));
     for warning in &warnings {
         human.push_str(&format!("warning: {warning}\n"));
     }
     for path in &fixed {
         human.push_str(&format!("fixed: {path}\n"));
-    }
-    if let Some(report) = &migration {
-        human.push_str(&report.render_human());
     }
 
     Ok(crate::output::CommandOutput::new(
@@ -277,8 +230,6 @@ fn diagnose(
             "path_on_path": on_path,
             "fixed": fixed,
             "discovery": discovery_json,
-            "workspace": workspace_json,
-            "migration": migration_json,
         }),
         human,
     )
@@ -328,7 +279,7 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
             AMBIGUOUS_BOARD,
             None,
             format!(
-                "both {} and legacy Board {} exist; run `orbit doctor --migrate` to finish or resume the move",
+                "both {} and legacy Board {} exist; resolve the duplicate Boards, then run `orbit migrate` to convert the legacy one",
                 new.display(),
                 legacy.display()
             ),
@@ -341,22 +292,23 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
     }
 
     if let Some(board) = board {
-        if board.config.board.storage.is_none() && discovery.legacy.is_none() {
+        if board.needs_migration(Some(discovery)) && discovery.legacy.is_none() {
             issues.push(Issue::new(
                 LEGACY_LAYOUT,
                 None,
                 format!(
-                    "Board at {} predates the Orbit folder and has no board.storage mode; run `orbit doctor --migrate`",
+                    "Board at {} uses a pre-ADR-0019 layout; run `orbit migrate` to convert it to a standalone Board folder",
                     board.root.display()
                 ),
             ));
-        } else if let Some(configured) = board.config.board.storage {
+        }
+        if let Some(configured) = board.config.board.storage {
             let actual = StorageMode::detect(&board.root);
             if configured != actual {
                 let hint = if configured == StorageMode::Worktree {
-                    "its .git link to the orbit worktree is missing or damaged; run `orbit doctor --fix`, or move the directory aside and re-run `orbit init`"
+                    "its .git link to the orbit worktree is missing or damaged; run `orbit doctor --fix`, or run `orbit migrate` to convert the Board"
                 } else {
-                    "run `orbit doctor --migrate` or repair the worktree"
+                    "run `orbit migrate` to convert the Board"
                 };
                 issues.push(Issue::new(
                     STORAGE_MISMATCH,
@@ -505,6 +457,20 @@ fn diagnose_tasks(
         warnings.push(format!(
             "{} stale temp file(s) in the board; run `orbit doctor --fix`",
             stale_temps.len()
+        ));
+    }
+
+    // Links on a Board with no Remote Tracker configuration are inert
+    // provenance: they stay untouched, nothing calls the tracker, and doctor
+    // says so once instead of per Task.
+    let linked = graph
+        .tasks
+        .values()
+        .filter(|task| crate::remote::link::link_view(task).is_some())
+        .count();
+    if linked > 0 && !crate::remote::configured(board) {
+        warnings.push(format!(
+            "{linked} task(s) carry Remote Issue links but no Remote Tracker is configured; the links are kept untouched and nothing syncs — configure a Remote Project to resume syncing"
         ));
     }
 

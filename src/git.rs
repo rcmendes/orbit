@@ -79,6 +79,7 @@ pub(crate) fn git_output(path: &Path, args: &[&str]) -> std::result::Result<Stri
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+#[cfg(test)]
 pub(crate) fn is_direct_git_repository(path: &Path) -> bool {
     let Ok(output) = git_output(path, &["rev-parse", "--show-toplevel"]) else {
         return false;
@@ -89,10 +90,12 @@ pub(crate) fn is_direct_git_repository(path: &Path) -> bool {
 }
 
 pub(crate) fn is_git_tracked(root: &Path, relative: &str) -> bool {
+    // `:(literal)` so glob characters in a path never match other files.
+    let pathspec = format!(":(literal){relative}");
     Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["ls-files", "--error-unmatch", "--", relative])
+        .args(["ls-files", "--error-unmatch", "--", &pathspec])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -140,14 +143,14 @@ pub fn origin_url() -> Result<String> {
     let output = run_git(None, &["remote", "get-url", "origin"], None).map_err(|_| {
         OrbitError::new(
             crate::error::code::GITHUB_NOT_CONFIGURED,
-            "could not read the `origin` Git remote; add a GitHub origin and rerun `orbit github connect`",
+            "could not read the `origin` Git remote; add a GitHub origin and rerun `orbit remote connect`",
         )
     })?;
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if url.is_empty() {
         return Err(OrbitError::new(
             crate::error::code::GITHUB_NOT_CONFIGURED,
-            "the `origin` Git remote is empty; add a GitHub origin and rerun `orbit github connect`",
+            "the `origin` Git remote is empty; add a GitHub origin and rerun `orbit remote connect`",
         ));
     }
     Ok(url)
@@ -587,6 +590,215 @@ pub fn set_head(path: &Path, branch: &str) -> Result<()> {
 pub fn init_repo(path: &Path) -> Result<()> {
     run_git(None, &["init", path.to_string_lossy().as_ref()], None)?;
     Ok(())
+}
+
+/// Adds a remote, or updates its URL when it already exists.
+pub fn remote_set_url(repo: &Path, name: &str, url: &str) -> Result<()> {
+    // `--` keeps a URL that starts with `-` from being read as an option.
+    let output = run_git_raw(Some(repo), &["remote", "set-url", "--", name, url], None)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    run_git(Some(repo), &["remote", "add", "--", name, url], None)?;
+    Ok(())
+}
+
+/// Removes a remote when present; the remote's own branches are untouched.
+pub fn remote_remove(repo: &Path, name: &str) -> Result<()> {
+    let output = run_git_raw(Some(repo), &["remote", "remove", name], None)?;
+    if output.status.success() || remote_url(repo, name)?.is_none() {
+        return Ok(());
+    }
+    Err(git_failure(&["remote", "remove", name], &output))
+}
+
+/// The fetch URL of a remote, or `None` when the remote does not exist.
+pub fn remote_url(repo: &Path, name: &str) -> Result<Option<String>> {
+    let output = run_git_raw(Some(repo), &["remote", "get-url", name], None)?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!url.is_empty()).then_some(url))
+}
+
+/// Resolves a remote ref to its tip commit without fetching objects.
+/// Returns `None` when the remote does not advertise the ref.
+pub fn ls_remote(repo: &Path, remote: &str, reference: &str) -> Result<Option<String>> {
+    let output = run_git_network(repo, &["ls-remote", "--", remote, reference])?;
+    if !output.status.success() {
+        return Err(git_failure(&["ls-remote", remote, reference], &output));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .map(str::to_string))
+}
+
+/// Fetches every branch the remote advertises into `refs/remotes/<remote>/*`.
+pub fn fetch(repo: &Path, remote: &str) -> Result<()> {
+    run_git_network_ok(repo, &["fetch", "--", remote])?;
+    Ok(())
+}
+
+/// Fetches one branch from an explicit URL without configuring a remote and
+/// returns the fetched tip commit.
+pub fn fetch_head(repo: &Path, url: &str, branch: &str) -> Result<String> {
+    run_git_network_ok(repo, &["fetch", "--", url, branch])?;
+    rev_parse(repo, "FETCH_HEAD")?
+        .ok_or_else(|| OrbitError::git(format!("git fetch {url} {branch} left no FETCH_HEAD")))
+}
+
+/// Pushes `refspec` (for example `HEAD:refs/heads/orbit`) to `remote`.
+pub fn push(repo: &Path, remote: &str, refspec: &str) -> Result<()> {
+    run_git_network_ok(repo, &["push", "--", remote, refspec])?;
+    Ok(())
+}
+
+/// Resolves `reference` to a commit id, or `None` when it does not exist.
+pub fn rev_parse(repo: &Path, reference: &str) -> Result<Option<String>> {
+    let reference = format!("{reference}^{{commit}}");
+    let output = run_git_raw(
+        Some(repo),
+        &["rev-parse", "--verify", "--quiet", &reference],
+        None,
+    )?;
+    match output.status.code() {
+        Some(0) => {
+            let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Ok((!value.is_empty()).then_some(value))
+        }
+        Some(1) | Some(128) => Ok(None),
+        _ => Err(git_failure(
+            &["rev-parse", "--verify", "--quiet", &reference],
+            &output,
+        )),
+    }
+}
+
+/// The best common ancestor of two commits, or `None` for unrelated histories.
+pub fn merge_base(repo: &Path, a: &str, b: &str) -> Result<Option<String>> {
+    let output = run_git_raw(Some(repo), &["merge-base", a, b], None)?;
+    match output.status.code() {
+        Some(0) => {
+            let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Ok((!value.is_empty()).then_some(value))
+        }
+        Some(1) => Ok(None),
+        _ => Err(git_failure(&["merge-base", a, b], &output)),
+    }
+}
+
+/// Every blob path in a commit's tree, recursively.
+pub fn tree_files(repo: &Path, commit: &str) -> Result<Vec<String>> {
+    let output = run_git(Some(repo), &["ls-tree", "-r", "--name-only", commit], None)?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .filter(|line| !line.is_empty())
+        .collect())
+}
+
+/// The UTF-8 content of `path` at `commit`, or `None` when absent.
+pub fn show_file(repo: &Path, commit: &str, path: &str) -> Result<Option<String>> {
+    let object = format!("{commit}:{path}");
+    let probe = run_git_raw(Some(repo), &["cat-file", "-t", &object], None)?;
+    match probe.status.code() {
+        Some(0) => {
+            if String::from_utf8_lossy(&probe.stdout).trim() != "blob" {
+                return Ok(None);
+            }
+        }
+        Some(1) | Some(128) => return Ok(None),
+        _ => return Err(git_failure(&["cat-file", "-t", &object], &probe)),
+    }
+    let output = run_git(Some(repo), &["show", &object], None)?;
+    Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
+}
+
+/// Stages every change in the working tree (`git add -A`).
+pub fn stage_all(repo: &Path) -> Result<()> {
+    run_git(Some(repo), &["add", "-A"], None)?;
+    Ok(())
+}
+
+/// Writes the current index as a tree object.
+pub fn write_tree(repo: &Path) -> Result<String> {
+    let output = run_git(Some(repo), &["write-tree"], None)?;
+    let tree = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if tree.is_empty() {
+        return Err(OrbitError::git(
+            "git write-tree returned an empty tree hash",
+        ));
+    }
+    Ok(tree)
+}
+
+/// Creates a commit object with explicit parents (used for merge commits).
+pub fn commit_tree_parents(
+    repo: &Path,
+    tree: &str,
+    parents: &[&str],
+    message: &str,
+) -> Result<String> {
+    let mut args = vec!["-c", "commit.gpgsign=false", "commit-tree", tree];
+    for parent in parents {
+        args.push("-p");
+        args.push(parent);
+    }
+    args.push("-m");
+    args.push(message);
+    let output = run_git(Some(repo), &args, None)?;
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if commit.is_empty() {
+        return Err(OrbitError::git("git commit-tree returned no commit hash"));
+    }
+    Ok(commit)
+}
+
+/// Runs a git command that talks to a remote. It never prompts — no
+/// credential, passphrase, or host-key questions — and aborts a stalled HTTP
+/// transfer or an SSH connect that hangs, so a dead host fails fast instead
+/// of hanging an agent. User-set values (environment or `core.sshCommand`)
+/// win.
+fn run_git_network(repo: &Path, args: &[&str]) -> Result<Output> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo).args(args);
+    for (key, value) in [
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GIT_HTTP_LOW_SPEED_LIMIT", "1000"),
+        ("GIT_HTTP_LOW_SPEED_TIME", "30"),
+    ] {
+        if std::env::var_os(key).is_none() {
+            command.env(key, value);
+        }
+    }
+    // `GIT_SSH_COMMAND` outranks `core.sshCommand`, so only set it when the
+    // user configured neither (nor the older `GIT_SSH`).
+    if std::env::var_os("GIT_SSH_COMMAND").is_none()
+        && std::env::var_os("GIT_SSH").is_none()
+        && matches!(config_get(repo, "core.sshCommand"), Ok(None))
+    {
+        command.env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o ConnectTimeout=15",
+        );
+    }
+    command
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| OrbitError::git(format!("could not run git: {error}")))
+}
+
+fn run_git_network_ok(repo: &Path, args: &[&str]) -> Result<Output> {
+    let output = run_git_network(repo, args)?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(git_failure(args, &output))
+    }
 }
 
 fn run_git(cwd: Option<&Path>, args: &[&str], stdin: Option<&str>) -> Result<Output> {

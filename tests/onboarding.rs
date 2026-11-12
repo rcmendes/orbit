@@ -607,12 +607,7 @@ fn repo_add_rejects_a_directory_that_is_not_a_repository() {
     repo.init();
     let empty = tempfile::tempdir().unwrap();
 
-    let (status, value) = repo.json(&[
-        "repo",
-        "add",
-        empty.path().to_str().unwrap(),
-        "--json",
-    ]);
+    let (status, value) = repo.json(&["repo", "add", empty.path().to_str().unwrap(), "--json"]);
 
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "NOT_A_REPOSITORY");

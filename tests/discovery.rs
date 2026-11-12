@@ -261,11 +261,8 @@ fn a_board_in_the_home_directory_resolves_from_its_subdirectories() {
     // `init` outside Git anchors a Board at <dir>/.orbit/board; running it
     // with the home directory as the working directory places an ordinary
     // Board in ~ — there is no distinct global layout.
-    let (status, init) = repo.json_in_with_env(
-        home.path(),
-        &["init", "--agents", "none", "--json"],
-        &env,
-    );
+    let (status, init) =
+        repo.json_in_with_env(home.path(), &["init", "--agents", "none", "--json"], &env);
     assert_eq!(status, 0, "{init}");
     assert_eq!(init["data"]["prefix"], "orb-");
     assert_eq!(init["data"]["storage"], "repository");
@@ -562,8 +559,7 @@ fn workspace_init_merges_a_child_repository_board() {
     let child = workspace.join("api");
     init_child_repo(&repo, &child);
     repo.ok_json_in(&child, &["init", "--agents", "none", "--json"]);
-    let child_task = repo
-        .ok_json_in(&child, &["add", "Child task", "--json"])["data"]["id"]
+    let child_task = repo.ok_json_in(&child, &["add", "Child task", "--json"])["data"]["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -585,9 +581,7 @@ fn workspace_init_merges_a_child_repository_board() {
     assert_eq!(value["data"]["created"], true);
     assert!(board.join("config.toml").is_file());
     assert!(
-        workspace
-            .join(".orbit/backups/api/config.toml")
-            .is_file(),
+        workspace.join(".orbit/backups/api/config.toml").is_file(),
         "child Board should be relocated under .orbit/backups"
     );
     assert!(!child.join(".orbit/board").exists());
@@ -598,10 +592,8 @@ fn workspace_init_merges_a_child_repository_board() {
     let tasks = listed["data"]["tasks"].as_array().unwrap();
     assert_eq!(tasks.len(), 1, "{listed}");
     assert_eq!(tasks[0]["id"], child_task);
-    let content = std::fs::read_to_string(
-        board.join("tasks").join(format!("{child_task}.md")),
-    )
-    .unwrap();
+    let content =
+        std::fs::read_to_string(board.join("tasks").join(format!("{child_task}.md"))).unwrap();
     assert!(content.contains("repo: api"), "{content}");
 
     // The child repository now discovers the merged Board and is a member.

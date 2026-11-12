@@ -221,10 +221,7 @@ fn repo_remove_rejects_a_discovered_child_repository() {
     );
     git_repo(&repo, &anchor.join("web"));
 
-    let (status, value) = repo.json_in(
-        &anchor,
-        &["repo", "remove", "web", "--json"],
-    );
+    let (status, value) = repo.json_in(&anchor, &["repo", "remove", "web", "--json"]);
 
     assert_eq!(status, 1, "{value}");
     assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
@@ -265,10 +262,7 @@ fn repo_refresh_writes_the_member_inventory_and_reports_deltas() {
     repo.ok_json(&["repo", "remove", "api", "--json"]);
     let third = repo.ok_json(&["repo", "refresh", "--json"]);
     assert_eq!(third["data"]["removed"], serde_json::json!(["api"]));
-    assert_eq!(
-        third["data"]["repositories"].as_array().unwrap().len(),
-        0
-    );
+    assert_eq!(third["data"]["repositories"].as_array().unwrap().len(), 0);
 }
 
 #[test]

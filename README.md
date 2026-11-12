@@ -689,17 +689,19 @@ Run `orbit github status` for a read-only diagnostic of the authenticated accoun
 To publish mapped changes after local mutations instead of running `orbit github sync` by hand, toggle auto-push on the Board:
 
 ```bash
-orbit github auto-push on     # writes [github] auto_push = true and commits it
+orbit github auto-push on     # writes [remote] auto_push = true and commits it
 orbit github auto-push off
 ```
 
 The equivalent Board configuration is:
 
 ```toml
+[remote]
+auto_push = true
+
 [github]
 mode = "basic"
 repositories = ["alice/widget"]
-auto_push = true
 ```
 
 Auto-push is push-only. `orbit add` creates an Issue when exactly one repository is available; title, body, labels, status, `area`, and `verification` changes are pushed; `done` closes with `state_reason: completed`, `cancelled` with `not_planned`, and `claim` adds the reserved `orbit:in-progress` label. It never pulls, never overwrites a field that changed on GitHub, and never creates an Issue for an existing Local Task. Priority, type, comments, claims, checkpoints, and relationships do not trigger a push. Conflicts and failed pushes are warnings, not command failures; the baseline stays unchanged so `orbit github sync <task>` can resolve them. Use `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. See [github-sync.md](./docs/github-sync.md#automatic-push).

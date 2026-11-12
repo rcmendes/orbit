@@ -110,12 +110,10 @@ ORBIT_BIN="$PWD/target/release/orbit" bash scripts/onboarding-smoke.sh
 
 Both scripts run in a temporary Git repository with a temporary `HOME`/`USERPROFILE`, create a project-local `.claude` marker so at least Claude is always detected, and never read or write the developer's real agent configuration. They must stay in sync with the documented quick start; do not add a second smoke sequence. GitHub operations use `ORBIT_GITHUB_FIXTURE`; never remove that fixture or let the release smoke contact GitHub.
 
-The release defaults to the Cargo `github-provider` feature. Keep that feature
-in `[features].default` so cargo-dist archives, installers, and the binary
-bundled by npm all include the provider. CI also checks the public CLI help in
-the archived binaries. A build with `--no-default-features` may omit the
-provider; it must fail clearly when it loads an enabled `[github]` Board and
-direct users to Orbit v0.9.0 or newer. Do not bump the package version as part
+The GitHub Remote Tracker adapter (ADR 0018) is always compiled in; there is no
+`github-provider` feature to keep in `[features].default`, so cargo-dist
+archives, installers, and the binary bundled by npm all include it. CI still
+checks the public CLI help in the archived binaries. Do not bump the package version as part
 of feature integration; the release owner chooses the tag/version when cutting
 the release.
 

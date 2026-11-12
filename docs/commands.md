@@ -910,9 +910,8 @@ orbit board sync --resolve orb-a1b2c3.title=host --json
 
 ### `orbit github` — GitHub Issue provider
 
-GitHub sync and Triage require Orbit 0.9.0 or newer. Default release builds
-include the provider; a build without the `github-provider` capability reports
-`GITHUB_UNSUPPORTED` when it loads a Board with active `[github]` configuration.
+GitHub sync and Triage run through the built-in GitHub Remote Tracker adapter
+(ADR 0018); every release build includes it.
 
 Connects the current checkout's origin repository, adopts or creates Issues, and
 runs bidirectional sync with conflict detection. `orbit github connect` checks
@@ -936,7 +935,8 @@ Only GitHub's separate Auto-close issue workflow can turn a card move into an
 Issue close, which pull sync then sees as an Issue change. See
 [github-sync.md](./github-sync.md).
 
-Enable `[github] auto_push` to publish mapped changes after a local mutation.
+Enable `[remote] auto_push` (or the legacy `[github] auto_push`) to publish
+mapped changes after a local mutation.
 Toggle it with `orbit github auto-push on` or `orbit github auto-push off`; the
 command writes the Board config and commits it, reports the previous value, and
 warns when no single repository can receive newly created Issues. It is

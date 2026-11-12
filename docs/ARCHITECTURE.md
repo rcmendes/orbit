@@ -27,7 +27,7 @@ flowchart LR
         CMD["Command handlers<br/>src/commands/"]
         PRIME["prime context"]
         DOCTOR["doctor and sync"]
-        GITHUB["GitHub provider<br/>src/github/commands.rs"]
+        GITHUB["GitHub Remote Tracker adapter<br/>src/github/ + src/remote/"]
         MIGRATE["Slug migration<br/>src/migrate.rs"]
         WSMIGRATE["Workspace Board migration<br/>src/workspace_migrate.rs"]
         SETUP["Harness setup<br/>src/setup.rs"]
@@ -138,10 +138,10 @@ flowchart LR
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
-| Application | `src/commands/`, `src/migrate.rs`, `src/workspace_migrate.rs`, `src/workspace.rs`, `src/issue_catalog.rs`, `src/workspace_doctor.rs`, `src/github/commands.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. Workspace commands reconcile repositories and Remote Issue snapshots explicitly. GitHub commands provide status diagnostics, export previews, Issue creation, and synchronization; `doctor` adds read-only Workspace, repository/cache, migration, link, and managed-agent diagnostics when configured. Prefix migration rewrites one Board; Workspace migration validates, combines, and activates multiple Boards. |
+| Application | `src/commands/`, `src/migrate.rs`, `src/workspace_migrate.rs`, `src/workspace.rs`, `src/workspace_doctor.rs`, `src/github/commands.rs`, `src/remote/` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. `src/remote/` owns the provider-neutral Remote Tracker port — sync engine, baselines, auto-push, relationships, link persistence, and the Remote Issue catalog seam — while `src/github/` is the built-in GitHub adapter plus its CLI surface. `doctor` adds read-only Workspace, repository/cache, migration, link, and managed-agent diagnostics when configured. Prefix migration rewrites one Board; Workspace migration validates, combines, and activates multiple Boards. |
 | Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
-| Execution | `src/mutation.rs`, `src/github/execution.rs` | Board mutation execution (lifecycle, terminal, reopen, shared Task persistence and commit warnings) and GitHub sync execution behind an injected `GitHubClient`; both run inside the caller's Board access scope. |
+| Execution | `src/mutation.rs`, `src/remote/execution.rs` | Board mutation execution (lifecycle, terminal, reopen, shared Task persistence and commit warnings) and provider-neutral Remote Tracker execution (`synchronize`, `create_and_link`, `apply_plan`) behind a resolved `RemoteAdapter`; both run inside the caller's Board access scope. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
 | Setup | `src/setup.rs` | Detect harnesses and write managed instruction files, MCP entries, and the Claude SessionStart hook. |
 
@@ -160,19 +160,21 @@ an immediate commit. Terminal execution includes graph checks, forced SubTask
 cancellation, optional comments, and commit outcomes. Publication remains atomic
 per file; multi-file operations do not promise rollback.
 
-`github::execution::synchronize` accepts an injected `GitHubClient` and a sync
-request and returns a typed report. It owns preflight, mode restrictions, conflict
-choices, relationship planning, application, and baseline updates. The CLI owns
-argument conversion and human/JSON presentation. Both execution modules run
-inside the caller's Board access scope; they do not acquire a second lock.
+`remote::execution::synchronize` resolves the tracker named on the request to a
+`RemoteAdapter` (the `github` tracker maps to `GitHubAdapter`) and returns a
+typed report of provider-neutral `SyncPlan`s. It owns preflight, mode
+restrictions, conflict choices, relationship planning, application, baseline
+updates, and Remote Issue catalog upserts. The CLI owns argument conversion
+and human/JSON presentation. Both execution modules run inside the caller's
+Board access scope; they do not acquire a second lock.
 
-`github::auto_push` is the opt-in post-mutation path. The task command wrapper
+`remote::auto_push` is the opt-in post-mutation path. The task command wrapper
 snapshots `tasks/*.md` before and after a successful write, then pushes changed
-mapped fields for every linked Task, creating an Issue for a newly added Task
-when exactly one repository is available. It runs inside the same exclusive
-Board lock, never pulls, and turns remote failures and conflicts into warnings.
-GitHub commands, Workspace issue commands, `sync`, migrations, and `delete` use
-the non-auto-push wrapper. The publish path is selected by
+mapped fields for every linked Task, creating a Remote Issue for a newly added
+Task when exactly one Remote Project is available. It runs inside the same
+exclusive Board lock, never pulls, and turns remote failures and conflicts into
+warnings. Remote Tracker commands, `sync`, migrations, and `delete` use the
+non-auto-push wrapper. The publish path is selected by
 `[github].auto_push` plus the `--no-sync`/`ORBIT_NO_AUTO_SYNC` escape hatch.
 
 ### Human output and JSON
@@ -493,11 +495,11 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 
 | Family | Commands | Effect |
 | --- | --- | --- |
-| Bootstrap | `init`, `link`, `unlink`, `setup`, `workspace setup` | Create or select the Board; optionally wire harness files, MCP entries, and hooks, or reconcile selected harnesses across Workspace repositories. |
+| Bootstrap | `init`, `link`, `unlink`, `setup`, `repo add` | Create or select the Board; optionally wire harness files and MCP entries, or register a member Repository on a multi-Repository Board. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `github create` preview, `workspace status`, Workspace issue/catalog previews | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. Import, detach, and reattach previews do not write; only explicit apply changes Board/catalog state, never GitHub. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `github create`/`sync` preview, `repo list` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. Sync and create previews do not write; only `--apply` changes Board state or GitHub. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
-| Maintenance | `doctor`, `sync`, `github`, `workspace refresh/include/exclude/detach/reattach`, `workspace issues refresh/detach/reattach`, `slug`, `mcp` | Check Board and configured GitHub health, commit heartbeat-only changes, explicitly create or synchronize GitHub Issues, or push mapped changes when auto-push is enabled, discover or detach/reattach Workspace repositories and Linked Tasks, refresh or archive Remote Issue summaries, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. Detach/reattach previews are read-only; apply preserves local Task data and never writes GitHub. |
+| Maintenance | `doctor`, `sync`, `github`, `repo`, `slug`, `mcp` | Check Board and configured Remote Tracker health, commit heartbeat-only changes, explicitly create or synchronize Remote Issues or push mapped changes when auto-push is enabled, manage member Repositories and the rebuildable repository catalog, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Board layouts and initialization
 

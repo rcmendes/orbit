@@ -281,8 +281,9 @@ fn apply_files(root: &Path, files: &BTreeMap<String, Option<String>>) -> Result<
         match content {
             Some(text) => {
                 if let Some(parent) = full.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|error| OrbitError::io(format!("create {}", parent.display()), error))?;
+                    std::fs::create_dir_all(parent).map_err(|error| {
+                        OrbitError::io(format!("create {}", parent.display()), error)
+                    })?;
                 }
                 crate::atomic::write_atomic(&full, text.as_bytes(), true)?;
             }
@@ -310,7 +311,10 @@ fn classify(path: &str) -> (FileKind, String) {
     if path == "config.toml" {
         return (FileKind::Config, "config".to_string());
     }
-    for (prefix, kind) in [("tasks/", FileKind::Task), ("comments/", FileKind::Comments)] {
+    for (prefix, kind) in [
+        ("tasks/", FileKind::Task),
+        ("comments/", FileKind::Comments),
+    ] {
         if let Some(rest) = path.strip_prefix(prefix)
             && let Some(stem) = rest.strip_suffix(".md")
             && !stem.contains('/')
@@ -331,8 +335,18 @@ fn describe_content(content: &Option<String>) -> String {
     match content {
         None => "(deleted)".to_string(),
         Some(text) => {
-            let flat: String = text.lines().next().unwrap_or_default().chars().take(120).collect();
-            if flat.is_empty() { "(empty)".to_string() } else { flat }
+            let flat: String = text
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .take(120)
+                .collect();
+            if flat.is_empty() {
+                "(empty)".to_string()
+            } else {
+                flat
+            }
         }
     }
 }
@@ -346,13 +360,7 @@ fn yaml_desc<T: Serialize>(value: &T) -> String {
 /// Three-way field merge. `base` is the field's value in the merge base
 /// (`None` when the Task itself is new on both sides).
 #[allow(clippy::too_many_arguments)]
-fn pick<T>(
-    base: Option<T>,
-    local: T,
-    remote: T,
-    field: &str,
-    outcome: &mut MergeOutcome,
-) -> T
+fn pick<T>(base: Option<T>, local: T, remote: T, field: &str, outcome: &mut MergeOutcome) -> T
 where
     T: PartialEq + Clone + Serialize,
 {
@@ -401,7 +409,13 @@ fn pick_depends_on(
         list.dedup();
         list
     };
-    pick(base.map(canonical), canonical(local), canonical(remote), field, outcome)
+    pick(
+        base.map(canonical),
+        canonical(local),
+        canonical(remote),
+        field,
+        outcome,
+    )
 }
 
 #[derive(Clone)]
@@ -436,11 +450,18 @@ fn later_time(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<Date
     }
 }
 
-fn later_stray(a: &Option<StrayClaimTimes>, b: &Option<StrayClaimTimes>) -> Option<StrayClaimTimes> {
+fn later_stray(
+    a: &Option<StrayClaimTimes>,
+    b: &Option<StrayClaimTimes>,
+) -> Option<StrayClaimTimes> {
     match (a, b) {
         (Some(a), Some(b)) => {
             let key = |s: &StrayClaimTimes| (s.claimed_at, s.lease_until);
-            Some(if key(a) >= key(b) { a.clone() } else { b.clone() })
+            Some(if key(a) >= key(b) {
+                a.clone()
+            } else {
+                b.clone()
+            })
         }
         (Some(a), None) => Some(a.clone()),
         (None, Some(b)) => Some(b.clone()),
@@ -471,14 +492,23 @@ fn claim_notice(task: &str, winner: &Claim, loser: Option<&Claim>) -> ClaimNotic
         Some(loser) => format!(
             "claim conflict on {task}: the earlier claim by {} (claimed {}) won over {} (claimed {})",
             winner.holder,
-            winner.claimed_at.map(|at| at.to_rfc3339()).unwrap_or_else(|| "unknown".into()),
+            winner
+                .claimed_at
+                .map(|at| at.to_rfc3339())
+                .unwrap_or_else(|| "unknown".into()),
             loser.holder,
-            loser.claimed_at.map(|at| at.to_rfc3339()).unwrap_or_else(|| "unknown".into()),
+            loser
+                .claimed_at
+                .map(|at| at.to_rfc3339())
+                .unwrap_or_else(|| "unknown".into()),
         ),
         None => format!(
             "claim conflict on {task}: kept the claim by {} (claimed {}); the other side had released it",
             winner.holder,
-            winner.claimed_at.map(|at| at.to_rfc3339()).unwrap_or_else(|| "unknown".into()),
+            winner
+                .claimed_at
+                .map(|at| at.to_rfc3339())
+                .unwrap_or_else(|| "unknown".into()),
         ),
     };
     ClaimNotice {
@@ -524,27 +554,21 @@ fn merge_claim(
     match (&local.claim, &remote.claim) {
         (Some(local_claim), Some(remote_claim)) => {
             let (winner, loser) = earlier_claim(local_claim, remote_claim);
-            outcome
-                .notices
-                .push(claim_notice(id, winner, Some(loser)));
+            outcome.notices.push(claim_notice(id, winner, Some(loser)));
             ClaimSide {
                 claim: Some(winner.clone()),
                 stray: None,
             }
         }
         (Some(local_claim), None) => {
-            outcome
-                .notices
-                .push(claim_notice(id, local_claim, None));
+            outcome.notices.push(claim_notice(id, local_claim, None));
             ClaimSide {
                 claim: Some(local_claim.clone()),
                 stray: None,
             }
         }
         (None, Some(remote_claim)) => {
-            outcome
-                .notices
-                .push(claim_notice(id, remote_claim, None));
+            outcome.notices.push(claim_notice(id, remote_claim, None));
             ClaimSide {
                 claim: Some(remote_claim.clone()),
                 stray: None,
@@ -767,9 +791,7 @@ fn merge_trees(
         used_resolutions: BTreeSet::new(),
     };
 
-    let mut paths: BTreeSet<String> = git::tree_files(root, local)?
-        .into_iter()
-        .collect();
+    let mut paths: BTreeSet<String> = git::tree_files(root, local)?.into_iter().collect();
     paths.extend(git::tree_files(root, remote)?);
 
     for path in paths {
@@ -779,7 +801,13 @@ fn merge_trees(
             Some(base) => git::show_file(root, base, &path)?,
             None => None,
         };
-        resolve_path(&path, base_content, local_content, remote_content, &mut outcome)?;
+        resolve_path(
+            &path,
+            base_content,
+            local_content,
+            remote_content,
+            &mut outcome,
+        )?;
     }
 
     // Tell every claim loser on their Task's comment sidecar. The notices
@@ -862,7 +890,10 @@ fn resolve_path(
             }
         }
         FileKind::Comments => {
-            let id = field.strip_suffix(".comments").unwrap_or(&field).to_string();
+            let id = field
+                .strip_suffix(".comments")
+                .unwrap_or(&field)
+                .to_string();
             match merge_comments(&id, local.as_deref(), remote.as_deref()) {
                 Ok(content) => {
                     outcome.files.insert(path.to_string(), Some(content));

@@ -746,9 +746,10 @@ impl Board {
         if root
             .file_name()
             .is_some_and(|name| name == std::ffi::OsStr::new(ORBIT_DIR))
-            && let Some(board) = resolve_orbit_dir(&root) {
-                return Ok((board.root().to_path_buf(), board.is_legacy()));
-            }
+            && let Some(board) = resolve_orbit_dir(&root)
+        {
+            return Ok((board.root().to_path_buf(), board.is_legacy()));
+        }
         // An Orbit folder resolves its hidden `board/` or the `board` pointer.
         let orbit = root.join(".orbit");
         if let Some(board) = resolve_orbit_dir(&orbit) {
@@ -1578,9 +1579,10 @@ fn orbit_root(board: &OrbitBoard) -> PathBuf {
 fn nearest_orbit(start: &Path, stop: &Path, skip: Option<&Path>) -> Option<OrbitBoard> {
     for dir in git::ancestors_through(start, Some(stop)) {
         if skip != Some(dir)
-            && let Some(board) = resolve_orbit_dir(&dir.join(".orbit")) {
-                return Some(board);
-            }
+            && let Some(board) = resolve_orbit_dir(&dir.join(".orbit"))
+        {
+            return Some(board);
+        }
     }
     None
 }
@@ -1874,10 +1876,7 @@ fn legacy_local_board_for(root: &Path) -> Option<PathBuf> {
         .filter(|toplevel| {
             dunce::canonicalize(toplevel).unwrap_or_else(|_| toplevel.clone()) != root
         })
-        .or_else(|| {
-            root.parent()
-                .and_then(git::toplevel_containing)
-        });
+        .or_else(|| root.parent().and_then(git::toplevel_containing));
     if let Some(repo) = repo
         && let Ok(common) = git::common_dir_at(&repo)
     {

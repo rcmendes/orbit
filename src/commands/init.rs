@@ -116,8 +116,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
                 visible_board = visible;
                 if let Some(resolved) = crate::board::resolve_orbit_dir(&orbit_dir) {
                     board_root = resolved.root().to_path_buf();
-                    visible_board =
-                        matches!(resolved, crate::board::OrbitBoard::Visible { .. });
+                    visible_board = matches!(resolved, crate::board::OrbitBoard::Visible { .. });
                 }
             }
         }
@@ -212,7 +211,9 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         .map(|spec| crate::board_host::normalize_host_spec(&spec))
         .transpose()?;
     let mut host_joined = false;
-    if !args.print && let Some(spec) = &host_spec {
+    if !args.print
+        && let Some(spec) = &host_spec
+    {
         let join = created
             || Board::discover(Some(&board_root))
                 .and_then(|board| board.task_ids())
@@ -642,12 +643,7 @@ impl VisibleChoice {
 /// A visible Board folder name must be a single path component.
 fn board_folder_name(name: &str) -> Result<String> {
     let name = name.trim();
-    if name.is_empty()
-        || name == "."
-        || name == ".."
-        || name.contains('/')
-        || name.contains('\\')
-    {
+    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
         return Err(OrbitError::invalid_argument(format!(
             "invalid Board folder name `{name}`; use a single directory name"
         )));

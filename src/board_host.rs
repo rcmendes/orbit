@@ -47,7 +47,9 @@ enum HostSpec {
 fn classify(spec: &str) -> Result<HostSpec> {
     let spec = spec.trim();
     if spec.is_empty() {
-        return Err(OrbitError::invalid_argument("the Board host must not be empty"));
+        return Err(OrbitError::invalid_argument(
+            "the Board host must not be empty",
+        ));
     }
 
     // An existing path wins over URL-looking syntax (`C:\…`, `./repo`).
@@ -293,7 +295,10 @@ pub fn status_output(board: &Board) -> Result<crate::output::CommandOutput> {
     });
     let human = match (&outcome.host, &outcome.url) {
         (Some(host), Some(url)) if host == url => {
-            format!("board host: {host}\nhost_sync: {}\n", board.config.board.host_sync.as_str())
+            format!(
+                "board host: {host}\nhost_sync: {}\n",
+                board.config.board.host_sync.as_str()
+            )
         }
         (Some(host), Some(url)) => format!(
             "board host: {host} ({url})\nhost_sync: {}\n",

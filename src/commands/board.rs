@@ -36,9 +36,9 @@ pub(super) fn cmd_host(board: &Board, args: &BoardHostArgs) -> Result<CommandOut
                 "host_sync": board.config.board.host_sync.as_str(),
             });
             let human = match (&outcome.host, &outcome.url, &outcome.remote_tip) {
-                (Some(host), Some(url), Some(tip)) if host != url => format!(
-                    "board host set to {host} ({url}); remote `orbit` tip {tip}\n"
-                ),
+                (Some(host), Some(url), Some(tip)) if host != url => {
+                    format!("board host set to {host} ({url}); remote `orbit` tip {tip}\n")
+                }
                 (Some(host), Some(_), Some(tip)) => {
                     format!("board host set to {host}; remote `orbit` tip {tip}\n")
                 }
@@ -66,7 +66,10 @@ pub(super) fn cmd_sync(board: &Board, args: &BoardSyncArgs) -> Result<CommandOut
         human.push_str(&format!("  host `orbit` tip: {tip}\n"));
     }
     if report.state == "merged" {
-        human.push_str(&format!("  merged {} divergent files\n", report.merged_files));
+        human.push_str(&format!(
+            "  merged {} divergent files\n",
+            report.merged_files
+        ));
     }
     for field in &report.conflicts_resolved {
         human.push_str(&format!("  resolved {field} by --resolve\n"));

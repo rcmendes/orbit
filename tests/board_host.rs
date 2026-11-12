@@ -201,13 +201,15 @@ fn sync_unrelated_history_merges_different_tasks() {
     assert_eq!(joined["data"]["host_joined"], true);
     let second_board = second.join(".orbit").join("board");
     assert!(
-        second_board.join("tasks").join(format!("{local_id}.md")).exists(),
+        second_board
+            .join("tasks")
+            .join(format!("{local_id}.md"))
+            .exists(),
         "joined Board adopted the host's Tasks"
     );
 
     // Diverge: the second Board adds a Task while the first adds another.
-    let peer_id = repo
-        .ok_json_in(&second, &["add", "Peer task", "--json"])["data"]["id"]
+    let peer_id = repo.ok_json_in(&second, &["add", "Peer task", "--json"])["data"]["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -224,7 +226,12 @@ fn sync_unrelated_history_merges_different_tasks() {
     for board in [repo.board_path(), second_board.clone()] {
         assert!(board.join("tasks").join(format!("{local_id}.md")).exists());
         assert!(board.join("tasks").join(format!("{peer_id}.md")).exists());
-        assert!(board.join("tasks").join(format!("{other_local}.md")).exists());
+        assert!(
+            board
+                .join("tasks")
+                .join(format!("{other_local}.md"))
+                .exists()
+        );
     }
 }
 
@@ -292,8 +299,7 @@ fn sync_merges_fields_and_unions_comments() {
 
     // Remote side: priority + a comment.
     let task_relative = format!("tasks/{id}.md");
-    let remote_task = peer_read(&peer, &task_relative)
-        .replace("priority: 2", "priority: 3");
+    let remote_task = peer_read(&peer, &task_relative).replace("priority: 2", "priority: 3");
     peer_write(&peer, &task_relative, &remote_task);
     let comments_relative = format!("comments/{id}.md");
     peer_write(
@@ -306,7 +312,14 @@ fn sync_merges_fields_and_unions_comments() {
     // Local side: title + a comment, on different fields.
     repo.ok_json(&["update", &id, "--title", "Shared task renamed", "--json"]);
     repo.ok_json(&[
-        "comment", "add", &id, "--body", "local note", "--by", "agent", "--json",
+        "comment",
+        "add",
+        &id,
+        "--body",
+        "local note",
+        "--by",
+        "agent",
+        "--json",
     ]);
 
     let merged = repo.ok_json(&["board", "sync", "--json"]);
@@ -361,11 +374,13 @@ fn sync_field_conflict_stops_until_resolved() {
         "--json",
     ]);
     assert_eq!(resolved["data"]["state"], "merged");
-    assert!(resolved["data"]["conflicts_resolved"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|field| field == &format!("{id}.title")));
+    assert!(
+        resolved["data"]["conflicts_resolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == &format!("{id}.title"))
+    );
 
     let task = repo.read_task(&id);
     assert!(task.contains("title: Local title"), "{task}");
@@ -433,20 +448,14 @@ fn sync_never_rebases_or_force_pushes() {
         &peer_read(&peer, &task_relative).replace("priority: 2", "priority: 1"),
     );
     peer_commit(&repo, &peer, "host edit");
-    let peer_tip = repo
-        .git_in(&peer, &["rev-parse", "HEAD"])
-        .stdout;
+    let peer_tip = repo.git_in(&peer, &["rev-parse", "HEAD"]).stdout;
     let peer_tip = String::from_utf8_lossy(&peer_tip).trim().to_string();
 
     repo.ok_json(&["update", &id, "--title", "Local title", "--json"]);
     repo.ok_json(&["board", "sync", "--json"]);
 
     // The remote tip is a merge commit whose second parent is the peer's work.
-    let output = repo.git(&[
-        "ls-remote",
-        host_arg(&host).as_str(),
-        "refs/heads/orbit",
-    ]);
+    let output = repo.git(&["ls-remote", host_arg(&host).as_str(), "refs/heads/orbit"]);
     let remote = String::from_utf8_lossy(&output.stdout);
     let remote_tip = remote
         .lines()
@@ -462,10 +471,7 @@ fn sync_never_rebases_or_force_pushes() {
     assert_eq!(parents.split_whitespace().count(), 2, "{parents}");
 
     // The peer's commit remains an ancestor: history was merged, not rewritten.
-    let check = repo.git_in(
-        &peer,
-        &["fetch", "-q", "origin"],
-    );
+    let check = repo.git_in(&peer, &["fetch", "-q", "origin"]);
     assert!(check.status.success());
     let ancestor = repo.git_in(
         &peer,
@@ -489,7 +495,15 @@ fn init_defaults_to_the_hidden_board_folder() {
 #[test]
 fn init_visible_uses_a_visible_board_folder() {
     let repo = TestRepo::new();
-    let visible = repo.ok_json(&["init", "--visible", "--agents", "none", "--slug", "vis", "--json"]);
+    let visible = repo.ok_json(&[
+        "init",
+        "--visible",
+        "--agents",
+        "none",
+        "--slug",
+        "vis",
+        "--json",
+    ]);
     let board = visible["data"]["board"].as_str().unwrap().to_string();
     assert!(board.ends_with("/board"), "{board}");
     assert!(Path::new(&board).join("config.toml").exists());

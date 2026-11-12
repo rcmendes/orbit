@@ -621,11 +621,7 @@ pub fn remote_url(repo: &Path, name: &str) -> Result<Option<String>> {
 /// Resolves a remote ref to its tip commit without fetching objects.
 /// Returns `None` when the remote does not advertise the ref.
 pub fn ls_remote(repo: &Path, remote: &str, reference: &str) -> Result<Option<String>> {
-    let output = run_git_raw(
-        Some(repo),
-        &["ls-remote", remote, reference],
-        None,
-    )?;
+    let output = run_git_raw(Some(repo), &["ls-remote", remote, reference], None)?;
     if !output.status.success() {
         return Err(git_failure(&["ls-remote", remote, reference], &output));
     }
@@ -693,11 +689,7 @@ pub fn merge_base(repo: &Path, a: &str, b: &str) -> Result<Option<String>> {
 
 /// Every blob path in a commit's tree, recursively.
 pub fn tree_files(repo: &Path, commit: &str) -> Result<Vec<String>> {
-    let output = run_git(
-        Some(repo),
-        &["ls-tree", "-r", "--name-only", commit],
-        None,
-    )?;
+    let output = run_git(Some(repo), &["ls-tree", "-r", "--name-only", commit], None)?;
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(str::to_string)
@@ -733,7 +725,9 @@ pub fn write_tree(repo: &Path) -> Result<String> {
     let output = run_git(Some(repo), &["write-tree"], None)?;
     let tree = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if tree.is_empty() {
-        return Err(OrbitError::git("git write-tree returned an empty tree hash"));
+        return Err(OrbitError::git(
+            "git write-tree returned an empty tree hash",
+        ));
     }
     Ok(tree)
 }

@@ -113,7 +113,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                         board::cmd_host(board, host_args)
                     })
                 } else {
-                    with_board(dir.as_deref(), true, |board| board::cmd_host(board, host_args))
+                    with_board(dir.as_deref(), true, |board| {
+                        board::cmd_host(board, host_args)
+                    })
                 }
             }
             crate::cli::BoardCommand::Sync(sync_args) => {
@@ -239,9 +241,7 @@ where
         }
     }
     if matches!(mode, crate::board::AccessMode::Write) {
-        output
-            .warnings
-            .extend(crate::board_sync::auto_after(board));
+        output.warnings.extend(crate::board_sync::auto_after(board));
     }
     output.warnings.extend(board.warnings.iter().cloned());
     Ok(output)

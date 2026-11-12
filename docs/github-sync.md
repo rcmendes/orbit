@@ -34,14 +34,15 @@ orbit remote sync orb-a7b2c9 --apply
 
 ## Provider modes
 
-The GitHub adapter supports two modes, configured under `[github]` (or
-`[remote.github]` after `orbit migrate`). Existing configuration defaults to
-`full`, so existing organization setups keep their current behavior.
+The GitHub adapter supports two modes, configured under `[remote.github]` on a
+current Board (the legacy `[github]` section is still read until `orbit
+migrate` converts it). Missing configuration defaults to `full`, so existing
+organization setups keep their current behavior.
 
 ### Full mode (organization Issue Fields)
 
 - Requires organization-level Issue Fields named **Area** and
-  **Verification** (names are configurable under `[github.issue_fields]`).
+  **Verification** (names are configurable under `[remote.github.issue_fields]`).
 - Run `orbit remote connect --fields` to resolve and store the Issue Field GraphQL ids.
   Use `orbit remote connect --fields --validate-only` to check configuration without
   writing ids.
@@ -50,21 +51,29 @@ The GitHub adapter supports two modes, configured under `[github]` (or
 
 Connect an organization-owned repository from its checkout with
 `orbit remote connect`. It checks `gh auth status` and repository access,
-validates the organization fields, and writes the `[github]` configuration. It
+validates the organization fields, and writes the Remote Project and
+`[remote.github]` configuration. It
 preserves other Board settings and is safe to rerun. Use
 `orbit remote connect --json` for machine-readable status. To configure the
 Board manually, use:
 
 ```toml
-[github]
+[[remote.projects]]
+tracker = "github"
+project = "acme-corp/widget"
+
+[remote.github]
 mode = "full" # optional; full is the default
 organization = "acme-corp"
-repositories = ["acme-corp/widget"]
 
-[github.issue_fields]
+[remote.github.issue_fields]
 area_name = "Area"
 verification_name = "Verification"
 ```
+
+On an unmigrated Board the same settings live under `[github]` with
+`repositories = ["acme-corp/widget"]`; `orbit migrate` converts them into the
+shape above.
 
 For manual configuration, run `orbit remote connect --fields` to resolve existing Issue
 Fields and store their GraphQL ids. This default command does not create
@@ -91,9 +100,12 @@ Basic mode supports personal repositories without organization Issue Fields
 or `orbit remote connect --fields`:
 
 ```toml
-[github]
+[[remote.projects]]
+tracker = "github"
+project = "alice/widget"
+
+[remote.github]
 mode = "basic"
-repositories = ["alice/widget"]
 ```
 
 Link repositories, adopt or create Issues, and explicitly sync linked Tasks or
@@ -127,9 +139,10 @@ create and push sync can publish `area` and `verification`.
 `orbit remote connect` reads the current checkout's GitHub `origin`, checks
 authentication and access, and detects whether the owner is an organization or
 a personal account. For a personal-account repository it leaves configuration
-unchanged and reports the exact `[github]` entries for the Board's `config.toml`
+unchanged and reports the exact `[[remote.projects]]` and `[remote.github]`
+entries for the Board's `config.toml`
 to configure basic mode; merge them with existing settings and preserve other
-linked repositories. For an organization repository, it validates and stores
+Remote Projects. For an organization repository, it validates and stores
 the repository and Issue Field configuration. Missing authentication,
 repository access, or fields are reported with remediation actions. JSON
 output includes `owner_type`, `organization`, `repository`, `field_status`,
@@ -197,11 +210,11 @@ changes nothing without `--apply`.
 
 ## Link repositories
 
-Remote Projects are linked explicitly; Orbit does not bulk-import an entire
-repository. On a Board that has run `orbit migrate`, `orbit remote connect`
-writes a `[remote] projects` entry for the `github` tracker; on a legacy
-Board it appends to `[github] repositories`. Both shapes feed the same
-adapter configuration.
+Remote Projects are connected explicitly; Orbit does not bulk-import an entire
+repository. `orbit remote connect` writes a `[[remote.projects]]` entry for
+the `github` tracker (plus `[remote.github]` adapter settings when needed);
+on an unmigrated Board it appends to `[github] repositories`. Both shapes
+feed the same adapter configuration.
 
 ```bash
 orbit remote connect acme-corp/widget
@@ -233,9 +246,12 @@ The equivalent Board configuration is:
 [remote]
 auto_push = true
 
-[github]
+[[remote.projects]]
+tracker = "github"
+project = "acme-corp/widget"
+
+[remote.github]
 mode = "basic"
-repositories = ["acme-corp/widget"]
 ```
 
 The default is `false`. Auto-push is **push-only**: it never pulls, never
@@ -258,7 +274,7 @@ What triggers a push:
 What does not trigger a push: priority, type, `waiting_on`, claims,
 heartbeats, checkpoints, comments, and dependency relationships. Those
 fields either have no GitHub representation or remain explicit. `orbit
-github *`, `orbit remote *`, `orbit sync`, `doctor`, migrations, and `delete`
+remote *`, `orbit sync`, `orbit board *`, `doctor`, migrations, and `delete`
 are also excluded. `orbit triage apply` is included because it changes
 labels, `area`, and `verification`.
 
@@ -271,9 +287,9 @@ back. If the local commit failed, auto-push is skipped.
 `orbit:in-progress` is an adapter-managed label, not part of the Task's user
 Labels. The GitHub adapter reconciles it from the Orbit status on every
 push: it is added while a Task is `in_progress` and removed otherwise. Orbit
-never reads it back as a user label or a status. `orbit remote connect`,
-`setup`, and `repo link` ensure the label exists in each linked repository;
-pull sync ignores it. Enabling `auto_push` backfills nothing: existing Local
+never reads it back as a user label or a status. Orbit ensures the label
+exists when a Remote Project is connected and when a Task is linked or its
+Issue created; pull sync ignores it. Enabling `auto_push` backfills nothing: existing Local
 Tasks still need `orbit remote create`, and existing `in_progress` Tasks
 receive the label on their next mapped change or explicit sync. `orbit remote status` shows whether auto-push is enabled and how many local Tasks
 have no Issue; `orbit doctor` reports a missing reserved label or no linked
@@ -406,7 +422,7 @@ or fields when known.
   multi-Repository Board so a member Repository's `origin` counts.
 - `REMOTE_ISSUE_CONFLICT`: the error names the Task, Remote Issue, and
   conflicting fields. Review both values with `orbit remote sync
-  <task-id>`, choose each side with `--resolve FIELD=orbit|github`, then
+  <task-id>`, choose each side with `--resolve FIELD=orbit|remote`, then
   apply with `--apply`.
 
 ## GitHub Projects

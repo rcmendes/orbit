@@ -61,10 +61,7 @@ fn init_dir_inside_a_repository_creates_an_excluded_board() {
     // A named directory inside a repository becomes a visible Board folder
     // anchored by the repository's Orbit folder.
     assert_eq!(value["data"]["storage"], "repository");
-    assert_eq!(
-        value["data"]["board"].as_str().unwrap(),
-        canonical(&dir)
-    );
+    assert_eq!(value["data"]["board"].as_str().unwrap(), canonical(&dir));
     let exclude = value["data"]["exclude"].as_array().unwrap();
     assert!(
         exclude.iter().any(|entry| entry == "/shared-board/"),
@@ -325,7 +322,10 @@ fn init_dot_print_reports_the_repository_orbit_folder() {
             .join(".orbit/board")
     );
     let exclude = value["data"]["exclude"].as_array().unwrap();
-    assert!(exclude.iter().any(|entry| entry == "/.orbit/"), "{exclude:?}");
+    assert!(
+        exclude.iter().any(|entry| entry == "/.orbit/"),
+        "{exclude:?}"
+    );
     assert!(!repo.path().join(".orbit").exists());
 }
 
@@ -418,10 +418,7 @@ fn init_ignores_the_global_fallback_as_a_conflict() {
 
     assert_eq!(status, 0, "{value}");
     assert_eq!(value["data"]["storage"], "repository");
-    assert!(repo
-        .path()
-        .join("sub/.orbit/board/config.toml")
-        .is_file());
+    assert!(repo.path().join("sub/.orbit/board/config.toml").is_file());
 }
 
 #[test]

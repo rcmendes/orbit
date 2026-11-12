@@ -128,10 +128,7 @@ pub struct Config {
     /// Legacy GitHub provider section; `orbit migrate` rewrites it to `remote`.
     #[serde(default)]
     pub github: crate::github::GitHubConfig,
-    #[serde(
-        default,
-        skip_serializing_if = "crate::remote::RemoteConfig::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "crate::remote::RemoteConfig::is_empty")]
     pub remote: crate::remote::RemoteConfig,
     #[serde(
         default,
@@ -580,9 +577,7 @@ impl Board {
 
     /// The default local Board folder: `<main-checkout>/.orbit/board`.
     pub fn local_root() -> Result<PathBuf> {
-        Ok(slug::main_checkout_anchor()?
-            .join(".orbit")
-            .join("board"))
+        Ok(slug::main_checkout_anchor()?.join(".orbit").join("board"))
     }
 
     /// The `.orbit` folder anchoring this Board when it resolved through one:
@@ -711,11 +706,9 @@ impl Board {
         if root
             .file_name()
             .is_some_and(|name| name == std::ffi::OsStr::new(ORBIT_DIR))
-        {
-            if let Some(board) = resolve_orbit_dir(&root) {
+            && let Some(board) = resolve_orbit_dir(&root) {
                 return Ok((board.root().to_path_buf(), board.is_legacy()));
             }
-        }
         // An Orbit folder resolves its hidden `board/` or the `board` pointer.
         let orbit = root.join(".orbit");
         if let Some(board) = resolve_orbit_dir(&orbit) {
@@ -1191,10 +1184,7 @@ fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
         push_warning(&mut discovery.warnings, warning);
     }
     let legacy_orbit = root.join(ORBIT_DIR);
-    if workspace
-        && selected_root != legacy_orbit
-        && Board::is_board(&legacy_orbit)
-    {
+    if workspace && selected_root != legacy_orbit && Board::is_board(&legacy_orbit) {
         discovery.ambiguous = Some((selected_root.clone(), legacy_orbit.clone()));
         push_warning(
             &mut discovery.warnings,
@@ -1291,26 +1281,24 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         discovery.steps[link_step].found = link_root.is_some();
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::Workspace,
-            workspace.as_ref().map(|board| orbit_root(board)),
+            workspace.as_ref().map(orbit_root),
         ));
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::Nearest,
-            nearest.as_ref().map(|board| orbit_root(board)),
+            nearest.as_ref().map(orbit_root),
         ));
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::MainCheckout,
-            main.as_ref().map(|board| orbit_root(board)),
+            main.as_ref().map(orbit_root),
         ));
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::LegacyLocal,
             Some(legacy_local.clone()),
         ));
-        discovery
-            .steps
-            .push(DiscoveryStep::new(
-                DiscoverySource::Global,
-                global.as_ref().map(|board| orbit_root(board)),
-            ));
+        discovery.steps.push(DiscoveryStep::new(
+            DiscoverySource::Global,
+            global.as_ref().map(orbit_root),
+        ));
 
         let selected = if discovery.error.is_some() {
             None
@@ -1420,15 +1408,15 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
     let global = home.as_deref().and_then(global_board);
     discovery.steps.push(DiscoveryStep::new(
         DiscoverySource::Workspace,
-        workspace.as_ref().map(|board| orbit_root(board)),
+        workspace.as_ref().map(orbit_root),
     ));
     discovery.steps.push(DiscoveryStep::new(
         DiscoverySource::Nearest,
-        nearest.as_ref().map(|board| orbit_root(board)),
+        nearest.as_ref().map(orbit_root),
     ));
     discovery.steps.push(DiscoveryStep::new(
         DiscoverySource::Global,
-        global.as_ref().map(|board| orbit_root(board)),
+        global.as_ref().map(orbit_root),
     ));
 
     if let Some(board) = workspace {
@@ -1533,8 +1521,7 @@ fn is_global_board(path: &Path) -> bool {
     let orbit = home.join(ORBIT_DIR);
     // The global Board folder is `~/.orbit` itself (legacy) or the Board the
     // Orbit folder resolves to — `~/.orbit/board` hidden or a visible folder.
-    path == orbit
-        || resolve_orbit_dir(&orbit).is_some_and(|board| board.root() == path)
+    path == orbit || resolve_orbit_dir(&orbit).is_some_and(|board| board.root() == path)
 }
 
 /// The Board folder an Orbit folder resolves to, plus whether that resolution
@@ -1550,11 +1537,10 @@ fn orbit_root(board: &OrbitBoard) -> PathBuf {
 
 fn nearest_orbit(start: &Path, stop: &Path, skip: Option<&Path>) -> Option<OrbitBoard> {
     for dir in git::ancestors_through(start, Some(stop)) {
-        if skip != Some(dir) {
-            if let Some(board) = resolve_orbit_dir(&dir.join(".orbit")) {
+        if skip != Some(dir)
+            && let Some(board) = resolve_orbit_dir(&dir.join(".orbit")) {
                 return Some(board);
             }
-        }
     }
     None
 }
@@ -1567,12 +1553,15 @@ fn nearest_workspace_board(start: &Path, skip: Option<&Path>) -> Option<OrbitBoa
         if skip == Some(directory) {
             continue;
         }
-        if git::toplevel_containing(&directory).is_some() {
+        if git::toplevel_containing(directory).is_some() {
             continue;
         }
         match resolve_orbit_dir(&directory.join(".orbit")) {
             Some(board)
-                if matches!(board, OrbitBoard::Hidden { .. } | OrbitBoard::Visible { .. }) =>
+                if matches!(
+                    board,
+                    OrbitBoard::Hidden { .. } | OrbitBoard::Visible { .. }
+                ) =>
             {
                 return Some(board);
             }
@@ -1611,9 +1600,9 @@ impl OrbitBoard {
     /// The resolved Board folder.
     pub(crate) fn root(&self) -> &Path {
         match self {
-            Self::Hidden { root, .. }
-            | Self::Visible { root, .. }
-            | Self::Legacy { root, .. } => root,
+            Self::Hidden { root, .. } | Self::Visible { root, .. } | Self::Legacy { root, .. } => {
+                root
+            }
         }
     }
 
@@ -1705,9 +1694,7 @@ pub fn board_cache_dir(board: &Board) -> PathBuf {
     board
         .root
         .parent()
-        .filter(|parent| {
-            parent.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR)
-        })
+        .filter(|parent| parent.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR))
         .map(|parent| parent.join(CACHE_DIR))
         .unwrap_or_else(|| board.root.join(CACHE_DIR))
 }
@@ -1773,10 +1760,7 @@ pub(crate) fn workspace_child_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
 /// The `.git/info/exclude` entries needed to hide an Orbit folder — and an
 /// optional visible Board folder — inside a Git working tree. Reports only;
 /// use `ensure_orbit_excluded` to write them. `.gitignore` is never touched.
-pub fn orbit_exclude_entries(
-    orbit: &Path,
-    visible_board: Option<&Path>,
-) -> Result<Vec<String>> {
+pub fn orbit_exclude_entries(orbit: &Path, visible_board: Option<&Path>) -> Result<Vec<String>> {
     let mut entries = Vec::new();
     if let Some((_, entry)) = worktree_exclusion(orbit)? {
         entries.push(entry);
@@ -1792,10 +1776,7 @@ pub fn orbit_exclude_entries(
 
 /// Writes the `.git/info/exclude` entries hiding an Orbit folder and an
 /// optional visible Board folder inside a Git working tree (ADR 0019).
-pub fn ensure_orbit_excluded(
-    orbit: &Path,
-    visible_board: Option<&Path>,
-) -> Result<Vec<String>> {
+pub fn ensure_orbit_excluded(orbit: &Path, visible_board: Option<&Path>) -> Result<Vec<String>> {
     let mut entries = Vec::new();
     if let Some((repo, entry)) = worktree_exclusion(orbit)? {
         git::ensure_exclude_entry(&repo, orbit)?;
@@ -1850,10 +1831,12 @@ fn legacy_local_board_for(root: &Path) -> Option<PathBuf> {
     // a code repository's working tree, the legacy Board belongs to that
     // enclosing repository's common dir, so look one level out as well.
     let repo = git::toplevel_containing(root)
-        .filter(|toplevel| dunce::canonicalize(toplevel).unwrap_or_else(|_| toplevel.clone()) != root)
+        .filter(|toplevel| {
+            dunce::canonicalize(toplevel).unwrap_or_else(|_| toplevel.clone()) != root
+        })
         .or_else(|| {
             root.parent()
-                .and_then(|parent| git::toplevel_containing(parent))
+                .and_then(git::toplevel_containing)
         });
     if let Some(repo) = repo
         && let Ok(common) = git::common_dir_at(&repo)

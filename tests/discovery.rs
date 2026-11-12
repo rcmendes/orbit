@@ -55,10 +55,7 @@ fn init_creates_the_orbit_folder_board_and_excludes_it() {
     // The Board folder is a standalone repository on branch `orbit`.
     assert!(dir.join(".git").exists());
     let branch = repo.git_in(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    assert_eq!(
-        String::from_utf8_lossy(&branch.stdout).trim(),
-        "orbit"
-    );
+    assert_eq!(String::from_utf8_lossy(&branch.stdout).trim(), "orbit");
 
     let config = std::fs::read_to_string(dir.join("config.toml")).unwrap();
     assert!(!config.contains("storage"), "{config}");

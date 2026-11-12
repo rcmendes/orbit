@@ -68,7 +68,10 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
                 "board": board.root,
                 "reason": "the Board already uses the standalone layout",
             }),
-            format!("the Board at {} is already migrated\n", board.root.display()),
+            format!(
+                "the Board at {} is already migrated\n",
+                board.root.display()
+            ),
         ));
     }
 
@@ -89,7 +92,11 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
     });
     let human = format!(
         "orbit migrate {} the Board at {}\n  layout: {}\n  tasks: {} scanned, {} github link(s), {} repo label(s)\n",
-        if args.apply { "applied to" } else { "preview for" },
+        if args.apply {
+            "applied to"
+        } else {
+            "preview for"
+        },
         board.root.display(),
         layout_target(&layout, &board).display(),
         stats.tasks_scanned,
@@ -275,9 +282,7 @@ fn repo_board_target(root: &Path) -> Result<Option<PathBuf>> {
     let Some(context) = context else {
         return Ok(None);
     };
-    Ok(Some(
-        context.main_checkout.join(".orbit").join("board"),
-    ))
+    Ok(Some(context.main_checkout.join(".orbit").join("board")))
 }
 
 /// Scans the Board for content that `orbit migrate` rewrites.
@@ -393,8 +398,8 @@ fn ensure_board_repo(root: &Path, branch: &str) -> Result<()> {
 fn hide_in_working_tree(board: &Board, discovery: &Discovery) -> Result<()> {
     match orbit_dir_of(board, discovery) {
         Some(orbit) => {
-            let visible = (board.root.parent() != Some(orbit.as_path()))
-                .then_some(board.root.as_path());
+            let visible =
+                (board.root.parent() != Some(orbit.as_path())).then_some(board.root.as_path());
             let _ = board::ensure_orbit_excluded(&orbit, visible);
         }
         None => {
@@ -547,8 +552,9 @@ fn migrate_worktree(
     content_needed: bool,
 ) -> Result<Option<String>> {
     let source = board.root.clone();
-    let context = Board::repo_context_at(&source)?
-        .ok_or_else(|| OrbitError::config("cannot resolve the repository owning the Board worktree"))?;
+    let context = Board::repo_context_at(&source)?.ok_or_else(|| {
+        OrbitError::config("cannot resolve the repository owning the Board worktree")
+    })?;
     let branch = board.config.board.branch.clone();
 
     // Stage a standalone clone of the Board branch next to the Orbit folder.
@@ -563,7 +569,14 @@ fn migrate_worktree(
     std::fs::create_dir_all(&stage)
         .map_err(|e| OrbitError::io(format!("create {}", stage.display()), e))?;
     crate::git::init_repo(&stage)?;
-    git_out(&stage, &["fetch", context.main_checkout.to_str().unwrap_or_default(), &branch])?;
+    git_out(
+        &stage,
+        &[
+            "fetch",
+            context.main_checkout.to_str().unwrap_or_default(),
+            &branch,
+        ],
+    )?;
     git_out(&stage, &["checkout", "-b", &branch, "FETCH_HEAD"])?;
 
     // Content conversion + the single migration commit inside the stage.
@@ -607,7 +620,10 @@ fn git_has_changes(root: &Path) -> Result<bool> {
 
 fn git_out(cwd: &Path, args: &[&str]) -> Result<String> {
     crate::git::git_output(cwd, args).map_err(|error| {
-        OrbitError::new(code::GIT_ERROR, format!("git {} failed: {error}", args.join(" ")))
+        OrbitError::new(
+            code::GIT_ERROR,
+            format!("git {} failed: {error}", args.join(" ")),
+        )
     })
 }
 
@@ -634,7 +650,9 @@ fn migrate_content(root: &Path) -> Result<ContentStats> {
             };
             if !config.remote.projects.contains(&project) {
                 config.remote.projects.push(project);
-                stats.config_changes.push(format!("remote.projects += {repo}"));
+                stats
+                    .config_changes
+                    .push(format!("remote.projects += {repo}"));
             }
         }
         let mut adapter = github.clone();

@@ -20,10 +20,7 @@ fn init_creates_the_local_orbit_folder() {
     // The Board folder is a standalone repository on branch `orbit`; the
     // code repository keeps no `orbit` worktree or branch.
     let board_git = repo.git_in(&board, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    assert_eq!(
-        String::from_utf8_lossy(&board_git.stdout).trim(),
-        "orbit"
-    );
+    assert_eq!(String::from_utf8_lossy(&board_git.stdout).trim(), "orbit");
     let branches = repo.git(&["branch", "--list", "orbit"]);
     assert!(String::from_utf8_lossy(&branches.stdout).trim().is_empty());
 

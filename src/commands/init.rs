@@ -39,15 +39,9 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     let (requested_root, explicit_global) = if args.global {
         (global_dir.clone().expect("global home was checked"), true)
     } else if let Some(target) = args.target.as_deref() {
-        (
-            crate::board::resolve_external(target)?,
-            false,
-        )
+        (crate::board::resolve_external(target)?, false)
     } else if let Some(dir) = dir {
-        (
-            crate::board::resolve_external(dir)?,
-            false,
-        )
+        (crate::board::resolve_external(dir)?, false)
     } else {
         (default_init_dir(&cwd)?, false)
     };
@@ -152,9 +146,8 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
             })?;
         }
         let cache = orbit_dir.join("cache");
-        std::fs::create_dir_all(&cache).map_err(|error| {
-            OrbitError::io(format!("create {}", cache.display()), error)
-        })?;
+        std::fs::create_dir_all(&cache)
+            .map_err(|error| OrbitError::io(format!("create {}", cache.display()), error))?;
     }
 
     // A Board folder inside a Git working tree is hidden only through
@@ -569,11 +562,7 @@ fn init_layout(
                             })
                         })
                     })
-                    .or_else(|| {
-                        requested
-                            .parent()
-                            .map(|parent| parent.join(".orbit"))
-                    })
+                    .or_else(|| requested.parent().map(|parent| parent.join(".orbit")))
                     .unwrap_or_else(|| requested.join(".orbit"));
                 return Ok((orbit, requested.to_path_buf(), true));
             }

@@ -213,10 +213,7 @@ fn migrate_rewrites_github_links_repo_labels_and_areas() {
     assert_eq!(value["data"]["repo_labels"], 1);
 
     let migrated = repo.board_path();
-    let task = std::fs::read_to_string(
-        migrated.join("tasks").join("orb-d0e5f2.md"),
-    )
-    .unwrap();
+    let task = std::fs::read_to_string(migrated.join("tasks").join("orb-d0e5f2.md")).unwrap();
     assert!(!task.contains("github:"), "{task}");
     assert!(task.contains("remote:"), "{task}");
     assert!(task.contains("tracker: github"), "{task}");
@@ -258,7 +255,7 @@ fn migrate_rewrites_the_github_section_to_remote_projects() {
         assert!(!github.contains_key(key), "{github:?}");
     }
     let remote = &config["remote"];
-    assert_eq!(remote["auto_push"].as_bool().unwrap(), true);
+    assert!(remote["auto_push"].as_bool().unwrap());
     let projects = remote["projects"].as_array().unwrap();
     assert_eq!(projects.len(), 2);
     for project in projects {
@@ -270,10 +267,7 @@ fn migrate_rewrites_the_github_section_to_remote_projects() {
     }
     // The GitHub adapter settings survive under `remote.github` without the
     // project list, which now lives in `remote.projects`.
-    assert_eq!(
-        remote["github"]["mode"].as_str().unwrap(),
-        "basic"
-    );
+    assert_eq!(remote["github"]["mode"].as_str().unwrap(), "basic");
     assert!(
         remote["github"]
             .get("repositories")
@@ -333,11 +327,6 @@ fn migrate_apply_on_a_visible_board_keeps_the_pointer() {
     let pointer = std::fs::read_to_string(orbit.join("board")).unwrap();
     assert_eq!(pointer.trim(), board.to_str().unwrap());
 
-    let listed = repo.ok_json(&[
-        "--dir",
-        workspace.to_str().unwrap(),
-        "list",
-        "--json",
-    ]);
+    let listed = repo.ok_json(&["--dir", workspace.to_str().unwrap(), "list", "--json"]);
     assert_eq!(listed["data"]["count"], 0);
 }

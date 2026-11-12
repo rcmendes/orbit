@@ -211,7 +211,9 @@ pub(crate) fn candidate_workspace_root(start: &Path) -> Option<PathBuf> {
         // Board folder marks a Workspace; a legacy `.orbit`-is-Board does not.
         let anchored = matches!(
             crate::board::resolve_orbit_dir(&orbit),
-            Some(crate::board::OrbitBoard::Hidden { .. } | crate::board::OrbitBoard::Visible { .. })
+            Some(
+                crate::board::OrbitBoard::Hidden { .. } | crate::board::OrbitBoard::Visible { .. }
+            )
         );
         if anchored
             || orbit.join("cache").exists()

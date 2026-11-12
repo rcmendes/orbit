@@ -61,7 +61,9 @@ pub struct RemoteProject {
 impl RemoteProject {
     pub fn validate(&self) -> Result<()> {
         if self.tracker.trim().is_empty() {
-            return Err(OrbitError::config("remote project tracker must be non-empty"));
+            return Err(OrbitError::config(
+                "remote project tracker must be non-empty",
+            ));
         }
         if self.project.trim().is_empty() {
             return Err(OrbitError::config("remote project id must be non-empty"));

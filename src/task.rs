@@ -189,7 +189,10 @@ pub struct RemoteLink {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    #[serde(default = "default_remote_active", skip_serializing_if = "is_remote_active")]
+    #[serde(
+        default = "default_remote_active",
+        skip_serializing_if = "is_remote_active"
+    )]
     pub active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<serde_yaml_ng::Value>,

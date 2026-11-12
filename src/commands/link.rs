@@ -132,8 +132,8 @@ pub(super) fn cmd_unlink() -> Result<crate::output::CommandOutput> {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| local.clone());
-    let local_exists = crate::board::resolve_orbit_dir(&orbit_dir).is_some()
-        || Board::is_board(&local);
+    let local_exists =
+        crate::board::resolve_orbit_dir(&orbit_dir).is_some() || Board::is_board(&local);
     let unlinked = Board::clear_link()?;
     let root = crate::git::repo_root()?;
     let mut warnings = Vec::new();

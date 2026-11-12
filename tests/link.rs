@@ -48,7 +48,7 @@ fn link_reports_a_missing_target_with_link_not_found() {
 }
 
 #[test]
-fn a_linked_legacy_board_keeps_warning_on_later_commands() {
+fn a_linked_legacy_board_requires_migration_on_later_commands() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let board = parent.path().join("old-board");
@@ -57,13 +57,14 @@ fn a_linked_legacy_board_keeps_warning_on_later_commands() {
     let linked = repo.link_at(&board);
     assert_warning(&linked, "LEGACY_LAYOUT");
 
-    let listed = repo.ok_json(&["list", "--json"]);
-    assert_eq!(listed["data"]["count"], 0);
-    assert_warning(&listed, "LEGACY_LAYOUT");
+    // Board commands refuse the pre-ADR-0019 layout until `orbit migrate`.
+    let (status, value) = repo.json(&["list", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "BOARD_NOT_MIGRATED");
 }
 
 #[test]
-fn a_linked_legacy_workspace_keeps_warning_on_later_commands() {
+fn a_linked_legacy_workspace_requires_migration_on_later_commands() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let workspace = parent.path().join("acme");
@@ -74,9 +75,9 @@ fn a_linked_legacy_workspace_keeps_warning_on_later_commands() {
     assert_eq!(linked["data"]["board"].as_str().unwrap(), canonical(&board));
     assert_warning(&linked, "LEGACY_LAYOUT");
 
-    let listed = repo.ok_json(&["list", "--json"]);
-    assert_eq!(listed["data"]["count"], 0);
-    assert_warning(&listed, "LEGACY_LAYOUT");
+    let (status, value) = repo.json(&["list", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "BOARD_NOT_MIGRATED");
 }
 
 #[test]
@@ -135,7 +136,7 @@ fn unlink_refreshes_managed_files_without_a_local_board() {
 }
 
 #[test]
-fn unlink_points_a_legacy_local_board_at_doctor_migrate() {
+fn unlink_points_a_legacy_local_board_at_orbit_migrate() {
     let repo = TestRepo::new();
     let legacy = repo.legacy_board_path();
     std::fs::create_dir_all(legacy.join("tasks")).unwrap();
@@ -152,7 +153,7 @@ fn unlink_points_a_legacy_local_board_at_doctor_migrate() {
     let warnings = value["meta"]["warnings"].as_array().unwrap();
     assert!(warnings.iter().any(|warning| {
         let warning = warning.as_str().unwrap();
-        warning.contains("legacy Board") && warning.contains("doctor --migrate")
+        warning.contains("legacy Board") && warning.contains("orbit migrate")
     }));
 }
 
@@ -173,9 +174,11 @@ fn link_from_a_worktree_writes_the_common_pointer_and_shares_the_lock() {
     repo.ok_json_in(&worktree, &["link", shared.to_str().unwrap(), "--json"]);
 
     let pointer = repo.path().join(".git/orbit/link");
+    // The link names the resolved Board folder: `<shared>/board` hidden
+    // inside the Orbit folder.
     assert_eq!(
         std::fs::read_to_string(&pointer).unwrap().trim(),
-        canonical(&shared)
+        canonical(&shared.join("board"))
     );
 
     let id = repo.ok_json_in(&worktree, &["add", "From a worktree", "--json"])["data"]["id"]
@@ -196,7 +199,8 @@ fn link_from_a_worktree_writes_the_common_pointer_and_shares_the_lock() {
     let shown = repo.ok_json_in(&worktree, &["show", id.as_str(), "--json"]);
     assert_eq!(shown["data"]["claimed_by"], "main-agent");
 
-    assert!(shared.join(".lock").is_file());
+    // The lock lives inside the standalone Board repository.
+    assert!(shared.join("board/.lock").is_file());
     assert!(!repo.path().join(".orbit/.lock").exists());
 }
 

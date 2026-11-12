@@ -299,6 +299,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
                 mcp_bin: Some(mcp_bin),
                 print: args.print,
                 remove: false,
+                remote_details: crate::remote::details_visible_for(Some(&board_root)),
             },
         )?;
         file_outcomes = outcome.files;

@@ -293,13 +293,43 @@ tasks with no parent follow in a final No parent section. The table is for
 reading; use --json when another program consumes the result, because it returns
 the full task objects in data.tasks plus data.count.
 
---linked shows only Tasks with an active GitHub Issue link; --local shows only
-Tasks without one, including detached provenance. --parent lists only the
-SubTasks of one Parent Task. --type is repeatable and matches any listed work
-shape; --exclude-type hides any listed shape. --label is repeatable and every
-label must match; --exclude-label is repeatable and hides a task carrying any of
-the named labels. --repo NAME is shorthand for --label repo:NAME. For work an
-agent can start, use `orbit ready` instead of filtering this list.";
+--linked shows only Tasks with an active Remote Issue link; --local shows only
+Tasks without one, including detached provenance. The ISSUE column and these
+filters appear only while the Board has Remote Tracker material. --parent lists
+only the SubTasks of one Parent Task. --type is repeatable and matches any
+listed work shape; --exclude-type hides any listed shape. --label is repeatable
+and every label must match; --exclude-label is repeatable and hides a task
+carrying any of the named labels. --repo NAME is shorthand for --label
+repo:NAME. For work an agent can start, use `orbit ready` instead of filtering
+this list.";
+
+/// `orbit list --help` on a Board with no Remote Project and no Task links:
+/// the ISSUE column and the link filters do not exist, so help omits them.
+pub const LIST_LONG_UNCONNECTED: &str = "\
+Lists tasks from a consistent snapshot of the Board. Done and cancelled tasks are
+hidden by default; pass --include-closed to include them, or name a terminal
+status with --status. Filters combine, so --status in_progress --claimed-by
+claude shows everything one agent is holding.
+
+Inside a member Repository or one of its worktrees the list is scoped to that
+Repository's Tasks plus Board-wide Tasks (tasks with no repo); --all widens it
+to the whole Board. At the Board's root there is no scoping.
+
+Human output is an aligned table with ID, STATUS, P, TYPE, TITLE, LABELS, and
+CLAIMED BY columns. Long titles are shortened to 60 characters. Root Tasks are
+ordered by priority, then creation time and ID; each Parent Task is followed by
+its SubTasks, also ordered by priority. --group renders one outlined table with
+a banner for each Parent Task and its SubTasks beneath it; tasks with no parent
+follow in a final No parent section. The table is for reading; use --json when
+another program consumes the result, because it returns the full task objects
+in data.tasks plus data.count.
+
+--parent lists only the SubTasks of one Parent Task. --type is repeatable and
+matches any listed work shape; --exclude-type hides any listed shape. --label
+is repeatable and every label must match; --exclude-label is repeatable and
+hides a task carrying any of the named labels. --repo NAME is shorthand for
+--label repo:NAME. For work an agent can start, use `orbit ready` instead of
+filtering this list.";
 
 pub const LIST_EXAMPLES: &str = "\
 Examples:
@@ -325,9 +355,41 @@ Examples:
   orbit list --repo api
   orbit list --repo api --label ready-for-agent
 
-  # Only work linked to a GitHub Issue, or only local work
+  # Only work linked to a Remote Issue, or only local work
   orbit list --linked
   orbit list --local
+
+  # Only epics and specs
+  orbit list --type epic
+
+  # Hide epics and specs from the list
+  orbit list --exclude-type epic";
+
+/// `orbit list --help` examples on a Board with no Remote material: the
+/// `--linked`/`--local` examples do not apply.
+pub const LIST_EXAMPLES_UNCONNECTED: &str = "\
+Examples:
+  # What is open right now?
+  orbit list
+
+  # Everything awaiting triage
+  orbit list --label needs-triage
+
+  # What is claude working on?
+  orbit list --status in_progress --claimed-by claude
+
+  # Full history, including closed work
+  orbit list --include-closed --json
+
+  # The pieces of one feature
+  orbit list --parent orb-a7b2c9
+
+  # Group Parent Tasks and SubTasks in one outlined table
+  orbit list --group
+
+  # Everything for one repository, optionally with another label
+  orbit list --repo api
+  orbit list --repo api --label ready-for-agent
 
   # Only epics and specs
   orbit list --type epic
@@ -1045,12 +1107,14 @@ Examples:
   orbit remote auto-push disable         # alias for off";
 
 pub const TRIAGE_LONG: &str = "\
-Review GitHub-linked Tasks and apply approved metadata changes on the Orbit Board first.
+Review Tasks and apply approved metadata changes on the Orbit Board first.
 
 Triage only touches Orbit-owned `area`, task-level `verification`, and canonical triage/category
-labels. In GitHub basic mode, it supports labels only. It does not change Task title, body, status,
-or open/closed state, and it does not run verification commands. After approving a review or
-`triage apply --approve`, publish changes with `orbit remote sync`.
+labels. It works on Local Tasks and Linked Tasks alike; for a Linked Task, only the Remote
+Project's Mapped fields can be proposed, since those are the only fields a later sync publishes.
+It does not change Task title, body, status, or open/closed state, and it does not run
+verification commands. After approving a review or `triage apply --approve` on a Linked Task,
+publish changes with `orbit remote sync`.
 
 Agents draft a proposal JSON file and run `triage review` to see a field-by-field preview. With a
 proposal file and both stdin and stdout connected to a terminal, review prompts for explicit
@@ -1061,8 +1125,8 @@ prints the preview and never waits for input. `--json` remains non-interactive, 
 `orbit triage` rejects a proposal whose resulting labels contain more than one state role or more
 than one category role, with `TRIAGE_INVALID_PROPOSAL`.
 
-Review and apply change the Orbit Board only. GitHub is unchanged until an explicit
-`orbit remote sync` command. When evidence is insufficient, record `uncertainty` and leave
+Review and apply change the Orbit Board only. A Remote Tracker is unchanged until an explicit
+sync command. When evidence is insufficient, record `uncertainty` and leave
 metadata unchanged.";
 
 pub const TRIAGE_EXAMPLES: &str = "\

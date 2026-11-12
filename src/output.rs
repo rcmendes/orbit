@@ -197,15 +197,6 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
                 "Task {task} conflicts with {tracker} Issue {project}#{id} in {fields}. Review with `{sync_command}`, choose each side with `--resolve FIELD=orbit` or `--resolve FIELD=remote`, then apply with `{sync_command} --resolve FIELD=orbit|remote --apply`."
             ))
         }
-        crate::error::code::TRIAGE_NOT_LINKED => {
-            let task = details
-                .get("task")
-                .and_then(Value::as_str)
-                .unwrap_or("<task-id>");
-            Some(format!(
-                "Link the intended Remote Issue for Task {task} with `orbit remote link {task} <issue-url>`, then retry triage."
-            ))
-        }
         crate::error::code::TRIAGE_APPROVAL_REQUIRED => {
             let task = details
                 .get("task")

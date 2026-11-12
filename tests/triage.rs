@@ -71,26 +71,118 @@ fn adopt_basic_linked(repo: &TestRepo, fixture: &std::path::Path) -> String {
 }
 
 #[test]
-fn triage_context_requires_github_link() {
+fn triage_context_reports_local_task_without_remote_link() {
     let repo = TestRepo::new();
     repo.init();
-    let id = repo.add("Local only", &[]);
-    let (status, value) = repo.json(&["triage", "context", id.as_str(), "--json"]);
-    assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "TRIAGE_NOT_LINKED");
-    assert_eq!(value["error"]["details"]["task"], id);
-    let remediation = value["error"]["details"]["remediation"].as_str().unwrap();
-    assert!(remediation.contains(&format!("orbit remote link {id} <issue-url>")));
-    assert!(
-        value["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains(remediation)
-    );
+    let id = repo.add("Local only", &["--label", "needs-triage"]);
 
-    let human = repo.orbit(&["triage", "context", id.as_str()]);
-    assert!(!human.status.success());
-    assert!(String::from_utf8_lossy(&human.stderr).contains(remediation));
+    let ctx = repo.ok_json(&["triage", "context", id.as_str(), "--json"]);
+    assert_eq!(ctx["data"]["id"], id);
+    assert!(ctx["data"]["remote"].is_null());
+    assert!(ctx["data"]["github"].is_null());
+    assert_eq!(ctx["data"]["metadata_capabilities"]["area"], true);
+    assert_eq!(ctx["data"]["metadata_capabilities"]["verification"], true);
+    assert_eq!(ctx["data"]["metadata_capabilities"]["labels"], true);
+    let labels = ctx["data"]["canonical_labels"].as_array().unwrap();
+    assert!(labels.iter().any(|v| v == "needs-triage"));
+}
+
+#[test]
+fn triage_review_and_apply_work_on_local_tasks_without_publish_step() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Local only", &["--label", "needs-triage"]);
+    let proposal = repo.path().join("proposal.json");
+    fs::write(
+        &proposal,
+        r#"{
+  "area": "cli",
+  "labels_add": ["bug"],
+  "labels_remove": ["needs-triage"]
+}"#,
+    )
+    .unwrap();
+
+    let review = repo.ok_json(&[
+        "triage",
+        "review",
+        id.as_str(),
+        "--proposal-file",
+        proposal.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(review["data"]["apply_ready"], true);
+    assert_eq!(review["data"]["changes"]["area"]["to"], "cli");
+    assert_eq!(review["data"]["changes"]["labels"]["add"], json!(["bug"]));
+    let note = review["data"]["sync_note"].as_str().unwrap();
+    assert!(note.contains("Local"), "{note}");
+    assert!(!note.contains("--direction push"), "{note}");
+
+    let applied = repo.ok_json(&[
+        "triage",
+        "apply",
+        id.as_str(),
+        "--proposal-file",
+        proposal.to_str().unwrap(),
+        "--approve",
+        "--json",
+    ]);
+    assert_eq!(applied["data"]["applied"], true);
+    assert_eq!(applied["data"]["sync_required"], false);
+    assert!(applied["data"]["sync_command"].is_null());
+
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["area"], "cli");
+    assert_eq!(show["data"]["labels"], json!(["bug"]));
+}
+
+#[test]
+fn triage_linked_task_reports_remote_link_and_publish_command() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    let id = adopt_linked(&repo, &fixture);
+
+    // Triage never calls the Remote Tracker: no fixture env is needed here.
+    let ctx = repo.ok_json(&["triage", "context", id.as_str(), "--json"]);
+    assert_eq!(ctx["data"]["remote"]["tracker"], "github");
+    assert_eq!(ctx["data"]["remote"]["project"], "acme/widget");
+    assert_eq!(ctx["data"]["remote"]["id"], "7");
+    assert_eq!(ctx["data"]["metadata_capabilities"]["area"], true);
+    assert_eq!(ctx["data"]["metadata_capabilities"]["verification"], true);
+    assert_eq!(ctx["data"]["metadata_capabilities"]["labels"], true);
+
+    let proposal = repo.path().join("proposal.json");
+    fs::write(&proposal, r#"{"labels_add": ["bug"]}"#).unwrap();
+
+    let review = repo.ok_json(&[
+        "triage",
+        "review",
+        id.as_str(),
+        "--proposal-file",
+        proposal.to_str().unwrap(),
+        "--json",
+    ]);
+    let note = review["data"]["sync_note"].as_str().unwrap();
+    assert!(note.contains("orbit remote sync"), "{note}");
+    assert!(note.contains("--direction push --apply"), "{note}");
+
+    let applied = repo.ok_json(&[
+        "triage",
+        "apply",
+        id.as_str(),
+        "--proposal-file",
+        proposal.to_str().unwrap(),
+        "--approve",
+        "--json",
+    ]);
+    assert_eq!(applied["data"]["applied"], true);
+    assert_eq!(applied["data"]["sync_required"], true);
+    let command = applied["data"]["sync_command"].as_str().unwrap();
+    assert!(command.contains("orbit remote sync"), "{command}");
+    assert!(command.contains(&id), "{command}");
+    assert!(command.contains("--direction push --apply"), "{command}");
 }
 
 #[test]
@@ -488,12 +580,9 @@ fn basic_mode_triage_exposes_only_label_capability() {
     );
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
-    assert!(
-        value["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("labels only")
-    );
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("does not map"), "{message}");
+    assert!(message.contains("area"), "{message}");
 
     fs::write(&proposal, r#"{"labels_add":["bug"]}"#).unwrap();
     let applied = repo.ok_json_with_env(

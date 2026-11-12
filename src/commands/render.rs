@@ -70,18 +70,20 @@ pub(super) fn group_tasks<'a>(graph: &'a Graph, tasks: &[&'a Task]) -> Result<Ve
     Ok(groups)
 }
 
-fn group_headers() -> [String; 8] {
-    [
-        "ID",
-        "STATUS",
-        "P",
-        "TYPE",
-        "ISSUE",
-        "TITLE",
-        "LABELS",
-        "CLAIMED BY",
-    ]
-    .map(String::from)
+fn group_headers(remote: bool) -> Vec<String> {
+    let mut headers: Vec<String> = ["ID", "STATUS", "P", "TYPE"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    if remote {
+        headers.push("ISSUE".to_string());
+    }
+    headers.extend(
+        ["TITLE", "LABELS", "CLAIMED BY"]
+            .into_iter()
+            .map(String::from),
+    );
+    headers
 }
 
 fn issue_cell(task: &Task) -> String {
@@ -92,23 +94,29 @@ fn issue_cell(task: &Task) -> String {
     }
 }
 
-fn task_cells(task: &Task) -> [String; 8] {
-    [
+fn task_cells(task: &Task, remote: bool) -> Vec<String> {
+    let mut cells: Vec<String> = vec![
         task.id.to_string(),
         task.front.status.as_str().to_string(),
         format!("P{}", task.front.priority),
         task.front.task_type.as_str().to_string(),
-        issue_cell(task),
+    ];
+    if remote {
+        cells.push(issue_cell(task));
+    }
+    cells.extend([
         truncate(&task.front.title, 60),
         task.front.labels.join(", "),
         task.holder()
             .map(|holder| holder.to_string())
             .unwrap_or_default(),
-    ]
+    ]);
+    cells
 }
 
-fn column_widths(rows: &[[String; 8]]) -> Vec<usize> {
-    (0..8)
+fn column_widths(rows: &[Vec<String>]) -> Vec<usize> {
+    let columns = rows.first().map(Vec::len).unwrap_or(0);
+    (0..columns)
         .map(|column| {
             rows.iter()
                 .map(|row| row[column].chars().count())
@@ -118,9 +126,9 @@ fn column_widths(rows: &[[String; 8]]) -> Vec<usize> {
         .collect()
 }
 
-pub(super) fn format_table(tasks: &[&Task]) -> String {
-    let mut rows = vec![group_headers()];
-    rows.extend(tasks.iter().map(|task| task_cells(task)));
+pub(super) fn format_table(tasks: &[&Task], remote: bool) -> String {
+    let mut rows = vec![group_headers(remote)];
+    rows.extend(tasks.iter().map(|task| task_cells(task, remote)));
     let widths = column_widths(&rows);
     rows.iter()
         .map(|row| {
@@ -136,13 +144,13 @@ pub(super) fn format_table(tasks: &[&Task]) -> String {
         .join("\n")
 }
 
-pub(super) fn format_grouped_table(groups: &[ListGroup]) -> String {
-    let headers = group_headers();
+pub(super) fn format_grouped_table(groups: &[ListGroup], remote: bool) -> String {
+    let headers = group_headers(remote);
     let mut rows = vec![headers.clone()];
     rows.extend(
         groups
             .iter()
-            .flat_map(|group| group.tasks.iter().map(|task| task_cells(task))),
+            .flat_map(|group| group.tasks.iter().map(|task| task_cells(task, remote))),
     );
     let widths = column_widths(&rows);
     let inner_width = widths.iter().map(|width| width + 2).sum::<usize>() + widths.len() - 1;
@@ -160,7 +168,7 @@ pub(super) fn format_grouped_table(groups: &[ListGroup]) -> String {
         }
         lines.push(full_border("├", "┤", inner_width));
         for task in &group.tasks {
-            lines.push(table_row(&task_cells(task), &widths));
+            lines.push(table_row(&task_cells(task, remote), &widths));
         }
     }
     lines.push(column_border("╰", "┴", "╯", &widths));
@@ -191,7 +199,7 @@ fn full_border(left: &str, right: &str, inner_width: usize) -> String {
     format!("{left}{}{right}", "─".repeat(inner_width))
 }
 
-fn table_row(cells: &[String; 8], widths: &[usize]) -> String {
+fn table_row(cells: &[String], widths: &[usize]) -> String {
     let padded: Vec<String> = cells
         .iter()
         .zip(widths)
@@ -314,28 +322,35 @@ fn push_field_lines(lines: &mut Vec<String>, label: &str, text: &str) {
     }
 }
 
-pub(super) fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) -> String {
+pub(super) fn format_detail(
+    graph: &Graph,
+    task: &Task,
+    comments: &[Comment],
+    remote: bool,
+) -> String {
     let mut lines = Vec::new();
     lines.push(format!("{}  {}", task.id, task.front.title));
     lines.push(format!("status: {}", task.front.status.as_str()));
     lines.push(format!("kind: {}", task.kind()));
     lines.push(format!("type: {}", task.front.task_type.as_str()));
-    lines.push(match crate::remote::link::link_view(task) {
-        Some(link) if link.tracker == "github" && link.active => {
-            format!("github: {}#{}", link.project, link.id)
-        }
-        Some(link) if link.tracker == "github" => {
-            format!("github: {}#{} (detached)", link.project, link.id)
-        }
-        Some(link) if link.active => {
-            format!("remote: {} {}#{}", link.tracker, link.project, link.id)
-        }
-        Some(link) => format!(
-            "remote: {} {}#{} (detached)",
-            link.tracker, link.project, link.id
-        ),
-        None => "github: -".to_string(),
-    });
+    if remote {
+        lines.push(match crate::remote::link::link_view(task) {
+            Some(link) if link.tracker == "github" && link.active => {
+                format!("github: {}#{}", link.project, link.id)
+            }
+            Some(link) if link.tracker == "github" => {
+                format!("github: {}#{} (detached)", link.project, link.id)
+            }
+            Some(link) if link.active => {
+                format!("remote: {} {}#{}", link.tracker, link.project, link.id)
+            }
+            Some(link) => format!(
+                "remote: {} {}#{} (detached)",
+                link.tracker, link.project, link.id
+            ),
+            None => "github: -".to_string(),
+        });
+    }
     lines.push(format!("priority: P{}", task.front.priority));
     if let Some(parent) = &task.front.parent {
         lines.push(format!("parent: {parent}"));

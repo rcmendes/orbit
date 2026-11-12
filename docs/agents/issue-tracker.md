@@ -86,9 +86,10 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
   `labels`, `blocking`, and claim fields.
 - `orbit show <ID> --json` returns the full task, including `body`, `labels`,
   `kind`, `type`, `area`, `verification`, `parent`, `subtasks`, `dependents`, and `comments`.
-- `orbit list` prints an aligned table for humans. The `ISSUE` column is `-` for
-  a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance; use
-  `--linked` or `--local` to filter. It truncates long titles and its columns are
+- `orbit list` prints an aligned table for humans. When the Board has remote
+  material, an `ISSUE` column shows `-` for a Local Task, `#N` for a Linked
+  Task, and `~#N` for detached provenance; use `--linked` or `--local` to
+  filter. It truncates long titles and its columns are
   presentation only; parse `--json` in automation. `orbit ready` and `orbit
   tree` use compact summary lines for the same reason.
 - Break a feature into SubTasks with `orbit add "<title>" --parent <parent-id>`.
@@ -187,8 +188,8 @@ Orbit is the tracker. Matt Pocock's engineering skills own the triage state
 machine: gathering context, verifying the claim, grilling, writing the agent
 brief, and maintaining `.out-of-scope/`.
 
-`orbit triage` is a deterministic metadata primitive for a GitHub-linked Task.
-It sets `area`, task-level `verification`, and the canonical labels in
+`orbit triage` is a deterministic metadata primitive for any Task, Local or
+Linked. It sets `area`, task-level `verification`, and the canonical labels in
 [`triage-labels.md`](./triage-labels.md). It does not verify a claim, grill,
 write a brief, or update `.out-of-scope/`. The commands are in
 [`triage-workflow.md`](./triage-workflow.md).
@@ -213,7 +214,7 @@ commands are in [Wayfinding operations](#wayfinding-operations).
 - **Comments:** `orbit comment add <ID> --by <agent> --body ...`; read with
   `orbit comment list <ID>` or `orbit show <ID> --json`.
 
-GitHub sync and Triage require Orbit 0.9.0 or newer. For GitHub-linked Tasks,
+Remote Tracker sync and Triage require Orbit 0.9.0 or newer. For Linked Tasks,
 use the structured workflow in
 [`triage-workflow.md`](./triage-workflow.md): `orbit triage context`, `review`, and
 `apply --approve`, then `orbit remote sync --direction push --apply`.

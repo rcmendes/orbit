@@ -14,7 +14,6 @@ struct InitTarget {
     prefix: String,
     storage: crate::board::StorageMode,
     branch: String,
-    exclude: Vec<String>,
     warnings: Vec<String>,
 }
 
@@ -63,14 +62,19 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     // ADR 0019: the Board folder is a standalone repository. Hidden Boards
     // live at `<anchor>/.orbit/board`; a visible folder is anchored by the
     // `.orbit/board` pointer file instead.
-    let (orbit_dir, board_root, visible_board) = init_layout(
+    let (orbit_dir, mut board_root, mut visible_board) = init_layout(
         &requested_root,
         workspace_root,
         explicit_global,
         global_dir.as_deref(),
-        &cwd,
-        in_repo,
     )?;
+    // The Orbit folder may already anchor a Board: a hidden `.orbit/board`
+    // directory or a `board` pointer file naming a visible folder. Reuse
+    // whichever it resolves to instead of assuming the computed layout.
+    if let Some(resolved) = crate::board::resolve_orbit_dir(&orbit_dir) {
+        board_root = resolved.root().to_path_buf();
+        visible_board = matches!(resolved, crate::board::OrbitBoard::Visible { .. });
+    }
     let global = explicit_global
         || global_dir
             .as_ref()
@@ -114,11 +118,17 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         prefix,
         storage,
         branch,
-        exclude: _,
         mut warnings,
     } = run_init(
         &board_root,
-        workspace_root.then_some(requested_root.as_path()),
+        // Hidden Boards derive the slug from their Orbit folder so `.orbit`
+        // keeps meaning "the enclosing folder's name"; visible Board folders
+        // derive it from the folder itself.
+        Some(if visible_board {
+            board_root.as_path()
+        } else {
+            orbit_dir.as_path()
+        }),
         args.slug.as_deref(),
         args.print,
         global,
@@ -147,14 +157,19 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         })?;
     }
 
-    let mut exclude = Vec::new();
-    if !args.print {
-        // A Board folder inside a Git working tree is hidden only through
-        // `.git/info/exclude`, never `.gitignore` (ADR 0019).
-        exclude = crate::board::ensure_orbit_excluded(&orbit_dir, visible_board.then_some(board_root.as_path()))?;
+    // A Board folder inside a Git working tree is hidden only through
+    // `.git/info/exclude`, never `.gitignore` (ADR 0019).
+    let exclude = if !args.print {
+        crate::board::ensure_orbit_excluded(
+            &orbit_dir,
+            visible_board.then_some(board_root.as_path()),
+        )?
     } else {
-        exclude = crate::board::orbit_exclude_entries(&orbit_dir, visible_board.then_some(board_root.as_path()))?;
-    }
+        crate::board::orbit_exclude_entries(
+            &orbit_dir,
+            visible_board.then_some(board_root.as_path()),
+        )?
+    };
 
     let mut file_outcomes: Vec<crate::setup::FileOutcome> = Vec::new();
     let mut files: Vec<Value> = Vec::new();
@@ -454,7 +469,6 @@ fn run_init(
             prefix,
             storage: crate::board::StorageMode::Repository,
             branch: board.config.board.branch,
-            exclude: Vec::new(),
             warnings: board.warnings,
         });
     }
@@ -479,7 +493,6 @@ fn run_init(
             prefix,
             storage: crate::board::StorageMode::Repository,
             branch: "orbit".to_string(),
-            exclude: Vec::new(),
             warnings: warning.into_iter().collect(),
         });
     }
@@ -491,7 +504,6 @@ fn run_init(
         prefix: result.prefix,
         storage: result.storage,
         branch: result.branch,
-        exclude: Vec::new(),
         warnings: warning.into_iter().collect(),
     })
 }
@@ -505,8 +517,6 @@ fn init_layout(
     workspace_root: bool,
     global: bool,
     global_dir: Option<&Path>,
-    _cwd: &Path,
-    in_repo: bool,
 ) -> Result<(PathBuf, PathBuf, bool)> {
     if global {
         let orbit = global_dir
@@ -525,32 +535,23 @@ fn init_layout(
             false,
         ));
     }
-    if in_repo {
-        // A target that is a working-tree root (repository root, `.`, or a
-        // linked worktree) means "this repository's Board": the main
-        // checkout's Orbit folder.
-        let is_toplevel = crate::git::toplevel_containing(requested)
-            .map(|toplevel| {
-                let toplevel = dunce::canonicalize(&toplevel).unwrap_or(toplevel);
-                toplevel == requested
-            })
-            .unwrap_or(false);
-        if is_toplevel {
-            let repo = crate::git::toplevel_containing(requested)
-                .ok_or_else(|| OrbitError::new(code::NOT_A_REPOSITORY, "not a Git repository"))?;
-            let repo = dunce::canonicalize(&repo).unwrap_or(repo);
-            let common = crate::git::common_dir_at(&repo)?;
-            let main = crate::board::main_checkout_for(&repo, &common);
+    // The target's own Git membership decides the layout, not the caller's
+    // directory: `orbit init /elsewhere/board` from inside a repository still
+    // creates a standalone Board outside it.
+    if let Some(toplevel) = crate::git::toplevel_containing(requested) {
+        let toplevel = dunce::canonicalize(&toplevel).unwrap_or(toplevel);
+        let canonical_requested =
+            dunce::canonicalize(requested).unwrap_or_else(|_| requested.to_path_buf());
+        if toplevel == canonical_requested {
+            let common = crate::git::common_dir_at(&toplevel)?;
+            let main = crate::board::main_checkout_for(&toplevel, &common);
             let orbit = main.join(".orbit");
             return Ok((orbit.clone(), orbit.join("board"), false));
         }
         // Any other directory inside the repository is a visible Board
         // folder anchored by the repository's Orbit folder.
-        let repo = crate::git::toplevel_containing(requested)
-            .ok_or_else(|| OrbitError::new(code::NOT_A_REPOSITORY, "not a Git repository"))?;
-        let repo = dunce::canonicalize(&repo).unwrap_or(repo);
-        let common = crate::git::common_dir_at(&repo)?;
-        let main = crate::board::main_checkout_for(&repo, &common);
+        let common = crate::git::common_dir_at(&toplevel)?;
+        let main = crate::board::main_checkout_for(&toplevel, &common);
         let orbit = main.join(".orbit");
         return Ok((orbit, requested.to_path_buf(), true));
     }

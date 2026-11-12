@@ -18,8 +18,19 @@ pub(super) fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
     let board = Board::discover(Some(&target))?;
     let local = Board::local_root()?;
     let legacy_local = Board::legacy_local_root()?;
+    // The repository's own Board resolves through its Orbit folder: a hidden
+    // `.orbit/board`, a visible folder named by the `board` pointer, or a
+    // legacy `.orbit`-is-Board.
+    let orbit_dir = local
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| local.clone());
     let mut shadowed_boards = Vec::new();
-    for candidate in [local.clone(), legacy_local] {
+    let mut candidates = vec![legacy_local];
+    if let Some(resolved) = crate::board::resolve_orbit_dir(&orbit_dir) {
+        candidates.push(resolved.root().to_path_buf());
+    }
+    for candidate in candidates {
         if candidate != board.root
             && Board::is_board(&candidate)
             && !shadowed_boards.contains(&candidate)
@@ -33,13 +44,13 @@ pub(super) fn cmd_link(args: LinkArgs) -> Result<crate::output::CommandOutput> {
 
     let root = crate::git::repo_root()?;
     let mut warnings = board.warnings.clone();
-    if board.config.board.storage.is_none()
+    if board.needs_migration(None)
         && !warnings
             .iter()
             .any(|warning| warning.starts_with(crate::board::LEGACY_LAYOUT))
     {
         warnings.push(format!(
-            "{}: linked Board at {} predates board.storage",
+            "{}: linked Board at {} uses a pre-ADR-0019 layout; run `orbit migrate`",
             crate::board::LEGACY_LAYOUT,
             board.root.display()
         ));
@@ -117,7 +128,12 @@ pub(super) fn cmd_unlink() -> Result<crate::output::CommandOutput> {
     }
 
     let local = Board::local_root()?;
-    let local_exists = Board::is_board(&local);
+    let orbit_dir = local
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| local.clone());
+    let local_exists = crate::board::resolve_orbit_dir(&orbit_dir).is_some()
+        || Board::is_board(&local);
     let unlinked = Board::clear_link()?;
     let root = crate::git::repo_root()?;
     let mut warnings = Vec::new();
@@ -134,7 +150,7 @@ pub(super) fn cmd_unlink() -> Result<crate::output::CommandOutput> {
             let legacy = Board::legacy_local_root().ok();
             if let Some(legacy) = legacy.filter(|path| Board::is_board(path)) {
                 warnings.push(format!(
-                    "this repository has no .orbit Board; it still resolves the legacy Board at {}; run `orbit doctor --migrate`",
+                    "this repository has no .orbit Board; it still resolves the legacy Board at {}; run `orbit migrate`",
                     legacy.display()
                 ));
             } else {

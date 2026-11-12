@@ -70,7 +70,14 @@ impl TestRepo {
         self.dir.path()
     }
 
+    /// The Board folder: `<repo>/.orbit/board` for the hidden layout.
     pub fn board_path(&self) -> PathBuf {
+        self.path().join(".orbit").join("board")
+    }
+
+    /// The Orbit folder anchoring the Board (`.orbit`), which also holds
+    /// `cache/` beside the Board folder.
+    pub fn orbit_path(&self) -> PathBuf {
         self.path().join(".orbit")
     }
 

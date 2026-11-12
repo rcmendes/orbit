@@ -15,7 +15,6 @@ use crate::graph::{Graph, Issue, LoadMode};
 
 pub fn run(dir: Option<&Path>, args: DoctorArgs) -> Result<crate::output::CommandOutput> {
     let mut fixed = Vec::new();
-    let mut migration = None;
 
     // A failed repair must still say where discovery looked, since `doctor` is
     // the command people run when resolution is already broken.
@@ -30,11 +29,8 @@ pub fn run(dir: Option<&Path>, args: DoctorArgs) -> Result<crate::output::Comman
     if args.fix {
         fixed = fix(dir).map_err(with_trace)?;
     }
-    if args.migrate {
-        migration = Some(crate::legacy::migrate(dir).map_err(with_trace)?);
-    }
 
-    diagnose(dir, &args, fixed, migration)
+    diagnose(dir, &args, fixed)
 }
 
 fn workspace_root(dir: Option<&Path>, board: Option<&Board>) -> Option<PathBuf> {
@@ -154,7 +150,6 @@ fn diagnose(
     dir: Option<&Path>,
     args: &DoctorArgs,
     fixed: Vec<String>,
-    migration: Option<crate::legacy::MigrationReport>,
 ) -> Result<crate::output::CommandOutput> {
     let discovery = Board::discovery(dir);
     let mut issues = Vec::new();
@@ -211,10 +206,6 @@ fn diagnose(
         .as_ref()
         .map(crate::workspace_doctor::WorkspaceDiagnosis::json)
         .unwrap_or(Value::Null);
-    let migration_json = migration
-        .as_ref()
-        .map(|report| serde_json::to_value(report).unwrap_or(Value::Null))
-        .unwrap_or(Value::Null);
 
     let mut human = String::new();
     if healthy {
@@ -264,9 +255,6 @@ fn diagnose(
     for path in &fixed {
         human.push_str(&format!("fixed: {path}\n"));
     }
-    if let Some(report) = &migration {
-        human.push_str(&report.render_human());
-    }
 
     Ok(crate::output::CommandOutput::new(
         json!({
@@ -278,7 +266,6 @@ fn diagnose(
             "fixed": fixed,
             "discovery": discovery_json,
             "workspace": workspace_json,
-            "migration": migration_json,
         }),
         human,
     )
@@ -328,7 +315,7 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
             AMBIGUOUS_BOARD,
             None,
             format!(
-                "both {} and legacy Board {} exist; run `orbit doctor --migrate` to finish or resume the move",
+                "both {} and legacy Board {} exist; resolve the duplicate Boards, then run `orbit migrate` to convert the legacy one",
                 new.display(),
                 legacy.display()
             ),
@@ -341,22 +328,23 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
     }
 
     if let Some(board) = board {
-        if board.config.board.storage.is_none() && discovery.legacy.is_none() {
+        if board.needs_migration(Some(&discovery)) && discovery.legacy.is_none() {
             issues.push(Issue::new(
                 LEGACY_LAYOUT,
                 None,
                 format!(
-                    "Board at {} predates the Orbit folder and has no board.storage mode; run `orbit doctor --migrate`",
+                    "Board at {} uses a pre-ADR-0019 layout; run `orbit migrate` to convert it to a standalone Board folder",
                     board.root.display()
                 ),
             ));
-        } else if let Some(configured) = board.config.board.storage {
+        }
+        if let Some(configured) = board.config.board.storage {
             let actual = StorageMode::detect(&board.root);
             if configured != actual {
                 let hint = if configured == StorageMode::Worktree {
-                    "its .git link to the orbit worktree is missing or damaged; run `orbit doctor --fix`, or move the directory aside and re-run `orbit init`"
+                    "its .git link to the orbit worktree is missing or damaged; run `orbit doctor --fix`, or run `orbit migrate` to convert the Board"
                 } else {
-                    "run `orbit doctor --migrate` or repair the worktree"
+                    "run `orbit migrate` to convert the Board"
                 };
                 issues.push(Issue::new(
                     STORAGE_MISMATCH,

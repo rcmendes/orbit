@@ -859,10 +859,10 @@ GitHub identities, orphaned links, field-level sync conflicts, and missing or
 conflicting managed agent setup. Every finding identifies severity, affected
 repository/Task/Issue, cause, and a safe next action.
 
-Doctor is read-only unless `--fix` or `--migrate` is requested. --fix removes
-stale temp files and re-attaches an orphan orbit worktree. --migrate moves a
-legacy Board to the Orbit folder and is resumable; it never rewrites task bodies
-or comments, resolves semantic conflicts, or changes GitHub.";
+Doctor is read-only unless `--fix` is requested. --fix removes
+stale temp files and re-attaches an orphan orbit worktree. Boards that still
+use a pre-ADR-0019 layout are reported with LEGACY_LAYOUT; convert them with
+`orbit migrate`.";
 
 pub const DOCTOR_EXAMPLES: &str = "\
 Examples:
@@ -872,8 +872,8 @@ Examples:
   # Clean up stale temp files and re-attach an orphan worktree
   orbit doctor --fix
 
-  # Move a legacy hidden or workspace Board to .orbit
-  orbit doctor --migrate
+  # Convert a pre-ADR-0019 Board to a standalone Board folder
+  orbit migrate
 
   # Inspect the discovery trace and reported issues as JSON
   orbit doctor --json

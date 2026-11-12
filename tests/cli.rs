@@ -11,15 +11,21 @@ fn init_creates_the_local_orbit_folder() {
     let value = repo.ok_json(&["init", "--json"]);
 
     assert_eq!(value["data"]["branch"], "orbit");
-    assert_eq!(value["data"]["storage"], "worktree");
+    assert_eq!(value["data"]["storage"], "repository");
 
     let board = repo.board_path();
     assert!(board.join("config.toml").is_file());
     assert!(board.join("tasks").is_dir());
 
-    let worktrees = repo.git(&["worktree", "list", "--porcelain"]);
-    let worktrees = String::from_utf8_lossy(&worktrees.stdout);
-    assert!(worktrees.contains("orbit"), "{worktrees}");
+    // The Board folder is a standalone repository on branch `orbit`; the
+    // code repository keeps no `orbit` worktree or branch.
+    let board_git = repo.git_in(&board, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(
+        String::from_utf8_lossy(&board_git.stdout).trim(),
+        "orbit"
+    );
+    let branches = repo.git(&["branch", "--list", "orbit"]);
+    assert!(String::from_utf8_lossy(&branches.stdout).trim().is_empty());
 
     let log = repo.git(&["-C", board.to_str().unwrap(), "log", "--oneline"]);
     let log = String::from_utf8_lossy(&log.stdout);

@@ -209,6 +209,8 @@ mod tests {
                 area: None,
                 verification: None,
                 github: None,
+                remote: None,
+                repo: None,
                 extra: BTreeMap::new(),
             },
             body: String::new(),

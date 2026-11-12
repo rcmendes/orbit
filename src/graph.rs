@@ -713,6 +713,8 @@ mod tests {
                 area: None,
                 verification: None,
                 github: None,
+                remote: None,
+                repo: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: now,

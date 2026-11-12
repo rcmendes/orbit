@@ -676,6 +676,8 @@ mod create_tests {
                 area: None,
                 verification: None,
                 github: None,
+                remote: None,
+                repo: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: Utc::now(),
@@ -696,6 +698,7 @@ mod create_tests {
             lock_path: root.join(".lock"),
             config,
             warnings: Vec::new(),
+            orbit_dir: None,
             commit_failed: Default::default(),
         };
         let path = root.join("fixture.json");

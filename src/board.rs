@@ -511,11 +511,11 @@ impl Board {
         let orbit_dir = discovery.orbit_dir.clone();
         let mut board = Self::at_root(root, discovery.warnings)?;
         board.orbit_dir = orbit_dir.or_else(|| discovery_orbit_dir(&board.root));
-        if linked && board.config.board.storage.is_none() {
+        if linked && board.needs_migration(None) {
             push_warning(
                 &mut board.warnings,
                 format!(
-                    "{LEGACY_LAYOUT}: linked Board at {} predates board.storage",
+                    "{LEGACY_LAYOUT}: linked Board at {} uses a pre-ADR-0019 layout; run `orbit migrate`",
                     board.root.display()
                 ),
             );
@@ -585,13 +585,22 @@ impl Board {
             .join("board"))
     }
 
+    /// The `.orbit` folder anchoring this Board when it resolved through one:
+    /// the parent of a hidden `.orbit/board`, or the folder holding the
+    /// pointer file for a visible Board folder. `None` for legacy, explicit,
+    /// or otherwise unanchored Boards.
+    pub fn resolved_orbit_dir(&self) -> Option<PathBuf> {
+        self.orbit_dir
+            .clone()
+            .or_else(|| discovery_orbit_dir(&self.root))
+    }
+
     /// A Workspace Board lives internally at `<workspace>/.orbit/board`; the
     /// Workspace root is the user-facing directory. A repository-local Board
     /// at `<repo>/.orbit/board` has the same shape, so the Orbit folder's
     /// parent must sit outside every Git working tree to count as a Workspace.
     pub fn is_workspace_board(&self) -> bool {
-        let Some(orbit) = self.orbit_dir.clone().or_else(|| discovery_orbit_dir(&self.root))
-        else {
+        let Some(orbit) = self.resolved_orbit_dir() else {
             return false;
         };
         let Some(workspace) = orbit.parent() else {
@@ -611,6 +620,12 @@ impl Board {
         if self.root.join(".git").is_file() {
             return true;
         }
+        // Every Board is a standalone repository. A Board folder without its
+        // own `.git` — a plain directory, or the legacy `.git/orbit/board`
+        // store reached through an explicit `--dir` — predates ADR 0019.
+        if !self.root.join(".git").exists() {
+            return true;
+        }
         // A Board folder sitting directly in an Orbit folder, or in the
         // retired `.board` folder: both predate `.orbit/board`.
         if self.root.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR)
@@ -623,13 +638,41 @@ impl Board {
         {
             return true;
         }
-        // A non-default `[github]` section predates `[remote]`.
-        if self.config.github != crate::github::GitHubConfig::default() {
+        // A legacy `<workspace>/board` folder: named `board`, outside any Git
+        // working tree, and not anchored by an Orbit folder. Anchored Boards
+        // (`.orbit/board` hidden or a `board` pointer) are already covered by
+        // the checks above.
+        let anchored = self
+            .orbit_dir
+            .as_ref()
+            .is_some_and(|orbit| *orbit != self.root)
+            || discovery
+                .and_then(|discovery| discovery.orbit_dir.as_ref())
+                .is_some_and(|orbit| *orbit != self.root)
+            || self
+                .root
+                .parent()
+                .is_some_and(|parent| parent.join(ORBIT_DIR).exists());
+        if !anchored
+            && self.root.file_name().and_then(|name| name.to_str()) == Some(BOARD_DIR)
+            && self
+                .root
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str())
+                != Some(ORBIT_DIR)
+            && self
+                .root
+                .parent()
+                .is_some_and(|parent| !crate::git::is_git_repo(parent))
+        {
             return true;
         }
-        // Discovery flagged a legacy or half-migrated layout.
+        // Discovery flagged a legacy layout. `ambiguous` alone does not gate:
+        // the selected Board may already be standalone while a shadowed
+        // legacy Board remains for `doctor` to report.
         if let Some(discovery) = discovery
-            && (discovery.legacy.is_some() || discovery.ambiguous.is_some())
+            && discovery.legacy.is_some()
         {
             return true;
         }
@@ -662,6 +705,16 @@ impl Board {
         let root = resolve_external(path)?;
         if Self::is_board(&root) {
             return Ok((root, false));
+        }
+        // An Orbit folder named directly resolves its hidden `board/` or the
+        // `board` pointer rather than looking for a nested `.orbit`.
+        if root
+            .file_name()
+            .is_some_and(|name| name == std::ffi::OsStr::new(ORBIT_DIR))
+        {
+            if let Some(board) = resolve_orbit_dir(&root) {
+                return Ok((board.root().to_path_buf(), board.is_legacy()));
+            }
         }
         // An Orbit folder resolves its hidden `board/` or the `board` pointer.
         let orbit = root.join(".orbit");
@@ -1692,12 +1745,12 @@ pub(crate) fn workspace_child_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
             }
             if path.join(".git").exists() {
                 let local = path.join(ORBIT_DIR);
-                if Board::is_board(&local) {
-                    found.push(local.clone());
+                if let Some(board) = resolve_orbit_dir(&local) {
+                    found.push(board.root().to_path_buf());
                 }
                 if let Ok(common) = git::common_dir_at(&path) {
                     let legacy = common.join("orbit").join(BOARD_DIR);
-                    if Board::is_board(&legacy) && legacy != local {
+                    if Board::is_board(&legacy) && !found.contains(&legacy) {
                         found.push(legacy);
                     }
                 }
@@ -1785,7 +1838,16 @@ fn legacy_local_path(common: &Path) -> PathBuf {
 }
 
 fn legacy_local_board_for(root: &Path) -> Option<PathBuf> {
-    if let Some(repo) = git::toplevel_containing(root)
+    // A standalone Board folder is its own Git repository; when it sits inside
+    // a code repository's working tree, the legacy Board belongs to that
+    // enclosing repository's common dir, so look one level out as well.
+    let repo = git::toplevel_containing(root)
+        .filter(|toplevel| dunce::canonicalize(toplevel).unwrap_or_else(|_| toplevel.clone()) != root)
+        .or_else(|| {
+            root.parent()
+                .and_then(|parent| git::toplevel_containing(parent))
+        });
+    if let Some(repo) = repo
         && let Ok(common) = git::common_dir_at(&repo)
     {
         let legacy = legacy_local_path(&common);
@@ -1853,10 +1915,7 @@ fn link_not_found(path: &Path) -> OrbitError {
 }
 
 fn warn_if_ambiguous(warnings: &mut Vec<String>, root: &Path, legacy: &Path) {
-    if root != legacy
-        && root.file_name().and_then(|name| name.to_str()) == Some(".orbit")
-        && Board::is_board(legacy)
-    {
+    if root != legacy && Board::is_board(root) && Board::is_board(legacy) {
         push_warning(
             warnings,
             format!(
@@ -1947,6 +2006,7 @@ mod tests {
             lock_path: dir.path().join(".lock"),
             config: Config::default(),
             warnings: Vec::new(),
+            orbit_dir: None,
             commit_failed: Default::default(),
         };
         assert!(!board.commit_failed());

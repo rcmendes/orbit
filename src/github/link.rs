@@ -136,4 +136,39 @@ impl GitHubSyncBaseline {
                 .collect(),
         }
     }
+
+    /// GitHub-shaped view of a provider-neutral [`SyncBaseline`] for output
+    /// compatibility. The remote status round-trips through Orbit's Status,
+    /// so `issue_state_reason` is reconstructed as `completed`/`not_planned`
+    /// and `reopened` cannot be recovered.
+    pub fn from_sync_baseline(baseline: &crate::remote::model::SyncBaseline) -> Self {
+        let to_ref =
+            |issue: &crate::remote::model::RemoteIssueRef| crate::github::model::IssueRef {
+                repo: issue.project.clone(),
+                number: issue.id.parse::<u64>().unwrap_or(0),
+            };
+        let (issue_state, issue_state_reason) = match baseline.remote_status {
+            Some(Status::Done) => (Some(IssueState::Closed), Some(IssueStateReason::Completed)),
+            Some(Status::Cancelled) => {
+                (Some(IssueState::Closed), Some(IssueStateReason::NotPlanned))
+            }
+            Some(_) => (Some(IssueState::Open), None),
+            None => (None, None),
+        };
+        Self {
+            at: baseline.at,
+            issue_updated_at: baseline.remote_updated_at,
+            orbit_updated_at: baseline.orbit_updated_at,
+            title: baseline.title.clone(),
+            body: baseline.body.clone(),
+            labels: baseline.labels.clone(),
+            area: baseline.area.clone(),
+            verification: baseline.verification.clone(),
+            status: baseline.status,
+            issue_state,
+            issue_state_reason,
+            sub_issues: baseline.subtasks.iter().map(to_ref).collect(),
+            blocked_by: baseline.blocked_by.iter().map(to_ref).collect(),
+        }
+    }
 }

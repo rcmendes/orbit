@@ -3,7 +3,7 @@ mod common;
 use common::TestRepo;
 
 #[test]
-fn configured_github_board_requires_the_provider_capability() {
+fn configured_github_board_loads_with_the_builtin_provider() {
     let repo = TestRepo::new();
     repo.init();
     let config = repo.board_path().join("config.toml");
@@ -11,25 +11,14 @@ fn configured_github_board_requires_the_provider_capability() {
     contents.push_str("\n[github]\nmode = \"basic\"\nrepositories = [\"alice/widget\"]\n");
     std::fs::write(config, contents).unwrap();
 
+    // GitHub is a built-in Remote Tracker adapter (ADR 0018): a configured
+    // Board loads normally and `orbit github` commands are always available.
     let (status, output) = repo.json(&["list", "--json"]);
+    assert_eq!(status, 0, "{output}");
+    assert_eq!(output["ok"], true);
 
-    if cfg!(feature = "github-provider") {
-        assert_eq!(status, 0, "{output}");
-        assert_eq!(output["ok"], true);
-    } else {
-        assert_eq!(status, 1, "{output}");
-        assert_eq!(output["error"]["code"], "GITHUB_UNSUPPORTED");
-        let message = output["error"]["message"].as_str().unwrap();
-        assert!(message.contains("0.9.0"), "{message}");
-        assert!(message.contains("upgrade"), "{message}");
-
-        let human = repo.orbit(&["list"]);
-        assert_eq!(human.status.code(), Some(1));
-        let stderr = String::from_utf8_lossy(&human.stderr);
-        assert!(stderr.contains("GITHUB_UNSUPPORTED"), "{stderr}");
-        assert!(stderr.contains("0.9.0"), "{stderr}");
-        assert!(stderr.contains("upgrade"), "{stderr}");
-    }
+    let status_output = repo.json(&["github", "status", "--json"]);
+    assert_eq!(status_output.0, 0, "{}", status_output.1);
 }
 
 #[test]
@@ -42,16 +31,16 @@ fn binary_help_exposes_github_and_triage_commands() {
 }
 
 #[test]
-fn release_metadata_keeps_the_provider_in_default_install_artifacts() {
+fn github_is_builtin_not_a_cargo_feature() {
     let manifest: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
-    let default_features = manifest["features"]["default"]
-        .as_array()
-        .expect("Cargo package declares default features");
+    let features = manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .cloned()
+        .unwrap_or_default();
     assert!(
-        default_features
-            .iter()
-            .any(|feature| feature.as_str() == Some("github-provider")),
-        "default Cargo installs must include github-provider"
+        !features.contains_key("github-provider"),
+        "GitHub sync is built in; the github-provider feature gate is gone"
     );
 
     let dist: toml::Value = toml::from_str(include_str!("../dist-workspace.toml")).unwrap();

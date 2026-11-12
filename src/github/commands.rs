@@ -1,8 +1,6 @@
-use super::execution::{
-    fetch_issue, reject_basic_metadata, repository_available, require_repository_available,
-    set_baseline,
-};
-use crate::github::execution::{CreateFollowUp, SyncOutcome, create_and_link};
+use crate::github::adapter::GitHubAdapter;
+use crate::github::client::client_from_env;
+use crate::github::config::GitHubConfig;
 use crate::mutation::persist_task;
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -14,14 +12,13 @@ use crate::cli::{
     GitHubSyncDirection,
 };
 use crate::error::{OrbitError, Result, code};
-use crate::github::client::client_from_env;
-use crate::github::fields::parse_area;
-use crate::github::link::GitHubLink;
-use crate::github::model::{IssueSnapshot, SyncDirection, SyncPlan};
-use crate::github::relationships;
-use crate::github::sync::{self, OrbitSyncView, validate_orbit_metadata};
 use crate::graph::{Graph, LoadMode};
-use crate::task::Task;
+use crate::remote::execution::{self, CreateFollowUp, SyncOutcome};
+use crate::remote::link::{active_link, github_compat_json, link_json, link_view};
+use crate::remote::model::{RemoteIssue, RemoteIssueRef, SyncDirection, SyncPlan};
+use crate::remote::port::{RemoteAdapter, RemoteResolver, board_resolver};
+use crate::remote::{RemoteProject, relationships, sync};
+use crate::task::{self, Task};
 
 pub fn run(board: &Board, args: GitHubArgs) -> Result<crate::output::CommandOutput> {
     match args.command {
@@ -47,9 +44,10 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let client = client_from_env()?;
     let auth = client.auth_status();
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let github = &board.config.github;
+    let github = github_config(board);
     let configured = github.is_enabled();
     let basic_mode = github.mode.is_basic();
+    let auto_push = auto_push_enabled(board);
 
     let username = auth
         .username
@@ -102,7 +100,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
                     let label_present = client
                         .label_exists(name, crate::github::status::IN_PROGRESS_LABEL)
                         .ok();
-                    if github.auto_push && label_present == Some(false) {
+                    if auto_push && label_present == Some(false) {
                         issues.push(json!({
                             "code": "GITHUB_SETUP_INCOMPLETE",
                             "message": format!(
@@ -203,15 +201,19 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let mut pending_push = Vec::new();
     let mut conflicts = Vec::new();
     let mut unsupported = Vec::new();
-    for task in graph.iter().filter(|task| task.github_link().is_some()) {
-        let link = task.github_link().expect("filtered linked task");
-        let linked_repo = repository_available(board, &link.repo)?;
+    let github_link = |task: &Task| active_link(task).filter(|link| link.tracker == "github");
+    let adapter = GitHubAdapter::from_board(board)?;
+    let resolver = board_resolver(board);
+    for task in graph.iter().filter(|task| github_link(task).is_some()) {
+        let link = github_link(task).expect("filtered linked task");
+        let project = link.remote_project();
+        let linked_repo = crate::remote::execution::project_available(board, &resolver, &project)?;
         if !linked_repo {
             issues.push(json!({
                 "code": "GITHUB_REPO_NOT_LINKED",
                 "task": task.id,
-                "repository": link.repo,
-                "message": format!("Task {} links to {}, which is not linked to this Board", task.id, link.repo),
+                "repository": link.project,
+                "message": format!("Task {} links to {}, which is not linked to this Board", task.id, link.project),
             }));
         }
 
@@ -219,9 +221,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
             .iter()
             .filter(|candidate| candidate.front.parent.as_deref() == Some(task.id.as_str()))
             .filter_map(|candidate| {
-                candidate
-                    .github_link()
-                    .map(|child_link| (candidate.clone(), child_link.clone()))
+                github_link(candidate).map(|child_link| (candidate.clone(), child_link))
             })
             .collect();
         let dependencies: Vec<_> = task
@@ -230,14 +230,12 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
             .iter()
             .filter_map(|id| graph.tasks.get(id))
             .filter_map(|dependency| {
-                dependency
-                    .github_link()
-                    .map(|dep_link| (dependency.clone(), dep_link.clone()))
+                github_link(dependency).map(|dep_link| (dependency.clone(), dep_link))
             })
             .collect();
         let relationships = relationships::plan_relationship_sync(
-            link,
-            &relationships::RemoteRelations::EMPTY,
+            &link,
+            &relationships::RemoteRelationsView::EMPTY,
             &children,
             &dependencies,
         );
@@ -251,24 +249,29 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
         if !auth.authenticated || !linked_repo {
             continue;
         }
-        match fetch_issue(board, client.as_ref(), &link.repo, link.number) {
+        match adapter.fetch_issue(&project, &link.id) {
             Ok(issue) => {
                 let direction = if basic_mode {
                     SyncDirection::Pull
                 } else {
                     SyncDirection::Both
                 };
-                let plan = sync::plan_sync(OrbitSyncView { task, link }, &issue, direction);
+                let plan = sync::plan_sync(
+                    &adapter,
+                    sync::OrbitSyncView { task, link: &link },
+                    &issue,
+                    direction,
+                );
                 let pull_count = count_pull_changes(&plan);
                 let push_count = count_push_changes(&plan);
                 if pull_count > 0 {
-                    pending_pull.push(json!({ "task": task.id, "repository": link.repo, "number": link.number, "changes": pull_count }));
+                    pending_pull.push(json!({ "task": task.id, "repository": link.project, "number": link.id, "changes": pull_count }));
                 }
                 if push_count > 0 {
-                    pending_push.push(json!({ "task": task.id, "repository": link.repo, "number": link.number, "changes": push_count }));
+                    pending_push.push(json!({ "task": task.id, "repository": link.project, "number": link.id, "changes": push_count }));
                 }
                 if !plan.conflicts.is_empty() {
-                    conflicts.push(json!({ "task": task.id, "repository": link.repo, "number": link.number, "conflicts": plan.conflicts }));
+                    conflicts.push(json!({ "task": task.id, "repository": link.project, "number": link.id, "conflicts": plan.conflicts }));
                 }
             }
             Err(error) => issues.push(json!({
@@ -384,11 +387,11 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
         "repositories": repositories,
         "fields": fields,
         "auto_push": {
-            "enabled": github.auto_push,
+            "enabled": auto_push,
             "reserved_label": crate::github::status::IN_PROGRESS_LABEL,
         },
-        "linked_tasks": graph.iter().filter(|task| task.github_link().is_some()).count(),
-        "local_tasks": graph.iter().filter(|task| task.github_link().is_none()).count(),
+        "linked_tasks": graph.iter().filter(|task| github_link(task).is_some()).count(),
+        "local_tasks": graph.iter().filter(|task| github_link(task).is_none()).count(),
         "pending": {
             "pull": pending_pull.iter().map(|entry| entry["changes"].as_u64().unwrap_or(0)).sum::<u64>(),
             "push": pending_push.iter().map(|entry| entry["changes"].as_u64().unwrap_or(0)).sum::<u64>(),
@@ -452,7 +455,7 @@ fn scope_satisfies(granted: &str, required: &str) -> bool {
 /// Board or included by the Workspace catalog. Workspace members need no
 /// per-repository `orbit github repo link`.
 pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
-    let github = &board.config.github;
+    let github = github_config(board);
     if !github.is_enabled() {
         return Vec::new();
     }
@@ -518,7 +521,7 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
             ));
         }
     }
-    if github.auto_push {
+    if auto_push_enabled(board) {
         let mut repositories = github.repositories.clone();
         if let Ok(Some(workspace_repositories)) = crate::workspace::export_repositories(board) {
             for repository in workspace_repositories {
@@ -873,15 +876,15 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
     }
 
     let organization = repo.split('/').next().unwrap_or_default();
-    let setup = match client.validate_org_fields(organization, &board.config.github.issue_fields) {
+    let effective = github_config(board);
+    let setup = match client.validate_org_fields(organization, &effective.issue_fields) {
         Ok(setup) => setup,
         Err(error) => {
             let message = error.message.clone();
             let missing = missing_field_names(&error);
-            let area_missing =
-                missing.contains(&board.config.github.issue_fields.area_name.as_str());
+            let area_missing = missing.contains(&effective.issue_fields.area_name.as_str());
             let verification_missing =
-                missing.contains(&board.config.github.issue_fields.verification_name.as_str());
+                missing.contains(&effective.issue_fields.verification_name.as_str());
             let fields_missing = !missing.is_empty();
             let area_status = if area_missing {
                 "missing"
@@ -908,31 +911,30 @@ fn cmd_connect(board: &Board) -> Result<crate::output::CommandOutput> {
                     } else {
                         "grant_issue_field_access"
                     },
-                    "remediation": format!("Create the missing organization Issue Field(s) `{}` and `{}` for `{organization}`, then rerun `orbit github connect`. If they exist, run `gh auth refresh --hostname github.com --scopes read:org,repo` and retry.", board.config.github.issue_fields.area_name, board.config.github.issue_fields.verification_name),
+                    "remediation": format!("Create the missing organization Issue Field(s) `{}` and `{}` for `{organization}`, then rerun `orbit github connect`. If they exist, run `gh auth refresh --hostname github.com --scopes read:org,repo` and retry.", effective.issue_fields.area_name, effective.issue_fields.verification_name),
                     "field_error": message,
                 }),
                 format!(
                     "Organization `{organization}` is missing a required Issue Field or the current account cannot read it. Create `{}` and `{}`, or refresh `gh` scopes with `gh auth refresh --hostname github.com --scopes read:org,repo`, then rerun `orbit github connect`.",
-                    board.config.github.issue_fields.area_name,
-                    board.config.github.issue_fields.verification_name
+                    effective.issue_fields.area_name, effective.issue_fields.verification_name
                 ),
             ));
         }
     };
 
-    let changed = board.config.github.organization.as_deref() != Some(organization)
-        || !board.config.github.contains_repo(&repo)
-        || board.config.github.issue_fields.area_id.as_deref() != Some(setup.area_id.as_str())
-        || board.config.github.issue_fields.verification_id.as_deref()
+    let changed = effective.organization.as_deref() != Some(organization)
+        || !effective.contains_repo(&repo)
+        || effective.issue_fields.area_id.as_deref() != Some(setup.area_id.as_str())
+        || effective.issue_fields.verification_id.as_deref()
             != Some(setup.verification_id.as_str());
     if changed {
-        board.save_config("orbit: github connect", |config| {
-            config.github.organization = Some(organization.to_string());
-            config.github.link_repo(&repo)?;
-            config.github.issue_fields.area_id = Some(setup.area_id);
-            config.github.issue_fields.verification_id = Some(setup.verification_id);
+        save_github_settings(board, "orbit: github connect", |config| {
+            config.organization = Some(organization.to_string());
+            config.issue_fields.area_id = Some(setup.area_id.clone());
+            config.issue_fields.verification_id = Some(setup.verification_id.clone());
             Ok(())
         })?;
+        link_github_repository(board, &repo)?;
     }
     let mut output = crate::output::CommandOutput::new(
         json!({
@@ -997,7 +999,7 @@ fn parse_github_remote(remote: &str) -> Result<String> {
 }
 
 fn require_github_section(board: &Board) -> Result<()> {
-    if board.config.github.is_enabled() {
+    if GitHubAdapter::effective_config(board).is_enabled() {
         Ok(())
     } else {
         Err(OrbitError::new(
@@ -1007,14 +1009,176 @@ fn require_github_section(board: &Board) -> Result<()> {
     }
 }
 
+/// Whether this Board keeps GitHub settings under `[remote]` (the shape
+/// `orbit migrate` writes) rather than the legacy top-level `[github]`
+/// section. Config writes must land where the adapter actually reads.
+/// `[remote] auto_push` does not count: it is the provider-neutral flag and
+/// can be set on a legacy board without migrating `[github]` settings.
+fn github_uses_remote_config(board: &Board) -> bool {
+    board.config.remote.github.is_some()
+        || board
+            .config
+            .remote
+            .projects
+            .iter()
+            .any(|project| project.tracker == "github")
+}
+
+/// Apply a mutation to the GitHub adapter settings in whichever section the
+/// Board uses: `[remote.github]` post-migration, `[github]` otherwise.
+fn save_github_settings(
+    board: &Board,
+    message: &str,
+    mutate: impl FnOnce(&mut GitHubConfig) -> Result<()>,
+) -> Result<()> {
+    let remote = github_uses_remote_config(board);
+    board.save_config(message, move |config| {
+        if remote {
+            mutate(
+                config
+                    .remote
+                    .github
+                    .get_or_insert_with(GitHubConfig::default),
+            )?;
+        } else {
+            mutate(&mut config.github)?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// The effective `[github]` settings: `[remote.github]` wins over the
+/// legacy section, and `[remote] projects` on the github tracker count as
+/// linked repositories.
+fn github_config(board: &Board) -> GitHubConfig {
+    GitHubAdapter::effective_config(board)
+}
+
+/// Whether Auto-push is enabled for this Board, whichever section carries
+/// the flag.
+fn auto_push_enabled(board: &Board) -> bool {
+    crate::remote::auto_push::enabled(board)
+}
+
+/// Link a GitHub Remote Project (`owner/repo`) to the Board in whichever
+/// config shape the Board uses: `[remote] projects` post-migration,
+/// `[github] repositories` otherwise.
+fn link_github_repository(board: &Board, repository: &str) -> Result<()> {
+    let repository = GitHubConfig::normalize_repo(repository)?;
+    let remote = github_uses_remote_config(board);
+    board.save_config("orbit: github repo link", move |config| {
+        if remote {
+            let project = RemoteProject {
+                tracker: "github".to_string(),
+                project: repository.clone(),
+            };
+            if !config.remote.projects.contains(&project) {
+                config.remote.projects.push(project);
+            }
+            if let Some(github) = config.remote.github.as_mut() {
+                github
+                    .repositories
+                    .retain(|repo| !repo.eq_ignore_ascii_case(&repository));
+            }
+            config
+                .github
+                .repositories
+                .retain(|repo| !repo.eq_ignore_ascii_case(&repository));
+        } else {
+            config.github.link_repo(&repository)?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// Remove a GitHub Remote Project link from every config shape that could
+/// carry it. Returns whether anything was removed.
+fn unlink_github_repository(board: &Board, repository: &str) -> Result<bool> {
+    let repository = GitHubConfig::normalize_repo(repository)?;
+    let remote = github_uses_remote_config(board);
+    // Decide up-front so a missing repo reports not-found without a commit.
+    let was_linked = if remote {
+        board.config.remote.projects.iter().any(|project| {
+            project.tracker == "github" && project.project.eq_ignore_ascii_case(&repository)
+        }) || board
+            .config
+            .remote
+            .github
+            .as_ref()
+            .is_some_and(|github| github.contains_repo(&repository))
+            || board.config.github.contains_repo(&repository)
+    } else {
+        board.config.github.contains_repo(&repository)
+    };
+    if !was_linked {
+        return Ok(false);
+    }
+    board.save_config("orbit: github repo unlink", move |config| {
+        if remote {
+            config.remote.projects.retain(|project| {
+                !(project.tracker == "github" && project.project.eq_ignore_ascii_case(&repository))
+            });
+            if let Some(github) = config.remote.github.as_mut() {
+                github.unlink_repo(&repository)?;
+            }
+            config.github.unlink_repo(&repository)?;
+        } else {
+            config.github.unlink_repo(&repository)?;
+        }
+        Ok(())
+    })?;
+    Ok(true)
+}
+
+/// The GitHub-shaped JSON view of a Remote Issue for `orbit github`
+/// command output: `state`/`state_reason`/`number` keep the historical
+/// IssueSnapshot shape while the engine works in Orbit terms.
+fn github_issue_json(issue: &RemoteIssue) -> Value {
+    let (state, state_reason) = match issue.status {
+        task::Status::Done => ("closed", "completed"),
+        task::Status::Cancelled => ("closed", "not_planned"),
+        _ => ("open", ""),
+    };
+    let refs = |refs: &[RemoteIssueRef]| {
+        refs.iter()
+            .map(|issue| {
+                json!({
+                    "repo": issue.project,
+                    "number": issue.id.parse::<u64>().unwrap_or(0),
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "repo": issue.project,
+        "number": issue.id.parse::<u64>().unwrap_or(0),
+        "title": issue.title,
+        "body": issue.body,
+        "state": state,
+        "state_reason": if state_reason.is_empty() { Value::Null } else { json!(state_reason) },
+        "labels": issue.labels.iter().chain(issue.markers.iter()).cloned().collect::<Vec<_>>(),
+        "assignees": issue.actors,
+        "updated_at": issue.updated_at,
+        "area": issue.area,
+        "verification": issue.verification,
+        "url": issue.url,
+        "parent_issue": refs(&issue.relations.parents),
+        "blocked_by": refs(&issue.relations.blocked_by),
+        "blocking": refs(&issue.relations.blocking),
+    })
+}
+
 fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::CommandOutput> {
-    let org = board.config.github.require_organization()?;
+    let effective = github_config(board);
+    let org = effective.require_organization()?;
     let client = client_from_env()?;
     let setup = if args.create_fields {
         let area_options = super::client::area_field_options(&board.config.board.areas);
-        client.create_org_fields(org, &board.config.github.issue_fields, &area_options)?
+        client.create_org_fields(org, &effective.issue_fields, &area_options)?
     } else {
-        client.validate_org_fields(org, &board.config.github.issue_fields)?
+        client.validate_org_fields(org, &effective.issue_fields)?
     };
     if args.validate_only {
         return Ok(crate::output::CommandOutput::new(
@@ -1030,9 +1194,9 @@ fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::Comm
     let area_id = setup.area_id.clone();
     let verification_id = setup.verification_id.clone();
     let created_fields_count = setup.created_fields.len();
-    board.save_config("orbit: github setup", |config| {
-        config.github.issue_fields.area_id = Some(setup.area_id);
-        config.github.issue_fields.verification_id = Some(setup.verification_id);
+    save_github_settings(board, "orbit: github setup", |config| {
+        config.issue_fields.area_id = Some(setup.area_id);
+        config.issue_fields.verification_id = Some(setup.verification_id);
         Ok(())
     })?;
     let mut data = json!({
@@ -1057,7 +1221,7 @@ fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::Comm
             format!("Stored GitHub Issue Field ids for `{org}`")
         },
     );
-    for repo in &board.config.github.repositories {
+    for repo in &github_config(board).repositories {
         if let Err(error) = client.ensure_label(repo, crate::github::status::IN_PROGRESS_LABEL) {
             output.warnings.push(format!(
                 "could not ensure the `{}` label on `{repo}`: {}; auto-push will keep pushing other fields",
@@ -1074,7 +1238,7 @@ fn cmd_repo(board: &Board, command: GitHubRepoCommand) -> Result<crate::output::
         GitHubRepoCommand::Link(args) => cmd_repo_link(board, args),
         GitHubRepoCommand::Unlink(args) => cmd_repo_unlink(board, args),
         GitHubRepoCommand::List => {
-            let repos = board.config.github.repositories.clone();
+            let repos = github_config(board).repositories;
             Ok(crate::output::CommandOutput::new(
                 json!({ "repositories": repos, "count": repos.len() }),
                 if repos.is_empty() {
@@ -1089,10 +1253,7 @@ fn cmd_repo(board: &Board, command: GitHubRepoCommand) -> Result<crate::output::
 
 fn cmd_repo_link(board: &Board, args: GitHubRepoLinkArgs) -> Result<crate::output::CommandOutput> {
     let repo = crate::github::GitHubConfig::normalize_repo(&args.repository)?;
-    board.save_config("orbit: github repo link", |config| {
-        config.github.link_repo(&repo)?;
-        Ok(())
-    })?;
+    link_github_repository(board, &repo)?;
     let mut output = crate::output::CommandOutput::new(
         json!({ "repository": repo, "linked": true }),
         format!("Linked `{repo}`"),
@@ -1114,13 +1275,9 @@ fn cmd_repo_unlink(
     args: GitHubRepoLinkArgs,
 ) -> Result<crate::output::CommandOutput> {
     let repo = crate::github::GitHubConfig::normalize_repo(&args.repository)?;
-    board.save_config("orbit: github repo unlink", |config| {
-        if config.github.unlink_repo(&repo)? {
-            Ok(())
-        } else {
-            Err(OrbitError::not_found(&repo))
-        }
-    })?;
+    if !unlink_github_repository(board, &repo)? {
+        return Err(OrbitError::not_found(&repo));
+    }
     Ok(crate::output::CommandOutput::new(
         json!({ "repository": repo, "linked": false }),
         format!("Unlinked `{repo}`"),
@@ -1129,37 +1286,34 @@ fn cmd_repo_unlink(
 
 fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::CommandOutput> {
     let (repo, number) = resolve_adopt_identifier(&args)?;
-    require_repository_available(board, &repo)?;
-    let client = client_from_env()?;
-    let issue = fetch_issue(board, client.as_ref(), &repo, number)?;
+    let project = RemoteProject {
+        tracker: "github".to_string(),
+        project: repo.clone(),
+    };
+    let resolver = board_resolver(board);
+    crate::remote::execution::require_project_available(board, &resolver, &project)?;
+    let adapter = resolver.adapter("github")?;
+    let issue = adapter.fetch_issue(&project, &number.to_string())?;
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let task = graph.get(&args.task)?.clone();
-    if task.front.github.as_ref().is_some_and(|link| !link.active) {
+    if let Some(link) = link_view(&task).filter(|link| link.tracker == "github" && !link.active) {
         return Err(OrbitError::invalid_argument(format!(
             "task {} retains inactive GitHub provenance from {}#{}; review it before adopting another Issue",
-            args.task,
-            task.front
-                .github
-                .as_ref()
-                .expect("inactive provenance")
-                .repo,
-            task.front
-                .github
-                .as_ref()
-                .expect("inactive provenance")
-                .number,
+            args.task, link.project, link.id,
         )));
     }
-    if task.github_link().is_some() {
+    if let Some(link) = active_link(&task) {
         return Err(OrbitError::invalid_argument(format!(
-            "task {} already links to a GitHub Issue",
-            args.task
+            "task {} already links to {}#{}",
+            args.task, link.project, link.id
         )));
     }
     if let Some(existing) = graph.iter().find(|candidate| {
-        candidate
-            .github_link()
-            .is_some_and(|link| link.repo.eq_ignore_ascii_case(&repo) && link.number == number)
+        active_link(candidate).is_some_and(|link| {
+            link.tracker == "github"
+                && link.project.eq_ignore_ascii_case(&repo)
+                && link.id == number.to_string()
+        })
     }) {
         return Err(OrbitError::invalid_argument(format!(
             "GitHub Issue {repo}#{number} is already linked to Task {}; one GitHub Issue can be paired with only one Orbit Task",
@@ -1167,14 +1321,27 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
         )));
     }
     let mut task = task;
-    task.front.github = Some(GitHubLink::new(repo.clone(), number));
+    task.front.remote = Some(crate::remote::RemoteLink {
+        tracker: "github".to_string(),
+        project: repo.clone(),
+        id: number.to_string(),
+        url: issue.url.clone(),
+        active: true,
+        baseline: None,
+    });
     task.front.updated_at = Utc::now();
-    apply_issue_to_task(&mut task, &issue, !board.config.github.mode.is_basic())?;
-    validate_orbit_metadata(&task)?;
+    crate::remote::execution::set_baseline(&mut task, &issue);
+    apply_issue_to_task(&mut task, &issue, !github_config(board).mode.is_basic())?;
+    sync::validate_orbit_metadata(&task)?;
     let outcome = persist_task(board, &task, &format!("orbit: github adopt {}", task.id))?;
     let human = format!("Adopted {repo}/#{number} for {}", task.id);
     let mut output = crate::output::CommandOutput::new(
-        json!({ "task": task.id, "github": task.front.github, "issue": issue }),
+        json!({
+            "task": task.id,
+            "github": github_compat_json(&task),
+            "remote": link_json(&task),
+            "issue": github_issue_json(&issue),
+        }),
         human,
     );
     output
@@ -1187,7 +1354,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let workspace_repositories = crate::workspace::export_repositories(board)?;
     let mut repositories = workspace_repositories.clone().unwrap_or_default();
-    for repository in &board.config.github.repositories {
+    for repository in &github_config(board).repositories {
         if !repositories
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(repository))
@@ -1201,7 +1368,15 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         ));
     }
     let repo = select_create_repo(&repositories, args.repo.as_deref())?;
-    require_repository_available(board, &repo)?;
+    let create_project = RemoteProject {
+        tracker: "github".to_string(),
+        project: repo.clone(),
+    };
+    crate::remote::execution::require_project_available(
+        board,
+        &board_resolver(board),
+        &create_project,
+    )?;
 
     let mut plans = Vec::new();
     let mut selected = std::collections::HashSet::new();
@@ -1211,38 +1386,36 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             Some(format!(
                 "task {id} appears more than once in the export selection"
             ))
-        } else if task.front.github.as_ref().is_some_and(|link| !link.active) {
+        } else if link_view(task).is_some_and(|link| !link.active) {
             Some(format!(
-                "task {id} retains inactive GitHub provenance; reattach the exact Issue before exporting"
+                "task {id} retains inactive Remote Issue provenance; reattach the exact Issue before exporting"
             ))
-        } else if task.github_link().is_some() {
+        } else if active_link(task).is_some() {
             Some(format!(
-                "task {id} already links to a GitHub Issue; use `orbit github sync {id}` instead"
+                "task {id} already links to a Remote Issue; use `orbit github sync {id}` instead"
             ))
         } else if task.front.status.is_terminal() && !args.include_closed {
             Some(format!(
                 "task {id} is {}; pass --include-closed to export done and cancelled Tasks",
                 task.front.status.as_str()
             ))
-        } else if board.config.github.mode.is_basic()
+        } else if github_config(board).mode.is_basic()
             && (task.front.area.is_some() || task.front.verification.is_some())
         {
-            Some(
-                reject_basic_metadata(task)
-                    .expect_err("metadata was checked")
-                    .message,
-            )
+            Some(basic_mode_metadata_error(task))
         } else {
             None
         };
         plans.push((task.clone(), rejected));
     }
 
-    let client = if args.apply && plans.iter().any(|(_, error)| error.is_none()) {
-        Some(client_from_env()?)
-    } else {
-        None
-    };
+    if args.apply && plans.iter().any(|(_, error)| error.is_none()) {
+        // Fail fast on a missing `gh` before per-Task work begins; the
+        // adapter resolves its own client inside `create_and_link`.
+        client_from_env()?;
+    }
+    let resolver = board_resolver(board);
+    let project = create_project;
     let mut results = Vec::new();
     let mut human = Vec::new();
     let mut warnings = Vec::new();
@@ -1293,11 +1466,10 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             continue;
         }
 
-        let client = client.as_ref().expect("apply initialized GitHub client");
-        let created = match create_and_link(
+        let created = match crate::remote::execution::create_and_link(
             board,
-            &**client,
-            &repo,
+            &resolver,
+            &project,
             &task,
             &format!("orbit: github create {}", task.id),
         ) {
@@ -1334,7 +1506,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                 CreateFollowUp::CatalogUpdateFailed(error) => {
                     let warning = format!(
                         "{}: created {}/#{} but could not update the Remote Issue cache: {}; run `orbit workspace issues refresh`",
-                        task.id, repo, final_issue.number, error.message
+                        task.id, repo, final_issue.id, error.message
                     );
                     if !warnings.contains(&warning) {
                         warnings.push(warning);
@@ -1355,7 +1527,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                     error,
                     format!(
                         "run `orbit github adopt {} https://github.com/{repo}/issues/{}` to link the created Issue",
-                        task.id, final_issue.number
+                        task.id, final_issue.id
                     ),
                     "created, but could not link the Task",
                 ),
@@ -1373,8 +1545,9 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             results.push(json!({
                 "task": task.id,
                 "repository": repo,
-                "github": if linked { json!(task.front.github) } else { Value::Null },
-                "issue": final_issue,
+                "github": if linked { github_compat_json(&task) } else { Value::Null },
+                "remote": if linked { link_json(&task) } else { Value::Null },
+                "issue": github_issue_json(&final_issue),
                 "success": false,
                 "created": true,
                 "linked": linked,
@@ -1400,15 +1573,16 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             "verification": task.front.verification,
             "status": task.front.status,
             "issue_state": issue_state,
-            "github": task.front.github,
-            "issue": final_issue,
+            "github": github_compat_json(&task),
+            "remote": link_json(&task),
+            "issue": github_issue_json(&final_issue),
             "success": true,
         }));
         human.push(format!(
             "{}\n  Result: created {}/#{}",
             format_create_preview(&task, &repo, issue_state),
             repo,
-            final_issue.number
+            final_issue.id
         ));
     }
 
@@ -1441,6 +1615,23 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
         output = output.with_warning(warning);
     }
     Ok(output)
+}
+
+/// The rejection message for Orbit metadata a basic-mode GitHub adapter
+/// cannot publish (no organization Issue Fields).
+fn basic_mode_metadata_error(task: &Task) -> String {
+    let present: Vec<&str> = [
+        ("area", task.front.area.is_some()),
+        ("verification", task.front.verification.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, present)| present.then_some(name))
+    .collect();
+    format!(
+        "GitHub basic mode cannot sync task {} field(s): {}; remove them or use mode = `full` with organization Issue Fields",
+        task.id,
+        present.join(", ")
+    )
 }
 
 fn format_create_preview(task: &Task, repository: &str, issue_state: &str) -> String {
@@ -1564,15 +1755,27 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
         GitHubSyncDirection::Pull => SyncDirection::Pull,
         GitHubSyncDirection::Push => SyncDirection::Push,
     };
-    let client = client_from_env()?;
-    let report = super::execution::synchronize(
+    // `--resolve FIELD=github` keeps working as the GitHub spelling of the
+    // provider-neutral `FIELD=remote` choice.
+    let resolutions: Vec<String> = args
+        .resolutions
+        .iter()
+        .map(|resolution| match resolution.split_once('=') {
+            Some((field, "github")) => format!("{field}=remote"),
+            _ => resolution.clone(),
+        })
+        .collect();
+    client_from_env()?;
+    let resolver = board_resolver(board);
+    let report = execution::synchronize(
         board,
-        client.as_ref(),
-        super::execution::SyncRequest {
+        &resolver,
+        execution::SyncRequest {
             task: args.task.as_deref(),
             direction,
-            resolutions: &args.resolutions,
+            resolutions: &resolutions,
             apply: args.apply,
+            tracker: Some("github"),
         },
     )?;
     if report.tasks.is_empty() {
@@ -1594,28 +1797,35 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
             report
                 .tasks
                 .iter()
-                .map(|item| format_sync_preview(
-                    &item.task,
-                    &item.github,
-                    &item.plan,
-                    &item.relationships
-                ))
+                .map(|item| {
+                    format_sync_preview(&item.task, &item.link, &item.plan, &item.relationships)
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         )
     };
-    let plans: Vec<_> = report.tasks.iter().map(|item| {
-        let mut value = json!({ "task": item.task.id, "github": item.github, "plan": item.plan, "relationships": item.relationships });
-        match &item.outcome {
-            SyncOutcome::Preview => {}
-            SyncOutcome::Applied => value["success"] = json!(true),
-            SyncOutcome::Failed(failure) => {
-                value["success"] = json!(false);
-                value["failure"] = json!(failure);
+    let plans: Vec<_> = report
+        .tasks
+        .iter()
+        .map(|item| {
+            let mut value = json!({
+                "task": item.task.id,
+                "github": github_compat_json(&item.task),
+                "remote": link_json(&item.task),
+                "plan": item.plan,
+                "relationships": item.relationships,
+            });
+            match &item.outcome {
+                SyncOutcome::Preview => {}
+                SyncOutcome::Applied => value["success"] = json!(true),
+                SyncOutcome::Failed(failure) => {
+                    value["success"] = json!(false);
+                    value["failure"] = json!(failure);
+                }
             }
-        }
-        value
-    }).collect();
+            value
+        })
+        .collect();
     let mut output = crate::output::CommandOutput::new(
         json!({
             "tasks": plans, "count": plans.len(), "apply": args.apply,
@@ -1629,10 +1839,12 @@ fn cmd_sync(board: &Board, args: GitHubSyncArgs) -> Result<crate::output::Comman
 
 fn cmd_auto_push(board: &Board, args: GitHubAutoPushArgs) -> Result<crate::output::CommandOutput> {
     let enabled = matches!(args.state, AutoPushState::On);
-    let previous = board.config.github.auto_push;
+    let previous = auto_push_enabled(board);
     let changed = previous != enabled;
     let mut warnings = Vec::new();
     if changed {
+        // Auto-push is provider-neutral: the flag lives in `[remote]` and
+        // covers every configured Remote Tracker.
         let outcome = board.save_config(
             if enabled {
                 "orbit: github auto-push on"
@@ -1640,7 +1852,7 @@ fn cmd_auto_push(board: &Board, args: GitHubAutoPushArgs) -> Result<crate::outpu
                 "orbit: github auto-push off"
             },
             |config| {
-                config.github.auto_push = enabled;
+                config.remote.auto_push = enabled;
                 Ok(())
             },
         )?;
@@ -1648,7 +1860,7 @@ fn cmd_auto_push(board: &Board, args: GitHubAutoPushArgs) -> Result<crate::outpu
     }
     if changed && enabled {
         let mut repositories = crate::workspace::export_repositories(board)?.unwrap_or_default();
-        for repository in &board.config.github.repositories {
+        for repository in &github_config(board).repositories {
             if !repositories
                 .iter()
                 .any(|candidate| candidate.eq_ignore_ascii_case(repository))
@@ -1690,13 +1902,13 @@ fn cmd_auto_push(board: &Board, args: GitHubAutoPushArgs) -> Result<crate::outpu
 
 fn format_sync_preview(
     task: &Task,
-    link: &GitHubLink,
+    link: &crate::remote::link::RemoteLinkView,
     plan: &SyncPlan,
     relationships: &relationships::RelationshipReport,
 ) -> String {
     let mut output = format!(
         "\nTask: {} — {}\nIssue: {}#{}\n",
-        task.id, task.front.title, link.repo, link.number
+        task.id, task.front.title, link.project, link.id
     );
 
     let mut pulls = Vec::new();
@@ -1715,7 +1927,7 @@ fn format_sync_preview(
     push_preview_field(&mut pushes, "labels", &plan.push_labels);
     push_preview_field(&mut pushes, "area", &plan.push_area);
     push_preview_field(&mut pushes, "verification", &plan.push_verification);
-    push_preview_field(&mut pushes, "state", &plan.push_state);
+    push_preview_field(&mut pushes, "status", &plan.push_status);
     output.push_str("Push to GitHub:\n");
     append_preview_fields(&mut output, &pushes);
 
@@ -1728,7 +1940,7 @@ fn format_sync_preview(
                 "  - {}: Orbit = {}; GitHub = {}; choose `--resolve {}=orbit` or `--resolve {}=github`\n",
                 conflict.field,
                 format_preview_value(&conflict.orbit_value),
-                format_preview_value(&conflict.github_value),
+                format_preview_value(&conflict.remote_value),
                 conflict.field,
                 conflict.field,
             ));
@@ -1747,8 +1959,11 @@ fn format_sync_preview(
     } else {
         for change in &relationships.changes {
             output.push_str(&format!(
-                "  - {} {} {}/#{}\n",
-                change.action, change.kind, change.github.repo, change.github.number
+                "  - {} {} {}#{}\n",
+                change.action.as_str(),
+                change.kind.as_str(),
+                change.issue.project,
+                change.issue.id
             ));
         }
     }
@@ -1785,17 +2000,29 @@ fn format_preview_value(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "<unprintable>".to_string())
 }
 
-fn apply_issue_to_task(task: &mut Task, issue: &IssueSnapshot, include_fields: bool) -> Result<()> {
+fn apply_issue_to_task(task: &mut Task, issue: &RemoteIssue, include_fields: bool) -> Result<()> {
     task.front.title = issue.title.clone();
     task.body = issue.body.clone();
-    task.front.labels = crate::github::status::user_labels(&issue.labels);
+    // `RemoteIssue.labels` already excludes adapter-managed markers.
+    task.front.labels = issue.labels.clone();
     if include_fields {
-        task.front.area = issue.area.as_deref().map(parse_area).transpose()?;
+        task.front.area = match &issue.area {
+            Some(area) => {
+                let normalized = area.trim().to_ascii_lowercase();
+                if !task::is_valid_area(&normalized) {
+                    return Err(OrbitError::invalid_argument(
+                        "area must be a short lowercase slug of letters, digits, and `-`",
+                    ));
+                }
+                Some(normalized)
+            }
+            None => None,
+        };
         task.front.verification = issue.verification.clone();
     }
-    task.front.status =
-        crate::github::status::status_from_issue(issue.state, issue.state_reason, &issue.labels);
-    set_baseline(task, issue);
+    // The adapter already mapped the Remote Issue onto Orbit's Status.
+    task.front.status = issue.status;
+    execution::set_baseline(task, issue);
     Ok(())
 }
 

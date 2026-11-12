@@ -154,7 +154,10 @@ pub fn github_compat_json(task: &Task) -> serde_json::Value {
         value["active"] = serde_json::json!(false);
     }
     if let Some(baseline) = &link.baseline
-        && let Ok(baseline) = serde_yaml_ng::from_value::<serde_json::Value>(baseline.clone())
+        && let Some(baseline) = decode_baseline(&link.tracker, baseline)
+        && let Ok(baseline) = serde_json::to_value(
+            crate::github::link::GitHubSyncBaseline::from_sync_baseline(&baseline),
+        )
     {
         value["last_sync"] = baseline;
     }

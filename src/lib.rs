@@ -13,8 +13,6 @@ pub mod github;
 pub mod graph;
 pub mod health;
 pub mod help;
-#[allow(dead_code, unreachable_code)]
-pub mod issue_catalog;
 pub mod lock;
 pub mod mcp;
 pub mod migrate;

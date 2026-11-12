@@ -330,6 +330,15 @@ pub enum RelationAction {
     Remove,
 }
 
+impl RelationAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Remove => "remove",
+        }
+    }
+}
+
 /// A remote relationship edge to add or remove.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RelationChange {

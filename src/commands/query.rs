@@ -84,10 +84,10 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             if args.unlabeled && !task.front.labels.is_empty() {
                 return false;
             }
-            if args.linked && task.github_link().is_none() {
+            if args.linked && crate::remote::link::active_link(task).is_none() {
                 return false;
             }
-            if args.local && task.github_link().is_some() {
+            if args.local && crate::remote::link::active_link(task).is_some() {
                 return false;
             }
             if let Some(parent) = args.parent.as_deref()

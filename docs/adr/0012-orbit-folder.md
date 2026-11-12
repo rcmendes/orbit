@@ -38,7 +38,7 @@ positional argument of `init`, the argument of `link`, and `--dir`/`ORBIT_DIR`.
 ### One creation command
 
 ```text
-orbit init [DIR] [--slug SLUG] [--global]
+orbit init [DIR] [--slug SLUG]
            [--agents LIST|none|all] [--print]
 ```
 
@@ -46,8 +46,8 @@ orbit init [DIR] [--slug SLUG] [--global]
 - `orbit workspace`, `init --board PATH`, and `init --local` are removed. Orbit
   is pre-alpha, so there is no compatibility alias. A workspace is now created
   from its folder with `orbit init`; `link` is unchanged as the joining step.
-- `init --global` targets `~/.orbit`. It conflicts with a positional DIR and
-  with `--dir`/`ORBIT_DIR`.
+- Run `init` in `~` to create an ordinary home-directory Board. There is no
+  `--global` flag.
 - `init` takes DIR from the positional argument, then `--dir`/`ORBIT_DIR`, then
   `./.orbit`. `link` uses only its positional DIR; the global overrides never
   retarget the pointer.
@@ -67,7 +67,7 @@ orbit init [DIR] [--slug SLUG] [--global]
   it reuses it; if a different repository-local Board already resolves for DIR,
   it returns `ALREADY_INITIALIZED` naming that Board before creating anything.
   `orbit unlink` clears a link; an ancestor, main-checkout, or legacy Board must
-  be moved or migrated. `--global` and the `~/.orbit` fallback are exempt; the
+  be moved or migrated. The `~/.orbit` Board is exempt; the
   fallback never blocks a local Board. A DIR outside every working tree is a
   standalone Board; it becomes part of a repository only through `link`.
 
@@ -99,7 +99,7 @@ The slug is derived from DIR, not from the shell's current directory:
 | --- | --- |
 | `.../<name>/.orbit` | `<name>`, normalized |
 | `.../<name>` | `<name>`, normalized |
-| `~/.orbit` or `--global` | `orb`, with a warning |
+| `~/.orbit` | `orb`, with a warning |
 
 Explicit `--slug` keeps the strict validation from ADR 0011. Re-running `init`
 preserves the stored prefix; an empty Board can change it, and a populated Board
@@ -225,7 +225,7 @@ together with the old pointer shapes and the extra discovery step.
 - `orbit setup --scope user` makes a machine-wide integration possible without
   binding it to one Board.
 - Scripts that used `orbit workspace`, `init --board`, `init --local`, or passed
-  a workspace root to `link` must switch to `init DIR`, `init --global`, or
+  a workspace root to `link` must switch to `init DIR`, running `init` in `~`, or
   `link DIR`. This is an intentional pre-alpha break.
 - Legacy boards keep working with a warning until the following release, when
   the compatibility path is removed.

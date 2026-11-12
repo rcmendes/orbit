@@ -217,7 +217,7 @@ flowchart TD
     OWN --> LOCK
 ```
 
-The pointer lives in the Git common directory, not in a worktree — `orbit repo add` writes it — so a claim made from a linked worktree and a claim made from the main worktree serialize on the same Board lock and see the same tasks. An anchored Board at `<anchor>/.orbit/board` is found above child Git roots and needs no per-repository pointer. A Board in the home directory (`~/.orbit/board`, created with `orbit init --global`) is an ordinary Board found by the same upward walk; discovery never creates one. Every Board is a standalone repository on branch `orbit`; a pre-ADR-0019 layout resolves with a `LEGACY_LAYOUT` warning and then fails commands with `BOARD_NOT_MIGRATED` until `orbit migrate` converts it. When a child-local Board competes with the Board above it, the ancestor wins and the command warns with `AMBIGUOUS_BOARD`; `doctor` reports the duplicate.
+The pointer lives in the Git common directory, not in a worktree — `orbit repo add` writes it — so a claim made from a linked worktree and a claim made from the main worktree serialize on the same Board lock and see the same tasks. An anchored Board at `<anchor>/.orbit/board` is found above child Git roots and needs no per-repository pointer. A Board in the home directory (`~/.orbit/board`, created by running `orbit init` in `~`) is an ordinary Board found by the same upward walk; discovery never creates one. Every Board is a standalone repository on branch `orbit`; a pre-ADR-0019 layout resolves with a `LEGACY_LAYOUT` warning and then fails commands with `BOARD_NOT_MIGRATED` until `orbit migrate` converts it. When a child-local Board competes with the Board above it, the ancestor wins and the command warns with `AMBIGUOUS_BOARD`; `doctor` reports the duplicate.
 
 ### Domain relationships
 
@@ -499,7 +499,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 
 ### Topology
 
-A Board anchor is an ordinary, non-Git folder containing repositories and one Board. Its Board is the standalone repository at `<anchor>/.orbit/board`; the rebuildable cache is separate at `<anchor>/.orbit/cache`. Repositories discovered below the anchor are member Repositories: they find the Board by walking above their Git boundary and need no explicit membership. Repositories outside the anchor join with `orbit repo add`, which records an explicit `[repositories]` entry and writes the link pointer in that Repository's Git common directory. The repository-local Board remains `<repository>/.orbit/board`, and a home-directory Board at `~/.orbit/board` (created with `orbit init --global`) is found by the same upward walk.
+A Board anchor is an ordinary, non-Git folder containing repositories and one Board. Its Board is the standalone repository at `<anchor>/.orbit/board`; the rebuildable cache is separate at `<anchor>/.orbit/cache`. Repositories discovered below the anchor are member Repositories: they find the Board by walking above their Git boundary and need no explicit membership. Repositories outside the anchor join with `orbit repo add`, which records an explicit `[repositories]` entry and writes the link pointer in that Repository's Git common directory. The repository-local Board remains `<repository>/.orbit/board`, and a home-directory Board at `~/.orbit/board` (created by running `orbit init` in `~`) is found by the same upward walk.
 
 `src/repository.rs` owns Board membership: discovered child Repositories merge
 with the explicit `[repositories]` config entries, deduplicated by
@@ -561,7 +561,7 @@ flowchart LR
 
 ### Resolving the Task-ID slug
 
-`orbit init` resolves the literal `id.prefix` from the repository or Board anchor name before creating a Board. `--global` and `~/.orbit/board` use `orb` with a warning; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the anchor rule.
+`orbit init` resolves the literal `id.prefix` from the repository or Board anchor name before creating a Board. A Board anchored at `~/.orbit` uses `orb` with a warning; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the anchor rule.
 
 `orbit slug show` reads the stored prefix, task/SubTask counts, and comment-file count without loading the graph. `orbit slug migrate <slug>` is the explicit rewrite path for a populated Board. It keeps each random suffix, rewrites `parent`, `depends_on`, comment filenames and Orbit headers, updates `id.prefix`, and records one commit. It refuses an unhealthy Board, a target collision, and live claims unless `--force`; a dry run reports the plan and claims without writing.
 
@@ -587,7 +587,7 @@ The temporary worktree is the transaction boundary: the real Board is not touche
 
 ### Creating a Board
 
-`orbit init [DIR]` creates a repository-local Board at `./.orbit/board` inside Git or an anchored Board at `<anchor>/.orbit/board` outside Git. A `DIR` that is already a Git working-tree root, including `.`, also resolves to that checkout's `./.orbit/board` (the main checkout's from a linked worktree), so `orbit init .` matches plain `orbit init`; any other `DIR` inside a repository is a visible Board folder anchored by the repository's `.orbit/board` pointer file, and outside Git it is anchored by a sibling `.orbit`. `--dir`/`ORBIT_DIR` accept the anchor or a Board directory. Init on an anchor previews and merges any child-repository Boards it finds — Task IDs are preserved, child prefixes move to `id.accepted_prefixes`, imported Tasks record their Repository, and the child Boards stay on disk as backups under `<anchor>/.orbit/backups` — and refuses to overwrite unknown `.orbit` contents. A legacy Board directly at the anchor's `.orbit` gets a migration diagnostic, and any other pre-ADR-0019 Board is refused with `BOARD_NOT_MIGRATED`. Once the anchor's Board exists, `init` reuses it. Running `init` from a member Repository whose anchored Board already resolves reuses it. `--global` is exempt from these checks.
+`orbit init [DIR]` creates a repository-local Board at `./.orbit/board` inside Git or an anchored Board at `<anchor>/.orbit/board` outside Git. A `DIR` that is already a Git working-tree root, including `.`, also resolves to that checkout's `./.orbit/board` (the main checkout's from a linked worktree), so `orbit init .` matches plain `orbit init`; any other `DIR` inside a repository is a visible Board folder anchored by the repository's `.orbit/board` pointer file, and outside Git it is anchored by a sibling `.orbit`. `--dir`/`ORBIT_DIR` accept the anchor or a Board directory. Init on an anchor previews and merges any child-repository Boards it finds — Task IDs are preserved, child prefixes move to `id.accepted_prefixes`, imported Tasks record their Repository, and the child Boards stay on disk as backups under `<anchor>/.orbit/backups` — and refuses to overwrite unknown `.orbit` contents. A legacy Board directly at the anchor's `.orbit` gets a migration diagnostic, and any other pre-ADR-0019 Board is refused with `BOARD_NOT_MIGRATED`. Once the anchor's Board exists, `init` reuses it. Running `init` from a member Repository whose anchored Board already resolves reuses it. A Board at `~/.orbit` is exempt from conflicting-Board checks.
 
 ```mermaid
 flowchart TD
@@ -897,7 +897,7 @@ sequenceDiagram
 
 - The board is the only source of truth. There is no persistent index, cache, or watcher; every command rehydrates from Markdown.
 - A Board is one standalone Git repository on branch `orbit` in a Board folder; the hidden/visible placement changes only where `.orbit` anchors it, not the files, lock, command behavior, or JSON contract.
-- Discovery never creates a Board. `init` refuses when a repository-local Board already resolves for the target `DIR` (except `--global`), and `~/.orbit` is used only when it already exists.
+- Discovery never creates a Board. `init` refuses when a repository-local Board already resolves for the target `DIR` (except a Board at `~/.orbit`), and `~/.orbit` is used only when it already exists.
 - Readers take the shared lock for a consistent snapshot. Writers take the exclusive lock for the read-modify-write.
 - Each file is published with a temp file, `fsync`, and rename. A crash cannot truncate a task.
 - Ready and blocked are derived on every command. They are never stored in frontmatter.

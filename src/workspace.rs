@@ -199,4 +199,3 @@ fn load_catalog(path: &Path) -> Result<RepositoryCatalog> {
         Err(error) => Err(OrbitError::io(format!("read {}", path.display()), error)),
     }
 }
-

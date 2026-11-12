@@ -944,3 +944,71 @@ fn prime_hook_json_emits_the_session_start_envelope() {
     let (_, error) = repo.err_json(&["--json", "prime", "--hook-json", "--by", "claude"]);
     assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
 }
+
+#[test]
+fn setup_omits_remote_guidance_without_remote_material() {
+    // No Board at all: setup still writes local-only guidance.
+    let repo = TestRepo::new();
+    repo.ok_json(&["setup", "codex", "--json"]);
+    let agents = repo.read("AGENTS.md");
+    assert!(agents.contains("BEGIN ORBIT INTEGRATION"));
+    assert!(!agents.contains("`ISSUE` column"), "{agents}");
+    assert!(!agents.contains("--linked"), "{agents}");
+
+    repo.ok_json(&["setup", "mattpocock", "--json"]);
+    let tracker = repo.read("docs/agents/issue-tracker.md");
+    assert!(!tracker.contains("`ISSUE` column"), "{tracker}");
+    assert!(!tracker.contains("--linked"), "{tracker}");
+}
+
+#[test]
+fn setup_includes_remote_guidance_when_remote_material_exists() {
+    for mode in ["config", "link"] {
+        let repo = TestRepo::new();
+        repo.init();
+        if mode == "config" {
+            let path = repo.board_path().join("config.toml");
+            let config = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(
+                &path,
+                format!(
+                    "{config}\n[[remote.projects]]\ntracker = \"github\"\nproject = \"acme/widget\"\n"
+                ),
+            )
+            .unwrap();
+        } else {
+            let id = repo.add("Linked task", &[]);
+            let content = repo.read_task(&id);
+            let linked = content.replacen(
+                "---\n",
+                "---\nremote:\n  tracker: github\n  project: acme/widget\n  id: \"42\"\n",
+                1,
+            );
+            assert_ne!(linked, content);
+            repo.write_task(&id, &linked);
+        }
+
+        repo.ok_json(&["setup", "codex", "--json"]);
+        let agents = repo.read("AGENTS.md");
+        assert!(agents.contains("`ISSUE` column"), "{mode}: {agents}");
+        assert!(agents.contains("--linked"), "{mode}: {agents}");
+
+        repo.ok_json(&["setup", "mattpocock", "--json"]);
+        let tracker = repo.read("docs/agents/issue-tracker.md");
+        assert!(tracker.contains("`ISSUE` column"), "{mode}: {tracker}");
+    }
+}
+
+#[test]
+fn setup_reminds_to_commit_generated_files() {
+    let repo = TestRepo::new();
+    let output = repo.orbit(&["setup", "opencode", "--no-mcp"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("commit the generated files"), "{stdout}");
+
+    let preview = repo.orbit(&["setup", "opencode", "--no-mcp", "--print"]);
+    assert!(preview.status.success());
+    let stdout = String::from_utf8_lossy(&preview.stdout);
+    assert!(!stdout.contains("commit the generated files"), "{stdout}");
+}

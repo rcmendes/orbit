@@ -163,14 +163,14 @@ fn removed_init_surface_is_rejected() {
 }
 
 #[test]
-fn init_global_rejects_a_positional_dir() {
+fn init_in_home_creates_an_ordinary_board_despite_an_ancestor_board() {
     let repo = TestRepo::new();
-
-    let output = repo.orbit(&["init", "acme", "--global"]);
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--global"), "{stderr}");
+    repo.init();
+    assert!(repo.git_in(repo.home(), &["init", "-q"]).status.success());
+    let value = repo.ok_json_in(repo.home(), &["init", "--agents", "none", "--json"]);
+    assert_eq!(value["data"]["created"], true, "{value}");
+    assert!(repo.home().join(".orbit/board/config.toml").is_file());
+    assert!(repo.home().join(".orbit/board/.git").is_dir());
 }
 
 #[test]

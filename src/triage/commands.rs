@@ -9,6 +9,9 @@ use crate::board::Board;
 use crate::cli::{TriageApplyArgs, TriageArgs, TriageCommand, TriageReviewArgs};
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{Graph, LoadMode};
+use crate::remote::link::{RemoteLinkView, active_link, github_compat_json, link_json};
+use crate::remote::model::MappedFields;
+use crate::remote::port::{RemoteResolver, board_resolver};
 use crate::task::Task;
 use crate::triage::guidance::{guidance_missing_note, read_project_guidance};
 use crate::triage::labels::CANONICAL_TRIAGE_LABELS;
@@ -29,7 +32,7 @@ pub fn run(
 fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(id)?;
-    let link = require_github_link(task)?;
+    let publish = publishability(board, task);
 
     let (guidance, guidance_path) = read_project_guidance(board);
     let mut warnings = Vec::new();
@@ -37,6 +40,9 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
         && let Some(ref path) = guidance_path
     {
         warnings.push(guidance_missing_note(path));
+    }
+    if let Publishability::Unavailable { tracker } = &publish {
+        warnings.push(unavailable_tracker_note(id, tracker));
     }
 
     let guidance_path_json = guidance_path
@@ -50,9 +56,26 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
     } else {
         json!(board.config.board.areas)
     };
+    // For a Linked Task only the Remote Project's Mapped fields can be
+    // published, so they are the only fields Triage may change; a Local
+    // Task (or an unresolvable tracker) has no publish step and every
+    // field stays available.
+    let capabilities = match &publish {
+        Publishability::Remote { mapped, .. } => json!({
+            "area": mapped.area,
+            "verification": mapped.verification,
+            "labels": mapped.labels,
+        }),
+        _ => json!({
+            "area": true,
+            "verification": true,
+            "labels": true,
+        }),
+    };
     let data = json!({
         "id": task.id,
-        "github": link,
+        "github": github_compat_json(task),
+        "remote": link_json(task),
         "current": {
             "area": task.front.area.as_deref(),
             "verification": task.front.verification,
@@ -62,14 +85,9 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
         "project_guidance_path": guidance_path_json,
         "allowed_areas": allowed_areas,
         "canonical_labels": CANONICAL_TRIAGE_LABELS,
-        "metadata_capabilities": {
-            "area": !board.config.github.mode.is_basic(),
-            "verification": !board.config.github.mode.is_basic(),
-            "labels": true,
-        },
+        "metadata_capabilities": capabilities,
     });
-    let mut output =
-        crate::output::CommandOutput::new(data, format!("Triage context for {id} (GitHub-linked)"));
+    let mut output = crate::output::CommandOutput::new(data, format!("Triage context for {id}"));
     output.warnings.extend(warnings);
     Ok(output)
 }
@@ -83,12 +101,12 @@ fn cmd_review(
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
-    require_github_link(task)?;
+    let publish = publishability(board, task);
 
     let (changes, apply_ready) = proposal
         .build_preview(task)
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
-    reject_basic_structured_changes(board, &changes)?;
+    reject_unmapped_changes(&publish, task, &changes)?;
     let preview = render_preview(&args.task, &proposal, &changes);
     let data = json!({
         "id": task.id,
@@ -98,11 +116,7 @@ fn cmd_review(
         },
         "changes": changes,
         "apply_ready": apply_ready,
-        "sync_note": if board.config.github.mode.is_basic() {
-            "In basic mode, only labels can sync to GitHub; area and verification require full mode with organization Issue Fields."
-        } else {
-            "After approval, run `orbit github sync <ID> --direction push --apply` to publish Orbit-owned fields and labels to GitHub."
-        },
+        "sync_note": publish_note(&publish, &args.task),
     });
 
     let has_changes = changes
@@ -146,7 +160,6 @@ fn cmd_apply(board: &Board, args: TriageApplyArgs) -> Result<crate::output::Comm
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
-    require_github_link(task)?;
 
     let (changes, apply_ready) = validate_proposal_for_apply(board, &proposal, task)
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
@@ -173,7 +186,7 @@ fn validate_proposal_for_apply(
         ));
     }
     let (changes, apply_ready) = proposal.build_preview(task)?;
-    reject_basic_structured_changes(board, &changes)?;
+    reject_unmapped_changes(&publishability(board, task), task, &changes)?;
     Ok((changes, apply_ready))
 }
 
@@ -197,19 +210,36 @@ fn apply_proposal(
     let outcome =
         crate::mutation::persist_task(board, &task, &format!("orbit: triage apply {id}"))?;
 
-    let mut output = crate::output::CommandOutput::new(
-        json!({
-            "id": id,
-            "applied": true,
-            "changes": changes,
-            "sync_required": true,
-            "sync_command": format!(
-                "orbit github sync {} --direction push --apply",
-                id
-            ),
-        }),
-        format!("Applied triage metadata to {id}; publish with `orbit github sync`"),
-    );
+    let publish = publishability(board, &task);
+    let (data, message) = match &publish {
+        Publishability::Remote { link, .. } => {
+            let command = publish_command(link, id);
+            (
+                json!({
+                    "id": id,
+                    "applied": true,
+                    "changes": changes,
+                    "sync_required": true,
+                    "sync_command": command,
+                }),
+                format!("Applied triage metadata to {id}; publish with `{command}`"),
+            )
+        }
+        _ => (
+            json!({
+                "id": id,
+                "applied": true,
+                "changes": changes,
+                "sync_required": false,
+                "sync_command": serde_json::Value::Null,
+            }),
+            format!("Applied triage metadata to {id}"),
+        ),
+    };
+    let mut output = crate::output::CommandOutput::new(data, message);
+    if let Publishability::Unavailable { tracker } = &publish {
+        output.warnings.push(unavailable_tracker_note(id, tracker));
+    }
     if let Some(warning) = crate::mutation::commit_warning(outcome) {
         output.warnings.push(warning);
     }
@@ -306,19 +336,103 @@ fn prompt_for_approval(input: &mut impl BufRead, output: &mut impl Write) -> Res
     }
 }
 
-fn reject_basic_structured_changes(board: &Board, changes: &serde_json::Value) -> Result<()> {
-    if !board.config.github.mode.is_basic() {
+/// How a Task's triage changes can be published, resolved once per
+/// command. Triage itself is local-first: `Local` and `Unavailable` both
+/// mean nothing is published, and only `Remote` restricts which fields a
+/// proposal may change to the Remote Project's Mapped fields.
+enum Publishability {
+    /// No active Remote Issue link.
+    Local,
+    /// Actively linked and the tracker's adapter resolved.
+    Remote {
+        link: Box<RemoteLinkView>,
+        mapped: MappedFields,
+    },
+    /// Linked to a tracker whose adapter cannot be resolved.
+    Unavailable { tracker: String },
+}
+
+fn publishability(board: &Board, task: &Task) -> Publishability {
+    let Some(link) = active_link(task) else {
+        return Publishability::Local;
+    };
+    match board_resolver(board).adapter(&link.tracker) {
+        Ok(adapter) => Publishability::Remote {
+            mapped: adapter.mapped_fields(&link.remote_project()),
+            link: Box::new(link),
+        },
+        Err(_) => Publishability::Unavailable {
+            tracker: link.tracker.clone(),
+        },
+    }
+}
+
+/// The command that publishes a Linked Task's mapped fields. GitHub keeps
+/// its dedicated spelling until `orbit remote` lands; other trackers use
+/// the provider-neutral command.
+fn publish_command(link: &RemoteLinkView, task: &str) -> String {
+    let base = if link.tracker == "github" {
+        "orbit github sync"
+    } else {
+        "orbit remote sync"
+    };
+    format!("{base} {task} --direction push --apply")
+}
+
+fn publish_note(publish: &Publishability, task: &str) -> String {
+    match publish {
+        Publishability::Remote { link, .. } => format!(
+            "After approval, run `{}` to publish mapped Orbit fields and labels to the Remote Issue.",
+            publish_command(link, task)
+        ),
+        Publishability::Unavailable { tracker } => format!(
+            "Task is linked to tracker `{tracker}`, which has no installed adapter; triage changes stay local."
+        ),
+        Publishability::Local => {
+            "Local Task: triage changes stay on the Orbit Board; there is no Remote Issue to publish to.".into()
+        }
+    }
+}
+
+fn unavailable_tracker_note(task: &str, tracker: &str) -> String {
+    format!(
+        "Task {task} links to tracker `{tracker}`, which has no installed adapter; triage changes stay local and cannot be published"
+    )
+}
+
+/// For a Linked Task, reject proposal changes the Remote Project cannot
+/// publish: the adapter's Mapped fields are the only fields sync carries,
+/// so proposing an unmappable field would promise a publish that can
+/// never happen (and, for `area`/`verification`, would break the next
+/// push). Local Tasks and unresolvable trackers have no publish step, so
+/// nothing is rejected.
+fn reject_unmapped_changes(
+    publish: &Publishability,
+    task: &Task,
+    changes: &serde_json::Value,
+) -> Result<()> {
+    let Publishability::Remote { link, mapped } = publish else {
+        return Ok(());
+    };
+    let unmapped: Vec<&str> = [
+        ("area", mapped.area),
+        ("verification", mapped.verification),
+        ("labels", mapped.labels),
+    ]
+    .into_iter()
+    .filter(|(field, mapped)| changes.get(field).is_some() && !mapped)
+    .map(|(field, _)| field)
+    .collect();
+    if unmapped.is_empty() {
         return Ok(());
     }
-    let has_structured_field = changes.as_object().is_some_and(|changes| {
-        changes.contains_key("area") || changes.contains_key("verification")
-    });
-    if has_structured_field {
-        return Err(OrbitError::invalid_argument(
-            "GitHub basic mode Triage supports labels only; area and verification require mode = `full` with organization Issue Fields",
-        ));
-    }
-    Ok(())
+    Err(OrbitError::invalid_argument(format!(
+        "Task {} is linked to Remote Project `{}` on tracker `{}`, which does not map field(s): {}; Triage may only change fields the Remote Tracker publishes",
+        task.id,
+        link.project,
+        link.tracker,
+        unmapped.join(", ")
+    )))
 }
 
 fn load_proposal(board: &Board, path: &Path) -> Result<TriageProposal> {
@@ -336,22 +450,6 @@ fn load_proposal(board: &Board, path: &Path) -> Result<TriageProposal> {
     let mut proposal = TriageProposal::parse_json(&raw)?;
     proposal.normalize(&board.config.board.areas)?;
     Ok(proposal)
-}
-
-fn require_github_link(task: &Task) -> Result<serde_json::Value> {
-    crate::remote::link::active_link(task)
-        .filter(|link| link.tracker == "github")
-        .map(|link| json!({ "repo": link.project, "number": link.id.parse::<u64>().unwrap_or(0) }))
-        .ok_or_else(|| {
-            OrbitError::new(
-                code::TRIAGE_NOT_LINKED,
-                format!(
-                    "task {} is not linked to a GitHub Issue; adopt explicitly with `orbit github adopt` before triage",
-                    task.id
-                ),
-            )
-            .with_details(json!({ "task": task.id }))
-        })
 }
 
 fn proposal_context(task: &str, path: &Path) -> serde_json::Value {

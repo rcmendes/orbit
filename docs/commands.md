@@ -28,7 +28,7 @@ contract.
 | `--json` | Print exactly one JSON object on stdout, including errors. |
 | `--dir <PATH>` | Use a Board anchor or a specific Board directory for this command. |
 | `ORBIT_DIR` | Environment equivalent of `--dir`. |
-| `--no-sync` | Skip GitHub auto-push and Board host auto-sync for this command. `ORBIT_NO_AUTO_SYNC=1` (or `ORBIT_NO_HOST_SYNC=1`) does the same for a process. Explicit `orbit github sync` and `orbit board sync` are unaffected. |
+| `--no-sync` | Skip GitHub auto-push and Board host auto-sync for this command. `ORBIT_NO_AUTO_SYNC=1` (or `ORBIT_NO_HOST_SYNC=1`) does the same for a process. Explicit `orbit remote sync` and `orbit board sync` are unaffected. |
 
 Exit codes are `0` for success, `1` for a domain failure (for example
 `DEPENDENCY_BLOCKED` or a failing `doctor`), and `2` for a usage error.
@@ -63,7 +63,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
 | Recover or maintain the board | `orbit doctor`, `orbit sync` |
 | Host and synchronize the Board | `orbit board host`, `orbit board sync` |
-| Link GitHub Issues (optional) | `orbit github` — see [github-sync.md](./github-sync.md) |
+| Link GitHub Issues (optional) | `orbit remote connect` — see [github-sync.md](./github-sync.md) |
 | Triage linked Tasks | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
 
 ## Set up a Board
@@ -864,7 +864,7 @@ orbit doctor --json
 ### `orbit sync` — persist lease-only changes
 
 Commits pending board changes, mostly heartbeats, to the board branch. Nothing is
-pushed. This is not the GitHub toggle: use `orbit github auto-push on|off` to control
+pushed. This is not the GitHub toggle: use `orbit remote auto-push on|off` to control
 automatic Issue publishing.
 
 **Good fit:** a long session only heartbeated, or `doctor` reports uncommitted
@@ -908,13 +908,13 @@ orbit board sync                     # fetch, merge, push
 orbit board sync --resolve orb-a1b2c3.title=host --json
 ```
 
-### `orbit github` — GitHub Issue provider
+### `orbit remote` — GitHub Issue provider
 
 GitHub sync and Triage run through the built-in GitHub Remote Tracker adapter
 (ADR 0018); every release build includes it.
 
 Connects the current checkout's origin repository, adopts or creates Issues, and
-runs bidirectional sync with conflict detection. `orbit github connect` checks
+runs bidirectional sync with conflict detection. `orbit remote connect` checks
 `gh` authentication and repository access. For an organization-owned repository,
 it validates Issue Fields and writes `[github]` configuration. For a personal
 repository, it leaves configuration unchanged and reports the exact settings to
@@ -924,7 +924,7 @@ preserving other linked repositories; the response includes those exact entries
 and links to the setup guide. Existing integrations can link repositories
 explicitly. Sync requires the `gh` CLI and `[github]` in
 `config.toml`; full mode uses organization Issue Fields, while basic mode limits
-Triage to labels. `orbit github status` is a read-only diagnostic that reports
+Triage to labels. `orbit remote status` is a read-only diagnostic that reports
 authentication and scopes, linked repositories, Issue Field configuration when
 applicable, linked Task count, pending changes, conflicts, unsupported
 relationships, and a recommended next action. `orbit doctor` checks GitHub
@@ -937,7 +937,7 @@ Issue close, which pull sync then sees as an Issue change. See
 
 Enable `[remote] auto_push` (or the legacy `[github] auto_push`) to publish
 mapped changes after a local mutation.
-Toggle it with `orbit github auto-push on` or `orbit github auto-push off`; the
+Toggle it with `orbit remote auto-push on` or `orbit remote auto-push off`; the
 command writes the Board config and commits it, reports the previous value, and
 warns when no single repository can receive newly created Issues. It is
 push-only: `orbit add` creates an Issue when exactly one repository is
@@ -947,30 +947,30 @@ conflict, and never creates an Issue for an existing Local Task. `done` closes
 with `state_reason: completed`; `cancelled` with `not_planned`. Priority, type,
 comments, claims, checkpoints, and relationships do not trigger a push. Use
 `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation;
-explicit `orbit github sync` is unaffected. See
+explicit `orbit remote sync` is unaffected. See
 [github-sync.md#automatic-push](./github-sync.md#automatic-push).
 
 ```bash
-orbit github connect
-orbit github status
-orbit github status --json
-orbit github repo link acme/widget
-orbit github setup
-orbit github setup --create-fields       # explicitly create missing org Issue Fields
-orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
-orbit github adopt orb-a7b2c9 --repo acme/widget --number 42  # legacy form
-orbit github create orb-a7b2c9                 # preview only; uses the only linked repository
-orbit github create orb-a7b2c9 --apply         # create and link after review
-orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
-orbit github create orb-a7b2c9 --include-closed --apply
-orbit github sync orb-a7b2c9              # dry-run plan
-orbit github sync orb-a7b2c9 --apply      # apply pull/push plan
-orbit github auto-push on                 # publish mapped changes after mutations
-orbit github auto-push off                # return to explicit sync only
+orbit remote connect
+orbit remote status
+orbit remote status --json
+orbit remote connect acme/widget
+orbit remote connect --fields
+orbit remote connect --fields --create-fields       # explicitly create missing org Issue Fields
+orbit remote link orb-a7b2c9 https://github.com/acme/widget/issues/42
+orbit remote link orb-a7b2c9 acme/widget#42                 # shorthand identity
+orbit remote create orb-a7b2c9                 # preview only; uses the only linked repository
+orbit remote create orb-a7b2c9 --apply         # create and link after review
+orbit remote create orb-a7b2c9 orb-d4e5f6 --project acme/widget --apply
+orbit remote create orb-a7b2c9 --include-closed --apply
+orbit remote sync orb-a7b2c9              # dry-run plan
+orbit remote sync orb-a7b2c9 --apply      # apply pull/push plan
+orbit remote auto-push on                 # publish mapped changes after mutations
+orbit remote auto-push off                # return to explicit sync only
 orbit --no-sync add "Local-only task"     # skip auto-push for one command
 ```
 
-`orbit github setup` only resolves existing fields and stores their ids. Creating
+`orbit remote connect --fields` only resolves existing fields and stores their ids. Creating
 missing fields requires the explicit `--create-fields` option and organization
 administrator access. See [github-sync.md](./github-sync.md) for field types,
 permissions, and remediation.
@@ -983,12 +983,12 @@ explicit approval or cancellation. Non-TTY and `--json` reviews only preview; th
 never prompt or apply. `--proposal-file -` reads a proposal from stdin. Applying
 changes Orbit; with `[github] auto_push = true`, the changed labels, `area`, and
 `verification` are pushed immediately. Otherwise, publish approved linked Task
-changes with an explicit `orbit github sync`. See
+changes with an explicit `orbit remote sync`. See
 [agents/triage-workflow.md](./agents/triage-workflow.md).
 
 Apply preserves metadata on disk if the automatic Git commit fails and reports
 `COMMIT_FAILED` in the output warnings, as every other mutating command does
-(including `orbit github adopt`/`create`/`sync`). Run `orbit sync` to retry
+(including `orbit remote link`/`create`/`sync`). Run `orbit sync` to retry
 the commit; do not repeat the proposal
 merely to recover the commit.
 
@@ -998,7 +998,7 @@ orbit triage review orb-a7b2c9 --proposal-file proposal.json
 orbit triage review orb-a7b2c9 --proposal-file proposal.json --json
 orbit triage review orb-a7b2c9 --proposal-file - --json < proposal.json
 orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json
-orbit github sync orb-a7b2c9 --direction push --apply
+orbit remote sync orb-a7b2c9 --direction push --apply
 ```
 
 ## Scenarios

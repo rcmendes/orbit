@@ -364,10 +364,10 @@ discarded.
 
 The pre-revamp `orbit workspace` commands are retired. The GitHub repository
 catalog they maintained (`<anchor>/.orbit/cache/repositories.json`) is frozen
-legacy state that `orbit github` still reads for Boards migrated from the
-Workspace era; `orbit github repo link OWNER/REPO` is the current way to make a
+legacy state that `orbit remote` still reads for Boards migrated from the
+Workspace era; `orbit remote connect OWNER/REPO` is the current way to make a
 GitHub repository available to a Board. The Remote Issue snapshot machinery
-(`orbit workspace issues *`) is dormant pending the Remote Tracker port
+(`orbit remote issues *`) is dormant pending the Remote Tracker port
 (`orbit remote`).
 
 ### Board host and sync
@@ -530,7 +530,7 @@ orbit migrate [--apply|--dry-run]
 orbit doctor [--fix]
 orbit sync
 orbit board <host|sync>
-orbit github <status|connect|setup|repo|adopt|create|sync|auto-push>
+orbit remote <status|connect|disconnect|list|issues|import|link|create|detach|reattach|sync|auto-push>
 orbit triage <context|review|apply>
 ```
 
@@ -541,7 +541,7 @@ marker, `state_reason` translation, and Projects behavior, while the shared
 engine owns baselines, three-way conflict detection, previews, auto-push,
 relationships, and link persistence. There is no optional build feature.
 
-`orbit github status` is a read-only provider diagnostic. It reports the `gh`
+`orbit remote status` is a read-only provider diagnostic. It reports the `gh`
 identity and known token scopes, configured organization and linked repositories,
 Area and Verification field configuration/resolution, linked Task count, local
 Task count without an Issue, auto-push state, pending pull/push changes,
@@ -551,43 +551,42 @@ structure, including provider `mode`, field applicability, `next_action`, and
 `next_command`. In basic mode, organization Issue Fields are not applicable and
 the status check only requires the `repo` scope.
 
-`orbit github create TASK...` previews selected Local Tasks without writing.
+`orbit remote create TASK...` previews selected Local Tasks without writing.
 `--apply` creates one GitHub Issue for each eligible selected Task, then stores
-the confirmed `owner/repo#number` link and sync baseline on that Task. It also records the link's sync baseline on the Task so `orbit github sync` has
+the confirmed `owner/repo#number` link and sync baseline on that Task. It also records the link's sync baseline on the Task so `orbit remote sync` has
 nothing left to fetch for it. A linked
 Task is rejected and directs the user to sync; done and cancelled Tasks require
 `--include-closed` and create closed Issues. Each batch result reports success
 or failure independently. Repository Boards infer a destination only when one
 repository is linked; Boards with several available GitHub repositories require
-`--repo OWNER/REPO` to choose the destination.
+`--project OWNER/REPO` to choose the destination.
 
 ### Automatic push
 
 `[remote] auto_push = true` opts a Board into publishing mapped Task changes
 after a successful write command for every configured Remote Tracker; the
-legacy `[github] auto_push` key is still honored until migration. `orbit
-github auto-push on|off` toggles the same flag,
+legacy `[github] auto_push` key is still honored until migration. `orbit remote auto-push on|off` toggles the same flag,
 writes and commits the Board config, reports the previous value, and warns when
 enabling with zero or multiple available repositories because new Tasks cannot
 infer a single Issue destination. The default is `false`. Auto-push is push-only and
 synchronous: it never pulls, never resolves a conflict by overwriting a remote
 value, and never creates an Issue for an existing Local Task. The Board lock is
 held for the complete push. `--no-sync` and `ORBIT_NO_AUTO_SYNC=1` suppress it;
-explicit `orbit github sync` is never suppressed.
+explicit `orbit remote sync` is never suppressed.
 
 The trigger is a change to title, body, labels, status, `area`, or
 `verification`. Priority, type, `waiting_on`, claims, checkpoints, comments, and
 dependency relationships do not trigger a remote write. The command wrapper
 snapshots `tasks/*.md` before and after a task write command and pushes every
 changed Task whose mapped delta is non-empty. Deleted Tasks leave their Issues
-untouched and warn when linked. `orbit github *`, `orbit remote *`, `orbit sync`,
+untouched and warn when linked. `orbit remote *`, `orbit remote *`, `orbit sync`,
 `doctor`, `init`/`link`/`unlink`, migrations, and `delete` are excluded;
 `triage apply` is included.
 
 `orbit add` creates an Issue when exactly one repository is available — linked
-on a repository Board, or linked with `orbit github repo link`. With zero or multiple
+on a repository Board, or linked with `orbit remote connect`. With zero or multiple
 repositories the Task stays local with a warning. A failed creation is not
-retried automatically; use `orbit github create` explicitly. Enabling the flag
+retried automatically; use `orbit remote create` explicitly. Enabling the flag
 does not backfill existing Local Tasks.
 
 `todo` and `in_progress` both map to an open Issue. Claiming adds the reserved
@@ -604,7 +603,7 @@ explicit sync. When any field is skipped, the sync baseline does not advance, so
 the conflict remains visible. The local mutation always succeeds; remote failures
 are warnings, not command errors. If the local mutation's Git commit failed,
 auto-push is skipped rather than publishing state outside Board history.
-`orbit github status` reports whether auto-push is enabled, pending changes, and
+`orbit remote status` reports whether auto-push is enabled, pending changes, and
 local Tasks without an Issue; `doctor` reports a missing reserved label or the
 absence of a linked repository.
 
@@ -622,7 +621,7 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 
 `--agents` accepts `none`, `all`, or a comma-separated list of client names. Without it, `init` asks in a TTY and otherwise writes no agent files while explaining the `orbit setup` hint in its report; `--print` never prompts. `--agents none` is the non-interactive "Board only" choice.
 
-`TYPE` is one of `task`, `epic`, `spike`, `chore`, or `decision`. `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` is shorthand for `--label repo:NAME`. `--linked` and `--local` are mutually exclusive filters on `list`; `--local` includes Tasks whose GitHub identity is retained as inactive provenance.
+`TYPE` is one of `task`, `epic`, `spike`, `chore`, or `decision`. `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` is shorthand for `--label repo:NAME`. `--linked` and `--local` are mutually exclusive filters on `list`; `--local` includes Tasks whose Remote identity is retained as inactive provenance.
 
 ### Milestones
 
@@ -640,18 +639,18 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 - v0.8.1: hardens `doctor --migrate` and makes legacy worktree migration and the test suite pass on Windows. Supersedes v0.8.0.
 - v0.8.2: replaces the terse `init` status with a numbered onboarding report, explains each prompt choice, annotates verification and next-step commands, includes unchanged MCP configs in reconciliation output, and aligns the product description across the README, Cargo metadata, CLI help, and generated agent instructions.
 - v0.9.0: claim checkpoints. A claimant records progress, the next action, and a blocker in the task frontmatter; the record survives release, takeover, and reopen, never affects readiness, and stays as archived history after done or cancelled. Exposed through the CLI, MCP, detail JSON, and export.
-- v0.9.0: optional GitHub Issue provider (`orbit github`) for multi-repository linking, explicit adopt/create, and bidirectional sync with conflict detection. The provider and `orbit triage` ship in default release binaries and installers. Default `full` mode uses organization Issue Fields for `area` and `verification`; `basic` mode supports personal repositories without Issue Fields and limits Triage to labels. `orbit github connect` configures organization-owned origins and leaves personal-account origins unchanged, reporting the exact `[github]` settings to add or merge into `config.toml` for basic mode while preserving other linked repositories. `orbit github setup` resolves existing fields by default; `--create-fields` explicitly creates missing fields after checking organization administrator access. `orbit github status` reports integration health without writing; `doctor` checks GitHub configuration when enabled. See [github-sync.md](./github-sync.md) and [ADR 0014](./adr/0014-github-issue-provider.md).
+- v0.9.0: optional GitHub Issue provider (`orbit remote`) for multi-repository linking, explicit adopt/create, and bidirectional sync with conflict detection. The provider and `orbit triage` ship in default release binaries and installers. Default `full` mode uses organization Issue Fields for `area` and `verification`; `basic` mode supports personal repositories without Issue Fields and limits Triage to labels. `orbit remote connect` configures organization-owned origins and leaves personal-account origins unchanged, reporting the exact `[github]` settings to add or merge into `config.toml` for basic mode while preserving other linked repositories. `orbit remote connect --fields` resolves existing fields by default; `--create-fields` explicitly creates missing fields after checking organization administrator access. `orbit remote status` reports integration health without writing; `doctor` checks GitHub configuration when enabled. See [github-sync.md](./github-sync.md) and [ADR 0014](./adr/0014-github-issue-provider.md).
 - v0.9.1: Matt Pocock compatibility hardening. Documents the Orbit-vs-skills boundary, adds the agent-brief template, aligns Wayfinder labels and claims, and enforces triage state/category role invariants.
-- v0.9.2: fixes live GitHub organization Issue Field discovery by querying the `IssueFields` union and its concrete field types, restoring organization-backed `orbit github setup` and `--create-fields`.
+- v0.9.2: fixes live GitHub organization Issue Field discovery by querying the `IssueFields` union and its concrete field types, restoring organization-backed `orbit remote connect --fields` and `--create-fields`.
 - v0.9.3: fixes the live GraphQL transport to call `gh api graphql` with a complete query document, so organization field discovery and creation work against the real GitHub API.
 - v0.9.4: treats `admin:org` and `write:org` as satisfying `read:org`, avoiding a false missing-scope warning for organization administrators.
-- v0.10.0: Workspace Issue catalog and migration. `orbit workspace issues refresh`, `list`, `inspect`, `import`, `detach`, and `reattach` browse Remote Issues and import only on explicit request; `orbit workspace migrate` consolidates legacy Boards; `doctor` is Workspace-aware; included repositories participate in GitHub adopt/status/sync without separate links; `orbit github create` previews and batches; GitHub Projects are downstream of Issues. See [ADR 0015](./adr/0015-github-projects-downstream.md).
+- v0.10.0: Workspace Issue catalog and migration. `orbit remote issues refresh`, `list`, and `show` browse Remote Issues, and `orbit remote import`, `detach`, and `reattach` link or unlink Tasks and import only on explicit request; `orbit workspace migrate` consolidates legacy Boards; `doctor` is Workspace-aware; included repositories participate in GitHub adopt/status/sync without separate links; `orbit remote create` previews and batches; GitHub Projects are downstream of Issues. See [ADR 0015](./adr/0015-github-projects-downstream.md).
 - v0.10.2: Workspace migration preserves the legacy Workspace Board configuration, including `[github]`, when it stages a new Board; `orbit workspace refresh` infers the organization from child repositories that share one owner.
-- v0.10.1: packaging patch. The binary is functionally identical to v0.10.0; the packaged onboarding smoke now validates batched `orbit github create --apply` output so the release pipeline can publish to npm. v0.10.0 remains available as a GitHub Release.
+- v0.10.1: packaging patch. The binary is functionally identical to v0.10.0; the packaged onboarding smoke now validates batched `orbit remote create --apply` output so the release pipeline can publish to npm. v0.10.0 remains available as a GitHub Release.
 
 ### Command rules
 
-- `list` hides `done` and `cancelled` unless `--include-closed`. Inside a member Repository or one of its worktrees `list` and `ready` are scoped to that Repository's Tasks plus Board-wide Tasks (no `repo`); `--all` widens the scope to the whole Board, and at the Board's root there is no scoping. `--type` is repeatable and matches any listed Type; `--exclude-type` hides any listed Type. `--label` is repeatable and every label must match; `--exclude-label` is repeatable and hides a Task carrying any named label. `--repo NAME` is shorthand for `--label repo:NAME`. `--unlabeled` conflicts with `--label` and `--repo`. `--linked` and `--local` are mutually exclusive and filter by active GitHub Issue link; `--local` includes detached provenance.
+- `list` hides `done` and `cancelled` unless `--include-closed`. Inside a member Repository or one of its worktrees `list` and `ready` are scoped to that Repository's Tasks plus Board-wide Tasks (no `repo`); `--all` widens the scope to the whole Board, and at the Board's root there is no scoping. `--type` is repeatable and matches any listed Type; `--exclude-type` hides any listed Type. `--label` is repeatable and every label must match; `--exclude-label` is repeatable and hides a Task carrying any named label. `--repo NAME` is shorthand for `--label repo:NAME`. `--unlabeled` conflicts with `--label` and `--repo`. `--linked` and `--local` are mutually exclusive and filter by active Remote Issue link; `--local` includes detached provenance.
 - Human `list` output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `ISSUE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns. `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Root Tasks sort by priority, then creation time, then ID; each Parent Task is followed by its SubTasks, sorted by priority, then creation time, then ID. `--group` renders one outlined table with a banner for each Parent Task, its SubTasks underneath, and a final `No parent` section; parent groups follow the parent's priority and SubTasks follow their own priority. Titles longer than 60 characters are truncated with an ellipsis. The table is presentation only; `--json` carries the full title and every field and is the contract for scripts and agents.
 - `ready` and `prime` accept the same `--repo` and repeatable `--label` filters. `ready` also accepts `--parent`, `--type`, `--exclude-type`, and `--exclude-label`; `prime` reports `close_candidates` for non-terminal Parent Tasks with at least one SubTask and no open SubTasks. All filters combine with AND.
 - `add --type epic` and `update --type epic` are refused when the Task has a `parent`; epic is top-level only. `type` defaults to `task` and is written explicitly on every save.
@@ -814,7 +813,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **v0.7.0 — slug migration.** `orbit slug show` and `orbit slug migrate` add read-only identity reporting and an explicit, atomic prefix rewrite for populated Boards. Implemented.
 
-**v0.8.0–v0.10.0 — Orbit folder, GitHub provider, and Workspace catalog.** `init` creates the Orbit folder, `link` shares it, and `doctor` diagnoses and migrates legacy layouts. The GitHub Issue provider adds explicit adopt/create/sync with conflict detection. The Workspace Issue catalog adds refresh/list/inspect/import/detach/reattach, a resumable Board migration, and Workspace-aware diagnostics; included repositories participate in GitHub workflow without separate links.
+**v0.8.0–v0.10.0 — Orbit folder, GitHub provider, and Workspace catalog.** `init` creates the Orbit folder, `link` shares it, and `doctor` diagnoses and migrates legacy layouts. The GitHub Issue provider adds explicit adopt/create/sync with conflict detection. The Remote Issue catalog adds refresh/list/show plus import/detach/reattach, a resumable Board migration, and Workspace-aware diagnostics; included repositories participate in GitHub workflow without separate links.
 
 ## 11. Testing
 

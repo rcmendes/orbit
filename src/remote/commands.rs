@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 use crate::board::Board;
 use crate::cli::{
     AutoPushState, RemoteArgs, RemoteAutoPushArgs, RemoteCommand, RemoteConnectArgs,
-    RemoteCreateArgs, RemoteImportArgs, RemoteIssueRefArgs, RemoteIssuesArgs, RemoteIssuesCommand,
-    RemoteLinkArgs, RemoteMutationArgs, RemoteProjectArgs, RemoteSyncArgs, RemoteSyncDirection,
+    RemoteCreateArgs, RemoteImportArgs, RemoteIssueFilters, RemoteIssueRefArgs, RemoteIssuesArgs,
+    RemoteIssuesCommand, RemoteLinkArgs, RemoteMutationArgs, RemoteProjectArgs, RemoteSyncArgs,
+    RemoteSyncDirection,
 };
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{Graph, LoadMode};
@@ -1301,7 +1302,14 @@ fn cmd_list(board: &Board) -> Result<crate::output::CommandOutput> {
 fn cmd_disconnect(board: &Board, args: RemoteProjectArgs) -> Result<crate::output::CommandOutput> {
     let (tracker, project) = parse_remote_project(&args.project)?;
     if !disconnect_remote_project(board, &tracker, &project)? {
-        return Err(OrbitError::not_found(&args.project));
+        return Err(OrbitError::new(
+            code::REMOTE_PROJECT_NOT_LINKED,
+            format!("Remote Project `{tracker}:{project}` is not connected to this Board"),
+        )
+        .with_details(json!({
+            "tracker": tracker,
+            "project": project,
+        })));
     }
     let linked_tasks = Graph::load(board, LoadMode::Lenient)?
         .0
@@ -2071,7 +2079,8 @@ fn cmd_issues(board: &Board, args: RemoteIssuesArgs) -> Result<crate::output::Co
     match args.command {
         Some(RemoteIssuesCommand::Refresh) => issues_refresh(board),
         Some(RemoteIssuesCommand::Show(ref ref_args)) => issues_show(board, ref_args),
-        Some(RemoteIssuesCommand::List) | None => issues_list(board, &args),
+        Some(RemoteIssuesCommand::List(ref filters)) => issues_list(board, filters),
+        None => issues_list(board, &args.filters),
     }
 }
 
@@ -2162,21 +2171,24 @@ fn project_statuses(catalog: &RemoteIssueCatalog) -> Vec<Value> {
 
 /// `orbit remote issues` / `issues list` — cached Remote Issues with
 /// optional filters; never fetches issue bodies.
-fn issues_list(board: &Board, args: &RemoteIssuesArgs) -> Result<crate::output::CommandOutput> {
+fn issues_list(
+    board: &Board,
+    filters: &RemoteIssueFilters,
+) -> Result<crate::output::CommandOutput> {
     let root = catalog::root_for_board(board)?;
     let catalog = catalog::load(&catalog::cache_path(&root))?;
     let graph = Graph::load(board, LoadMode::Lenient)?.0;
     let linked = linked_remote_identities(&graph);
 
-    let project_filter = args
+    let project_filter = filters
         .project
         .as_deref()
         .map(|project| parse_remote_project(project).map(|(_, project)| project.to_lowercase()))
         .transpose()?;
-    let text_filter = args.text.as_deref().map(str::to_lowercase);
+    let text_filter = filters.text.as_deref().map(str::to_lowercase);
     let mut issues = Vec::new();
     for (tracker, projects) in &catalog.projects {
-        if args
+        if filters
             .tracker
             .as_deref()
             .is_some_and(|filter| !filter.eq_ignore_ascii_case(tracker))
@@ -2191,14 +2203,14 @@ fn issues_list(board: &Board, args: &RemoteIssuesArgs) -> Result<crate::output::
                 continue;
             }
             for issue in &cached.issues {
-                if args
+                if filters
                     .state
                     .as_deref()
                     .is_some_and(|state| state_name(issue.status) != state)
                 {
                     continue;
                 }
-                if args.label.iter().any(|label| {
+                if filters.label.iter().any(|label| {
                     !issue
                         .labels
                         .iter()
@@ -2214,7 +2226,7 @@ fn issues_list(board: &Board, args: &RemoteIssuesArgs) -> Result<crate::output::
                 }
                 let key = format!("{tracker}:{}#{}", project.to_lowercase(), issue.id);
                 let is_linked = linked.contains(&key);
-                if args.linked && !is_linked || args.unlinked && is_linked {
+                if filters.linked && !is_linked || filters.unlinked && is_linked {
                     continue;
                 }
                 let mut value = serde_json::to_value(issue).unwrap_or(Value::Null);
@@ -2293,12 +2305,12 @@ fn issues_show(board: &Board, args: &RemoteIssueRefArgs) -> Result<crate::output
     ))
 }
 
-/// Active and detached Remote links keyed `tracker:project#id` for
-/// catalog `linked` flags and import duplicate checks.
+/// Active Remote links keyed `tracker:project#id` for catalog `linked`
+/// flags; detached provenance does not count as linked.
 fn linked_remote_identities(graph: &Graph) -> std::collections::BTreeSet<String> {
     graph
         .iter()
-        .filter_map(link_view)
+        .filter_map(active_link)
         .map(|link| {
             format!(
                 "{}:{}#{}",

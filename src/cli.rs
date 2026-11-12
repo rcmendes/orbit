@@ -938,29 +938,41 @@ pub struct RemoteArgs {
 #[derive(Debug, Subcommand)]
 pub enum RemoteCommand {
     /// Report Remote Tracker health without changing the Board or tracker.
+    #[command(after_long_help = help::REMOTE_STATUS_EXAMPLES)]
     Status,
     /// Detect the origin Remote Project and connect its Remote Tracker, or
     /// configure the connected tracker's mapped fields.
+    #[command(after_long_help = help::REMOTE_CONNECT_EXAMPLES)]
     Connect(RemoteConnectArgs),
     /// Disconnect a Remote Project from this Board.
+    #[command(after_long_help = help::REMOTE_DISCONNECT_EXAMPLES)]
     Disconnect(RemoteProjectArgs),
     /// List the Remote Projects connected to this Board.
+    #[command(after_long_help = help::REMOTE_LIST_EXAMPLES)]
     List,
     /// Browse and refresh the Remote Issue catalog.
+    #[command(after_long_help = help::REMOTE_ISSUES_EXAMPLES)]
     Issues(RemoteIssuesArgs),
     /// Preview selected Remote Issues or explicitly apply their import.
+    #[command(after_long_help = help::REMOTE_IMPORT_EXAMPLES)]
     Import(RemoteImportArgs),
     /// Link a Local Task to a Remote Issue.
+    #[command(after_long_help = help::REMOTE_LINK_EXAMPLES)]
     Link(RemoteLinkArgs),
     /// Preview or create Remote Issues for selected Local Tasks.
+    #[command(after_long_help = help::REMOTE_CREATE_EXAMPLES)]
     Create(RemoteCreateArgs),
     /// Preview or detach a Linked Task from its Remote Issue.
+    #[command(after_long_help = help::REMOTE_DETACH_EXAMPLES)]
     Detach(RemoteMutationArgs),
     /// Preview or reattach a Local Task by its inactive Remote provenance.
+    #[command(after_long_help = help::REMOTE_REATTACH_EXAMPLES)]
     Reattach(RemoteMutationArgs),
     /// Preview or apply synchronization for Linked Tasks.
+    #[command(after_long_help = help::REMOTE_SYNC_EXAMPLES)]
     Sync(RemoteSyncArgs),
     /// Enable or disable automatic push of Task changes to Remote Issues.
+    #[command(after_long_help = help::REMOTE_AUTO_PUSH_EXAMPLES)]
     AutoPush(RemoteAutoPushArgs),
 }
 
@@ -994,6 +1006,14 @@ pub struct RemoteProjectArgs {
 pub struct RemoteIssuesArgs {
     #[command(subcommand)]
     pub command: Option<RemoteIssuesCommand>,
+    /// Filters for the default listing; `issues list` accepts the same
+    /// flags directly.
+    #[command(flatten)]
+    pub filters: RemoteIssueFilters,
+}
+
+#[derive(Debug, Default, Args)]
+pub struct RemoteIssueFilters {
     /// Filter by Remote Tracker.
     #[arg(long, value_name = "TRACKER")]
     pub tracker: Option<String>,
@@ -1020,10 +1040,13 @@ pub struct RemoteIssuesArgs {
 #[derive(Debug, Subcommand)]
 pub enum RemoteIssuesCommand {
     /// Refresh every connected Remote Project's catalog snapshot.
+    #[command(after_long_help = help::REMOTE_ISSUES_REFRESH_EXAMPLES)]
     Refresh,
     /// List cached Remote Issues without fetching their bodies.
-    List,
+    #[command(after_long_help = help::REMOTE_ISSUES_LIST_EXAMPLES)]
+    List(RemoteIssueFilters),
     /// Show one Remote Issue, fetched live from its Remote Tracker.
+    #[command(after_long_help = help::REMOTE_ISSUES_SHOW_EXAMPLES)]
     Show(RemoteIssueRefArgs),
 }
 

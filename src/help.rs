@@ -943,6 +943,107 @@ Examples:
   orbit remote auto-push on
   orbit remote auto-push off";
 
+pub const REMOTE_STATUS_EXAMPLES: &str = "\
+Examples:
+  orbit remote status
+  orbit remote status --json";
+
+pub const REMOTE_CONNECT_EXAMPLES: &str = "\
+Examples:
+  # Detect the origin remote and connect its Remote Tracker
+  orbit remote connect
+  orbit remote connect --json
+
+  # Connect an explicit Remote Project
+  orbit remote connect acme/widget
+  orbit remote connect github:acme/widget
+
+  # Resolve and store the tracker's mapped fields
+  orbit remote connect --fields
+  orbit remote connect --fields --validate-only
+  orbit remote connect --fields --create-fields";
+
+pub const REMOTE_DISCONNECT_EXAMPLES: &str = "\
+Examples:
+  orbit remote disconnect acme/widget
+  orbit remote disconnect github:acme/widget";
+
+pub const REMOTE_LIST_EXAMPLES: &str = "\
+Examples:
+  orbit remote list
+  orbit remote list --json";
+
+pub const REMOTE_ISSUES_EXAMPLES: &str = "\
+Examples:
+  orbit remote issues
+  orbit remote issues --state open --label bug
+  orbit remote issues list --text authentication --unlinked";
+
+pub const REMOTE_ISSUES_REFRESH_EXAMPLES: &str = "\
+Examples:
+  orbit remote issues refresh
+  orbit remote issues refresh --json";
+
+pub const REMOTE_ISSUES_LIST_EXAMPLES: &str = "\
+Examples:
+  orbit remote issues list
+  orbit remote issues list --state open --label bug
+  orbit remote issues list --project acme/widget --text authentication --unlinked
+  orbit remote issues list --linked --json";
+
+pub const REMOTE_ISSUES_SHOW_EXAMPLES: &str = "\
+Examples:
+  orbit remote issues show acme/widget#42
+  orbit remote issues show github:acme/widget#42
+  orbit remote issues show https://github.com/acme/widget/issues/42";
+
+pub const REMOTE_IMPORT_EXAMPLES: &str = "\
+Examples:
+  # Preview selected Remote Issues; nothing is written
+  orbit remote import acme/widget#42 acme/widget#8
+
+  # Link one Issue to an existing Local Task, then apply
+  orbit remote import acme/widget#42 --link acme/widget#42=orb-a7b2c9 --apply";
+
+pub const REMOTE_LINK_EXAMPLES: &str = "\
+Examples:
+  orbit remote link orb-a7b2c9 acme/widget#42
+  orbit remote link orb-a7b2c9 https://github.com/acme/widget/issues/42";
+
+pub const REMOTE_CREATE_EXAMPLES: &str = "\
+Examples:
+  orbit remote create orb-a7b2c9                 # preview only
+  orbit remote create orb-a7b2c9 --apply
+  orbit remote create orb-a7b2c9 orb-d4e5f6 --project acme/widget --apply
+  orbit remote create orb-d4e5f6 --include-closed --apply";
+
+pub const REMOTE_DETACH_EXAMPLES: &str = "\
+Examples:
+  orbit remote detach acme/widget#42
+  orbit remote detach acme/widget#42 --apply
+  orbit remote detach orb-a7b2c9 --apply";
+
+pub const REMOTE_REATTACH_EXAMPLES: &str = "\
+Examples:
+  orbit remote reattach acme/widget#42
+  orbit remote reattach acme/widget#42 --apply
+  orbit remote reattach orb-a7b2c9 --apply";
+
+pub const REMOTE_SYNC_EXAMPLES: &str = "\
+Examples:
+  orbit remote sync
+  orbit remote sync orb-a7b2c9
+  orbit remote sync orb-a7b2c9 --resolve title=orbit
+  orbit remote sync orb-a7b2c9 --resolve title=orbit --apply
+  orbit remote sync orb-a7b2c9 --apply --direction pull";
+
+pub const REMOTE_AUTO_PUSH_EXAMPLES: &str = "\
+Examples:
+  orbit remote auto-push on
+  orbit remote auto-push off
+  orbit remote auto-push enable          # alias for on
+  orbit remote auto-push disable         # alias for off";
+
 pub const TRIAGE_LONG: &str = "\
 Review GitHub-linked Tasks and apply approved metadata changes on the Orbit Board first.
 

@@ -667,14 +667,14 @@ with a fresh Board and the GitHub CLI authenticated:
 ```bash
 orbit init
 gh auth login
-orbit github connect
-orbit github status
+orbit remote connect
+orbit remote status
 orbit add "First GitHub task" -p 1
 # Copy the Task ID printed by `orbit add` and replace orb-a7b2c9 below.
-orbit github create orb-a7b2c9
-orbit github create orb-a7b2c9 --apply
-orbit github sync orb-a7b2c9 # preview only
-orbit github sync orb-a7b2c9 --apply
+orbit remote create orb-a7b2c9
+orbit remote create orb-a7b2c9 --apply
+orbit remote sync orb-a7b2c9 # preview only
+orbit remote sync orb-a7b2c9 --apply
 ```
 
 For a personal-account `origin`, `connect` reports the exact `[github]` entries
@@ -682,15 +682,15 @@ to add or merge into the Board's `config.toml`, without changing the Board.
 Preserve other linked repositories. Set `mode = "basic"` and include the
 repository name as described below before creating or syncing Issues.
 
-`orbit github connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports the exact basic-mode `[github]` entries to add or merge into the Board's `config.toml`, preserving other linked repositories. Use `orbit github connect --json` for machine-readable status, including the same guidance in `remediation` and `next_actions`.
+`orbit remote connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports the exact basic-mode `[github]` entries to add or merge into the Board's `config.toml`, preserving other linked repositories. Use `orbit remote connect --json` for machine-readable status, including the same guidance in `remediation` and `next_actions`.
 
-Run `orbit github status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
+Run `orbit remote status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
 
-To publish mapped changes after local mutations instead of running `orbit github sync` by hand, toggle auto-push on the Board:
+To publish mapped changes after local mutations instead of running `orbit remote sync` by hand, toggle auto-push on the Board:
 
 ```bash
-orbit github auto-push on     # writes [remote] auto_push = true and commits it
-orbit github auto-push off
+orbit remote auto-push on     # writes [remote] auto_push = true and commits it
+orbit remote auto-push off
 ```
 
 The equivalent Board configuration is:
@@ -704,39 +704,39 @@ mode = "basic"
 repositories = ["alice/widget"]
 ```
 
-Auto-push is push-only. `orbit add` creates an Issue when exactly one repository is available; title, body, labels, status, `area`, and `verification` changes are pushed; `done` closes with `state_reason: completed`, `cancelled` with `not_planned`, and `claim` adds the reserved `orbit:in-progress` label. It never pulls, never overwrites a field that changed on GitHub, and never creates an Issue for an existing Local Task. Priority, type, comments, claims, checkpoints, and relationships do not trigger a push. Conflicts and failed pushes are warnings, not command failures; the baseline stays unchanged so `orbit github sync <task>` can resolve them. Use `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. See [github-sync.md](./docs/github-sync.md#automatic-push).
+Auto-push is push-only. `orbit add` creates an Issue when exactly one repository is available; title, body, labels, status, `area`, and `verification` changes are pushed; `done` closes with `state_reason: completed`, `cancelled` with `not_planned`, and `claim` adds the reserved `orbit:in-progress` label. It never pulls, never overwrites a field that changed on GitHub, and never creates an Issue for an existing Local Task. Priority, type, comments, claims, checkpoints, and relationships do not trigger a push. Conflicts and failed pushes are warnings, not command failures; the baseline stays unchanged so `orbit remote sync <task>` can resolve them. Use `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. See [github-sync.md](./docs/github-sync.md#automatic-push).
 
 ```bash
 # Personal repository: [github] mode = "basic" + repositories in config.toml.
-orbit github repo link alice/widget
-orbit github create orb-a7b2c9 --repo alice/widget
-orbit github create orb-a7b2c9 --repo alice/widget --apply
+orbit remote connect alice/widget
+orbit remote create orb-a7b2c9 --project alice/widget
+orbit remote create orb-a7b2c9 --project alice/widget --apply
 
 # Connect an organization-owned repository from its checkout:
-orbit github connect
-orbit github status --json
+orbit remote connect
+orbit remote status --json
 
 # Or configure organization mode manually:
-orbit github repo link acme/widget
-orbit github setup
-orbit github setup --create-fields # create missing fields (organization admin required)
-orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
-orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
-orbit github sync orb-a7b2c9 --apply # publish changes to the adopted Issue
+orbit remote connect acme/widget
+orbit remote connect --fields
+orbit remote connect --fields --create-fields # create missing fields (organization admin required)
+orbit remote link orb-a7b2c9 https://github.com/acme/widget/issues/42
+orbit remote link orb-a7b2c9 acme/widget#42
+orbit remote sync orb-a7b2c9 --apply # publish changes to the adopted Issue
 orbit add "A new local task"        # use its printed ID below
-orbit github create orb-d4e5f6     # preview; automatically uses the only linked repository
-orbit github create orb-d4e5f6 --apply
+orbit remote create orb-d4e5f6     # preview; automatically uses the only linked repository
+orbit remote create orb-d4e5f6 --apply
 ```
 
-`github create` accepts one or more Task IDs and previews the destination,
+`orbit remote create` accepts one or more Task IDs and previews the destination,
 Issue title/body, labels, Orbit status, and mapped open/closed state without
 writing. Pass `--apply` to create Issues and link each Task only after GitHub
 confirms creation. A batch reports each Task's result independently; linked Tasks
-are rejected on retry and should use `orbit github sync`. Done and cancelled
+are rejected on retry and should use `orbit remote sync`. Done and cancelled
 Tasks require `--include-closed`. When several GitHub repositories are available
-to the Board, pass `--repo OWNER/REPO` to choose the destination.
+to the Board, pass `--project OWNER/REPO` to choose the destination.
 
-`orbit github setup` does not create fields unless `--create-fields` is passed.
+`orbit remote connect --fields` does not create fields unless `--create-fields` is passed.
 See [the GitHub sync guide](./docs/github-sync.md) for required permissions and
 the fields Orbit creates.
 
@@ -911,9 +911,9 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | --- | --- |
 | **Set up** | `init` · `repo` · `setup` |
 | **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
-| **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `github status` |
+| **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `remote status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
-| **Maintain** | `doctor` · `sync` · `board` · `migrate` · `github` · `slug` · `mcp` |
+| **Maintain** | `doctor` · `sync` · `board` · `migrate` · `remote` · `slug` · `mcp` |
 
 Every command explains its own semantics:
 

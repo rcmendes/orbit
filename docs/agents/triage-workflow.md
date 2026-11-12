@@ -21,7 +21,7 @@ A proposal may change:
 
 - Gather context, verify a claim, or grill
 - Write an agent brief ([`agent-brief.md`](./agent-brief.md)) or maintain `.out-of-scope/`
-- Adopt or import GitHub Issues (use `orbit github adopt`; Remote Issue catalog
+- Adopt or import GitHub Issues (use `orbit remote link`; Remote Issue catalog
   import returns with the `orbit remote` commands)
 - Change Task title, body, status, or open/closed state (edit those through
   normal Orbit Task commands, then review and explicitly sync them)
@@ -116,7 +116,7 @@ commands.
    explicit sync:
 
    ```bash
-   orbit github sync <ID> --direction push --apply
+   orbit remote sync <ID> --direction push --apply
    ```
 
 ## Proposal fields
@@ -139,7 +139,7 @@ When a proposal adds or removes labels, Orbit checks the label set that would re
 
 | Code | Meaning |
 | --- | --- |
-| `TRIAGE_NOT_LINKED` | Task has no GitHub link; adopt the intended Issue with `orbit github adopt <task-id> <issue-url>`. |
+| `TRIAGE_NOT_LINKED` | Task has no GitHub link; adopt the intended Issue with `orbit remote link <task-id> <issue-url>`. |
 | `TRIAGE_APPROVAL_REQUIRED` | `apply` was run without `--approve`; review the proposal, then rerun the reported command with `--approve`. |
 | `TRIAGE_INVALID_PROPOSAL` | The proposal is invalid; the error identifies the cause, including conflicting state/category roles or non-canonical labels, and directs you to edit the JSON and review it again. |
 

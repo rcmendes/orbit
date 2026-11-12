@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking:** replaced `orbit github` with the provider-neutral `orbit remote` command surface (ADR 0018). There are no aliases or compatibility flags; `orbit github` and `orbit workspace issues` are rejected. The GitHub adapter, client, and `[github]`/`[remote.github]` configuration are unchanged — only the command names moved.
+
+  | Old | New |
+  | --- | --- |
+  | `orbit github status` | `orbit remote status` |
+  | `orbit github connect` | `orbit remote connect` |
+  | `orbit github setup [--validate-only\|--create-fields]` | `orbit remote connect --fields [--validate-only\|--create-fields]` |
+  | `orbit github repo link OWNER/REPO` | `orbit remote connect [TRACKER:]OWNER/REPO` |
+  | `orbit github repo unlink OWNER/REPO` | `orbit remote disconnect [TRACKER:]OWNER/REPO` |
+  | `orbit github repo list` | `orbit remote list` |
+  | `orbit github adopt TASK ISSUE` | `orbit remote link TASK REMOTE_ISSUE` |
+  | `orbit github create TASKS [--repo P] [--apply] [--include-closed]` | `orbit remote create TASKS [--project P] [--apply] [--include-closed]` |
+  | `orbit github sync [TASK] [--direction D] [--apply] [--resolve F=orbit\|github]` | `orbit remote sync [TASK] [--direction D] [--apply] [--resolve F=orbit\|remote]` |
+  | `orbit github auto-push on\|off` | `orbit remote auto-push on\|off` (writes `[remote] auto_push`) |
+  | `orbit workspace issues refresh` | `orbit remote issues refresh` |
+  | `orbit workspace issues list` | `orbit remote issues list` (or bare `orbit remote issues`) |
+  | `orbit workspace issues inspect ISSUE` | `orbit remote issues show ISSUE` |
+  | `orbit workspace issues import ISSUES [--link I=T] [--apply]` | `orbit remote import ISSUES [--link I=T] [--apply]` |
+  | `orbit workspace issues detach ISSUE [--apply]` | `orbit remote detach ISSUE\|TASK [--apply]` |
+  | `orbit workspace issues reattach ISSUE [--apply]` | `orbit remote reattach ISSUE\|TASK [--apply]` |
+
+  Remote Issue identities are provider-neutral: `TRACKER:PROJECT#ID` (for example `github:acme/widget#42`), `PROJECT#ID`, or a tracker Issue URL. Task links are stored as `remote:` frontmatter; legacy `github:` links keep working and are materialized on write.
+
 ## 0.10.10 - 2026-11-09
 
 - Maintenance release. No source or behavior changes since v0.10.9; this version republishes the existing Orbit binary and installers.

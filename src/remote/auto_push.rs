@@ -9,7 +9,7 @@ use crate::graph::{Graph, LoadMode};
 use crate::remote::execution::{self, ApplyPlanRequest};
 use crate::remote::link::{active_link, link_view};
 use crate::remote::model::SyncDirection;
-use crate::remote::port::{RemoteAdapter, RemoteResolver, board_resolver};
+use crate::remote::port::{BoardResolver, RemoteAdapter, RemoteResolver};
 use crate::remote::relationships::RelationshipReport;
 use crate::remote::sync::{self, OrbitSyncView};
 use crate::task::Task;
@@ -128,7 +128,7 @@ pub fn after_command<R: RemoteResolver + ?Sized>(
 
 /// Convenience for callers that use the production resolver.
 pub fn after_command_default(board: &Board, before: &TaskSnapshot) -> Vec<String> {
-    after_command(board, &board_resolver(board), before)
+    after_command(board, &BoardResolver::new(board), before)
 }
 
 /// Candidate Remote Projects a new Task on this Board may publish to:

@@ -39,7 +39,7 @@ orbit repo refresh              # rebuild the member inventory
 | Initialize an anchor Board | `orbit init <ANCHOR>` |
 | Join an existing Board from a repository | `orbit repo add <DIR>` |
 | Manage member Repositories | `orbit repo list`, `orbit repo refresh`, `orbit repo remove` |
-| Create the machine-wide fallback | `orbit init --global` |
+| Create an ordinary Board in the home directory | Run `orbit init` in `~` |
 | Convert a pre-ADR-0019 Board | `orbit migrate` (preview, then `--apply`) |
 | Share the Board across machines | `orbit board host`, `orbit board sync` |
 

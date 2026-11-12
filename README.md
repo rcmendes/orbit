@@ -147,7 +147,7 @@ orbit init --agents all       # wire every supported harness
 orbit init --agents none      # Board only, no agent files
 orbit init --print            # preview without writing
 orbit init ~/src/acme         # anchor Board at ~/src/acme/.orbit/board
-orbit init --global           # Board at ~/.orbit/board
+(cd ~ && orbit init)         # ordinary Board at ~/.orbit/board
 orbit init --visible=tracker  # visible Board folder instead of .orbit/board
 ```
 
@@ -157,7 +157,6 @@ orbit init --visible=tracker  # visible Board folder instead of .orbit/board
 | --- | --- | --- |
 | *none* | Start a project-local Board in Git, or an anchor Board outside Git. | `orbit init` |
 | `DIR` | Name a Board anchor, an existing repository root (uses its `./.orbit`), or an explicit Board directory. An anchor stores its Board at `<DIR>/.orbit/board`. | `orbit init ~/src/acme` |
-| `--global` | Create or reuse the opt-in Board anchored at `~/.orbit`. It is found by ordinary discovery under `$HOME` and is never created implicitly. Conflicts with positional `DIR` and `--dir`/`ORBIT_DIR`. | `orbit init --global` |
 | `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents without a prompt: `none`, `all`, `auto`, or a comma-separated client list. | `orbit init --agents all` |
 | `--print` | Preview the Board, exclusion entry, and generated agent files without writing or prompting. | `orbit init DIR --print` |
@@ -169,7 +168,7 @@ orbit init --visible=tracker  # visible Board folder instead of .orbit/board
 - **A normal product repository:** run `orbit init` at the repository root. The Board is `./.orbit/board`, shared by every linked worktree, and IDs use the repository folder name.
 - **A multi-repository Board:** run `orbit init ~/src/acme` or `orbit init` at its non-Git root. Repositories inside discover `<anchor>/.orbit/board` automatically; repositories outside it can join with `orbit repo add`.
 - **A one-off or CI setup:** use `--print` first, then `--agents none` when the machine should not receive editor configuration. Pass `--slug` when IDs must be predictable.
-- **A global fallback:** use `--global` only when you intentionally want one Board available when no project-local Board resolves. Discovery does not create it.
+- **A home Board:** run `orbit init` in `~` to create an ordinary Board there. Normal discovery finds it; discovery never creates it. There is no `--global` flag.
 - **Joining an existing Board:** use `orbit repo add DIR` from the repository that should share the Board; do not run `init` again. A second local Board in the same working tree is refused.
 - **Moving a supported legacy storage layout:** run `orbit migrate`; `init` is not a migration command. It converts pre-ADR-0019 Boards — worktree-mode Boards, in-repo layouts, and child Boards — into standalone Board folders in one commit.
 
@@ -577,7 +576,7 @@ SubTasks are one level deep. If a ticket needs its own breakdown, flatten it int
 
 ## Task-ID slugs
 
-A Board has one slug that prefixes its Task IDs. `orbit init` derives it from the repository or anchor folder name; `orbit init --global` uses `orb` with a warning. Pass `--slug` to choose it explicitly:
+A Board has one slug that prefixes its Task IDs. `orbit init` derives it from the repository or anchor folder name; a Board anchored at `~/.orbit` uses `orb` with a warning. Pass `--slug` to choose it explicitly:
 
 ```bash
 orbit init --slug teramigo
@@ -861,7 +860,7 @@ orbit init --agents none      # Board only; no agent files
 orbit init --print            # preview without writing
 orbit init --portable-mcp     # MCP command `orbit`; editor PATH must find it
 orbit init ~/src/acme          # create an anchor Board
-orbit init --global           # Board at ~/.orbit/board
+(cd ~ && orbit init)         # ordinary Board at ~/.orbit/board
 ```
 
 Use `orbit setup` to wire, repair, or adjust a harness later. `--scope project` (the default) writes repository-level files; `--scope user` writes the harness's user-level locations:

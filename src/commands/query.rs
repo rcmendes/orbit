@@ -15,7 +15,8 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
     if let Some(priority) = args.priority {
         validate_priority(priority)?;
     }
-    let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
+    let label_filters = normalize_labels(&args.label)?;
+    let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
     let areas = normalize_areas(board, &args.area)?;
     let excluded_areas = normalize_areas(board, &args.exclude_area)?;
@@ -75,7 +76,7 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             {
                 return false;
             }
-            if !task.has_labels(&label_filters) {
+            if !matches_repo(task, repo_filter.as_deref()) || !task.has_labels(&label_filters) {
                 return false;
             }
             if task.has_any_label(&excluded_labels) {
@@ -123,7 +124,8 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
 
 pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
+    let label_filters = normalize_labels(&args.label)?;
+    let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
     let areas = normalize_areas(board, &args.area)?;
     let excluded_areas = normalize_areas(board, &args.exclude_area)?;
@@ -146,6 +148,7 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
         areas: &areas,
         excluded_areas: &excluded_areas,
         scope: scope.as_deref(),
+        repo: repo_filter.as_deref(),
     };
     if args.claim {
         let agent = resolve_agent(args.by)?;
@@ -251,8 +254,11 @@ pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::C
 
 pub(super) fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
-    let counts = graph.counts_matching(&label_filters);
+    let label_filters = normalize_labels(&args.label)?;
+    let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
+    let matches =
+        |task: &Task| task.has_labels(&label_filters) && matches_repo(task, repo_filter.as_deref());
+    let counts = graph.counts_where(matches);
     let agent = optional_agent(args.by).unwrap_or_else(|| "unknown (set ORBIT_AGENT)".to_string());
     let instructions = format!(
         "Orbit is the task tracker for this repository.\n\
@@ -270,19 +276,19 @@ Use the CLI; never edit task files directly.\n\
     let ready_tasks: Vec<Task> = graph
         .ready_tasks()
         .into_iter()
-        .filter(|task| task.has_labels(&label_filters))
+        .filter(|task| matches(task))
         .take(10)
         .collect();
     let close_candidate_tasks: Vec<&Task> = graph
         .close_candidates()
         .into_iter()
-        .filter(|task| task.has_labels(&label_filters))
+        .filter(|task| matches(task))
         .take(10)
         .collect();
     let stale_tasks: Vec<&Task> = graph
         .stale_tasks()
         .into_iter()
-        .filter(|task| task.has_labels(&label_filters))
+        .filter(|task| matches(task))
         .take(10)
         .collect();
     let ready: Vec<Value> = ready_tasks
@@ -304,6 +310,9 @@ Use the CLI; never edit task files directly.\n\
     human.push_str(&format!("agent: {agent}\n"));
     if !label_filters.is_empty() {
         human.push_str(&format!("scope: {}\n", label_filters.join(", ")));
+    }
+    if let Some(repo) = &repo_filter {
+        human.push_str(&format!("repository: {repo}\n"));
     }
     human.push_str(&format!(
         "counts: total={} ready={} stale={} in_progress={} waiting={} blocked={}\n",
@@ -345,6 +354,7 @@ Use the CLI; never edit task files directly.\n\
             "agent": agent,
             "instructions": instructions,
             "labels": label_filters,
+            "repo": repo_filter,
             "counts": counts,
             "ready": ready,
             "close_candidates": close_candidates,
@@ -437,6 +447,7 @@ struct ReadyFilters<'a> {
     areas: &'a [String],
     excluded_areas: &'a [String],
     scope: Option<&'a str>,
+    repo: Option<&'a str>,
 }
 
 fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Task> {
@@ -449,7 +460,9 @@ fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Tas
         areas,
         excluded_areas,
         scope,
+        repo,
     } = filters;
+    ready.retain(|task| matches_repo(task, repo));
     if let Some(scope) = scope {
         ready.retain(|task| task.front.repo.as_deref().is_none_or(|repo| repo == scope));
     }

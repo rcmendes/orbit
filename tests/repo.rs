@@ -284,6 +284,31 @@ fn orbit_add_records_the_member_repository_on_the_task() {
     assert!(!content.contains("repo:"), "{content}");
 }
 
+#[test]
+fn repo_filter_matches_repository_field_and_legacy_label() {
+    let repo = TestRepo::new();
+    repo.init();
+    let api = git_repo(&repo, &repo.path().join("api"));
+    repo_add(&repo, &repo.orbit_path(), &api, "api");
+    let added = repo.ok_json_in(&api, &["add", "API work", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap().to_string();
+    let legacy = repo.add("Legacy API work", &["--label", "repo:api"]);
+    repo.add("Unrelated work", &[]);
+    let mut expected = vec![id, legacy.clone()];
+    expected.sort();
+    for command in ["list", "ready"] {
+        let listed = repo.ok_json(&[command, "--repo", "api", "--json"]);
+        let mut ids = task_ids(&listed);
+        ids.sort();
+        assert_eq!(ids, expected, "{command}: {listed}");
+    }
+    let legacy_case = repo.ok_json(&["list", "--repo", "API", "--json"]);
+    assert_eq!(task_ids(&legacy_case), vec![legacy], "{legacy_case}");
+    let prime = repo.ok_json(&["prime", "--repo", "api", "--json"]);
+    assert_eq!(prime["data"]["counts"]["total"], 2, "{prime}");
+    assert_eq!(prime["data"]["ready"].as_array().unwrap().len(), 2);
+}
+
 fn task_ids(listed: &serde_json::Value) -> Vec<String> {
     listed["data"]["tasks"]
         .as_array()

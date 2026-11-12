@@ -65,7 +65,7 @@ pub(super) fn cmd_sync(board: &Board, args: &BoardSyncArgs) -> Result<CommandOut
     if let Some(tip) = &report.remote_tip {
         human.push_str(&format!("  host `orbit` tip: {tip}\n"));
     }
-    if report.state == "merged" {
+    if report.state == board_sync::SyncState::Merged {
         human.push_str(&format!(
             "  merged {} divergent files\n",
             report.merged_files

@@ -294,9 +294,9 @@ prefix = "orb-"
 
 A Board lives in a Board folder, `DIR`, which is always a standalone Git repository on branch `orbit`. In a Git working tree, the default is `./.orbit/board` — the hidden Board inside the repository's Orbit folder, with `cache/` beside it (or the main checkout's from a linked worktree). A `DIR` that is itself a Git working-tree root, including `.`, means "initialize that checkout" and resolves to its `./.orbit/board` (the main checkout's from a linked worktree); the repository root's own `.orbit` anchors it. Any other `DIR` inside a repository is a visible Board folder anchored by the repository's `.orbit/board` pointer file and hidden through `.git/info/exclude`. Outside Git, `orbit init` at an anchor folder creates `<anchor>/.orbit/board`; any other directory becomes a visible Board folder anchored by a sibling `.orbit`. `--dir` and `ORBIT_DIR` accept an anchor or a Board directory.
 
-`orbit init [DIR] [--slug SLUG] [--global] [--agents LIST|none|all] [--print]`:
+`orbit init [DIR] [--slug SLUG] [--agents LIST|none|all] [--print]`:
 
-1. Resolves the target and refuses to create a Board when a conflicting repository-local Board or anchor `.orbit` layout already exists, or when an explicit Board directory is not empty. `--global` is exempt. A configured `user.name` / `user.email` is required. The repository does not need an initial commit. A pre-ADR-0019 Board at the target is refused with `BOARD_NOT_MIGRATED`.
+1. Resolves the target and refuses to create a Board when a conflicting repository-local Board or anchor `.orbit` layout already exists, or when an explicit Board directory is not empty. A Board at `~/.orbit` is exempt. A configured `user.name` / `user.email` is required. The repository does not need an initial commit. A pre-ADR-0019 Board at the target is refused with `BOARD_NOT_MIGRATED`.
 2. Creates `DIR` as a standalone Git repository on branch `orbit` — `git init` plus an initial commit — and, for a hidden Board, the `.orbit` folder around it; for a visible Board it writes the `.orbit/board` pointer file naming `DIR`. Inside a code repository the Orbit folder and any visible Board folder are listed in `.git/info/exclude`, never `.gitignore`. `<orbit>/cache` is reserved beside the Board.
 3. Writes `config.toml` with the resolved `id.prefix` (no `board.storage`), plus `.gitignore`, `tasks/.gitkeep`, and `comments/.gitkeep`.
 4. Commits `orbit: initialize board`.
@@ -311,8 +311,8 @@ An explicit target that is already a Git working-tree root, such as `.` or a
 repository path, also uses that checkout's `./.orbit/board` (or the main
 checkout's from a linked worktree) instead of treating the root as an explicit
 Board directory; a target that is already a Board folder is reused in place.
-`--global` is exclusive with a positional target and with `--dir`/`ORBIT_DIR` and
-means `~/.orbit/board`. `repo add` uses only its positional path;
+Running `orbit init` in `~` creates an ordinary Board at `~/.orbit/board`;
+there is no `--global` flag. `repo add` uses only its positional path;
 `--dir`/`ORBIT_DIR` never retarget the pointer it writes.
 
 A repository owns one local Board. A member Repository inside an anchor discovers
@@ -324,10 +324,10 @@ contains child Boards previews and merges them, preserving Task IDs and keeping
 the children as backups under `<anchor>/.orbit/backups/`. A second `.orbit` in
 the same working tree is refused.
 
-`orbit init --global` targets `~/.orbit/board` and creates a standalone Board
-unless it already exists, even when `~` happens to sit inside another Git
-working tree. The global Board is an ordinary Board found by the nearest-`.orbit`
-walk and is never created while resolving a command.
+`orbit init` run in `~` creates an ordinary standalone Board at `~/.orbit/board`.
+It uses normal init target resolution and layout, is exempt from conflicting-Board
+checks, and is found by the ordinary nearest-`.orbit` walk. Discovery never
+creates it implicitly.
 
 A Board anchor is a normal folder, not a Git repository. Run
 `orbit init <anchor>` to create `<anchor>/.orbit/board` and reserve
@@ -389,7 +389,7 @@ A Board has one slug. It is resolved from `DIR` when the Board is created; an em
 | --- | --- | --- |
 | `init` | Repository folder, or anchor-folder basename outside Git | explicit |
 | `init DIR` | Anchor-root or Board-directory basename | explicit |
-| `init --global` | `orb`, with a warning | explicit |
+| `init` run in `~` | `orb`, with a warning | explicit |
 
 The repository-local `./.orbit/board` uses the repository folder name. An anchor Board uses the anchor-folder name, so `~/src/acme` becomes `acme-`. A linked worktree defaults to the main checkout's `.orbit/board`, so it keeps the same Board and slug.
 
@@ -498,7 +498,7 @@ The command map and the `init` and task-lifecycle sequences are in
 ### Command surface
 
 ```text
-orbit init [DIR] [--slug SLUG] [--global] [--visible[=NAME]] [--host[=REPO|URL]] [--agents LIST|none|all] [--portable-mcp] [--print]
+orbit init [DIR] [--slug SLUG] [--visible[=NAME]] [--host[=REPO|URL]] [--agents LIST|none|all] [--portable-mcp] [--print]
 orbit repo <add|remove|list|refresh>
 orbit slug show
 orbit slug migrate <SLUG> [--dry-run] [--force]
@@ -622,7 +622,7 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 
 `--agents` accepts `none`, `all`, or a comma-separated list of client names. Without it, `init` asks in a TTY and otherwise writes no agent files while explaining the `orbit setup` hint in its report; `--print` never prompts. `--agents none` is the non-interactive "Board only" choice.
 
-`TYPE` is one of `task`, `epic`, `spike`, `chore`, or `decision`. `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` is shorthand for `--label repo:NAME`. `--linked` and `--local` are mutually exclusive filters on `list`; `--local` includes Tasks whose Remote identity is retained as inactive provenance.
+`TYPE` is one of `task`, `epic`, `spike`, `chore`, or `decision`. `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` matches the Task's `repo` field or a legacy `repo:NAME` label. `--linked` and `--local` are mutually exclusive filters on `list`; `--local` includes Tasks whose Remote identity is retained as inactive provenance.
 
 ### Milestones
 
@@ -651,14 +651,14 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 
 ### Command rules
 
-- `list` hides `done` and `cancelled` unless `--include-closed`. Inside a member Repository or one of its worktrees `list` and `ready` are scoped to that Repository's Tasks plus Board-wide Tasks (no `repo`); `--all` widens the scope to the whole Board, and at the Board's root there is no scoping. `--type` is repeatable and matches any listed Type; `--exclude-type` hides any listed Type. `--label` is repeatable and every label must match; `--exclude-label` is repeatable and hides a Task carrying any named label. `--repo NAME` is shorthand for `--label repo:NAME`. `--unlabeled` conflicts with `--label` and `--repo`. `--linked` and `--local` are mutually exclusive and filter by active Remote Issue link; `--local` includes detached provenance.
+- `list` hides `done` and `cancelled` unless `--include-closed`. Inside a member Repository or one of its worktrees `list` and `ready` are scoped to that Repository's Tasks plus Board-wide Tasks (no `repo`); `--all` widens the scope to the whole Board, and at the Board's root there is no scoping. `--type` is repeatable and matches any listed Type; `--exclude-type` hides any listed Type. `--label` is repeatable and every label must match; `--exclude-label` is repeatable and hides a Task carrying any named label. `--repo NAME` matches the Task's `repo` field or a legacy `repo:NAME` label. `--unlabeled` conflicts with `--label` and `--repo`. `--linked` and `--local` are mutually exclusive and filter by active Remote Issue link; `--local` includes detached provenance.
 - Human `list` output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `ISSUE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns. `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Root Tasks sort by priority, then creation time, then ID; each Parent Task is followed by its SubTasks, sorted by priority, then creation time, then ID. `--group` renders one outlined table with a banner for each Parent Task, its SubTasks underneath, and a final `No parent` section; parent groups follow the parent's priority and SubTasks follow their own priority. Titles longer than 60 characters are truncated with an ellipsis. The table is presentation only; `--json` carries the full title and every field and is the contract for scripts and agents.
 - `ready` and `prime` accept the same `--repo` and repeatable `--label` filters. `ready` also accepts `--parent`, `--type`, `--exclude-type`, and `--exclude-label`; `prime` reports `close_candidates` for non-terminal Parent Tasks with at least one SubTask and no open SubTasks. All filters combine with AND.
 - `add --type epic` and `update --type epic` are refused when the Task has a `parent`; epic is top-level only. `type` defaults to `task` and is written explicitly on every save.
 - `init` accepts `--slug` as a bare word. Explicit invalid input returns `INVALID_SLUG` with a normalized suggestion. Re-runs preserve the stored prefix; an empty Board can change it, a populated Board returns `SLUG_LOCKED` naming `orbit slug migrate <slug>`; `--print` previews the same prefix without writing.
-- `init` derives the slug from `DIR`: the parent folder name when `DIR` is named `.orbit`, otherwise `DIR`'s own name. `--global` and `~/.orbit` use `orb` with a warning. Explicit `--slug` wins.
-- `init` refuses to create a second Board for the same location. A re-run on the same `DIR` is idempotent; an attempt to create `.orbit` while a link pointer, ancestor `.orbit`, main-checkout `.orbit`, or legacy Board already resolves for `DIR` returns `ALREADY_INITIALIZED` and names the existing Board. `orbit repo remove` clears an explicit membership and its pointer; move or migrate an ancestor, main-checkout, or legacy Board. `--global` and the `~/.orbit` Board are exempt.
-- `init --global` creates or reuses `~/.orbit/board` as a standalone Board. Discovery uses it only when it already exists; no command creates it implicitly.
+- `init` derives the slug from `DIR`: the parent folder name when `DIR` is named `.orbit`, otherwise `DIR`'s own name. Boards anchored at `~/.orbit` use `orb` with a warning. Explicit `--slug` wins.
+- `init` refuses to create a second Board for the same location. A re-run on the same `DIR` is idempotent; an attempt to create `.orbit` while a link pointer, ancestor `.orbit`, main-checkout `.orbit`, or legacy Board already resolves for `DIR` returns `ALREADY_INITIALIZED` and names the existing Board. `orbit repo remove` clears an explicit membership and its pointer; move or migrate an ancestor, main-checkout, or legacy Board. The `~/.orbit` Board is exempt.
+- `init` run in `~` creates or reuses `~/.orbit/board` as a standalone Board. Discovery uses it only when it already exists; no command creates it implicitly.
 - `slug show` is read-only and reports the slug, literal prefix, task/SubTask counts, and comment-file count. `slug migrate` is the explicit rewrite path described in [Migrating the slug](#migrating-the-slug); it is not exposed as an MCP tool.
 - `slug migrate` validates the target like `--slug`. The current slug is a no-op with no commit. Applying with live claims requires `--force`; dry-run reports them without refusing. An unhealthy Board returns `MIGRATION_BLOCKED`; a target collision returns `PREFIX_COLLISION`. `--dry-run` writes nothing.
 - A hand-edited `id.prefix` that matches no task file returns one `PREFIX_MISMATCH` from strict loads and `doctor`. Migration refuses this state; restore the configured prefix first.
@@ -827,7 +827,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Multi-process tests: concurrent claims, dependencies, and deletes against one board; assert serializability and distinct claims.
 - Crash test: abort a writer between temp write and rename; the old file survives and `doctor --fix` removes the temp.
 - Worktree integration: initialize in the main worktree, claim from a linked worktree, assert one board.
-- Orbit folder tests: a secondary worktree resolves the main checkout's `.orbit/board`; `init` there reuses it; commands run from `src/` resolve the root Board and `init` there refuses while that Board exists; `git clean -xdff` removes `DIR` and `doctor --fix` re-attaches it with every Task intact; `init` outside a repository creates an anchored Board; `~/.orbit` resolves only when it exists and `init --global` creates `~/.orbit/board`.
+- Orbit folder tests: a secondary worktree resolves the main checkout's `.orbit/board`; `init` there reuses it; commands run from `src/` resolve the root Board and `init` there refuses while that Board exists; `git clean -xdff` removes `DIR` and `doctor --fix` re-attaches it with every Task intact; `init` outside a repository creates an anchored Board; `~/.orbit` resolves only when it exists and `init` run in `~` creates `~/.orbit/board`.
 - Anchor tests (`tests/init_dir.rs`, `tests/discovery.rs`): `init <anchor>` creates `.orbit/board` plus `.orbit/cache` outside Git; the anchor and nested child Git directories resolve one Board without pointers; an outside Repository joins with `orbit repo add`; `--dir`/`ORBIT_DIR` accept the anchor or a Board directory; child-local Boards and unknown `.orbit` contents are reported without being overwritten; legacy direct `.orbit` Boards remain explicitly addressable.
 - Member Repository tests (`tests/repo.rs`): `orbit repo add` writes the link pointer and records explicit membership, `repo remove` clears both, `repo refresh` rebuilds `member-repositories.json` reporting additions and removals, a discovered child cannot be removed, and a shadowed local Board is reported.
 - Child Board merge and migration tests (`tests/migrate.rs`): `init` on an anchor previews and merges child Boards preserving Task IDs, moving child prefixes to `id.accepted_prefixes`, recording each imported Task's Repository, and keeping children as backups under `.orbit/backups`; dry-run is read-only.
@@ -837,7 +837,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, `--remove` preserving user content, project versus user scope, and TTY versus non-TTY `init` behavior.
 - Onboarding tests: idempotent `init`, first-board refusal, harness detection and selection, link-pointer precedence over a local Board, `--dir`/`ORBIT_DIR` overrides, main-checkout fallback, vanished link targets, and ephemeral binary rejection.
 - SubTask, ID, filter, and export integration tests: `tests/subtasks.rs` and `tests/export.rs`.
-- Slug tests: normalization and validation tables, auto-adoption from repository and anchor roots and explicitly named Board directories, `--global` fallback, explicit overrides, empty/populated Board changes, `PREFIX_MISMATCH`, and the export/prime prefix fields.
+- Slug tests: normalization and validation tables, auto-adoption from repository and anchor roots and explicitly named Board directories, home-directory Board fallback, explicit overrides, empty/populated Board changes, `PREFIX_MISMATCH`, and the export/prime prefix fields.
 - Slug migration tests: show counts, dry-run with no writes, full Task/SubTask/reference/comment rewrite, one-commit atomicity, live-claim refusal and `--force`, unhealthy-board refusal, invalid input, no-op, empty Board, legacy no-dash prefixes, and flushing heartbeat-only writes.
 - Human-output tests cover the aligned `list` table, including the header and non-task Type rendering, alongside the JSON shapes in `tests/types.rs`.
 - MCP tests: initialize, tools/list, label/comment/checkpoint round-trips, SubTask/parent filtering, resources, and error envelopes over a real stdio child process.

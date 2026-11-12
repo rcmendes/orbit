@@ -160,19 +160,6 @@ pub(crate) fn workspace_root_if_board(board: &Board) -> Option<PathBuf> {
     Some(dunce::canonicalize(anchor).unwrap_or_else(|_| anchor.to_path_buf()))
 }
 
-/// Repositories included in the Workspace catalog — the candidates a
-/// Remote Issue catalog or Auto-push create flow may target.
-#[allow(dead_code)]
-pub(crate) fn included_repositories(workspace: &Path) -> Result<Vec<String>> {
-    let catalog = load_catalog(&catalog_path(workspace))?;
-    Ok(catalog
-        .repositories
-        .values()
-        .filter(|entry| entry.included && entry.status != RepositoryStatus::Removed)
-        .map(|entry| entry.repository.clone())
-        .collect())
-}
-
 pub(crate) fn catalog_path(workspace: &Path) -> PathBuf {
     workspace
         .join(".orbit")
@@ -211,16 +198,4 @@ fn load_catalog(path: &Path) -> Result<RepositoryCatalog> {
         }
         Err(error) => Err(OrbitError::io(format!("read {}", path.display()), error)),
     }
-}
-
-#[allow(dead_code)]
-fn save_catalog(path: &Path, catalog: &RepositoryCatalog) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| OrbitError::config("catalog has no parent directory"))?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| OrbitError::io(format!("create {}", parent.display()), error))?;
-    let contents = serde_json::to_vec_pretty(catalog)
-        .map_err(|error| OrbitError::config(format!("serialize repository catalog: {error}")))?;
-    crate::atomic::write_atomic(path, &contents, true)
 }

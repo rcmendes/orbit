@@ -20,8 +20,8 @@ and then prints exactly one JSON object on stdout.
 Board discovery order: --dir or ORBIT_DIR, then the repository link pointer,
 then the nearest .orbit walking up across Git boundaries, then the same walk
 restarted from a worktree's main checkout, then nothing. A Board in the home
-directory is an ordinary Board found by that walk; `orbit init --global`
-creates or reuses it at ~/.orbit/board.
+directory is an ordinary Board found by that walk; run `orbit init` in ~
+to create or reuse it at ~/.orbit/board. There is no --global flag.
 
 Run `orbit init <ANCHOR>` once on a folder that holds several repositories;
 child repositories discover the Board across their Git boundary, and init

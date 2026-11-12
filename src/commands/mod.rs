@@ -314,18 +314,29 @@ fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {
     Ok(normalized)
 }
 
-fn normalize_label_filters(labels: &[String], repo: Option<&str>) -> Result<Vec<String>> {
-    let mut normalized = normalize_labels(labels)?;
-    if let Some(repo) = repo {
+fn normalize_repo_filter(repo: Option<&str>) -> Result<Option<String>> {
+    repo.map(|repo| {
         let repo = repo.trim();
         if repo.is_empty() {
             return Err(OrbitError::invalid_argument("--repo must not be empty"));
         }
-        normalized.push(task::normalize_label(&format!("repo:{repo}"))?);
-    }
-    normalized.sort();
-    normalized.dedup();
-    Ok(normalized)
+        // Keep the same validation as legacy repo labels, without turning
+        // the Repository field filter into a required label.
+        task::normalize_label(&format!("repo:{repo}"))?;
+        Ok(repo.to_string())
+    })
+    .transpose()
+}
+
+fn matches_repo(task: &Task, repo: Option<&str>) -> bool {
+    repo.is_none_or(|repo| {
+        task.front.repo.as_deref() == Some(repo)
+            || task
+                .front
+                .labels
+                .iter()
+                .any(|label| label.eq_ignore_ascii_case(&format!("repo:{repo}")))
+    })
 }
 
 fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {

@@ -96,7 +96,7 @@ orbit init --agents all          # wire every supported harness
 orbit init --print               # preview every file that would change
 orbit init --portable-mcp        # MCP command `orbit`; editor PATH must find it
 orbit init ~/src/acme            # anchor Board at ~/src/acme/.orbit/board
-orbit init --global              # Board at ~/.orbit/board
+(cd ~ && orbit init)            # ordinary Board at ~/.orbit/board
 orbit init --slug teramigo       # Task IDs become teramigo-…
 orbit init --visible             # visible Board folder ./board instead of ./.orbit/board
 orbit init --visible=tracker     # visible Board folder ./tracker
@@ -109,11 +109,10 @@ orbit init --host=../board-host  # also set the Board host (repo path or git URL
 | --- | --- | --- |
 | *none* | Start a repository-local Board in Git or an anchor Board outside Git. | `orbit init` |
 | `DIR` | Choose a Board anchor, an existing repository root (initialize at its `./.orbit/board`), or an explicit Board directory — visible outside Git, or a visible folder inside a repository. Anchor Board files live at `<DIR>/.orbit/board`. | `orbit init ~/src/acme` |
-| `--global` | Create or reuse the opt-in `~/.orbit/board` fallback. It conflicts with positional `DIR` and `--dir`/`ORBIT_DIR`, and discovery never creates it. | `orbit init --global` |
 | `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents non-interactively: `none`, `all`, `auto`, or a client list. | `orbit init --agents all` |
 | `--print` | Preview the Board, exclusion entries, and generated agent files without writing or prompting. | `orbit init DIR --print` |
-| `--visible[=NAME]` | Use a visible Board folder instead of the hidden `.orbit/board` layout. Bare `--visible` names it `board`; `=NAME` picks the name. Applies when the target resolves to a repository or anchor root — an explicit directory is already visible. Conflicts with `--global`. | `orbit init --visible=tracker` |
+| `--visible[=NAME]` | Use a visible Board folder instead of the hidden `.orbit/board` layout. Bare `--visible` names it `board`; `=NAME` picks the name. Applies when the target resolves to a repository or anchor root — an explicit directory is already visible. | `orbit init --visible=tracker` |
 | `--host[=REPO\|URL]` | Set the Board host: a member Repository name/path or git URL whose remote stores the Board's `orbit` branch. Bare `--host` prompts in a terminal; `=REPO\|URL` sets it without prompting. An existing host branch with a different Slug is refused (`BOARD_HOST_CONFLICT`); a matching one is joined. | `orbit init --host=../board-host` |
 
 **Choose by scenario**
@@ -121,7 +120,7 @@ orbit init --host=../board-host  # also set the Board host (repo path or git URL
 - **New product repository:** run `orbit init` at the root. The Board is `./.orbit/board`, a standalone repository shared by linked worktrees, and IDs use the folder name.
 - **Multi-repository Board:** run `orbit init ~/src/acme` or `orbit init` at its non-Git root. Repositories inside discover the Board automatically; repositories outside it can `orbit repo add`.
 - **CI or scripted setup:** preview with `--print`, then use `--agents none` and an explicit `--slug` when the machine should not receive editor files and IDs must be stable.
-- **Global fallback:** use `--global` only for an intentional machine-wide Board. Project-local Boards still win in discovery.
+- **Home Board:** run `orbit init` in `~` for an ordinary Board there. It is discovered normally, never created implicitly, and remains exempt from conflicting-Board checks. There is no `--global` flag.
 - **Joining an existing Board:** use `orbit repo add DIR` from the repository that should share the Board; `init` is for creating or reusing the target `DIR`, not for joining another Board.
 - **Sharing a Board across machines:** pass `--host` (or run `orbit board host` later) so the Board's `orbit` branch lives on one host repository; `orbit board sync` merges and pushes, and `board.host_sync = "auto"` syncs at `orbit prime` and after commits.
 - **Migrating a pre-ADR-0019 Board:** use `orbit migrate`; `init` refuses legacy layouts with `BOARD_NOT_MIGRATED`. `orbit init` on an anchor that still contains child Boards previews and merges them in place, preserving Task IDs and keeping the children as backups under `.orbit/backups/`.
@@ -163,7 +162,7 @@ harness has an MCP config, later runs do not ask.
 
 Task IDs use the Board's slug as their prefix. An anchor Board uses its
 anchor-folder name (`~/src/acme` → `acme-`); a repository Board uses its
-repository name; `--global` uses `orb` with a warning. Pass `--slug` to choose it
+repository name; a Board anchored at `~/.orbit` uses `orb` with a warning. Pass `--slug` to choose it
 explicitly. Re-running `init` preserves the stored prefix; an empty Board can
 change it, while a populated Board returns `SLUG_LOCKED` and points at
 `orbit slug migrate <slug>`. `--print` reports the same result without writing.
@@ -174,7 +173,7 @@ the managed files.
 `init` takes its target from the positional argument, then `--dir`/`ORBIT_DIR`.
 Without a target, it uses `./.orbit` in Git, a discovered Board anchor from a
 member Repository, or the current directory as an anchor outside Git.
-`--global` is exclusive with those and means `~/.orbit/board`. `repo add` uses
+Running `init` in `~` creates an ordinary Board at `~/.orbit/board`. `repo add` uses
 only its positional `DIR`; `--dir`/`ORBIT_DIR` never retargets the pointer. A
 repository can own one local Board; a second `.orbit` in the same working tree
 is refused. Member repositories inside an anchor use its Board without an
@@ -189,8 +188,8 @@ a terminal, `init` writes no agent files and explains how to wire them with
 `--agents` accepts `none`, `all`, or a comma-separated client list. `init` refuses to create a
 Board that would compete with an existing repository-local resolution for `DIR`:
 a link, an ancestor `.orbit`, the main checkout's `.orbit`, or a legacy Board is
-reported as `ALREADY_INITIALIZED` before anything is written. `--global` and the
-`~/.orbit` fallback are exempt. `orbit repo remove` forgets an explicit
+reported as `ALREADY_INITIALIZED` before anything is written. The
+`~/.orbit` Board is exempt. `orbit repo remove` forgets an explicit
 membership; move or migrate an ancestor, main-checkout, or legacy Board.
 
 ### A Board across repositories
@@ -517,7 +516,7 @@ orbit list --linked                               # only Tasks linked to a Remot
 orbit list --local                                # only Tasks without an active link
 orbit list --label needs-triage
 orbit list --label repo:api --label ready-for-agent   # every label must match
-orbit list --repo api                               # shorthand for repo:api
+orbit list --repo api                               # repo field api or legacy repo:api label
 orbit list --status in_progress --claimed-by claude
 orbit list --status done            # closed work, without --include-closed
 orbit list --unlabeled
@@ -554,7 +553,12 @@ exclusive. The `ISSUE` column and both flags appear in human output and
 are hidden but still accepted. `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
 any listed shape. `--label` is repeatable and every label must match;
 `--exclude-label` is repeatable and hides a task carrying any of the named labels.
-`--repo NAME` is shorthand for `--label repo:NAME`. Parent groups follow the
+`--repo NAME` matches the Task's exact `repo` field or its legacy `repo:NAME` label
+(case-insensitive, as with label normalization);
+explicit `--label` filters remain additional requirements. This applies to
+`list`, `ready` (including `--claim`), and `prime`. Prime reports the Repository
+filter separately as `repo` in JSON and `repository:` in human output; its
+`labels` contains only explicit label filters. Parent groups follow the
 parent's priority; SubTasks inside a group follow their own priority. Tasks with
 no parent appear in the final `No parent` section. JSON always carries `kind`,
 `type`, `parent`, `subtasks`, and `open_subtasks` with the full title. A Parent

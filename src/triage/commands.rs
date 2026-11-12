@@ -11,7 +11,7 @@ use crate::error::{OrbitError, Result, code};
 use crate::graph::{Graph, LoadMode};
 use crate::remote::link::{RemoteLinkView, active_link, github_compat_json, link_json};
 use crate::remote::model::MappedFields;
-use crate::remote::port::{RemoteResolver, board_resolver};
+use crate::remote::port::{BoardResolver, RemoteResolver};
 use crate::task::Task;
 use crate::triage::guidance::{guidance_missing_note, read_project_guidance};
 use crate::triage::labels::CANONICAL_TRIAGE_LABELS;
@@ -356,7 +356,7 @@ fn publishability(board: &Board, task: &Task) -> Publishability {
     let Some(link) = active_link(task) else {
         return Publishability::Local;
     };
-    match board_resolver(board).adapter(&link.tracker) {
+    match BoardResolver::new(board).adapter(&link.tracker) {
         Ok(adapter) => Publishability::Remote {
             mapped: adapter.mapped_fields(&link.remote_project()),
             link: Box::new(link),

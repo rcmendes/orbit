@@ -974,7 +974,7 @@ impl Board {
     /// caller anchors with an Orbit-folder pointer.
     pub fn init_dir(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
         let root = resolve_external(dir)?;
-        if let Some(existing) = Self::conflicting_board_for(&root, false)? {
+        if let Some(existing) = Self::conflicting_board_for(&root)? {
             return Err(already_initialized(&existing));
         }
         init_external(&root, slug)
@@ -987,8 +987,8 @@ impl Board {
 
     /// Returns the repository-local Board that would compete with `dir`.
     /// A global Board is exempt: it is only an opt-in discovery fallback.
-    pub fn conflicting_board_for(dir: &Path, global: bool) -> Result<Option<PathBuf>> {
-        if global || Self::is_board(dir) {
+    pub fn conflicting_board_for(dir: &Path) -> Result<Option<PathBuf>> {
+        if is_global_board(dir) || Self::is_board(dir) {
             return Ok(None);
         }
         let Some(repo_root) = git::toplevel_containing(dir) else {
@@ -1550,11 +1550,6 @@ fn nearest_orbit_board(start: &Path) -> Option<OrbitBoard> {
     None
 }
 
-#[allow(dead_code)]
-pub(crate) fn workspace_child_board(workspace: &Path) -> Result<Option<PathBuf>> {
-    Ok(workspace_child_boards(workspace)?.into_iter().next())
-}
-
 /// Directory names that locate a Board relative to a Workspace or repository.
 pub(crate) const ORBIT_DIR: &str = ".orbit";
 pub(crate) const BOARD_DIR: &str = "board";
@@ -1682,7 +1677,7 @@ pub fn board_cache_dir(board: &Board) -> PathBuf {
 /// Every Board that sits beside or under `workspace` other than its Workspace
 /// Board: the workspace-level legacy layouts plus child-repository Boards.
 /// Canonical, sorted, and deduplicated.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn workspace_local_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
     let mut found: Vec<PathBuf> = [LEGACY_BOARD_DIR, BOARD_DIR, ORBIT_DIR]
         .iter()
@@ -1703,7 +1698,7 @@ pub(crate) fn workspace_local_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
 /// depth-first. Skips `.git`, `.orbit`, and `.board` directories and does not
 /// descend into nested repositories; for each child repository it reports the
 /// `.orbit` Board first, then the legacy common-dir `orbit/board`.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn workspace_child_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     if !workspace.exists() {

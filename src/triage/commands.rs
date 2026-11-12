@@ -339,8 +339,9 @@ fn load_proposal(board: &Board, path: &Path) -> Result<TriageProposal> {
 }
 
 fn require_github_link(task: &Task) -> Result<serde_json::Value> {
-    task.github_link()
-        .map(|link| json!({ "repo": link.repo, "number": link.number }))
+    crate::remote::link::active_link(task)
+        .filter(|link| link.tracker == "github")
+        .map(|link| json!({ "repo": link.project, "number": link.id.parse::<u64>().unwrap_or(0) }))
         .ok_or_else(|| {
             OrbitError::new(
                 code::TRIAGE_NOT_LINKED,

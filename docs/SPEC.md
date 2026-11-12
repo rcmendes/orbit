@@ -247,7 +247,7 @@ updated_at: 2026-10-23T12:00:00Z
 Body text, acceptance criteria, notes.
 ```
 
-Required: `title`, `status`, `created_at`, `updated_at`. Optional: `type` (default `task`; one of `task`, `epic`, `spike`, `chore`, `decision`; always written on save), `priority` (default `2`), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `waiting_on`, `checkpoint`, `area` (optional; a short lowercase slug, restricted to `board.areas` when the Board configures them), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `github` (optional active link or inactive provenance when the GitHub provider is enabled), `claimed_by`, `claimed_at`, `lease_until`. A GitHub link with no `active` field is active for backward compatibility; detach writes `active: false` while retaining the stable identity and sync baseline. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task that is not itself a SubTask; SubTasks are one level deep, a SubTask cannot have `type: epic`, and the SubTask ID must encode the same parent. `doctor` reports a mismatch as `PARENT_MISMATCH` or an invalid epic as `INVALID_TYPE`.
+Required: `title`, `status`, `created_at`, `updated_at`. Optional: `type` (default `task`; one of `task`, `epic`, `spike`, `chore`, `decision`; always written on save), `priority` (default `2`), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `waiting_on`, `checkpoint`, `area` (optional; a short lowercase slug, restricted to `board.areas` when the Board configures them), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `remote` (optional provider-neutral link — `tracker`, `project`, `id`, optional `url`, `active`, and an opaque `baseline` — or inactive provenance when a Remote Tracker provider is enabled), `github` (optional legacy GitHub link kept for backward compatibility; new writes use `remote`). A link with no `active` field is active; detach writes `active: false` while retaining the stable identity and sync baseline. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task that is not itself a SubTask; SubTasks are one level deep, a SubTask cannot have `type: epic`, and the SubTask ID must encode the same parent. `doctor` reports a mismatch as `PARENT_MISMATCH` or an invalid epic as `INVALID_TYPE`.
 
 The body is free-form Markdown. Orbit does not duplicate the title as an H1. Frontmatter is parsed as the first `---` block, not by splitting the whole file on `---`.
 
@@ -534,10 +534,12 @@ orbit github <status|connect|setup|repo|adopt|create|sync|auto-push>
 orbit triage <context|review|apply>
 ```
 
-GitHub sync and Triage require Orbit 0.9.0 or newer. Default release builds
-include the `github-provider` capability. A build without that capability returns
-`GITHUB_UNSUPPORTED` when it loads a Board with active `[github]` configuration;
-it must not silently ignore configured GitHub state.
+GitHub sync runs through the provider-neutral Remote Tracker port
+([ADR 0018](./adr/0018-remote-trackers-behind-an-orbit-port.md)): the built-in
+GitHub adapter owns Issue Fields, provider modes, the `orbit:in-progress`
+marker, `state_reason` translation, and Projects behavior, while the shared
+engine owns baselines, three-way conflict detection, previews, auto-push,
+relationships, and link persistence. There is no optional build feature.
 
 `orbit github status` is a read-only provider diagnostic. It reports the `gh`
 identity and known token scopes, configured organization and linked repositories,
@@ -561,8 +563,10 @@ repository is linked; Boards with several available GitHub repositories require
 
 ### Automatic push
 
-`[github] auto_push = true` opts a Board into publishing mapped Task changes after
-a successful write command. `orbit github auto-push on|off` toggles the same flag,
+`[remote] auto_push = true` opts a Board into publishing mapped Task changes
+after a successful write command for every configured Remote Tracker; the
+legacy `[github] auto_push` key is still honored until migration. `orbit
+github auto-push on|off` toggles the same flag,
 writes and commits the Board config, reports the previous value, and warns when
 enabling with zero or multiple available repositories because new Tasks cannot
 infer a single Issue destination. The default is `false`. Auto-push is push-only and
@@ -576,9 +580,9 @@ The trigger is a change to title, body, labels, status, `area`, or
 dependency relationships do not trigger a remote write. The command wrapper
 snapshots `tasks/*.md` before and after a task write command and pushes every
 changed Task whose mapped delta is non-empty. Deleted Tasks leave their Issues
-untouched and warn when linked. `orbit github *`, dormant issue-catalog commands and
-detach/reattach, `orbit sync`, `doctor`, `init`/`link`/`unlink`, migrations, and
-`delete` are excluded; `triage apply` is included.
+untouched and warn when linked. `orbit github *`, `orbit remote *`, `orbit sync`,
+`doctor`, `init`/`link`/`unlink`, migrations, and `delete` are excluded;
+`triage apply` is included.
 
 `orbit add` creates an Issue when exactly one repository is available — linked
 on a repository Board, or linked with `orbit github repo link`. With zero or multiple
@@ -594,8 +598,8 @@ with `state_reason: not_planned`, and reopen reopens. Native `state_reason` is
 authoritative; `wontfix` remains a pull fallback for older Issues and is never
 added automatically.
 
-A field changed on both sides is skipped with a `GITHUB_AUTO_PUSH_CONFLICT`
-warning. Remote-only changes produce `GITHUB_AUTO_PUSH_PENDING` and are left for
+A field changed on both sides is skipped with a `REMOTE_AUTO_PUSH_CONFLICT`
+warning. Remote-only changes produce `REMOTE_AUTO_PUSH_PENDING` and are left for
 explicit sync. When any field is skipped, the sync baseline does not advance, so
 the conflict remains visible. The local mutation always succeeds; remote failures
 are warnings, not command errors. If the local mutation's Git commit failed,

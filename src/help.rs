@@ -897,9 +897,7 @@ conflicts, unsupported relationships, and the next recommended action. `orbit
 doctor` also checks GitHub configuration when the provider is enabled. With
 auto-push enabled, priority, type, comments, claims, checkpoints, and
 relationships do not trigger a push; use `orbit --no-sync <command>` or
-`ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. GitHub sync
-requires Orbit 0.9.0 or newer; default release builds include the
-`github-provider` capability. `github create` previews one or more Local Tasks by
+`ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. `github create` previews one or more Local Tasks by
 default. Pass `--apply` to create Issues and persist their links; done and cancelled
 Tasks also require `--include-closed`. Workspace Boards infer the destination
 from the included repository catalog when exactly one repository is available.";

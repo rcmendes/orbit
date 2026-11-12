@@ -23,6 +23,10 @@ pub struct RepositoryConfig {
     pub name: String,
     /// Absolute path of the Repository's main checkout.
     pub path: PathBuf,
+    /// The Remote Project new Tasks in this Repository publish to
+    /// (ADR 0018). Absent means the Board's default Remote Project applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_project: Option<crate::remote::RemoteProject>,
 }
 
 impl RepositoryConfig {
@@ -39,8 +43,22 @@ impl RepositoryConfig {
                 self.name
             )));
         }
+        if let Some(project) = &self.remote_project {
+            project.validate()?;
+        }
         Ok(())
     }
+}
+
+/// The Remote Project a Repository designates for its new Tasks (ADR 0018):
+/// the `remote_project` on its `repositories` entry, if any.
+pub fn remote_project_for(board: &Board, name: &str) -> Option<crate::remote::RemoteProject> {
+    board
+        .config
+        .repositories
+        .iter()
+        .find(|repository| repository.name == name)
+        .and_then(|repository| repository.remote_project.clone())
 }
 
 /// Where a member Repository came from.

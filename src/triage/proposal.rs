@@ -2,7 +2,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{OrbitError, Result, code};
-use crate::github::fields::validate_verification;
 use crate::task::{Task, normalize_area, normalize_label, normalize_verification};
 use crate::triage::labels::{validate_category_roles, validate_label_list, validate_state_roles};
 
@@ -82,11 +81,7 @@ impl TriageProposal {
         }
 
         if let Some(verification) = self.verification.take() {
-            let normalized = normalize_verification(Some(verification))?;
-            if let Some(value) = normalized {
-                validate_verification(&value)?;
-                self.verification = Some(value);
-            }
+            self.verification = normalize_verification(Some(verification))?;
         }
 
         Ok(())

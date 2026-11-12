@@ -160,6 +160,9 @@ pub(crate) fn workspace_root_if_board(board: &Board) -> Option<PathBuf> {
     Some(dunce::canonicalize(anchor).unwrap_or_else(|_| anchor.to_path_buf()))
 }
 
+/// Repositories included in the Workspace catalog — the candidates a
+/// Remote Issue catalog or Auto-push create flow may target.
+#[allow(dead_code)]
 pub(crate) fn included_repositories(workspace: &Path) -> Result<Vec<String>> {
     let catalog = load_catalog(&catalog_path(workspace))?;
     Ok(catalog

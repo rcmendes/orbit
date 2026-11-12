@@ -1,4 +1,4 @@
-//! Provider-neutral Remote Tracker configuration (ADR 0018).
+//! Provider-neutral Remote Tracker configuration and port (ADR 0018).
 //!
 //! A Board connects to Remote Projects on one or more Remote Trackers. The
 //! core owns only the project list and the tracker-neutral auto-push flag;
@@ -6,7 +6,39 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::board::Board;
 use crate::error::{OrbitError, Result};
+
+pub mod auto_push;
+pub mod catalog;
+pub mod execution;
+pub mod link;
+pub mod model;
+pub mod port;
+pub mod relationships;
+pub mod sync;
+
+pub use crate::task::RemoteLink;
+
+/// Remote Projects explicitly configured on the Board: `[remote] projects`
+/// plus the legacy `[github] repositories` list, which names GitHub Remote
+/// Projects.
+pub fn configured_projects(board: &Board) -> Vec<RemoteProject> {
+    let mut projects = board.config.remote.projects.clone();
+    for repository in &board.config.github.repositories {
+        let project = RemoteProject {
+            tracker: "github".to_string(),
+            project: repository.clone(),
+        };
+        if !projects.iter().any(|candidate| {
+            candidate.tracker == project.tracker
+                && candidate.project.eq_ignore_ascii_case(&project.project)
+        }) {
+            projects.push(project);
+        }
+    }
+    projects
+}
 
 /// `[remote]` section of `config.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

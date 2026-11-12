@@ -36,7 +36,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         command,
     } = cli;
     if no_sync {
-        crate::github::auto_push::suppress();
+        crate::remote::auto_push::suppress();
         crate::board_sync::suppress();
     }
 
@@ -202,9 +202,9 @@ where
     let board = access.board();
     let snapshot = (auto_push == AutoPush::On
         && matches!(mode, crate::board::AccessMode::Write)
-        && board.config.github.auto_push
-        && !crate::github::auto_push::suppressed())
-    .then(|| crate::github::auto_push::snapshot(board));
+        && crate::remote::auto_push::enabled(board)
+        && !crate::remote::auto_push::suppressed())
+    .then(|| crate::remote::auto_push::snapshot(board));
     let mut output = f(board)?;
     if let Some(before) = snapshot {
         if board.commit_failed() {
@@ -215,7 +215,9 @@ where
         } else {
             output
                 .warnings
-                .extend(crate::github::auto_push::after_command(board, &before));
+                .extend(crate::remote::auto_push::after_command_default(
+                    board, &before,
+                ));
         }
     }
     if matches!(mode, crate::board::AccessMode::Write) {

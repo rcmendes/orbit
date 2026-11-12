@@ -351,6 +351,13 @@ impl Task {
         self.front.github.as_ref().filter(|link| link.active)
     }
 
+    /// The Task's active provider-neutral Remote Issue link (`remote:`
+    /// frontmatter). Legacy `github:` links are read through
+    /// [`crate::remote::link::active_link`] instead.
+    pub fn remote_link(&self) -> Option<&RemoteLink> {
+        self.front.remote.as_ref().filter(|link| link.active)
+    }
+
     pub fn has_labels(&self, labels: &[String]) -> bool {
         labels
             .iter()

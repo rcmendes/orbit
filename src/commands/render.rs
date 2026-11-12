@@ -85,9 +85,9 @@ fn group_headers() -> [String; 8] {
 }
 
 fn issue_cell(task: &Task) -> String {
-    match &task.front.github {
-        Some(link) if link.active => format!("#{}", link.number),
-        Some(link) => format!("~#{}", link.number),
+    match crate::remote::link::link_view(task) {
+        Some(link) if link.active => format!("#{}", link.id),
+        Some(link) => format!("~#{}", link.id),
         None => "-".to_string(),
     }
 }
@@ -320,9 +320,20 @@ pub(super) fn format_detail(graph: &Graph, task: &Task, comments: &[Comment]) ->
     lines.push(format!("status: {}", task.front.status.as_str()));
     lines.push(format!("kind: {}", task.kind()));
     lines.push(format!("type: {}", task.front.task_type.as_str()));
-    lines.push(match &task.front.github {
-        Some(link) if link.active => format!("github: {}#{}", link.repo, link.number),
-        Some(link) => format!("github: {}#{} (detached)", link.repo, link.number),
+    lines.push(match crate::remote::link::link_view(task) {
+        Some(link) if link.tracker == "github" && link.active => {
+            format!("github: {}#{}", link.project, link.id)
+        }
+        Some(link) if link.tracker == "github" => {
+            format!("github: {}#{} (detached)", link.project, link.id)
+        }
+        Some(link) if link.active => {
+            format!("remote: {} {}#{}", link.tracker, link.project, link.id)
+        }
+        Some(link) => format!(
+            "remote: {} {}#{} (detached)",
+            link.tracker, link.project, link.id
+        ),
         None => "github: -".to_string(),
     });
     lines.push(format!("priority: P{}", task.front.priority));

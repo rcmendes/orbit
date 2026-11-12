@@ -29,7 +29,7 @@ pub fn run(
 fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(id)?;
-    let link = require_github_link(task)?;
+    let link = require_remote_link(task)?;
 
     let (guidance, guidance_path) = read_project_guidance(board);
     let mut warnings = Vec::new();
@@ -83,7 +83,7 @@ fn cmd_review(
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
-    require_github_link(task)?;
+    require_remote_link(task)?;
 
     let (changes, apply_ready) = proposal
         .build_preview(task)
@@ -101,7 +101,7 @@ fn cmd_review(
         "sync_note": if board.config.github.mode.is_basic() {
             "In basic mode, only labels can sync to GitHub; area and verification require full mode with organization Issue Fields."
         } else {
-            "After approval, run `orbit github sync <ID> --direction push --apply` to publish Orbit-owned fields and labels to GitHub."
+            "After approval, run `orbit remote sync <ID> --direction push --apply` to publish Orbit-owned fields and labels to the Remote Tracker."
         },
     });
 
@@ -146,7 +146,7 @@ fn cmd_apply(board: &Board, args: TriageApplyArgs) -> Result<crate::output::Comm
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
-    require_github_link(task)?;
+    require_remote_link(task)?;
 
     let (changes, apply_ready) = validate_proposal_for_apply(board, &proposal, task)
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
@@ -204,11 +204,11 @@ fn apply_proposal(
             "changes": changes,
             "sync_required": true,
             "sync_command": format!(
-                "orbit github sync {} --direction push --apply",
+                "orbit remote sync {} --direction push --apply",
                 id
             ),
         }),
-        format!("Applied triage metadata to {id}; publish with `orbit github sync`"),
+        format!("Applied triage metadata to {id}; publish with `orbit remote sync`"),
     );
     if let Some(warning) = crate::mutation::commit_warning(outcome) {
         output.warnings.push(warning);
@@ -338,7 +338,7 @@ fn load_proposal(board: &Board, path: &Path) -> Result<TriageProposal> {
     Ok(proposal)
 }
 
-fn require_github_link(task: &Task) -> Result<serde_json::Value> {
+fn require_remote_link(task: &Task) -> Result<serde_json::Value> {
     crate::remote::link::active_link(task)
         .filter(|link| link.tracker == "github")
         .map(|link| json!({ "repo": link.project, "number": link.id.parse::<u64>().unwrap_or(0) }))
@@ -346,7 +346,7 @@ fn require_github_link(task: &Task) -> Result<serde_json::Value> {
             OrbitError::new(
                 code::TRIAGE_NOT_LINKED,
                 format!(
-                    "task {} is not linked to a GitHub Issue; adopt explicitly with `orbit github adopt` before triage",
+                    "task {} is not linked to a GitHub Issue; link explicitly with `orbit remote link` before triage",
                     task.id
                 ),
             )

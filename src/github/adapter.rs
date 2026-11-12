@@ -41,7 +41,7 @@ impl GitHubAdapter {
         })
     }
 
-    /// Adapter over an injected client (tests and `orbit github` commands
+    /// Adapter over an injected client (tests and `orbit remote` commands
     /// that already resolved one).
     pub fn with_client(client: Box<dyn GitHubClient>, config: GitHubConfig) -> Self {
         Self { client, config }

@@ -50,10 +50,10 @@ pub struct IssueFieldConfig {
     /// Human-readable Issue Field name in the organization (default `Verification`).
     #[serde(default = "default_verification_name")]
     pub verification_name: String,
-    /// Resolved GraphQL node id for the area field after `orbit github setup`.
+    /// Resolved GraphQL node id for the area field after `orbit remote connect --fields`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub area_id: Option<String>,
-    /// Resolved GraphQL node id for the verification field after `orbit github setup`.
+    /// Resolved GraphQL node id for the verification field after `orbit remote connect --fields`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_id: Option<String>,
 }
@@ -149,13 +149,13 @@ impl GitHubConfig {
     pub fn require_organization(&self) -> Result<&str> {
         if self.mode.is_basic() {
             return Err(OrbitError::invalid_argument(
-                "`orbit github setup` is unavailable in basic mode; use mode = `full` with organization Issue Fields",
+                "`orbit remote connect --fields` is unavailable in basic mode; use mode = `full` with organization Issue Fields",
             ));
         }
         self.organization.as_deref().ok_or_else(|| {
             OrbitError::new(
                 crate::error::code::GITHUB_SETUP_INCOMPLETE,
-                "github.organization is not set; run `orbit github setup` after configuring config.toml",
+                "github.organization is not set; run `orbit remote connect --fields` after configuring config.toml",
             )
             .with_details(serde_json::json!({
                 "organization": null,

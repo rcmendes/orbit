@@ -11,6 +11,7 @@ use crate::error::{OrbitError, Result};
 
 pub mod auto_push;
 pub mod catalog;
+pub mod commands;
 pub mod execution;
 pub mod link;
 pub mod model;

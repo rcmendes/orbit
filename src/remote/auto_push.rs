@@ -223,7 +223,7 @@ fn create_in<R: RemoteResolver + ?Sized>(
                 task.id, error.message
             ),
             execution::CreateFollowUp::CatalogUpdateFailed(error) => format!(
-                "task {}: created {identity} but could not update the Remote Issue cache: {}; run `orbit workspace issues refresh`",
+                "task {}: created {identity} but could not update the Remote Issue cache: {}; run `orbit remote issues refresh`",
                 task.id, error.message
             ),
         });

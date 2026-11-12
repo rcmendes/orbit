@@ -3,7 +3,7 @@
 //! The Workspace/child-repository Board distinction is retired: a Board now
 //! has member Repositories (see `crate::repository`). What remains here is
 //! the `workspace.*` configuration block and the GitHub repository catalog
-//! that `orbit github` still reads until the Remote Tracker port lands. The
+//! that legacy GitHub commands still read. The
 //! catalog is refresh-free: `orbit repo refresh` owns member discovery.
 
 use std::collections::{BTreeMap, BTreeSet};

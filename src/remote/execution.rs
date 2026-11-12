@@ -28,7 +28,7 @@ pub struct SyncRequest<'a> {
     pub direction: SyncDirection,
     pub resolutions: &'a [String],
     pub apply: bool,
-    /// Restrict targets to links on this tracker (`orbit github` passes
+    /// Restrict targets to links on this tracker (the GitHub adapter path passes
     /// `"github"`); `None` syncs every linked Task.
     pub tracker: Option<&'a str>,
 }

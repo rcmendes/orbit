@@ -984,7 +984,7 @@ impl Board {
     /// caller anchors with an Orbit-folder pointer.
     pub fn init_dir(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
         let root = resolve_external(dir)?;
-        if let Some(existing) = Self::conflicting_board_for(&root)? {
+        if let Some(existing) = Self::conflicting_board_for(&root, false)? {
             return Err(already_initialized(&existing));
         }
         init_external(&root, slug)
@@ -996,8 +996,9 @@ impl Board {
     }
 
     /// Returns the repository-local Board that would compete with `dir`.
-    pub fn conflicting_board_for(dir: &Path) -> Result<Option<PathBuf>> {
-        if Self::is_board(dir) {
+    /// A global Board is exempt: it is only an opt-in discovery fallback.
+    pub fn conflicting_board_for(dir: &Path, global: bool) -> Result<Option<PathBuf>> {
+        if global || Self::is_board(dir) {
             return Ok(None);
         }
         let Some(repo_root) = git::toplevel_containing(dir) else {
@@ -1016,10 +1017,11 @@ impl Board {
         let main = main_checkout_for(&repo_root, &common).join(".orbit");
         if let Some(board) = resolve_orbit_dir(&main)
             && board.root() != dir
+            && !is_global_board(board.root())
         {
             return Ok(Some(board.root().to_path_buf()));
         }
-        if Self::is_board(&main) && main != dir {
+        if Self::is_board(&main) && main != dir && !is_global_board(&main) {
             return Ok(Some(main));
         }
 
@@ -1028,10 +1030,15 @@ impl Board {
             return Ok(Some(legacy));
         }
 
-        for parent in dir.parent().into_iter().flat_map(Path::ancestors) {
+        for parent in dir
+            .parent()
+            .into_iter()
+            .flat_map(|parent| git::ancestors_through(parent, Some(repo_root.as_path())))
+        {
             let candidate = parent.join(".orbit");
             if let Some(board) = resolve_orbit_dir(&candidate)
                 && board.root() != dir
+                && !is_global_board(board.root())
             {
                 return Ok(Some(board.root().to_path_buf()));
             }
@@ -1039,7 +1046,7 @@ impl Board {
 
         for path in git::worktree_paths(&repo_root)? {
             let path = dunce::canonicalize(&path).unwrap_or(path);
-            if path == dir {
+            if path == dir || is_global_board(&path) {
                 continue;
             }
             if Self::is_board(&path) {
@@ -1047,6 +1054,7 @@ impl Board {
             }
             if let Some(board) = resolve_orbit_dir(&path.join(".orbit"))
                 && board.root() != dir
+                && !is_global_board(board.root())
             {
                 return Ok(Some(board.root().to_path_buf()));
             }
@@ -1517,6 +1525,16 @@ pub(crate) fn resolve_external(dir: &Path) -> Result<PathBuf> {
         canonical.push(component);
     }
     Ok(canonical)
+}
+
+fn is_global_board(path: &Path) -> bool {
+    let Some(home) = git::home_dir() else {
+        return false;
+    };
+    let orbit = home.join(ORBIT_DIR);
+    // The global Board folder is `~/.orbit` itself (legacy) or the Board the
+    // Orbit folder resolves to — `~/.orbit/board` hidden or a visible folder.
+    path == orbit || resolve_orbit_dir(&orbit).is_some_and(|board| board.root() == path)
 }
 
 /// The Board folder an Orbit folder resolves to, plus whether that resolution

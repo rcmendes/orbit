@@ -209,6 +209,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         }),
         args.slug.as_deref(),
         args.print,
+        global,
     )?;
 
     // `--host` / the host prompt: validate the host and, for a fresh or still
@@ -584,6 +585,7 @@ fn run_init(
     slug_root: Option<&Path>,
     slug_arg: Option<&str>,
     print: bool,
+    global: bool,
 ) -> Result<InitTarget> {
     if Board::is_board(board_root) {
         let board = Board::discover(Some(board_root))?;
@@ -598,7 +600,9 @@ fn run_init(
         });
     }
 
-    if print && let Some(existing) = Board::conflicting_board_for(board_root)? {
+    if print
+        && let Some(existing) = Board::conflicting_board_for(board_root, global)?
+    {
         return Err(crate::board::already_initialized(&existing));
     }
 

@@ -8,7 +8,6 @@ mod render;
 mod repo;
 mod slug;
 
-use clap::ValueEnum;
 use serde_json::Value;
 use std::io::Read;
 use std::path::Path;
@@ -17,7 +16,7 @@ use crate::board::Board;
 use crate::cli::{Cli, Command, CommentCommand, LabelCommand, SlugCommand};
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{self, Graph};
-use crate::task::{self, Task, TaskArea};
+use crate::task::{self, Task};
 
 use crud::{cmd_add, cmd_delete, cmd_update};
 use init::cmd_init;
@@ -328,26 +327,26 @@ fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {
     }
 }
 
-fn parse_area_option(area: Option<String>) -> Result<Option<TaskArea>> {
+fn parse_area_option(board: &Board, area: Option<String>) -> Result<Option<String>> {
     match area {
         None => Ok(None),
-        Some(value) => Ok(Some(parse_area_value(&value)?)),
+        Some(value) => Ok(Some(parse_area_value(board, &value)?)),
     }
 }
 
-fn parse_area_value(value: &str) -> Result<TaskArea> {
-    let value = value.trim();
-    TaskArea::from_str(value, true).map_err(|_| {
-        let allowed = TaskArea::all()
-            .iter()
-            .map(|area| area.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        OrbitError::new(
-            code::INVALID_AREA,
-            format!("unknown area `{value}`; expected one of: {allowed}"),
-        )
-    })
+/// Normalizes one Area filter value and validates it against the Board's
+/// `board.areas` list; `task::normalize_area` treats an empty list as
+/// unrestricted.
+fn parse_area_value(board: &Board, value: &str) -> Result<String> {
+    task::normalize_area(value, &board.config.board.areas)
+}
+
+/// Normalizes repeatable Area filter flags the same way as `--area`.
+fn normalize_areas(board: &Board, areas: &[String]) -> Result<Vec<String>> {
+    areas
+        .iter()
+        .map(|area| parse_area_value(board, area))
+        .collect()
 }
 
 fn resolve_body(body: Option<String>, file: Option<std::path::PathBuf>) -> Result<String> {

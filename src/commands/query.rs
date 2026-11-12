@@ -17,6 +17,9 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
     }
     let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
+    let areas = normalize_areas(board, &args.area)?;
+    let excluded_areas = normalize_areas(board, &args.exclude_area)?;
+    let scope = repository_scope(board, args.all)?;
     if let Some(parent) = args.parent.as_deref() {
         let parent_task = graph.get(parent)?;
         if parent_task.front.parent.is_some() {
@@ -34,10 +37,15 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
                 if task.front.status != status {
                     return false;
                 }
-            } else if !args.all && task.front.status.is_terminal() {
+            } else if !args.include_closed && task.front.status.is_terminal() {
                 return false;
             }
 
+            if let Some(scope) = scope.as_deref()
+                && task.front.repo.as_deref().is_some_and(|repo| repo != scope)
+            {
+                return false;
+            }
             if let Some(priority) = args.priority
                 && task.front.priority != priority
             {
@@ -54,14 +62,16 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             if args.exclude_type.contains(&task.front.task_type) {
                 return false;
             }
-            if !args.area.is_empty() && !args.area.iter().any(|area| task.front.area == Some(*area))
+            if !areas.is_empty()
+                && !areas
+                    .iter()
+                    .any(|area| task.front.area.as_deref() == Some(area.as_str()))
             {
                 return false;
             }
-            if args
-                .exclude_area
+            if excluded_areas
                 .iter()
-                .any(|area| task.front.area == Some(*area))
+                .any(|area| task.front.area.as_deref() == Some(area.as_str()))
             {
                 return false;
             }
@@ -114,6 +124,9 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let label_filters = normalize_label_filters(&args.label, args.repo.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
+    let areas = normalize_areas(board, &args.area)?;
+    let excluded_areas = normalize_areas(board, &args.exclude_area)?;
+    let scope = repository_scope(board, args.all)?;
     if let Some(parent) = args.parent.as_deref() {
         let parent_task = graph.get(parent)?;
         if parent_task.front.parent.is_some() {
@@ -129,8 +142,9 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
         excluded: &excluded_labels,
         types: &args.task_type,
         excluded_types: &args.exclude_type,
-        areas: &args.area,
-        excluded_areas: &args.exclude_area,
+        areas: &areas,
+        excluded_areas: &excluded_areas,
+        scope: scope.as_deref(),
     };
     if args.claim {
         let agent = resolve_agent(args.by)?;
@@ -401,6 +415,16 @@ pub(super) fn cmd_sync(board: &Board) -> Result<crate::output::CommandOutput> {
     }
 }
 
+/// The Repository scope for `list`/`ready`: the member Repository the command
+/// runs in, or `None` at the Board's root or with `--all`. A Task without a
+/// `repo` is Board-wide and always stays in scope.
+fn repository_scope(board: &Board, all: bool) -> Result<Option<String>> {
+    if all {
+        return Ok(None);
+    }
+    crate::repository::current_scope(board)
+}
+
 #[derive(Clone, Copy)]
 struct ReadyFilters<'a> {
     parent: Option<&'a str>,
@@ -408,8 +432,9 @@ struct ReadyFilters<'a> {
     excluded: &'a [String],
     types: &'a [TaskType],
     excluded_types: &'a [TaskType],
-    areas: &'a [TaskArea],
-    excluded_areas: &'a [TaskArea],
+    areas: &'a [String],
+    excluded_areas: &'a [String],
+    scope: Option<&'a str>,
 }
 
 fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Task> {
@@ -421,7 +446,11 @@ fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Tas
         excluded_types,
         areas,
         excluded_areas,
+        scope,
     } = filters;
+    if let Some(scope) = scope {
+        ready.retain(|task| task.front.repo.as_deref().is_none_or(|repo| repo == scope));
+    }
     if let Some(parent) = parent {
         ready.retain(|task| task.front.parent.as_deref() == Some(parent));
     }
@@ -438,14 +467,20 @@ fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Tas
         ready.retain(|task| !excluded_types.contains(&task.front.task_type));
     }
     if !areas.is_empty() {
-        ready.retain(|task| task.front.area.is_some_and(|area| areas.contains(&area)));
+        ready.retain(|task| {
+            task.front
+                .area
+                .as_deref()
+                .is_some_and(|area| areas.iter().any(|candidate| candidate == area))
+        });
     }
     if !excluded_areas.is_empty() {
         ready.retain(|task| {
             !task
                 .front
                 .area
-                .is_some_and(|area| excluded_areas.contains(&area))
+                .as_deref()
+                .is_some_and(|area| excluded_areas.iter().any(|candidate| candidate == area))
         });
     }
     ready

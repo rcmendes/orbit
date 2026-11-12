@@ -344,8 +344,8 @@ fn plan_content(board: &Board) -> Result<ContentStats> {
             {
                 stats.repo_labels += 1;
             }
-            if let Some(area) = task.front.area {
-                areas.insert(area.as_str().to_string());
+            if let Some(area) = &task.front.area {
+                areas.insert(area.clone());
             }
         }
     }
@@ -726,8 +726,8 @@ fn migrate_content(root: &Path) -> Result<ContentStats> {
                 stats.repo_labels += 1;
                 changed = true;
             }
-            if let Some(area) = task.front.area {
-                areas.insert(area.as_str().to_string());
+            if let Some(area) = &task.front.area {
+                areas.insert(area.clone());
             }
 
             if changed {

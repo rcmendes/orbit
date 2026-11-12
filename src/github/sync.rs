@@ -50,7 +50,7 @@ pub fn plan_sync(
     let orbit_title = view.task.front.title.clone();
     let orbit_body = view.task.body.clone();
     let orbit_labels = user_labels(&view.task.front.labels);
-    let orbit_area = view.task.front.area.map(|area| area.as_str().to_string());
+    let orbit_area = view.task.front.area.clone();
     let orbit_verification = view.task.front.verification.clone();
     let orbit_status = view.task.front.status;
 
@@ -108,7 +108,7 @@ pub fn baseline_from(view: OrbitSyncView<'_>, issue: &IssueSnapshot) -> GitHubSy
         title: issue.title.clone(),
         body: issue.body.clone(),
         labels: user_labels(&issue.labels),
-        area: view.task.front.area.map(|area| area.as_str().to_string()),
+        area: view.task.front.area.clone(),
         verification: view.task.front.verification.clone(),
         status: Some(view.task.front.status),
         issue_state: Some(issue.state),
@@ -282,7 +282,7 @@ pub fn validate_orbit_metadata(task: &Task) -> Result<(), crate::error::OrbitErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{TaskArea, TaskFrontmatter, TaskType, default_priority};
+    use crate::task::{TaskFrontmatter, TaskType, default_priority};
     use chrono::TimeZone;
     use std::collections::BTreeMap;
 
@@ -304,7 +304,7 @@ mod tests {
                 stray_claim_times: None,
                 created_at: now,
                 updated_at: now,
-                area: Some(TaskArea::Cli),
+                area: Some("cli".to_string()),
                 verification: Some("cargo test".into()),
                 github: Some(GitHubLink {
                     repo: "acme/app".into(),

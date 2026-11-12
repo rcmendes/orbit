@@ -657,9 +657,9 @@ fn merge_task(
         outcome,
     );
     let area = pick(
-        base_front.map(|f| f.area),
-        local.front.area,
-        remote.front.area,
+        base_front.map(|f| f.area.clone()),
+        local.front.area.clone(),
+        remote.front.area.clone(),
         &key("area"),
         outcome,
     );

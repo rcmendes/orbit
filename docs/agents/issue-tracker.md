@@ -105,8 +105,8 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
 - Never use `done --force` or `cancel --force` on a Parent Task with open
   SubTasks: it cancels every open child. Close or cancel the children first, or
   leave the parent open until the family is finished.
-- In a multi-Repository Board, add `--repo <name>` to `orbit ready` or
-  `orbit list` to narrow the queue to one Repository.
+- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus
+  Board-wide Tasks; `--all` widens to the whole Board.
 
 ## Labels
 
@@ -224,7 +224,8 @@ use the structured workflow in
 orbit show <ID> --json
 ```
 
-Use `orbit list --all --json` to inspect the board. `orbit ready --json` lists only
+Use `orbit list --all --include-closed --json` to inspect the whole board.
+`orbit ready --json` lists only
 unclaimed tasks whose dependencies are done or cancelled and which carry no hold
 label.
 

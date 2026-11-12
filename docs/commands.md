@@ -412,9 +412,11 @@ use `done --force` or `cancel --force` on a spec parent with open tickets: it
 cancels them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md) and
 [ADR 0010](./adr/0010-structural-type-field.md).
 
-`--area` sets an optional controlled classification (`board`, `cli`, `mcp`,
-`setup`, `docs`, or `release`). Filter with `orbit list --area cli` or
-`orbit ready --exclude-area docs`. `--verification` stores concise checks or
+`--area` sets an optional work-area slug (`cli`, `payments`, `mobile-api`, ...).
+Each Board may restrict values through `board.areas` in `config.toml`; when the
+list is empty any short lowercase slug is accepted. Filter with
+`orbit list --area cli` or `orbit ready --exclude-area docs`.
+`--verification` stores concise checks or
 commands for agents; shared project defaults live in
 [`docs/agents/project-guidance.md`](./agents/project-guidance.md).
 
@@ -489,8 +491,11 @@ orbit comment list orb-a7b2c9
 ### `orbit list` — inspect the board
 
 Lists tasks with combinable filters. Done and cancelled tasks are hidden by
-default; pass `--all`, or name a terminal status with `--status`, to include
-them. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `ISSUE`,
+default; pass `--include-closed`, or name a terminal status with `--status`, to
+include them. Inside a member Repository or one of its worktrees the list is
+scoped to that Repository's Tasks plus Board-wide Tasks (tasks with no `repo`);
+`--all` widens it to the whole Board, and at the Board's root there is no
+scoping. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `ISSUE`,
 `TITLE`, `LABELS`, and `CLAIMED BY` columns; titles longer than 60 characters
 are shortened with an ellipsis. `ISSUE` is `-` for a Local Task, `#N` for a
 Linked Task, and `~#N` for detached provenance. Root Tasks are always ordered by
@@ -511,13 +516,14 @@ orbit list --label needs-triage
 orbit list --label repo:api --label ready-for-agent   # every label must match
 orbit list --repo api                               # shorthand for repo:api
 orbit list --status in_progress --claimed-by claude
-orbit list --status done            # closed work, without --all
+orbit list --status done            # closed work, without --include-closed
 orbit list --unlabeled
 orbit list --parent orb-a7b2c9      # only this feature's SubTasks
 orbit list --type epic              # only epics and specs
 orbit list --group                  # parents and SubTasks in one outlined table
 orbit list --exclude-type epic      # hide spec/epic containers
-orbit list --all --json
+orbit list --include-closed --json
+orbit list --all --json             # every Repository, from inside a member
 ```
 
 Human output with `--group` looks like this:
@@ -564,6 +570,10 @@ With `--claim`, the first task is claimed atomically in the same command and
 moves to `in_progress` with a lease. When nothing is ready, the command succeeds
 with `data: null` and `meta.reason: "NO_READY_TASKS"`. `--parent` scopes the
 queue to one feature's SubTasks.
+
+Inside a member Repository or one of its worktrees the queue is scoped to that
+Repository's Tasks plus Board-wide Tasks; `--all` widens it to the whole Board,
+and `--claim` only ever takes a Task inside the scope.
 
 **Good fit:** an agent asks what to do next, a supervisor polls for idle work, or
 a worker wants to take exactly one task without racing another agent.

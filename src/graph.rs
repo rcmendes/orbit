@@ -652,7 +652,7 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
             .checkpoint
             .as_ref()
             .map(|_| task.front.status.is_terminal()),
-        "area": task.front.area,
+        "area": task.front.area.as_deref(),
         "verification": task.front.verification,
         "github": task.front.github,
         "claimed_by": task.holder(),

@@ -45,18 +45,92 @@ fn area_and_verification_round_trip_through_add_show_and_update() {
 }
 
 #[test]
-fn invalid_area_is_rejected_on_add_and_update() {
+fn invalid_area_is_rejected_on_add_update_and_filters() {
     let repo = TestRepo::new();
     repo.init();
 
-    let (status, value) = repo.json(&["add", "Bad area", "--area", "unknown", "--json"]);
+    // Area is a free-form slug: "Not An Area!" is not one.
+    let (status, value) = repo.json(&["add", "Bad area", "--area", "Not An Area!", "--json"]);
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "INVALID_AREA");
 
     let id = repo.add("Task", &[]);
-    let (status, value) = repo.json(&["update", id.as_str(), "--area", "unknown", "--json"]);
+    let (status, value) = repo.json(&["update", id.as_str(), "--area", "Bad Area", "--json"]);
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "INVALID_AREA");
+
+    let (status, value) = repo.json(&["list", "--area", "Bad Area", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_AREA");
+}
+
+#[test]
+fn area_accepts_any_lowercase_slug_when_the_board_defines_no_areas() {
+    let repo = TestRepo::new();
+    repo.init();
+
+    let id = repo.add("Mobile work", &["--area", "mobile-api"]);
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["area"], "mobile-api");
+
+    let list = repo.ok_json(&["list", "--area", "mobile-api", "--json"]);
+    assert_eq!(list["data"]["count"], 1);
+    assert_eq!(list["data"]["tasks"][0]["id"], id.as_str());
+}
+
+/// Writes `areas = [...]` into the Board's `[board]` config table.
+fn configure_board_areas(repo: &TestRepo, areas: &str) {
+    let path = repo.board_path().join("config.toml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    let config = config.replacen("[board]\n", &format!("[board]\nareas = {areas}\n"), 1);
+    std::fs::write(&path, config).unwrap();
+}
+
+#[test]
+fn board_areas_config_restricts_area_values() {
+    let repo = TestRepo::new();
+    repo.init();
+    configure_board_areas(&repo, r#"["cli", "docs"]"#);
+
+    // A configured Area works; casing normalizes to the lowercase slug.
+    let id = repo.add("Docs work", &["--area", "DOCS"]);
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["area"], "docs");
+
+    // A valid slug outside the Board's list is rejected.
+    let (status, value) = repo.json(&["add", "MCP work", "--area", "mcp", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_AREA");
+
+    let (status, value) = repo.json(&["update", id.as_str(), "--area", "mcp", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_AREA");
+
+    // Filters are validated against the same list.
+    let (status, value) = repo.json(&["list", "--area", "mcp", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_AREA");
+    let listed = repo.ok_json(&["list", "--area", "docs", "--json"]);
+    assert_eq!(listed["data"]["count"], 1);
+}
+
+#[test]
+fn task_files_accept_free_form_area_slugs() {
+    let repo = TestRepo::new();
+    repo.init();
+
+    let id = repo.add("Custom area", &["--area", "payments"]);
+    let content = repo.read_task(&id);
+    assert!(content.contains("area: payments"), "{content}");
+    let show = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(show["data"]["area"], "payments");
+
+    // A hand-edited value that is not a slug is corrupt, not silently kept.
+    let content = content.replace("area: payments", "area: Not A Slug!");
+    repo.write_task(&id, &content);
+    let (status, value) = repo.json(&["list", "--json"]);
+    assert_eq!(status, 1, "{value}");
+    assert_eq!(value["error"]["code"], "CORRUPT_TASK");
 }
 
 #[test]

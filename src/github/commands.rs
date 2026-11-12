@@ -1011,7 +1011,8 @@ fn cmd_setup(board: &Board, args: GitHubSetupArgs) -> Result<crate::output::Comm
     let org = board.config.github.require_organization()?;
     let client = client_from_env()?;
     let setup = if args.create_fields {
-        client.create_org_fields(org, &board.config.github.issue_fields)?
+        let area_options = super::client::area_field_options(&board.config.board.areas);
+        client.create_org_fields(org, &board.config.github.issue_fields, &area_options)?
     } else {
         client.validate_org_fields(org, &board.config.github.issue_fields)?
     };
@@ -1258,7 +1259,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                 "title": task.front.title,
                 "body": task.body,
                 "labels": task.front.labels,
-                "area": task.front.area.map(|area| area.as_str()),
+                "area": task.front.area.as_deref(),
                 "verification": task.front.verification,
                 "status": task.front.status,
                 "issue_state": issue_state,
@@ -1278,7 +1279,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             "title": task.front.title,
             "body": task.body,
             "labels": task.front.labels,
-            "area": task.front.area.map(|area| area.as_str()),
+            "area": task.front.area.as_deref(),
             "verification": task.front.verification,
             "status": task.front.status,
             "issue_state": issue_state,
@@ -1308,7 +1309,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                     "title": task.front.title,
                     "body": task.body,
                     "labels": task.front.labels,
-                    "area": task.front.area.map(|area| area.as_str()),
+                    "area": task.front.area.as_deref(),
                     "verification": task.front.verification,
                     "status": task.front.status,
                     "issue_state": issue_state,
@@ -1395,7 +1396,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             "title": task.front.title,
             "body": task.body,
             "labels": task.front.labels,
-            "area": task.front.area.map(|area| area.as_str()),
+            "area": task.front.area.as_deref(),
             "verification": task.front.verification,
             "status": task.front.status,
             "issue_state": issue_state,
@@ -1463,10 +1464,7 @@ fn format_create_preview(task: &Task, repository: &str, issue_state: &str) -> St
         } else {
             task.front.labels.join(", ")
         },
-        task.front
-            .area
-            .map(|area| area.as_str())
-            .unwrap_or("(none)"),
+        task.front.area.as_deref().unwrap_or("(none)"),
         task.front.verification.as_deref().unwrap_or("(none)"),
         task.front.status.as_str(),
         issue_state,

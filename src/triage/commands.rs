@@ -9,7 +9,7 @@ use crate::board::Board;
 use crate::cli::{TriageApplyArgs, TriageArgs, TriageCommand, TriageReviewArgs};
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{Graph, LoadMode};
-use crate::task::{Task, TaskArea};
+use crate::task::Task;
 use crate::triage::guidance::{guidance_missing_note, read_project_guidance};
 use crate::triage::labels::CANONICAL_TRIAGE_LABELS;
 use crate::triage::proposal::TriageProposal;
@@ -43,18 +43,24 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
         .as_ref()
         .map(|path| path.display().to_string());
 
-    let areas: Vec<&str> = TaskArea::all().iter().map(|area| area.as_str()).collect();
+    // An empty `board.areas` means the Board defines no Areas, so any
+    // lowercase slug is allowed; `null` tells the agent there is no list.
+    let allowed_areas = if board.config.board.areas.is_empty() {
+        serde_json::Value::Null
+    } else {
+        json!(board.config.board.areas)
+    };
     let data = json!({
         "id": task.id,
         "github": link,
         "current": {
-            "area": task.front.area.map(|area| area.as_str()),
+            "area": task.front.area.as_deref(),
             "verification": task.front.verification,
             "labels": task.front.labels,
         },
         "project_guidance": guidance,
         "project_guidance_path": guidance_path_json,
-        "allowed_areas": areas,
+        "allowed_areas": allowed_areas,
         "canonical_labels": CANONICAL_TRIAGE_LABELS,
         "metadata_capabilities": {
             "area": !board.config.github.mode.is_basic(),
@@ -73,7 +79,7 @@ fn cmd_review(
     args: TriageReviewArgs,
     json_mode: bool,
 ) -> Result<crate::output::CommandOutput> {
-    let proposal = load_proposal(&args.proposal_file)
+    let proposal = load_proposal(board, &args.proposal_file)
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
@@ -136,7 +142,7 @@ fn cmd_apply(board: &Board, args: TriageApplyArgs) -> Result<crate::output::Comm
         })));
     }
 
-    let proposal = load_proposal(&args.proposal_file)
+    let proposal = load_proposal(board, &args.proposal_file)
         .map_err(|error| with_proposal_context(error, &args.task, &args.proposal_file))?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.task)?;
@@ -315,7 +321,7 @@ fn reject_basic_structured_changes(board: &Board, changes: &serde_json::Value) -
     Ok(())
 }
 
-fn load_proposal(path: &Path) -> Result<TriageProposal> {
+fn load_proposal(board: &Board, path: &Path) -> Result<TriageProposal> {
     let raw = if path.as_os_str() == "-" {
         let mut raw = String::new();
         std::io::stdin()
@@ -328,7 +334,7 @@ fn load_proposal(path: &Path) -> Result<TriageProposal> {
         })?
     };
     let mut proposal = TriageProposal::parse_json(&raw)?;
-    proposal.normalize()?;
+    proposal.normalize(&board.config.board.areas)?;
     Ok(proposal)
 }
 
@@ -409,7 +415,7 @@ mod tests {
             r#"{"uncertainty":"The issue has no reproduction details."}"#,
         )
         .unwrap();
-        uncertain.normalize().unwrap();
+        uncertain.normalize(&[]).unwrap();
         let uncertainty_preview = render_preview("orb-123", &uncertain, &serde_json::json!({}));
         assert!(
             uncertainty_preview.contains("Uncertainty: The issue has no reproduction details.")
@@ -420,7 +426,7 @@ mod tests {
         );
 
         let mut satisfied = TriageProposal::parse_json(r#"{"area":"cli"}"#).unwrap();
-        satisfied.normalize().unwrap();
+        satisfied.normalize(&[]).unwrap();
         let noop_preview = render_preview("orb-123", &satisfied, &serde_json::json!({}));
         assert!(noop_preview.contains("No metadata changes: the proposal is already satisfied."));
     }

@@ -311,7 +311,7 @@ fn resolve_sync_conflicts(
                 plan.apply_labels = Some(issue.labels.clone())
             }
             ("area", SyncResolution::PreferOrbit) => {
-                plan.push_area = Some(task.front.area.map(|area| area.as_str().to_string()));
+                plan.push_area = Some(task.front.area.clone());
             }
             ("area", SyncResolution::PreferGitHub) => plan.apply_area = Some(issue.area.clone()),
             ("verification", SyncResolution::PreferOrbit) => {
@@ -465,10 +465,7 @@ pub(crate) fn require_repository_available(board: &Board, repository: &str) -> R
 }
 
 pub(crate) fn reject_basic_metadata(task: &Task) -> Result<()> {
-    let fields = [
-        task.front.area.map(|area| area.as_str().to_string()),
-        task.front.verification.clone(),
-    ];
+    let fields = [task.front.area.clone(), task.front.verification.clone()];
     let present: Vec<_> = ["area", "verification"]
         .into_iter()
         .zip(fields)
@@ -566,7 +563,7 @@ pub(crate) fn create_and_link(
             title: task.front.title.clone(),
             body: task.body.clone(),
             labels: super::status::labels_for_status(&task.front.labels, task.front.status),
-            area: task.front.area.map(|area| area.as_str().to_string()),
+            area: task.front.area.clone(),
             verification: task.front.verification.clone(),
             organization: board.config.github.organization.clone(),
             issue_fields: board.config.github.issue_fields.clone(),

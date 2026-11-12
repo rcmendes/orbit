@@ -460,6 +460,20 @@ fn diagnose_tasks(
         ));
     }
 
+    // Links on a Board with no Remote Tracker configuration are inert
+    // provenance: they stay untouched, nothing calls the tracker, and doctor
+    // says so once instead of per Task.
+    let linked = graph
+        .tasks
+        .values()
+        .filter(|task| crate::remote::link::link_view(task).is_some())
+        .count();
+    if linked > 0 && !crate::remote::configured(board) {
+        warnings.push(format!(
+            "{linked} task(s) carry Remote Issue links but no Remote Tracker is configured; the links are kept untouched and nothing syncs — configure a Remote Project to resume syncing"
+        ));
+    }
+
     Ok(())
 }
 

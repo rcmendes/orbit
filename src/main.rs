@@ -1,9 +1,8 @@
-use clap::Parser;
-use orbit_tracker::cli::Cli;
+use orbit_tracker::cli;
 use orbit_tracker::{commands, output};
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = cli::parse();
     let json_mode = cli.json;
 
     if matches!(&cli.command, orbit_tracker::cli::Command::Mcp) {

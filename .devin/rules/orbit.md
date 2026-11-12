@@ -8,7 +8,7 @@ trigger: always_on
 
 Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
 
-From any child repository in a Workspace, these commands resolve the shared Workspace Board across the Git boundary. Tasks, dependencies, and claims are shared across its repositories.
+From any member Repository, these commands resolve the shared Board across the Git boundary. Tasks, dependencies, and claims are shared across its Repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
@@ -24,7 +24,7 @@ From any child repository in a Workspace, these commands resolve the shared Work
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.
 - Run `orbit prime` at session start for ready work, stale claims, and counts.
-- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
+- `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
 
 Parse the JSON envelope: `ok`, `data`, `error.code`, and `error.retryable`. If a command returns `LOCKED`, retry after a short backoff. Never infer state from prose.
 <!-- END ORBIT INTEGRATION -->

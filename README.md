@@ -241,7 +241,7 @@ $ orbit list --group
 ╰───────────────────┴────────┴────┴──────┴───────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
-Columns are `ID`, `STATUS`, `P` (priority), `TYPE`, `ISSUE`, `TITLE`, `LABELS`, and `CLAIMED BY`. `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance; `--linked` and `--local` filter on it. Root Tasks are ordered by priority (then creation time and ID), and each Parent Task is followed by its SubTasks, also ordered by priority; `--group` draws that hierarchy and puts tasks without a parent in a final `No parent` section. Long titles are shortened to 60 characters in the table; `--json` always returns the full title and every field.
+Columns are `ID`, `STATUS`, `P` (priority), `TYPE`, `TITLE`, `LABELS`, and `CLAIMED BY`, plus an `ISSUE` column when the Board has remote material (a configured Remote Project or any Task link): `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance; `--linked` and `--local` filter on it and appear in `--help` only then. Root Tasks are ordered by priority (then creation time and ID), and each Parent Task is followed by its SubTasks, also ordered by priority; `--group` draws that hierarchy and puts tasks without a parent in a final `No parent` section. Long titles are shortened to 60 characters in the table; `--json` always returns the full title and every field.
 
 For one feature, `orbit tree` shows the parent, its children, progress, and blockers:
 

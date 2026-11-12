@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
@@ -23,8 +23,9 @@ pub struct Cli {
     #[arg(global = true, long, env = "ORBIT_DIR", value_name = "PATH")]
     pub dir: Option<PathBuf>,
 
-    /// Do not auto-push task changes to GitHub for this command.
-    #[arg(global = true, long = "no-sync")]
+    /// Do not auto-push task changes to the Remote Tracker or sync the Board
+    /// host for this command. Hidden from help; still functional.
+    #[arg(global = true, long = "no-sync", hide = true)]
     pub no_sync: bool,
 
     #[command(subcommand)]
@@ -424,11 +425,11 @@ pub struct ListArgs {
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
-    /// Only Tasks with an active GitHub Issue link.
+    /// Only Tasks with an active Remote Issue link.
     #[arg(long, conflicts_with = "local")]
     pub linked: bool,
 
-    /// Only Tasks without an active GitHub Issue link. Includes detached provenance.
+    /// Only Tasks without an active Remote Issue link. Includes detached provenance.
     #[arg(long, conflicts_with = "linked")]
     pub local: bool,
 
@@ -1109,4 +1110,57 @@ pub struct BoardSyncArgs {
     /// Resolve a field conflict as `FIELD=local` or `FIELD=host`. Repeat as needed.
     #[arg(long = "resolve", value_name = "FIELD=local|host", action = clap::ArgAction::Append)]
     pub resolutions: Vec<String>,
+}
+
+/// Parse the process arguments. `orbit list --help` (and `orbit help list`)
+/// drops the Remote Tracker flags and remote column docs when the resolved
+/// Board has no Remote material; the flags themselves keep working.
+pub fn parse() -> Cli {
+    let mut command = Cli::command();
+    let (list_help, dir) = pre_scan();
+    if list_help && !crate::remote::details_visible_for(dir.as_deref()) {
+        command = command.mut_subcommand("list", |list| {
+            list.mut_arg("linked", |arg| arg.hide(true))
+                .mut_arg("local", |arg| arg.hide(true))
+                .long_about(help::LIST_LONG_UNCONNECTED)
+                .after_long_help(help::LIST_EXAMPLES_UNCONNECTED)
+        });
+    }
+    let matches = command.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+}
+
+/// Best-effort scan of the raw arguments for a `list` help request and the
+/// `--dir`/`ORBIT_DIR` override, so help can hide Remote Tracker material
+/// before clap renders it. Anything clap would reject is left for clap to
+/// report; a missed detection only means the full help is shown.
+fn pre_scan() -> (bool, Option<PathBuf>) {
+    let mut dir = std::env::var_os("ORBIT_DIR").map(PathBuf::from);
+    let mut subcommand: Option<String> = None;
+    let mut list_help = false;
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        let arg = arg.to_string_lossy().into_owned();
+        if arg == "--dir" {
+            if let Some(value) = args.next() {
+                dir = Some(PathBuf::from(value));
+            }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--dir=") {
+            dir = Some(PathBuf::from(value));
+            continue;
+        }
+        let Some(name) = subcommand.as_deref() else {
+            if !arg.starts_with('-') {
+                subcommand = Some(arg);
+            }
+            continue;
+        };
+        match (name, arg.as_str()) {
+            ("list", "--help" | "-h") | ("help", "list") => list_help = true,
+            _ => {}
+        }
+    }
+    (list_help, dir)
 }

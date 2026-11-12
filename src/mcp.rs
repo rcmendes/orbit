@@ -173,8 +173,8 @@ fn tool_definitions() -> Vec<Value> {
                 "exclude_areas": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these work-area slugs." },
                 "all": { "type": "boolean", "description": "Include tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." },
                 "include_closed": { "type": "boolean", "description": "Include done and cancelled tasks." },
-                "linked": { "type": "boolean", "description": "Only Tasks with an active GitHub Issue link." },
-                "local": { "type": "boolean", "description": "Only Tasks without an active GitHub Issue link; includes detached provenance." }
+                "linked": { "type": "boolean", "description": "Only Tasks with an active Remote Issue link." },
+                "local": { "type": "boolean", "description": "Only Tasks without an active Remote Issue link; includes detached provenance." }
             }),
             &[],
         ),

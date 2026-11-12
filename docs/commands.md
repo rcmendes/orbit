@@ -28,7 +28,7 @@ contract.
 | `--json` | Print exactly one JSON object on stdout, including errors. |
 | `--dir <PATH>` | Use a Board anchor or a specific Board directory for this command. |
 | `ORBIT_DIR` | Environment equivalent of `--dir`. |
-| `--no-sync` | Skip GitHub auto-push and Board host auto-sync for this command. `ORBIT_NO_AUTO_SYNC=1` (or `ORBIT_NO_HOST_SYNC=1`) does the same for a process. Explicit `orbit github sync` and `orbit board sync` are unaffected. |
+| `--no-sync` | Skip Remote Tracker auto-push and Board host auto-sync for this command (hidden from `--help`; still accepted). `ORBIT_NO_AUTO_SYNC=1` (or `ORBIT_NO_HOST_SYNC=1`) does the same for a process. Explicit `orbit github sync` and `orbit board sync` are unaffected. |
 
 Exit codes are `0` for success, `1` for a domain failure (for example
 `DEPENDENCY_BLOCKED` or a failing `doctor`), and `2` for a usage error.
@@ -495,10 +495,13 @@ default; pass `--include-closed`, or name a terminal status with `--status`, to
 include them. Inside a member Repository or one of its worktrees the list is
 scoped to that Repository's Tasks plus Board-wide Tasks (tasks with no `repo`);
 `--all` widens it to the whole Board, and at the Board's root there is no
-scoping. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `ISSUE`,
+scoping. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`,
 `TITLE`, `LABELS`, and `CLAIMED BY` columns; titles longer than 60 characters
-are shortened with an ellipsis. `ISSUE` is `-` for a Local Task, `#N` for a
-Linked Task, and `~#N` for detached provenance. Root Tasks are always ordered by
+are shortened with an ellipsis. When the Board has remote material — a
+configured Remote Project or any Task carrying a Remote link — an `ISSUE`
+column appears between `TYPE` and `TITLE`; it is `-` for a Local Task, `#N`
+for a Linked Task, and `~#N` for detached provenance, and a local-only Board
+omits the column entirely. Root Tasks are always ordered by
 priority, then creation time and ID; each Parent Task is followed by its
 SubTasks, also ordered by priority. `--group` draws that hierarchy as one
 outlined table: a banner for each Parent Task, its SubTasks underneath, and a
@@ -510,7 +513,7 @@ in-progress work, or the full history.
 
 ```bash
 orbit list
-orbit list --linked                               # only Tasks linked to a GitHub Issue
+orbit list --linked                               # only Tasks linked to a Remote Issue
 orbit list --local                                # only Tasks without an active link
 orbit list --label needs-triage
 orbit list --label repo:api --label ready-for-agent   # every label must match
@@ -544,9 +547,11 @@ The table is intentionally not a machine interface. Column widths grow with the
 data, labels are joined with commas, a claim holder appears in the last column,
 and long titles are truncated. Parse `--json` instead.
 
-`--linked` keeps only Tasks with an active GitHub Issue link; `--local` keeps
+`--linked` keeps only Tasks with an active Remote Issue link; `--local` keeps
 only Tasks without one, including detached provenance. They are mutually
-exclusive. `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
+exclusive. The `ISSUE` column and both flags appear in human output and
+`--help` only when the Board has remote material; on a local-only Board they
+are hidden but still accepted. `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
 any listed shape. `--label` is repeatable and every label must match;
 `--exclude-label` is repeatable and hides a task carrying any of the named labels.
 `--repo NAME` is shorthand for `--label repo:NAME`. Parent groups follow the
@@ -596,7 +601,10 @@ the next claim starts with the handoff context.
 ### `orbit show` — load one ticket
 
 Prints the full task: body, labels, dependencies, kind, type, parent, SubTasks,
-dependents, claim state, checkpoint, and comments. `--json` is the form an agent
+dependents, claim state, checkpoint, and comments. A `github:`/`remote:` line
+reports the Task's Remote Issue link only when the Board has remote material
+or the Task itself carries one; a connected Board shows `github: -` for an
+unlinked Task. `--json` is the form an agent
 should load before starting work. A terminal task keeps its latest checkpoint as
 archived history, marked by `checkpoint_archived: true`.
 

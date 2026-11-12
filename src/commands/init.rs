@@ -36,6 +36,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         ));
     }
     let global_dir = home.as_ref().map(|home| home.join(".orbit"));
+    let visible_choice = VisibleChoice::from_args(&args.visible)?;
     let (requested_root, explicit_global) = if args.global {
         (global_dir.clone().expect("global home was checked"), true)
     } else if let Some(target) = args.target.as_deref() {
@@ -44,6 +45,21 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         (crate::board::resolve_external(dir)?, false)
     } else {
         (default_init_dir(&cwd)?, false)
+    };
+    // The implicit target is the repository's `.orbit` anchor; `--visible`
+    // means "the enclosing root", so resolve it one level up. An explicit
+    // `.orbit` target stays an error inside `init_layout`.
+    let requested_root = if matches!(visible_choice, VisibleChoice::Named(_))
+        && args.target.is_none()
+        && dir.is_none()
+        && requested_root.file_name().and_then(|name| name.to_str()) == Some(".orbit")
+    {
+        requested_root
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or(requested_root)
+    } else {
+        requested_root
     };
     let workspace_root = is_workspace_root(&requested_root);
     let setup_root = if workspace_root {
@@ -56,7 +72,6 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     // ADR 0019: the Board folder is a standalone repository. Hidden Boards
     // live at `<anchor>/.orbit/board`; a visible folder is anchored by the
     // `.orbit/board` pointer file instead.
-    let visible_choice = VisibleChoice::from_args(&args.visible)?;
     let (mut orbit_dir, mut board_root, mut visible_board) = init_layout(
         &requested_root,
         workspace_root,
@@ -189,11 +204,20 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         global,
     )?;
 
-    // `--host` / the host prompt: validate the host and, for a fresh Board,
-    // adopt an existing same-Slug host branch instead of publishing over it.
+    // `--host` / the host prompt: validate the host and, for a fresh or still
+    // empty Board, adopt an existing same-Slug host branch instead of
+    // publishing divergent history over it. `host_spec` is normalized to the
+    // value `board.host` stores (canonical paths, verbatim URLs/names).
+    let host_spec = host_spec
+        .map(|spec| crate::board_host::normalize_host_spec(&spec))
+        .transpose()?;
     let mut host_joined = false;
     if !args.print && let Some(spec) = &host_spec {
-        let outcome = crate::board_host::set_host(&board_root, spec, created)?;
+        let join = created
+            || Board::discover(Some(&board_root))
+                .and_then(|board| board.task_ids())
+                .is_ok_and(|ids| ids.is_empty());
+        let outcome = crate::board_host::set_host(&board_root, spec, join)?;
         host_joined = outcome.joined;
     }
 

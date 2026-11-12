@@ -102,6 +102,7 @@ pub struct SyncReport {
     pub unused_resolutions: Vec<String>,
 }
 
+#[derive(Clone)]
 struct ClaimNotice {
     task: String,
     body: String,
@@ -213,7 +214,6 @@ pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
 
     let merged_files = outcome.files.len();
     let notices: Vec<String> = outcome.notices.iter().map(|n| n.body.clone()).collect();
-    append_claim_comments(&mut outcome, &board.root)?;
     apply_files(&board.root, &outcome.files)?;
 
     git::stage_all(&board.root)?;
@@ -273,34 +273,6 @@ pub fn auto_after(board: &Board) -> Vec<String> {
         }
         Err(error) => vec![format!("BOARD_HOST_SYNC_FAILED: {}", error.message)],
     }
-}
-
-fn append_claim_comments(outcome: &mut MergeOutcome, root: &Path) -> Result<()> {
-    if outcome.notices.is_empty() {
-        return Ok(());
-    }
-    let now = Utc::now();
-    for notice in &outcome.notices {
-        let path = format!("comments/{}.md", notice.task);
-        // A sidecar deleted on both sides stays deleted.
-        if outcome.files.get(&path).is_some_and(Option::is_none) {
-            continue;
-        }
-        let existing = outcome
-            .files
-            .get(&path)
-            .and_then(|content| content.clone())
-            .unwrap_or_default();
-        let comment = Comment {
-            author: "orbit".to_string(),
-            created_at: now,
-            body: notice.body.clone(),
-        };
-        let merged = comment::append_comment(&existing, &notice.task, &comment);
-        outcome.files.insert(path, Some(merged));
-    }
-    let _ = root;
-    Ok(())
 }
 
 fn apply_files(root: &Path, files: &BTreeMap<String, Option<String>>) -> Result<()> {
@@ -810,9 +782,9 @@ fn merge_trees(
         resolve_path(&path, base_content, local_content, remote_content, &mut outcome)?;
     }
 
-    // Tell every claim loser on their Task's comment sidecar.
-    let notices = std::mem::take(&mut outcome.notices);
-    for notice in notices {
+    // Tell every claim loser on their Task's comment sidecar. The notices
+    // stay on the outcome so the report can surface them too.
+    for notice in outcome.notices.clone() {
         let path = format!("comments/{}.md", notice.task);
         if outcome.files.get(&path).is_some_and(Option::is_none) {
             continue; // sidecar deleted on both sides stays deleted

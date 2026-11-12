@@ -23,22 +23,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
     let in_repo = crate::git::is_git_repo(&cwd);
 
-    if args.global && dir.is_some() {
-        return Err(OrbitError::invalid_argument(
-            "--global cannot be combined with --dir or ORBIT_DIR",
-        ));
-    }
-
-    let home = resolve_home_dir().ok();
-    if args.global && home.is_none() {
-        return Err(OrbitError::config(
-            "HOME or USERPROFILE must be set for `orbit init --global`",
-        ));
-    }
-    let global_dir = home.as_ref().map(|home| home.join(".orbit"));
-    let (requested_root, explicit_global) = if args.global {
-        (global_dir.clone().expect("global home was checked"), true)
-    } else if let Some(target) = args.target.as_deref() {
+    let (requested_root, explicit_global) = if let Some(target) = args.target.as_deref() {
         (crate::board::resolve_external(target)?, false)
     } else if let Some(dir) = dir {
         (crate::board::resolve_external(dir)?, false)
@@ -56,12 +41,8 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     // ADR 0019: the Board folder is a standalone repository. Hidden Boards
     // live at `<anchor>/.orbit/board`; a visible folder is anchored by the
     // `.orbit/board` pointer file instead.
-    let (orbit_dir, mut board_root, mut visible_board) = init_layout(
-        &requested_root,
-        workspace_root,
-        explicit_global,
-        global_dir.as_deref(),
-    )?;
+    let (orbit_dir, mut board_root, mut visible_board) =
+        init_layout(&requested_root, workspace_root, explicit_global)?;
     // The Orbit folder may already anchor a Board: a hidden `.orbit/board`
     // directory or a `board` pointer file naming a visible folder. Reuse
     // whichever it resolves to instead of assuming the computed layout.
@@ -69,10 +50,18 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         board_root = resolved.root().to_path_buf();
         visible_board = matches!(resolved, crate::board::OrbitBoard::Visible { .. });
     }
-    let global = explicit_global
-        || global_dir
-            .as_ref()
-            .is_some_and(|global| global.join("board") == board_root);
+    // The global Board is an ordinary Board in the home directory; there is
+    // no distinct global layout.
+    let global = false;
+
+    // Parent-folder init: child repositories under the anchor may anchor
+    // their own Boards. Their histories merge into the new Board and the
+    // children stay on disk as backups under `.orbit/backups/`.
+    let merge_children = if workspace_root {
+        child_boards(&requested_root, &board_root)?
+    } else {
+        Vec::new()
+    };
 
     if workspace_root {
         validate_workspace_layout(&requested_root)?;
@@ -125,7 +114,6 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         }),
         args.slug.as_deref(),
         args.print,
-        global,
     )?;
 
     if !args.print {
@@ -148,6 +136,12 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         let cache = orbit_dir.join("cache");
         std::fs::create_dir_all(&cache)
             .map_err(|error| OrbitError::io(format!("create {}", cache.display()), error))?;
+    }
+
+    if !args.print && !merge_children.is_empty() {
+        let board = Board::at_root(board_root.clone(), Vec::new())?;
+        let notes = apply_child_merge(&requested_root, &board, &merge_children)?;
+        warnings.extend(notes);
     }
 
     // A Board folder inside a Git working tree is hidden only through
@@ -235,6 +229,13 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
             "agents": clients.iter().map(|client| client.name()).collect::<Vec<_>>(),
             "portable_mcp": reported_portable_mcp,
             "files": files,
+            "merge": {
+                "children": merge_children.iter().map(|child| json!({
+                    "repository": child.repository,
+                    "board": child.board,
+                })).collect::<Vec<_>>(),
+                "applied": !args.print && !merge_children.is_empty(),
+            },
         }),
         human,
     );
@@ -455,7 +456,6 @@ fn run_init(
     slug_root: Option<&Path>,
     slug_arg: Option<&str>,
     print: bool,
-    global: bool,
 ) -> Result<InitTarget> {
     if Board::is_board(board_root) {
         let board = Board::discover(Some(board_root))?;
@@ -470,7 +470,7 @@ fn run_init(
         });
     }
 
-    if print && let Some(existing) = Board::conflicting_board_for(board_root, global)? {
+    if print && let Some(existing) = Board::conflicting_board_for(board_root)? {
         return Err(crate::board::already_initialized(&existing));
     }
 
@@ -512,15 +512,8 @@ fn run_init(
 fn init_layout(
     requested: &Path,
     workspace_root: bool,
-    global: bool,
-    global_dir: Option<&Path>,
+    _explicit_global: bool,
 ) -> Result<(PathBuf, PathBuf, bool)> {
-    if global {
-        let orbit = global_dir
-            .ok_or_else(|| OrbitError::config("HOME or USERPROFILE is not set"))?
-            .to_path_buf();
-        return Ok((orbit.clone(), orbit.join("board"), false));
-    }
     // An Orbit folder target anchors a hidden `.orbit/board` Board.
     if requested.file_name().and_then(|name| name.to_str()) == Some(".orbit") {
         return Ok((requested.to_path_buf(), requested.join("board"), false));
@@ -589,19 +582,16 @@ fn init_layout(
 
 fn default_init_dir(cwd: &Path) -> Result<std::path::PathBuf> {
     let discovery = Board::discovery(None);
-    if discovery.source == crate::board::DiscoverySource::Workspace
-        && let Some(board) = discovery.root
+    // Inside a Board's anchor folder (a non-Git directory holding `.orbit`),
+    // re-initialize that anchor so `orbit init` reuses or creates its Board.
+    if let Some(anchor) = discovery
+        .orbit_dir
+        .as_ref()
+        .and_then(|orbit| orbit.parent())
+        && crate::git::toplevel_containing(anchor).is_none()
+        && anchor != cwd
     {
-        // The Workspace root is the Orbit folder's parent.
-        let workspace = discovery
-            .orbit_dir
-            .as_ref()
-            .and_then(|orbit| orbit.parent())
-            .or_else(|| board.parent().and_then(Path::parent))
-            .map(|path| path.to_path_buf());
-        if let Some(workspace) = workspace {
-            return Ok(workspace);
-        }
+        return Ok(anchor.to_path_buf());
     }
     let Ok(repo_root) = crate::git::repo_root() else {
         return Ok(cwd.to_path_buf());
@@ -643,7 +633,7 @@ fn validate_workspace_layout(workspace: &Path) -> Result<()> {
         let entry =
             entry.map_err(|error| OrbitError::io(format!("read {}", orbit.display()), error))?;
         let name = entry.file_name();
-        if name != "board" && name != "cache" && name != "workspace-migration.lock" {
+        if name != "board" && name != "cache" && name != "backups" {
             return Err(crate::board::already_initialized(&entry.path()));
         }
     }
@@ -658,15 +648,6 @@ fn validate_workspace_layout(workspace: &Path) -> Result<()> {
         return Err(crate::board::already_initialized(&cache));
     }
     Ok(())
-}
-
-fn resolve_home_dir() -> Result<std::path::PathBuf> {
-    crate::git::home_dir()
-        .ok_or_else(|| OrbitError::config("HOME or USERPROFILE is not set"))
-        .and_then(|home| {
-            dunce::canonicalize(&home)
-                .map_err(|error| OrbitError::io(format!("resolve {}", home.display()), error))
-        })
 }
 
 fn reconcile_prefix(board: &Board, slug: Option<&str>, print: bool) -> Result<String> {
@@ -692,4 +673,181 @@ fn reconcile_prefix(board: &Board, slug: Option<&str>, print: bool) -> Result<St
         board.set_prefix(&requested)?;
     }
     Ok(requested)
+}
+
+/// A child repository under the init anchor and the Board its `.orbit`
+/// folder resolves to.
+struct ChildBoard {
+    repository: PathBuf,
+    board: PathBuf,
+}
+
+/// Repositories below `anchor` that anchor their own Board. The walk does
+/// not descend into repositories, matching member-Repository discovery.
+fn child_boards(anchor: &Path, board_root: &Path) -> Result<Vec<ChildBoard>> {
+    let board_root = crate::repository::canonical_lenient(board_root);
+    let mut found = std::collections::BTreeMap::new();
+    let mut pending = vec![anchor.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        if directory.join(".git").exists() {
+            if let Some(toplevel) = crate::git::toplevel_containing(&directory)
+                && let Ok(common) = crate::git::common_dir_at(&toplevel)
+            {
+                let main = crate::board::main_checkout_for(&toplevel, &common);
+                if let Some(resolved) =
+                    crate::board::resolve_orbit_dir(&main.join(crate::board::ORBIT_DIR))
+                {
+                    let root = resolved.root();
+                    if Board::is_board(root)
+                        && crate::repository::canonical_lenient(root) != board_root
+                    {
+                        found.insert(
+                            crate::repository::canonical_lenient(&main),
+                            root.to_path_buf(),
+                        );
+                    }
+                }
+            }
+            continue;
+        }
+        for path in crate::git::child_directories(&directory, false)? {
+            let path = path?;
+            let name = path.file_name();
+            if name == Some(std::ffi::OsStr::new(crate::board::ORBIT_DIR))
+                || name == Some(std::ffi::OsStr::new(".git"))
+                || name == Some(std::ffi::OsStr::new(crate::board::LEGACY_BOARD_DIR))
+            {
+                continue;
+            }
+            pending.push(path);
+        }
+    }
+    Ok(found
+        .into_iter()
+        .map(|(repository, board)| ChildBoard { repository, board })
+        .collect())
+}
+
+/// Merge every child Board's Tasks into `board`, preserving Task IDs and
+/// recording the children's prefixes in `id.accepted_prefixes`. Each
+/// imported Task records its Repository in `repo`. Child Boards move to
+/// `<anchor>/.orbit/backups/` so discovery routes their repositories to the
+/// merged Board.
+fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> Result<Vec<String>> {
+    let mut notes = Vec::new();
+    for child in children {
+        let source = Board::at_root(child.board.clone(), Vec::new())?;
+        let repo_name = child
+            .repository
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| crate::task::is_valid_repo(name));
+        let mut imported = 0usize;
+        for id in source.task_ids()? {
+            let source_path = source.task_path(&id);
+            let content = std::fs::read(&source_path).map_err(|error| {
+                OrbitError::io(format!("read {}", source_path.display()), error)
+            })?;
+            let target = board.tasks_dir().join(format!("{id}.md"));
+            if target.exists() {
+                let existing = std::fs::read(&target)
+                    .map_err(|error| OrbitError::io(format!("read {}", target.display()), error))?;
+                if existing != content {
+                    return Err(OrbitError::config(format!(
+                        "Task {id} exists in both the new Board and {}; resolve the collision before merging",
+                        child.board.display()
+                    )));
+                }
+                continue;
+            }
+            let mut bytes = content;
+            if let Some(name) = repo_name.as_deref()
+                && let Ok(text) = std::str::from_utf8(&bytes)
+            {
+                let mut task = crate::task::parse_task(id.clone(), text)?;
+                if task.front.repo.is_none() {
+                    task.front.repo = Some(name.to_string());
+                    bytes = crate::task::render_task(&task)?.into_bytes();
+                }
+            }
+            crate::atomic::write_atomic(&target, &bytes, true)?;
+            imported += 1;
+        }
+        for id in source.comment_ids()? {
+            let source_path = source.comment_path(&id);
+            let target = board.comments_dir().join(format!("{id}.md"));
+            if target.exists() {
+                continue;
+            }
+            let bytes = std::fs::read(&source_path).map_err(|error| {
+                OrbitError::io(format!("read {}", source_path.display()), error)
+            })?;
+            crate::atomic::write_atomic(&target, &bytes, true)?;
+        }
+        let source_config = source.config.clone();
+        board.save_config("orbit: merge child Board prefixes", move |config| {
+            for prefix in std::iter::once(source_config.id.prefix.as_str()).chain(
+                source_config
+                    .id
+                    .accepted_prefixes
+                    .iter()
+                    .map(String::as_str),
+            ) {
+                if prefix != config.id.prefix
+                    && !config
+                        .id
+                        .accepted_prefixes
+                        .iter()
+                        .any(|known| known == prefix)
+                {
+                    config.id.accepted_prefixes.push(prefix.to_string());
+                }
+            }
+            Ok(())
+        })?;
+        notes.push(format!(
+            "merged {} into the Board ({} tasks imported)",
+            child.board.display(),
+            imported
+        ));
+    }
+
+    for child in children {
+        relocate_child_board(anchor, child)?;
+    }
+    board.commit("orbit: merge child Boards", false)?;
+    Ok(notes)
+}
+
+/// Move a merged child Board under `<anchor>/.orbit/backups/` so its
+/// repository discovers the merged Board on the next command.
+fn relocate_child_board(anchor: &Path, child: &ChildBoard) -> Result<()> {
+    let backups = anchor.join(crate::board::ORBIT_DIR).join("backups");
+    let name = child
+        .repository
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "board".to_string());
+    let mut target = backups.join(&name);
+    let mut suffix = 1;
+    while target.exists() {
+        target = backups.join(format!("{name}-{suffix}"));
+        suffix += 1;
+    }
+    std::fs::create_dir_all(&backups)
+        .map_err(|error| OrbitError::io(format!("create {}", backups.display()), error))?;
+    std::fs::rename(&child.board, &target).map_err(|error| {
+        OrbitError::io(
+            format!("move {} to {}", child.board.display(), target.display()),
+            error,
+        )
+    })?;
+    // A visible Board leaves a `board` pointer file behind; remove it so the
+    // repository's `.orbit` no longer resolves the moved Board.
+    let pointer = child.repository.join(crate::board::ORBIT_DIR).join("board");
+    if pointer.is_file() {
+        std::fs::remove_file(&pointer)
+            .map_err(|error| OrbitError::io(format!("remove {}", pointer.display()), error))?;
+    }
+    Ok(())
 }

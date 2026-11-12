@@ -22,11 +22,12 @@ pub const ABSOLUTE_BOARD_PATH: &str = "ABSOLUTE_BOARD_PATH";
 pub enum DiscoverySource {
     Dir,
     Link,
-    Workspace,
     Nearest,
     MainCheckout,
+    /// The retired `<git-common-dir>/orbit/board` store. Discovery no longer
+    /// selects it for ordinary commands; `orbit migrate` still resolves it
+    /// through the repository context so pre-ADR-0019 Boards stay reachable.
     LegacyLocal,
-    Global,
     None,
 }
 
@@ -35,11 +36,9 @@ impl DiscoverySource {
         match self {
             Self::Dir => "dir",
             Self::Link => "link",
-            Self::Workspace => "workspace",
             Self::Nearest => "nearest",
             Self::MainCheckout => "main_checkout",
             Self::LegacyLocal => "legacy_local",
-            Self::Global => "global",
             Self::None => "none",
         }
     }
@@ -130,6 +129,8 @@ pub struct Config {
     pub github: crate::github::GitHubConfig,
     #[serde(default, skip_serializing_if = "crate::remote::RemoteConfig::is_empty")]
     pub remote: crate::remote::RemoteConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<crate::repository::RepositoryConfig>,
     #[serde(
         default,
         skip_serializing_if = "crate::workspace::WorkspaceConfig::is_empty"
@@ -198,6 +199,23 @@ impl Config {
         }
         self.github.validate()?;
         self.workspace.validate()?;
+        let mut names = std::collections::BTreeSet::new();
+        let mut paths = std::collections::BTreeSet::new();
+        for repository in &self.repositories {
+            repository.validate()?;
+            if !names.insert(repository.name.to_lowercase()) {
+                return Err(OrbitError::config(format!(
+                    "repositories contains duplicate name `{}`",
+                    repository.name
+                )));
+            }
+            if !paths.insert(crate::repository::canonical_lenient(&repository.path)) {
+                return Err(OrbitError::config(format!(
+                    "repositories contains duplicate path `{}`",
+                    repository.path.display()
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -590,6 +608,36 @@ impl Board {
             .or_else(|| discovery_orbit_dir(&self.root))
     }
 
+    /// The folder holding the Board's Orbit folder — the Board's anchor:
+    /// `<repo>/.orbit` anchors at `<repo>`, a workspace `.orbit` at the
+    /// workspace folder, `~/.orbit` at the home directory. Child Repositories
+    /// are discovered below it. `None` for unanchored Boards.
+    pub fn anchor_dir(&self) -> Option<PathBuf> {
+        let orbit = self.resolved_orbit_dir()?;
+        let anchor = orbit.parent()?;
+        Some(dunce::canonicalize(anchor).unwrap_or_else(|_| anchor.to_path_buf()))
+    }
+
+    /// Write the repository link pointer in `common`'s `orbit/link`.
+    pub fn write_link_at(common: &Path, root: &Path) -> Result<()> {
+        let path = common.join("orbit").join("link");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| OrbitError::io(format!("create {}", parent.display()), error))?;
+        }
+        crate::atomic::write_atomic(&path, format!("{}\n", root.display()).as_bytes(), true)
+    }
+
+    /// Remove the repository link pointer in `common` when it exists.
+    pub fn clear_link_at(common: &Path) -> Result<bool> {
+        let path = common.join("orbit").join("link");
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(OrbitError::io(format!("remove {}", path.display()), error)),
+        }
+    }
+
     /// A Workspace Board lives internally at `<workspace>/.orbit/board`; the
     /// Workspace root is the user-facing directory. A repository-local Board
     /// at `<repo>/.orbit/board` has the same shape, so the Orbit folder's
@@ -706,9 +754,10 @@ impl Board {
         if root
             .file_name()
             .is_some_and(|name| name == std::ffi::OsStr::new(ORBIT_DIR))
-            && let Some(board) = resolve_orbit_dir(&root) {
-                return Ok((board.root().to_path_buf(), board.is_legacy()));
-            }
+            && let Some(board) = resolve_orbit_dir(&root)
+        {
+            return Ok((board.root().to_path_buf(), board.is_legacy()));
+        }
         // An Orbit folder resolves its hidden `board/` or the `board` pointer.
         let orbit = root.join(".orbit");
         if let Some(board) = resolve_orbit_dir(&orbit) {
@@ -895,7 +944,7 @@ impl Board {
     /// caller anchors with an Orbit-folder pointer.
     pub fn init_dir(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
         let root = resolve_external(dir)?;
-        if let Some(existing) = Self::conflicting_board_for(&root, false)? {
+        if let Some(existing) = Self::conflicting_board_for(&root)? {
             return Err(already_initialized(&existing));
         }
         init_external(&root, slug)
@@ -907,9 +956,8 @@ impl Board {
     }
 
     /// Returns the repository-local Board that would compete with `dir`.
-    /// A global Board is exempt: it is only an opt-in discovery fallback.
-    pub fn conflicting_board_for(dir: &Path, global: bool) -> Result<Option<PathBuf>> {
-        if global || Self::is_board(dir) {
+    pub fn conflicting_board_for(dir: &Path) -> Result<Option<PathBuf>> {
+        if Self::is_board(dir) {
             return Ok(None);
         }
         let Some(repo_root) = git::toplevel_containing(dir) else {
@@ -928,11 +976,10 @@ impl Board {
         let main = main_checkout_for(&repo_root, &common).join(".orbit");
         if let Some(board) = resolve_orbit_dir(&main)
             && board.root() != dir
-            && !is_global_board(board.root())
         {
             return Ok(Some(board.root().to_path_buf()));
         }
-        if Self::is_board(&main) && main != dir && !is_global_board(&main) {
+        if Self::is_board(&main) && main != dir {
             return Ok(Some(main));
         }
 
@@ -941,15 +988,10 @@ impl Board {
             return Ok(Some(legacy));
         }
 
-        for parent in dir
-            .parent()
-            .into_iter()
-            .flat_map(|parent| git::ancestors_through(parent, Some(repo_root.as_path())))
-        {
+        for parent in dir.parent().into_iter().flat_map(Path::ancestors) {
             let candidate = parent.join(".orbit");
             if let Some(board) = resolve_orbit_dir(&candidate)
                 && board.root() != dir
-                && !is_global_board(board.root())
             {
                 return Ok(Some(board.root().to_path_buf()));
             }
@@ -957,7 +999,7 @@ impl Board {
 
         for path in git::worktree_paths(&repo_root)? {
             let path = dunce::canonicalize(&path).unwrap_or(path);
-            if path == dir || is_global_board(&path) {
+            if path == dir {
                 continue;
             }
             if Self::is_board(&path) {
@@ -965,7 +1007,6 @@ impl Board {
             }
             if let Some(board) = resolve_orbit_dir(&path.join(".orbit"))
                 && board.root() != dir
-                && !is_global_board(board.root())
             {
                 return Ok(Some(board.root().to_path_buf()));
             }
@@ -1196,23 +1237,6 @@ fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
             ),
         );
     }
-    if workspace {
-        match workspace_child_board(&root) {
-            Ok(Some(local)) if local != selected_root => {
-                discovery.ambiguous = Some((selected_root.clone(), local.clone()));
-                push_warning(
-                    &mut discovery.warnings,
-                    format!(
-                        "{AMBIGUOUS_BOARD}: Workspace Board {} and child-repository Board {} both exist; using the Workspace Board",
-                        selected_root.display(),
-                        local.display()
-                    ),
-                );
-            }
-            Ok(_) => {}
-            Err(error) => discovery.error = Some(error),
-        }
-    }
     if !workspace {
         match legacy_local_board_for(&selected_root) {
             Some(other) if other == selected_root => {
@@ -1233,6 +1257,11 @@ fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
     discovery.steps.push(step);
 }
 
+/// Board resolution order: `--dir`/`ORBIT_DIR`, the repository link pointer,
+/// the nearest `.orbit` walking up across Git boundaries, the same walk
+/// restarted from a worktree's main checkout, then nothing. A Board in the
+/// home directory is an ordinary Board found by that walk — there is no
+/// special global fallback.
 fn resolve_from_cwd(discovery: &mut Discovery) {
     let cwd = match std::env::current_dir() {
         Ok(cwd) => dunce::canonicalize(&cwd).unwrap_or(cwd),
@@ -1241,7 +1270,6 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
             return;
         }
     };
-    let home = home_dir();
 
     if let Some(repo_root) = git::toplevel_containing(&cwd) {
         let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
@@ -1252,13 +1280,11 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
                 return;
             }
         };
-        let link = common.join("orbit").join("link");
+        let main_checkout = main_checkout_for(&repo_root, &common);
         let legacy_local = legacy_local_path(&common);
-        let nearest = nearest_orbit(&cwd, &repo_root, home.as_deref());
-        let workspace = nearest_workspace_board(&cwd, home.as_deref());
-        let main = resolve_orbit_dir(&main_checkout_for(&repo_root, &common).join(".orbit"));
-        let global = home.as_deref().and_then(global_board);
 
+        // 1. The link pointer shared by every worktree of this repository.
+        let link = common.join("orbit").join("link");
         let mut link_root = None;
         let mut link_nested = false;
         match read_link_file(&link) {
@@ -1272,32 +1298,49 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
             Ok(None) => {}
             Err(error) => discovery.error = Some(error),
         }
-
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::Link,
             Some(link.clone()),
         ));
         let link_step = discovery.steps.len() - 1;
         discovery.steps[link_step].found = link_root.is_some();
-        discovery.steps.push(DiscoveryStep::new(
-            DiscoverySource::Workspace,
-            workspace.as_ref().map(orbit_root),
-        ));
+
+        // 2. The nearest `.orbit` walking up from the current directory,
+        //    across Git boundaries.
+        let nearest = nearest_orbit_board(&cwd);
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::Nearest,
             nearest.as_ref().map(orbit_root),
         ));
-        discovery.steps.push(DiscoveryStep::new(
+
+        // 3. The same walk restarted from the worktree's main checkout. Only
+        //    a linked worktree can resolve differently: for the main checkout
+        //    itself the first walk already covered these ancestors.
+        let main_walk = if dunce::canonicalize(&main_checkout)
+            .unwrap_or_else(|_| main_checkout.clone())
+            != repo_root
+        {
+            nearest_orbit_board(&main_checkout)
+        } else {
+            None
+        };
+        let mut main_step = DiscoveryStep::new(
             DiscoverySource::MainCheckout,
-            main.as_ref().map(orbit_root),
-        ));
+            main_walk.as_ref().map(orbit_root),
+        );
+        if main_walk.is_none() && main_step.path.is_none() {
+            main_step.note = Some(
+                "not a linked worktree; the nearest walk already covered the main checkout"
+                    .to_string(),
+            );
+        }
+        discovery.steps.push(main_step);
+
+        // The retired in-Git store stays visible in the trace so `doctor`
+        // can point at `orbit migrate`; it never wins over a real Board.
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::LegacyLocal,
             Some(legacy_local.clone()),
-        ));
-        discovery.steps.push(DiscoveryStep::new(
-            DiscoverySource::Global,
-            global.as_ref().map(orbit_root),
         ));
 
         let selected = if discovery.error.is_some() {
@@ -1312,25 +1355,6 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
                 push_warning(&mut discovery.warnings, warning);
             }
             Some((DiscoverySource::Link, root))
-        } else if let Some(board) = workspace {
-            let (root, _) = orbit_selection(&board);
-            discovery.orbit_dir = Some(board.orbit().to_path_buf());
-            if let Some(local) = nearest
-                .as_ref()
-                .map(|local| orbit_selection(local).0)
-                .filter(|local| *local != root)
-            {
-                discovery.ambiguous = Some((root.clone(), local.clone()));
-                push_warning(
-                    &mut discovery.warnings,
-                    format!(
-                        "{AMBIGUOUS_BOARD}: Workspace Board {} and child-repository Board {} both exist; using the Workspace Board",
-                        root.display(),
-                        local.display()
-                    ),
-                );
-            }
-            Some((DiscoverySource::Workspace, root))
         } else if let Some(board) = nearest {
             discovery.orbit_dir = Some(board.orbit().to_path_buf());
             let (root, legacy) = orbit_selection(&board);
@@ -1344,7 +1368,7 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
             }
             warn_if_ambiguous(&mut discovery.warnings, &root, &legacy_local);
             Some((DiscoverySource::Nearest, root))
-        } else if let Some(board) = main {
+        } else if let Some(board) = main_walk {
             discovery.orbit_dir = Some(board.orbit().to_path_buf());
             let (root, legacy) = orbit_selection(&board);
             if legacy {
@@ -1366,11 +1390,7 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
             push_warning(&mut discovery.warnings, warning);
             Some((DiscoverySource::LegacyLocal, legacy_local.clone()))
         } else {
-            global.map(|board| {
-                discovery.orbit_dir = Some(board.orbit().to_path_buf());
-                let (root, _) = orbit_selection(&board);
-                (DiscoverySource::Global, root)
-            })
+            None
         };
 
         if Board::is_board(&legacy_local)
@@ -1399,48 +1419,15 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         return;
     }
 
-    let stop = home
-        .as_deref()
-        .filter(|home| cwd.starts_with(home))
-        .unwrap_or_else(|| Path::new("/"));
-    let nearest = nearest_orbit(&cwd, stop, home.as_deref());
-    let workspace = nearest_workspace_board(&cwd, home.as_deref());
-    let global = home.as_deref().and_then(global_board);
-    discovery.steps.push(DiscoveryStep::new(
-        DiscoverySource::Workspace,
-        workspace.as_ref().map(orbit_root),
-    ));
+    // Outside a Git working tree there is no link pointer and no main
+    // checkout: the walk up from the current directory is the whole search.
+    let nearest = nearest_orbit_board(&cwd);
     discovery.steps.push(DiscoveryStep::new(
         DiscoverySource::Nearest,
         nearest.as_ref().map(orbit_root),
     ));
-    discovery.steps.push(DiscoveryStep::new(
-        DiscoverySource::Global,
-        global.as_ref().map(orbit_root),
-    ));
 
-    if let Some(board) = workspace {
-        discovery.orbit_dir = Some(board.orbit().to_path_buf());
-        let (root, _) = orbit_selection(&board);
-        if let Some(legacy) = nearest
-            .as_ref()
-            .map(|board| orbit_selection(board).0)
-            .filter(|path| *path != root)
-        {
-            discovery.ambiguous = Some((root.clone(), legacy.clone()));
-            push_warning(
-                &mut discovery.warnings,
-                format!(
-                    "{AMBIGUOUS_BOARD}: Workspace Board {} and legacy Board {} both exist; using the Workspace Board",
-                    root.display(),
-                    legacy.display()
-                ),
-            );
-        }
-        discovery.source = DiscoverySource::Workspace;
-        discovery.root = Some(root);
-        discovery.steps[0].selected = true;
-    } else if let Some(board) = nearest {
+    if let Some(board) = nearest {
         discovery.orbit_dir = Some(board.orbit().to_path_buf());
         discovery.source = DiscoverySource::Nearest;
         let (root, legacy) = orbit_selection(&board);
@@ -1453,21 +1440,7 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
             push_warning(&mut discovery.warnings, warning);
         }
         discovery.root = Some(root);
-        discovery.steps[1].selected = true;
-    } else if let Some(board) = global {
-        discovery.orbit_dir = Some(board.orbit().to_path_buf());
-        let (root, legacy) = orbit_selection(&board);
-        if legacy {
-            let warning = format!(
-                "{LEGACY_LAYOUT}: using a legacy Board directly at {}",
-                root.display()
-            );
-            discovery.legacy = Some(warning.clone());
-            push_warning(&mut discovery.warnings, warning);
-        }
-        discovery.source = DiscoverySource::Global;
-        discovery.root = Some(root);
-        discovery.steps[2].selected = true;
+        discovery.steps[0].selected = true;
     } else {
         discovery.error = Some(OrbitError::board_not_found());
     }
@@ -1506,24 +1479,6 @@ pub(crate) fn resolve_external(dir: &Path) -> Result<PathBuf> {
     Ok(canonical)
 }
 
-fn home_dir() -> Option<PathBuf> {
-    git::home_dir().and_then(|home| dunce::canonicalize(home).ok())
-}
-
-fn global_board(home: &Path) -> Option<OrbitBoard> {
-    resolve_orbit_dir(&home.join(".orbit"))
-}
-
-fn is_global_board(path: &Path) -> bool {
-    let Some(home) = home_dir() else {
-        return false;
-    };
-    let orbit = home.join(ORBIT_DIR);
-    // The global Board folder is `~/.orbit` itself (legacy) or the Board the
-    // Orbit folder resolves to — `~/.orbit/board` hidden or a visible folder.
-    path == orbit || resolve_orbit_dir(&orbit).is_some_and(|board| board.root() == path)
-}
-
 /// The Board folder an Orbit folder resolves to, plus whether that resolution
 /// is a pre-ADR-0019 layout `orbit migrate` must convert.
 fn orbit_selection(board: &OrbitBoard) -> (PathBuf, bool) {
@@ -1535,37 +1490,13 @@ fn orbit_root(board: &OrbitBoard) -> PathBuf {
     board.root().to_path_buf()
 }
 
-fn nearest_orbit(start: &Path, stop: &Path, skip: Option<&Path>) -> Option<OrbitBoard> {
-    for dir in git::ancestors_through(start, Some(stop)) {
-        if skip != Some(dir)
-            && let Some(board) = resolve_orbit_dir(&dir.join(".orbit")) {
-                return Some(board);
-            }
-    }
-    None
-}
-
-/// The nearest Workspace-level Orbit folder walking up across Git boundaries.
-/// Orbit folders inside a Git working tree belong to that repository and are
-/// skipped here; the caller's repository-local walk handles them.
-fn nearest_workspace_board(start: &Path, skip: Option<&Path>) -> Option<OrbitBoard> {
-    for directory in git::ancestors_through(start, None) {
-        if skip == Some(directory) {
-            continue;
-        }
-        if git::toplevel_containing(directory).is_some() {
-            continue;
-        }
-        match resolve_orbit_dir(&directory.join(".orbit")) {
-            Some(board)
-                if matches!(
-                    board,
-                    OrbitBoard::Hidden { .. } | OrbitBoard::Visible { .. }
-                ) =>
-            {
-                return Some(board);
-            }
-            _ => {}
+/// The nearest `.orbit` folder anchoring a Board, walking up from `start`
+/// across Git boundaries all the way to the filesystem root. A Board in the
+/// user's home directory is found here like any other ancestor Board.
+fn nearest_orbit_board(start: &Path) -> Option<OrbitBoard> {
+    for dir in git::ancestors_through(start, None) {
+        if let Some(board) = resolve_orbit_dir(&dir.join(".orbit")) {
+            return Some(board);
         }
     }
     None
@@ -1702,6 +1633,7 @@ pub fn board_cache_dir(board: &Board) -> PathBuf {
 /// Every Board that sits beside or under `workspace` other than its Workspace
 /// Board: the workspace-level legacy layouts plus child-repository Boards.
 /// Canonical, sorted, and deduplicated.
+#[allow(dead_code)]
 pub(crate) fn workspace_local_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
     let mut found: Vec<PathBuf> = [LEGACY_BOARD_DIR, BOARD_DIR, ORBIT_DIR]
         .iter()
@@ -1834,10 +1766,7 @@ fn legacy_local_board_for(root: &Path) -> Option<PathBuf> {
         .filter(|toplevel| {
             dunce::canonicalize(toplevel).unwrap_or_else(|_| toplevel.clone()) != root
         })
-        .or_else(|| {
-            root.parent()
-                .and_then(git::toplevel_containing)
-        });
+        .or_else(|| root.parent().and_then(git::toplevel_containing));
     if let Some(repo) = repo
         && let Ok(common) = git::common_dir_at(&repo)
     {
@@ -1882,7 +1811,7 @@ fn legacy_local_lock_for(root: &Path) -> Option<PathBuf> {
     None
 }
 
-fn classify_link_target(path: &Path) -> Result<(PathBuf, bool)> {
+pub(crate) fn classify_link_target(path: &Path) -> Result<(PathBuf, bool)> {
     Board::resolve_target(path).map_err(|_| {
         OrbitError::new(
             code::LINK_NOT_FOUND,
@@ -1925,7 +1854,7 @@ fn push_warning(warnings: &mut Vec<String>, warning: String) {
     }
 }
 
-fn read_link_file(path: &Path) -> Result<Option<PathBuf>> {
+pub(crate) fn read_link_file(path: &Path) -> Result<Option<PathBuf>> {
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),

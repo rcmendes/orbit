@@ -68,6 +68,9 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
     let area = parse_area_option(args.area)?;
     let verification = task::normalize_verification(args.verification)?;
     let body = resolve_body(args.body, args.body_file)?;
+    // Record the member Repository the command runs in; a worktree resolves
+    // to its main checkout's Repository.
+    let repo = crate::repository::current_member_name(board)?;
     let id = generate_unique_id(board, parent.as_deref())?;
     let now = Utc::now();
 
@@ -87,7 +90,7 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
             verification,
             github: None,
             remote: None,
-            repo: None,
+            repo,
             claim: None,
             stray_claim_times: None,
             created_at: now,

@@ -79,6 +79,7 @@ pub(crate) fn git_output(path: &Path, args: &[&str]) -> std::result::Result<Stri
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+#[allow(dead_code)]
 pub(crate) fn is_direct_git_repository(path: &Path) -> bool {
     let Ok(output) = git_output(path, &["rev-parse", "--show-toplevel"]) else {
         return false;

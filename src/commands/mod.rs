@@ -1,10 +1,10 @@
 mod crud;
 mod init;
 mod lifecycle;
-mod link;
 mod query;
 mod relations;
 mod render;
+mod repo;
 mod slug;
 
 use clap::ValueEnum;
@@ -13,7 +13,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::board::Board;
-use crate::cli::{Cli, Command, CommentCommand, LabelCommand, SlugCommand, WorkspaceCommand};
+use crate::cli::{Cli, Command, CommentCommand, LabelCommand, SlugCommand};
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{self, Graph};
 use crate::task::{self, Task, TaskArea};
@@ -23,9 +23,9 @@ use init::cmd_init;
 use lifecycle::{
     cmd_cancel, cmd_checkpoint, cmd_claim, cmd_done, cmd_heartbeat, cmd_release, cmd_reopen,
 };
-use link::{cmd_link, cmd_unlink};
 use query::{cmd_export, cmd_list, cmd_prime, cmd_ready, cmd_show, cmd_sync, cmd_tree};
 use relations::{cmd_comment, cmd_depend, cmd_label, cmd_undepend};
+use repo::run as cmd_repo;
 use slug::cmd_slug;
 
 pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
@@ -48,8 +48,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     match command {
         Command::Migrate(args) => crate::board_migrate::cmd_migrate(&args, dir.as_deref()),
         Command::Init(args) => cmd_init(args, dir.as_deref()),
-        Command::Link(args) => cmd_link(args),
-        Command::Unlink => cmd_unlink(),
+        Command::Repo(args) => with_board(dir.as_deref(), true, |board| cmd_repo(board, args)),
         Command::Slug(args) => {
             let exclusive = matches!(args.command, SlugCommand::Migrate(_));
             with_board(dir.as_deref(), exclusive, |board| cmd_slug(board, args))
@@ -121,26 +120,6 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 crate::github::commands::run(board, args)
             })
         }
-        Command::Workspace(args) => match args.command {
-            WorkspaceCommand::Migrate(args) => crate::workspace_migrate::run(dir.as_deref(), args),
-            command => {
-                let args = crate::cli::WorkspaceArgs { command };
-                if matches!(
-                    &args.command,
-                    crate::cli::WorkspaceCommand::Status
-                        | crate::cli::WorkspaceCommand::Issues(crate::cli::WorkspaceIssuesArgs {
-                            command: crate::cli::WorkspaceIssuesCommand::List(_)
-                                | crate::cli::WorkspaceIssuesCommand::Inspect(_)
-                        })
-                ) {
-                    with_board_read_only(dir.as_deref(), |board| crate::workspace::run(board, args))
-                } else {
-                    with_board(dir.as_deref(), true, |board| {
-                        crate::workspace::run(board, args)
-                    })
-                }
-            }
-        },
         Command::Triage(args) => with_task_board(dir.as_deref(), true, |board| {
             crate::triage::commands::run(board, args, json)
         }),

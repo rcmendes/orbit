@@ -168,12 +168,10 @@ fn make_plan(workspace: &Path) -> Result<MigrationPlan> {
                 None => Config::default(),
             };
             config.id.prefix = crate::slug::prefix(&slug);
-            config.board.storage = Some(crate::board::StorageMode::Repository);
             config.board.branch = "orbit".to_string();
             config.validate()?;
             let mut initialized = Config::default();
             initialized.id.prefix = config.id.prefix.clone();
-            initialized.board.storage = Some(crate::board::StorageMode::Repository);
             let config_bytes = initialized.to_toml()?.into_bytes();
             (config, Graph::from_tasks(Vec::new()), config_bytes, source)
         } else {
@@ -228,6 +226,9 @@ fn make_plan(workspace: &Path) -> Result<MigrationPlan> {
             }
         }
     }
+    // `board.storage` is retired (ADR 0019): the merged Board is always a
+    // standalone repository, so the key never propagates from source Boards.
+    merged_config.board.storage = None;
     merged_config.validate()?;
 
     ensure_unique_github_links(&destination, &destination_graph, &source_boards)?;
@@ -590,6 +591,8 @@ fn config_values(config: &Config) -> Result<BTreeMap<String, Value>> {
         .map_err(|error| OrbitError::config(format!("serialize Board config: {error}")))?;
     let mut values = BTreeMap::new();
     flatten_toml("", &value, &mut values);
+    // `board.storage` is retired; it is never a meaningful conflict.
+    values.remove("board.storage");
     Ok(values)
 }
 

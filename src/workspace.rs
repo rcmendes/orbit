@@ -188,7 +188,10 @@ pub(crate) fn workspace_root_if_board(board: &Board) -> Option<PathBuf> {
     if !board.is_workspace_board() {
         return None;
     }
-    let workspace = board.root.parent()?.parent()?;
+    // The Workspace root is the Orbit folder's parent; this also covers
+    // visible Board folders anchored by the `.orbit/board` pointer file.
+    let orbit = board.resolved_orbit_dir()?;
+    let workspace = orbit.parent()?;
     Some(dunce::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf()))
 }
 
@@ -198,18 +201,28 @@ pub(crate) fn workspace_root_if_board(board: &Board) -> Option<PathBuf> {
 pub(crate) fn candidate_workspace_root(start: &Path) -> Option<PathBuf> {
     let start = dunce::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
     for ancestor in start.ancestors() {
+        // Orbit folders inside a Git working tree belong to that repository's
+        // Board, not to a Workspace; only non-Git ancestors can be one.
+        if crate::git::toplevel_containing(ancestor).is_some() {
+            continue;
+        }
         let orbit = ancestor.join(".orbit");
-        if orbit.join("board").is_dir()
+        // A hidden `board/` folder or a `board` pointer file to a visible
+        // Board folder marks a Workspace; a legacy `.orbit`-is-Board does not.
+        let anchored = matches!(
+            crate::board::resolve_orbit_dir(&orbit),
+            Some(
+                crate::board::OrbitBoard::Hidden { .. } | crate::board::OrbitBoard::Visible { .. }
+            )
+        );
+        if anchored
             || orbit.join("cache").exists()
             || orbit.join("workspace-migration-state.json").exists()
             || orbit.join(".workspace-board-migration-stage").exists()
         {
             return Some(ancestor.to_path_buf());
         }
-        if orbit.is_dir()
-            && !Board::is_board(&orbit)
-            && crate::git::toplevel_containing(ancestor).is_none()
-        {
+        if orbit.is_dir() && !Board::is_board(&orbit) {
             return Some(ancestor.to_path_buf());
         }
     }

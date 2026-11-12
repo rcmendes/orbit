@@ -52,17 +52,29 @@ fn init_dir_is_idempotent() {
 }
 
 #[test]
-fn init_dir_inside_a_repository_creates_an_excluded_worktree() {
+fn init_dir_inside_a_repository_creates_an_excluded_board() {
     let repo = TestRepo::new();
     let dir = repo.path().join("shared-board");
 
     let value = repo.ok_json(&["init", "shared-board", "--agents", "none", "--json"]);
 
-    assert_eq!(value["data"]["storage"], "worktree");
-    assert_eq!(value["data"]["exclude"], "/shared-board/");
+    // A named directory inside a repository becomes a visible Board folder
+    // anchored by the repository's Orbit folder.
+    assert_eq!(value["data"]["storage"], "repository");
+    assert_eq!(value["data"]["board"].as_str().unwrap(), canonical(&dir));
+    let exclude = value["data"]["exclude"].as_array().unwrap();
+    assert!(
+        exclude.iter().any(|entry| entry == "/shared-board/"),
+        "{exclude:?}"
+    );
     assert!(dir.join("config.toml").is_file());
-    let exclude = repo.read(".git/info/exclude");
-    assert!(exclude.lines().any(|line| line == "/shared-board/"));
+    assert!(dir.join(".git").exists());
+    // `.orbit/board` is the pointer file naming the visible Board folder.
+    let pointer = repo.read(".orbit/board");
+    assert_eq!(pointer.trim(), canonical(&dir));
+    let info = repo.read(".git/info/exclude");
+    assert!(info.lines().any(|line| line == "/shared-board/"));
+    assert!(info.lines().any(|line| line == "/.orbit/"));
     assert!(!repo.path().join(".git/orbit/link").exists());
 }
 
@@ -84,17 +96,22 @@ fn init_dir_does_not_write_agent_files_without_agents() {
 }
 
 #[test]
-fn init_defaults_to_the_current_directory_orbit_folder() {
+fn init_defaults_to_the_repository_orbit_folder() {
     let repo = TestRepo::new();
     let sub = repo.path().join("sub");
     std::fs::create_dir_all(&sub).unwrap();
 
     let value = repo.ok_json_in(&sub, &["init", "--agents", "none", "--json"]);
 
-    assert_eq!(value["data"]["prefix"], "sub-");
-    assert_eq!(value["data"]["storage"], "worktree");
-    assert!(sub.join(".orbit/config.toml").is_file());
-    assert!(!repo.path().join(".orbit").exists());
+    // `init` from a subdirectory anchors the Board at the main checkout's
+    // Orbit folder, not inside `sub`.
+    assert_eq!(value["data"]["storage"], "repository");
+    assert_eq!(
+        value["data"]["board"].as_str().unwrap(),
+        canonical(&repo.path().join(".orbit/board"))
+    );
+    assert!(repo.path().join(".orbit/board/config.toml").is_file());
+    assert!(!sub.join(".orbit").exists());
 }
 
 #[test]
@@ -111,10 +128,18 @@ fn init_print_reports_the_exclusion_without_writing() {
     ]);
 
     assert_eq!(value["data"]["preview"], true);
-    assert_eq!(value["data"]["exclude"], "/shared-board/");
+    let exclude = value["data"]["exclude"].as_array().unwrap();
+    assert!(
+        exclude.iter().any(|entry| entry == "/shared-board/"),
+        "{exclude:?}"
+    );
+    assert!(
+        exclude.iter().any(|entry| entry == "/.orbit/"),
+        "{exclude:?}"
+    );
     assert!(!repo.path().join("shared-board").exists());
-    let exclude = repo.read(".git/info/exclude");
-    assert!(!exclude.lines().any(|line| line == "/shared-board/"));
+    let info = repo.read(".git/info/exclude");
+    assert!(!info.lines().any(|line| line == "/shared-board/"));
     assert!(!repo.path().join(".git/orbit/link").exists());
 }
 
@@ -244,7 +269,7 @@ fn init_in_a_worktree_reuses_the_main_checkout_board() {
     assert_eq!(value["data"]["created"], false);
     assert_eq!(
         value["data"]["board"].as_str().unwrap(),
-        canonical(&repo.path().join(".orbit"))
+        canonical(&repo.path().join(".orbit/board"))
     );
     assert!(!worktree.join(".orbit").exists());
 }
@@ -256,12 +281,15 @@ fn init_dot_at_the_repository_root_uses_the_orbit_folder() {
     let value = repo.ok_json(&["init", ".", "--agents", "none", "--json"]);
 
     assert_eq!(value["data"]["created"], true);
-    assert_eq!(value["data"]["storage"], "worktree");
+    assert_eq!(value["data"]["storage"], "repository");
     assert_eq!(
         value["data"]["board"].as_str().unwrap(),
-        canonical(&repo.path().join(".orbit"))
+        canonical(&repo.path().join(".orbit/board"))
     );
-    assert!(repo.path().join(".orbit/config.toml").is_file());
+    assert!(repo.path().join(".orbit/board/config.toml").is_file());
+    assert!(repo.path().join(".orbit/board/.git").exists());
+    let info = repo.read(".git/info/exclude");
+    assert!(info.lines().any(|line| line == "/.orbit/"));
     assert!(!repo.path().join(".git/orbit/link").exists());
 }
 
@@ -275,7 +303,7 @@ fn init_dot_at_the_repository_root_is_idempotent() {
     assert_eq!(second["data"]["created"], false);
     assert_eq!(
         second["data"]["board"].as_str().unwrap(),
-        canonical(&repo.path().join(".orbit"))
+        canonical(&repo.path().join(".orbit/board"))
     );
 }
 
@@ -286,12 +314,18 @@ fn init_dot_print_reports_the_repository_orbit_folder() {
     let value = repo.ok_json(&["init", ".", "--agents", "none", "--print", "--json"]);
 
     assert_eq!(value["data"]["preview"], true);
-    assert_eq!(value["data"]["storage"], "worktree");
+    assert_eq!(value["data"]["storage"], "repository");
     assert_eq!(
         std::path::Path::new(value["data"]["board"].as_str().unwrap()),
-        dunce::canonicalize(repo.path()).unwrap().join(".orbit")
+        dunce::canonicalize(repo.path())
+            .unwrap()
+            .join(".orbit/board")
     );
-    assert_eq!(value["data"]["exclude"], "/.orbit/");
+    let exclude = value["data"]["exclude"].as_array().unwrap();
+    assert!(
+        exclude.iter().any(|entry| entry == "/.orbit/"),
+        "{exclude:?}"
+    );
     assert!(!repo.path().join(".orbit").exists());
 }
 
@@ -304,10 +338,10 @@ fn init_repository_root_path_uses_the_orbit_folder() {
 
     assert_eq!(
         value["data"]["board"].as_str().unwrap(),
-        canonical(&project.join(".orbit"))
+        canonical(&project.join(".orbit/board"))
     );
     assert_eq!(value["data"]["prefix"], "project-");
-    assert!(project.join(".orbit/config.toml").is_file());
+    assert!(project.join(".orbit/board/config.toml").is_file());
 }
 
 #[test]
@@ -323,7 +357,7 @@ fn init_dot_in_a_linked_worktree_reuses_the_main_checkout_board() {
     assert_eq!(value["data"]["created"], false);
     assert_eq!(
         value["data"]["board"].as_str().unwrap(),
-        canonical(&repo.path().join(".orbit"))
+        canonical(&repo.path().join(".orbit/board"))
     );
 }
 
@@ -348,7 +382,7 @@ fn init_refuses_a_non_empty_target_directory() {
 }
 
 #[test]
-fn init_refreshes_a_missing_worktree_exclusion() {
+fn init_refreshes_a_missing_exclusion() {
     let repo = TestRepo::new();
     repo.ok_json(&["init", "shared-board", "--agents", "none", "--json"]);
     let exclude_path = repo.path().join(".git/info/exclude");
@@ -383,22 +417,30 @@ fn init_ignores_the_global_fallback_as_a_conflict() {
         repo.json_with_env(&["init", "sub/.orbit", "--agents", "none", "--json"], &env);
 
     assert_eq!(status, 0, "{value}");
-    assert_eq!(value["data"]["storage"], "worktree");
-    assert!(repo.path().join("sub/.orbit/config.toml").is_file());
+    assert_eq!(value["data"]["storage"], "repository");
+    assert!(repo.path().join("sub/.orbit/board/config.toml").is_file());
 }
 
 #[test]
-fn init_refuses_a_second_board_in_the_same_working_tree() {
+fn init_reuses_the_repository_board() {
     let repo = TestRepo::new();
     let sub = repo.path().join("sub");
     std::fs::create_dir_all(&sub).unwrap();
 
     repo.ok_json_in(&sub, &["init", "--agents", "none", "--json"]);
+    // A second `init` in the same working tree reuses the Board instead of
+    // creating another one.
     let (status, value) = repo.json(&["init", "--agents", "none", "--json"]);
 
-    assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "ALREADY_INITIALIZED");
-    assert!(!repo.path().join(".orbit").exists());
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["created"], false);
+    assert_eq!(
+        value["data"]["board"].as_str().unwrap(),
+        canonical(&repo.path().join(".orbit/board"))
+    );
+    // The Board lives under `.orbit/board`; `.orbit` itself stays a plain
+    // Orbit folder, never a Board root.
+    assert!(!repo.path().join(".orbit/config.toml").exists());
 }
 
 #[test]
@@ -487,10 +529,9 @@ fn link_accepts_a_legacy_workspace_root() {
     let creator = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let workspace = parent.path().join("acme");
-    creator.ok_json_in(
-        parent.path(),
-        &["init", "acme/board", "--agents", "none", "--json"],
-    );
+    // A pre-ADR-0019 Workspace Board: a plain `<workspace>/board` folder with
+    // no Orbit folder anchoring it.
+    creator.legacy_board_files(&workspace.join("board"), "orb-");
 
     let joiner = TestRepo::new();
     let linked = joiner.link_at(&workspace);

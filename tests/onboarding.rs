@@ -8,7 +8,7 @@ fn init_is_idempotent_and_reports_unchanged_artifacts() {
 
     let first = repo.ok_json(&["init", "--agents", "none", "--json"]);
     assert_eq!(first["data"]["created"], true);
-    assert_eq!(first["data"]["storage"], "worktree");
+    assert_eq!(first["data"]["storage"], "repository");
 
     let second = repo.ok_json(&["init", "--agents", "none", "--json"]);
     assert_eq!(second["data"]["created"], false);
@@ -982,7 +982,7 @@ fn init_human_report_describes_each_setup_step() {
     for expected in [
         "Orbit setup complete.",
         "1. Board (created)",
-        "storage  worktree",
+        "storage  repository (standalone Board folder",
         "exclude  /.orbit/",
         "2. Coding agents",
         "wired    claude",

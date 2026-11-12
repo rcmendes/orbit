@@ -46,6 +46,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     }
 
     match command {
+        Command::Migrate(args) => crate::board_migrate::cmd_migrate(&args, dir.as_deref()),
         Command::Init(args) => cmd_init(args, dir.as_deref()),
         Command::Link(args) => cmd_link(args),
         Command::Unlink => cmd_unlink(),

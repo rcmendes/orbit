@@ -21,6 +21,8 @@ fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
             area: None,
             verification: None,
             github: None,
+            remote: None,
+            repo: None,
             claim: None,
             stray_claim_times: None,
             created_at: now,

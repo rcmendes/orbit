@@ -738,6 +738,8 @@ fn create_linked_task(
                 prepared.issue.repo.to_ascii_lowercase(),
                 prepared.issue.number,
             )),
+            remote: None,
+            repo: None,
             claim: None,
             stray_claim_times: None,
             created_at: now,

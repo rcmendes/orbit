@@ -326,6 +326,8 @@ mod tests {
                         blocked_by: Vec::new(),
                     }),
                 }),
+                remote: None,
+                repo: None,
                 extra: BTreeMap::new(),
             },
             body: body.into(),

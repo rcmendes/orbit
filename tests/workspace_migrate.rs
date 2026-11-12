@@ -395,7 +395,9 @@ fn staging_a_workspace_board_inherits_the_legacy_configuration() {
     assert_eq!(applied["data"]["destination_created"], true);
     let written = std::fs::read_to_string(workspace.join(".orbit/board/config.toml")).unwrap();
     assert!(written.contains("default_priority = 0"), "{written}");
-    assert!(written.contains("storage = \"repository\""), "{written}");
+    // `board.storage` is retired by ADR 0019; every Board is a standalone
+    // repository, so the staged config must not carry the key.
+    assert!(!written.contains("storage"), "{written}");
     assert!(written.contains("organization = \"acme\""), "{written}");
     assert!(written.contains("acme/api"), "{written}");
     assert!(written.contains("area_id = \"AREA123\""), "{written}");

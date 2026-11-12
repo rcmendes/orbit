@@ -12,6 +12,7 @@ pub const DEFAULT_PREFIX: &str = "orb-";
 pub const DEFAULT_ID_LENGTH: usize = 6;
 pub const MAX_LABEL_LENGTH: usize = 32;
 pub const MAX_VERIFICATION_LENGTH: usize = 2000;
+pub const MAX_REPO_LENGTH: usize = 128;
 
 /// Stable classification of where work primarily lands in the repository.
 /// Shared metadata for agents and filters; not personal or session-local state.
@@ -175,6 +176,51 @@ impl Checkpoint {
     }
 }
 
+/// Provider-neutral link between a Task and a Remote Issue (ADR 0018). The
+/// Remote Tracker names its adapter (`github` today), the Remote Project is
+/// the tracker's container identity (`owner/repo` for GitHub), `id` is the
+/// Remote Issue identity in the tracker's own terms, `url` is its canonical
+/// link, and `baseline` is the opaque last-sync snapshot owned by the sync
+/// engine. `active: false` keeps the identity as provenance without syncing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemoteLink {
+    pub tracker: String,
+    pub project: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(
+        default = "default_remote_active",
+        skip_serializing_if = "is_remote_active"
+    )]
+    pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<serde_yaml_ng::Value>,
+}
+
+fn default_remote_active() -> bool {
+    true
+}
+
+fn is_remote_active(active: &bool) -> bool {
+    *active
+}
+
+impl RemoteLink {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        for (name, value) in [
+            ("tracker", self.tracker.as_str()),
+            ("project", self.project.as_str()),
+            ("id", self.id.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("remote.{name} must not be empty"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// On-disk shape: the Claim is stored as three flat keys (see docs/SPEC.md).
 #[derive(Serialize, Deserialize)]
 struct RawFrontmatter {
@@ -200,6 +246,10 @@ struct RawFrontmatter {
     verification: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     github: Option<GitHubLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remote: Option<RemoteLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    repo: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -239,6 +289,8 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             area: raw.area,
             verification: raw.verification,
             github: raw.github,
+            remote: raw.remote,
+            repo: raw.repo,
             claim,
             stray_claim_times,
             created_at: raw.created_at,
@@ -268,6 +320,8 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             area: front.area,
             verification: front.verification.clone(),
             github: front.github,
+            remote: front.remote,
+            repo: front.repo,
             claimed_by,
             claimed_at,
             lease_until,
@@ -292,7 +346,12 @@ pub struct TaskFrontmatter {
     pub checkpoint: Option<Checkpoint>,
     pub area: Option<TaskArea>,
     pub verification: Option<String>,
+    /// Legacy GitHub Issue link; `orbit migrate` rewrites it to `remote`.
     pub github: Option<GitHubLink>,
+    /// Provider-neutral Remote Issue link (ADR 0018).
+    pub remote: Option<RemoteLink>,
+    /// The member Repository this Task belongs to; absent means Board-wide.
+    pub repo: Option<String>,
     pub claim: Option<Claim>,
     pub stray_claim_times: Option<StrayClaimTimes>,
     pub created_at: DateTime<Utc>,
@@ -462,6 +521,20 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             ))
         })?;
     }
+    if let Some(link) = &front.remote
+        && let Err(reason) = link.validate()
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an invalid remote link: {reason}"
+        )));
+    }
+    if let Some(repo) = &front.repo
+        && !is_valid_repo(repo)
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an invalid repo `{repo}`"
+        )));
+    }
 
     let mut labels = Vec::with_capacity(front.labels.len());
     for label in &front.labels {
@@ -584,6 +657,34 @@ pub fn parent_id_from_id(id: &str, prefix: &str) -> Option<String> {
     Some(format!("{prefix}{parent}"))
 }
 
+/// A per-Board Area name: a short lowercase slug. Boards that configure
+/// `board.areas` restrict values to that list; others accept any valid name.
+pub fn is_valid_area(area: &str) -> bool {
+    !area.is_empty()
+        && area.len() <= MAX_LABEL_LENGTH
+        && area
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && area
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+}
+
+/// A Task's member Repository: a short name or `owner/name` identity. Kept
+/// permissive so local folder names and remote `owner/repo` forms both fit.
+pub fn is_valid_repo(repo: &str) -> bool {
+    !repo.is_empty()
+        && repo.len() <= MAX_REPO_LENGTH
+        && repo
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+        && repo
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+}
+
 pub fn is_valid_label(label: &str) -> bool {
     !label.is_empty()
         && label.len() <= MAX_LABEL_LENGTH
@@ -655,6 +756,8 @@ mod tests {
                 area: None,
                 verification: None,
                 github: None,
+                remote: None,
+                repo: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: now(),

@@ -676,7 +676,12 @@ fn triage_apply_reports_commit_failure_after_publishing_metadata() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    repo.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    // Board commits run inside the standalone Board repository, so the
+    // failing hook must be configured there rather than on the code repo.
+    repo.git_in(
+        &repo.board_path(),
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
     let applied = repo.ok_json_with_env(
         &[
             "triage",

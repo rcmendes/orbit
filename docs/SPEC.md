@@ -27,14 +27,14 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 
 ## 2. Architecture
 
-1. **Board (truth):** a dedicated orphan Git branch named `orbit`, checked out in an Orbit folder. A repository-local Board defaults to `<repository>/.orbit`; a Workspace Board lives at `<workspace>/.orbit/board`. Inside a Git working tree, the Orbit folder is a worktree of that repository; outside one, it is an independent repository on the `orbit` branch. A Workspace's separate rebuildable cache is reserved at `<workspace>/.orbit/cache`.
+1. **Board (truth):** a dedicated Git repository on branch `orbit`, checked out in a Board folder (ADR 0019). A repository-local Board defaults to the hidden `<repository>/.orbit/board`; a Workspace Board lives at `<workspace>/.orbit/board`; a visible Board folder is anchored by the `.orbit/board` pointer file instead. The rebuildable cache sits beside the Board at `<orbit>/cache`. Board history never enters a code repository.
 2. **Tasks:** Markdown files at `tasks/<id>.md` inside `DIR`.
 3. **Comments:** append-only Markdown sidecars at `comments/<id>.md` inside `DIR`.
 4. **Index (speed):** every process rebuilds an in-memory graph from the task files. There is no persistent cache and no watcher.
 5. **Writes (safety):** every mutation takes one Board-wide exclusive lock at `<DIR>/.lock`, performs a read-modify-write, and publishes each file with a temp-file + `fsync` + rename. Readers take a shared lock for a consistent snapshot.
 6. **History:** meaningful mutations auto-commit to the `orbit` branch. Heartbeat/lease-only changes are committed by `orbit sync`. The Board's Git branch is never pushed automatically. GitHub Issue auto-push is opt-in per Board and is defined in [ADR 0016](./adr/0016-opt-in-auto-push.md).
 
-The board is deliberately outside code branches: task churn never enters a feature PR, and agents in separate worktrees share one queue. See `docs/adr/0001-markdown-board-on-orphan-branch.md`, `docs/adr/0002-single-writer-lock-and-atomic-rename.md`, and `docs/adr/0012-orbit-folder.md`.
+The board is deliberately outside code branches: task churn never enters a feature PR, and agents in separate worktrees share one queue. See `docs/adr/0001-markdown-board-on-orphan-branch.md`, `docs/adr/0002-single-writer-lock-and-atomic-rename.md`, `docs/adr/0012-orbit-folder.md`, and `docs/adr/0019-board-folder-is-its-own-repository.md`.
 
 ### 2.1 Component view
 
@@ -69,8 +69,8 @@ flowchart LR
 
     subgraph Data["Durable state"]
         BRANCH["orphan branch: orbit"]
-        ORBITFOLDER["Orbit folder<br/>DIR · default .orbit"]
-        STANDALONE["standalone repository<br/>outside a working tree"]
+        ORBITFOLDER["Orbit folder<br/>DIR · default .orbit/board"]
+        STANDALONE["standalone repository<br/>Board folder on branch orbit"]
         LINK["link pointer<br/>.git/orbit/link"]
         FILES["tasks/ID.md and comments/ID.md"]
         CONFIG["config.toml"]
@@ -189,7 +189,7 @@ Examples: `teramigo-32fdfd` (Task), `teramigo-32fdfd.7fk2m9` (SubTask), and `orb
 
 ### Layout
 
-The Orbit folder, `DIR`, is the Board root. Its default is `<project>/.orbit`.
+The Board folder, `DIR`, is a standalone Git repository on branch `orbit`. Its default inside a repository is the hidden `<repository>/.orbit/board`; a Workspace Board is `<workspace>/.orbit/board`; a visible Board folder is anchored by an `.orbit/board` pointer file holding its absolute path. The Orbit folder `.orbit` also holds the rebuildable `cache/`; inside a code repository the whole folder is hidden through `.git/info/exclude`, never `.gitignore`.
 
 ```text
 <DIR>/
@@ -208,14 +208,11 @@ The Orbit folder, `DIR`, is the Board root. Its default is `<project>/.orbit`.
 
 Comments are optional; the file is created on the first comment. The task file remains the description and acceptance criteria; `orbit show` merges the task and its comments.
 
-The Board data lock is `<DIR>/.lock` in both storage modes and is gitignored. Initialization uses a short-lived bootstrap lock in `DIR` that is never committed.
+The Board data lock is `<DIR>/.lock` and is gitignored. Initialization uses a short-lived bootstrap lock in `DIR` that is never committed.
 
-`DIR` is stored in one of two private modes, recorded as `board.storage`:
+Every Board is a standalone repository; the retired `board.storage` modes are gone (ADR 0019). A Board folder without its own `.git`, a Board worktree of another repository, a Board directly at `.orbit`, a `<workspace>/board` folder, or a config still carrying `board.storage` is a pre-ADR-0019 layout: commands answer `BOARD_NOT_MIGRATED` until `orbit migrate` converts it.
 
-- `worktree`: `DIR` is inside a Git working tree and is a worktree of that repository on the `orbit` branch. The path is written to the containing repository's `.git/info/exclude`, never to a tracked `.gitignore`. Every worktree of the repository resolves the same Board.
-- `repository`: `DIR` is outside every Git working tree and is its own Git repository with `HEAD` on the `orbit` branch. The global Board and a shared Board that lives outside every working tree use this mode.
-
-Both modes expose the same files, lock, commands, and JSON contract. An explicit `DIR` that is created fresh must be empty apart from `.git`, so the initial Board commit contains only Board files; otherwise `init` returns `CONFIG_ERROR`.
+An explicit `DIR` that is created fresh must be empty apart from `.git`, so the initial Board commit contains only Board files; otherwise `init` returns `CONFIG_ERROR`.
 
 ### Frontmatter
 
@@ -281,7 +278,6 @@ The caller must hold the Claim; a Stale Claim still counts until another agent s
 ```toml
 [board]
 branch = "orbit"
-storage = "worktree"
 lease_minutes = 30
 default_priority = 2
 non_ready_labels = ["needs-triage", "needs-info", "ready-for-human"]
@@ -293,29 +289,27 @@ length = 6
 prefix = "orb-"
 ```
 
-`board.storage` is `worktree` or `repository` and records how `DIR` is backed by Git. A legacy Board without the field has its mode inferred from its location and is reported by `doctor` until migrated. `id.prefix` must contain only lowercase letters, digits, and dashes; a dot is reserved for the SubTask boundary. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`. Optional `id.accepted_prefixes` lists additional valid Task-ID prefixes retained when Boards with different slugs are consolidated; new Task IDs still use `id.prefix`.
+`board.storage` is retired (ADR 0019): every Board is a standalone repository, so the key is neither written nor honored; a config that still carries it marks a legacy Board for `orbit migrate`. `id.prefix` must contain only lowercase letters, digits, and dashes; a dot is reserved for the SubTask boundary. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`. Optional `id.accepted_prefixes` lists additional valid Task-ID prefixes retained when Boards with different slugs are consolidated; new Task IDs still use `id.prefix`.
 
 ## 5. Board lifecycle
 
-A Board lives in the Orbit folder, `DIR`. In a Git working tree, the default is `./.orbit` (or the main checkout's `.orbit` from a linked worktree). A `DIR` that is itself a Git working-tree root, including `.`, means "initialize that checkout" and resolves to its `./.orbit` (the main checkout's from a linked worktree); any other `DIR` is the Board folder and must be new or empty. Outside Git, `orbit init` at the Workspace root creates `<workspace>/.orbit/board`. `--dir` and `ORBIT_DIR` accept a Workspace root or a Board directory; for Workspace commands they name the root, not the internal `.orbit/board` path.
+A Board lives in a Board folder, `DIR`, which is always a standalone Git repository on branch `orbit`. In a Git working tree, the default is `./.orbit/board` — the hidden Board inside the repository's Orbit folder, with `cache/` beside it (or the main checkout's from a linked worktree). A `DIR` that is itself a Git working-tree root, including `.`, means "initialize that checkout" and resolves to its `./.orbit/board` (the main checkout's from a linked worktree); the repository root's own `.orbit` anchors it. Any other `DIR` inside a repository is a visible Board folder anchored by the repository's `.orbit/board` pointer file and hidden through `.git/info/exclude`. Outside Git, `orbit init` at the Workspace root creates `<workspace>/.orbit/board`; any other directory becomes a visible Board folder anchored by a sibling `.orbit`. `--dir` and `ORBIT_DIR` accept a Workspace root or a Board directory; for Workspace commands they name the root, not the internal `.orbit/board` path.
 
 `orbit init [DIR] [--slug SLUG] [--global] [--agents LIST|none|all] [--print]`:
 
-1. Resolves the target and refuses to create a Board when a conflicting repository-local Board or Workspace `.orbit` layout already exists, or when an explicit Board directory is not empty. `--global` is exempt. A configured `user.name` / `user.email` is required. The repository does not need an initial commit.
-2. Chooses the storage mode:
-   - Inside a Git working tree, it creates the `orbit` orphan branch if needed, adds `DIR` as a worktree of that repository, and writes the `DIR` path to `.git/info/exclude`. It never edits a tracked file.
-   - Outside every Git working tree, a Workspace root stores its Board at `<workspace>/.orbit/board`, an independent Git repository with `HEAD` on `orbit`; `<workspace>/.orbit/cache` is reserved separately. Explicit existing Board directories remain supported.
-3. Writes `config.toml` with the resolved `id.prefix` and `board.storage`, plus `.gitignore`, `tasks/.gitkeep`, and `comments/.gitkeep`.
+1. Resolves the target and refuses to create a Board when a conflicting repository-local Board or Workspace `.orbit` layout already exists, or when an explicit Board directory is not empty. `--global` is exempt. A configured `user.name` / `user.email` is required. The repository does not need an initial commit. A pre-ADR-0019 Board at the target is refused with `BOARD_NOT_MIGRATED`.
+2. Creates `DIR` as a standalone Git repository on branch `orbit` — `git init` plus an initial commit — and, for a hidden Board, the `.orbit` folder around it; for a visible Board it writes the `.orbit/board` pointer file naming `DIR`. Inside a code repository the Orbit folder and any visible Board folder are listed in `.git/info/exclude`, never `.gitignore`. `<orbit>/cache` is reserved beside the Board.
+3. Writes `config.toml` with the resolved `id.prefix` (no `board.storage`), plus `.gitignore`, `tasks/.gitkeep`, and `comments/.gitkeep`.
 4. Commits `orbit: initialize board`.
 5. Prints a numbered setup report: the Board (path, branch, storage mode, prefix, and exclusion), the coding-agent integration (wired harnesses, MCP command, and managed files), and the `orbit doctor` verification step, followed by next commands. A standalone Board always includes `orbit link DIR` in its next steps. In a TTY it asks whether to wire the detected coding-agent harnesses; without a TTY it writes no agent files and explains the `orbit setup` hint. `--agents` skips the prompt. `--print` reports the same steps in future tense, includes generated file contents, and writes nothing.
 
 `orbit init` is idempotent when `DIR` already holds a Board: the Board is reused and nothing is rewritten. If a different repository-local Board already resolves for `DIR`, `init` returns `ALREADY_INITIALIZED` naming that Board and creates nothing. The `~/.orbit` fallback does not block creating a local Board. Run `orbit unlink` before creating a local Board in a linked repository. A linked repository keeps its Board until `unlink`. `--print` computes the same result without writing.
 
-`init` takes its target from the positional argument, then `--dir`/`ORBIT_DIR`. With no target it uses `./.orbit` inside Git, the current directory as a Workspace root outside Git, or a discovered Workspace root when invoked from a child Repository. An explicit target that is already a Git working-tree root, such as `.` or a repository path, also uses that checkout's `./.orbit` (or the main checkout's from a linked worktree) instead of treating the root as an explicit Board directory. `--global` is exclusive with a positional target and with `--dir`/`ORBIT_DIR` and means `~/.orbit`. `link` uses only its positional path; `--dir`/`ORBIT_DIR` never retarget the pointer written by `link`.
+`init` takes its target from the positional argument, then `--dir`/`ORBIT_DIR`. With no target it uses `./.orbit` inside Git, the current directory as a Workspace root outside Git, or a discovered Workspace root when invoked from a child Repository. An explicit target that is already a Git working-tree root, such as `.` or a repository path, also uses that checkout's `./.orbit/board` (or the main checkout's from a linked worktree) instead of treating the root as an explicit Board directory; a target that is already a Board folder is reused in place. `--global` is exclusive with a positional target and with `--dir`/`ORBIT_DIR` and means `~/.orbit/board`. `link` uses only its positional path; `--dir`/`ORBIT_DIR` never retarget the pointer written by `link`.
 
-A repository owns one local Board. A child Repository inside a Workspace discovers the Workspace Board by walking above its Git root and needs no `orbit link`. Workspace discovery takes precedence over a child-local Board and reports `AMBIGUOUS_BOARD`; `orbit init <workspace>` refuses to create the first Workspace Board when a child-local Board already exists. After migration creates the Workspace Board, `init` reuses it and leaves child Boards untouched as backups. A second `.orbit` in the same working tree is refused because the `orbit` branch can be checked out by only one worktree.
+A repository owns one local Board. A child Repository inside a Workspace discovers the Workspace Board by walking above its Git root and needs no `orbit link`. Workspace discovery takes precedence over a child-local Board and reports `AMBIGUOUS_BOARD`; `orbit init <workspace>` refuses to create the first Workspace Board when a child-local Board already exists. After migration creates the Workspace Board, `init` reuses it and leaves child Boards untouched as backups. A second `.orbit` in the same working tree is refused.
 
-`orbit init --global` targets `~/.orbit` and creates a `repository`-mode Board unless it already exists, even when `~` happens to sit inside another Git working tree. The global Board is the last discovery fallback and is never created while resolving a command.
+`orbit init --global` targets `~/.orbit/board` and creates a standalone Board unless it already exists, even when `~` happens to sit inside another Git working tree. The global Board is the last discovery fallback and is never created while resolving a command.
 
 A Workspace is a normal folder, not a Git repository. Run `orbit init <workspace-root>` to create `<workspace-root>/.orbit/board` and reserve `<workspace-root>/.orbit/cache`. Repositories inside the Workspace discover the Board automatically, including across their Git boundary. Repositories outside it can join with `orbit link <workspace-root>`. `orbit init` does not clone repositories.
 
@@ -325,8 +319,8 @@ repository `.orbit` paths (or their legacy `<git-common-dir>/orbit/board` paths)
 into `<workspace>/.orbit/board`. It requires an ordinary non-Git Workspace root.
 If the Workspace Board exists, it is the destination. Otherwise, the command
 plans a new Board from the legacy Workspace Board's configuration, adapting
-`id.prefix` to the Workspace folder's derived slug, `board.storage` to
-`repository`, and `board.branch` to `orbit`. Without a legacy Workspace Board it
+`id.prefix` to the Workspace folder's derived slug, drops the retired
+`board.storage` key, and adapts `board.branch` to `orbit`. Without a legacy Workspace Board it
 uses default settings. The plan names the configuration source in
 `configuration_source`.
 `--dry-run` validates and prints the plan without writing. Apply saves an atomic
@@ -345,7 +339,8 @@ The Workspace config is authoritative. Every differing source config setting is
 reported with both values. When migration stages the first Workspace Board, the
 legacy Workspace Board's configuration becomes the Workspace config: `[github]`,
 `[workspace]`, and Board policy settings carry over, while the layout-specific
-`id.prefix`, `board.storage`, and `board.branch` are adapted. Task IDs are
+`id.prefix` and `board.branch` are adapted and the retired `board.storage` key is
+dropped. Task IDs are
 preserved unless they collide with a Workspace or earlier source ID. Source
 prefixes that differ from the Workspace
 prefix are added to `id.accepted_prefixes`, so they do not force an ID rewrite.
@@ -483,7 +478,7 @@ A Board has one slug. It is resolved from `DIR` when the Board is created; an em
 | `init DIR` | Workspace-root or Board-directory basename | explicit |
 | `init --global` | `orb`, with a warning | explicit |
 
-The repository-local `./.orbit` uses the repository folder name. A Workspace Board uses the Workspace-root name, so `~/src/acme` becomes `acme-`. A linked worktree defaults to the main checkout's `.orbit`, so it keeps the same Board and slug.
+The repository-local `./.orbit/board` uses the repository folder name. A Workspace Board uses the Workspace-root name, so `~/src/acme` becomes `acme-`. A linked worktree defaults to the main checkout's `.orbit/board`, so it keeps the same Board and slug.
 
 Auto-derived names are normalized: lowercase; every run outside `[a-z0-9]` becomes one `-`; collapse and trim `-`; fall back to `orb`; cap at 20 characters at the last dash, or hard-cut. Auto names never fail. A warning on stderr is emitted when the anchor is the home directory or `/`.
 
@@ -543,15 +538,15 @@ The plan shape is:
 
 The migration is not reversible for external references. `git revert` restores the files, but old IDs in pull requests, chat, docs, agent memory, and shell history remain stale. Run `--dry-run` first, pick the final slug deliberately, and treat the prefix as immutable again afterwards.
 
-`orbit link DIR` writes an absolute pointer at `<git-common-dir>/orbit/link` for a repository joining an existing Board. `DIR` can be the Workspace root (whose Board is `<workspace>/.orbit/board`) or a Board directory. An old workspace root containing `board/` or a legacy Board root resolves with `LEGACY_LAYOUT`. A target that holds no Board returns `LINK_NOT_FOUND`. `orbit unlink` removes the pointer. Because the pointer lives in the common directory, every linked worktree resolves the same Board. Linking does not delete a local Board; it shadows it and reports every shadowed local Board path, including a legacy `<git-common-dir>/orbit/board`.
+`orbit link DIR` writes an absolute pointer at `<git-common-dir>/orbit/link` for a repository joining an existing Board. `DIR` can be the Workspace root (whose Board is `<workspace>/.orbit/board`) or a Board directory. An old workspace root containing `board/` or a legacy Board root resolves with `LEGACY_LAYOUT`; later Board commands then refuse it with `BOARD_NOT_MIGRATED` until `orbit migrate` runs. A target that holds no Board returns `LINK_NOT_FOUND`. `orbit unlink` removes the pointer. Because the pointer lives in the common directory, every linked worktree resolves the same Board. Linking does not delete a local Board; it shadows it and reports every shadowed local Board path, including a legacy `<git-common-dir>/orbit/board`.
 
-Every command resolves the Board in this order. The first match wins.
+Every command resolves the Board in this order. The first match wins. An Orbit folder `.orbit` resolves its hidden `board/` directory or the `board` pointer file naming a visible Board folder; a Board sitting directly at `.orbit`, at `.board`, at `<workspace>/board`, or in `<git-common-dir>/orbit/board` is a legacy layout that resolves with a `LEGACY_LAYOUT` warning but then fails Board commands with `BOARD_NOT_MIGRATED` until `orbit migrate` converts it.
 
 1. `--dir` or `ORBIT_DIR`, which names the Workspace root or a Board directory directly.
 2. The link pointer at `<git-common-dir>/orbit/link`. A legacy target — an old board root or a Workspace root containing `board/` — resolves with a `LEGACY_LAYOUT` warning.
-3. The nearest containing Workspace Board at `<workspace>/.orbit/board`, walking above child Git roots.
-4. The nearest repository `.orbit`, walking up to the enclosing repository root, skipping `~/.orbit` itself.
-5. The main checkout's `.orbit`. The main checkout is the parent of the Git common directory when that directory is literally named `.git`; otherwise it is the repository root.
+3. The nearest containing Workspace Board, walking above child Git roots.
+4. The nearest repository `.orbit`, walking up to the enclosing repository root, skipping `~/.orbit` itself; it resolves to `.orbit/board` or the pointer's visible folder.
+5. The main checkout's `.orbit`, resolved the same way. The main checkout is the parent of the Git common directory when that directory is literally named `.git`; otherwise it is the repository root.
 6. The legacy local layout at `<git-common-dir>/orbit/board`, with a `LEGACY_LAYOUT` warning.
 7. `~/.orbit`, only when it already exists.
 
@@ -559,9 +554,9 @@ A pointer whose target no longer contains a Board returns `LINK_NOT_FOUND`. A mi
 
 ### Legacy layouts and migration
 
-Before this layout, a local Board lived at `<git-common-dir>/orbit/board` with its lock at `<git-common-dir>/orbit/lock`; a shared Board lived at `<workspace>/board` or an arbitrary `--board` path. Those Boards keep resolving through step 5 or through a legacy link target, with a warning. Legacy support is removed in the release after this change.
+Before ADR 0019, a local Board lived at `<git-common-dir>/orbit/board` with its lock at `<git-common-dir>/orbit/lock`, a worktree-backed Board lived at `.orbit` as a worktree of the code repository, and a shared Board lived at `<workspace>/board` or an arbitrary `--board` path. Those Boards still resolve through discovery or a legacy link target with a `LEGACY_LAYOUT` warning, but every Board command then fails with `BOARD_NOT_MIGRATED` until the Board is converted.
 
-`orbit doctor --migrate` is the explicit, resumable migration. For a local Board it adds `<main-checkout>/.orbit` as a worktree of the existing `orbit` branch, verifies every Task, writes the exclusion entry, and removes the old worktree record. For a shared `<workspace>/board` it moves the Board root to `<workspace>/.orbit/board` and reserves `<workspace>/.orbit/cache`. An arbitrary `--board` root outside every working tree is already DIR-shaped: it keeps its path, records `board.storage = "repository"`, and only the pointer changes. Other legacy roots are moved to a DIR that matches their storage mode. In every case the command updates the current repository's pointer. Interrupting the migration leaves at least one readable layout; re-running the command resumes. Other linked repositories may need to run `orbit link DIR` again. A legacy Board directly at `<workspace>/.orbit` remains available through an explicit `--dir` path; Workspace initialization reports it and will not shadow it.
+`orbit migrate [--apply|--dry-run]` is the explicit conversion (preview by default). It turns the resolved legacy Board into a standalone repository on branch `orbit` at the canonical location — the hidden `.orbit/board` inside the repository's or Workspace's Orbit folder, or a visible Board folder anchored by the `.orbit/board` pointer file — moves `<git-common-dir>/orbit/board` content onto that branch, removes the old worktree record, writes the `.git/info/exclude` entries, and reserves `.orbit/cache`. In the same commit it rewrites task frontmatter `github:` links to `remote:`, moves `repo:*` labels into the `repo` field, converts `[github]` configuration into remote project entries, drops `board.storage`, and seeds `board.areas` from the Area values Tasks already use. Re-running after `--apply` is a no-op. Other linked repositories may need to run `orbit link DIR` again. A legacy Board directly at `<workspace>/.orbit` remains available through an explicit `--dir` path; Workspace initialization reports it and will not shadow it.
 
 ### Agent configuration
 
@@ -569,9 +564,9 @@ Before this layout, a local Board lived at `<git-common-dir>/orbit/board` with i
 
 ### Doctor
 
-`doctor` runs without a Board and reports the discovery trace. Running without a Board is not itself a failure; the layout findings and task checks determine health. It diagnoses a legacy layout, a half-moved Board (`AMBIGUOUS_BOARD`), an orphan worktree whose `orbit` branch record outlived `DIR` (`ORPHAN_WORKTREE`), a storage mode that disagrees with `board.storage` (`STORAGE_MISMATCH`), and managed agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`). From a Workspace root or any child repository it additionally names the resolved Workspace and Board and reports missing or malformed Workspace layout, undiscovered, unreachable, stale, or removed repositories, unsupported origins, stale or partial Remote Issue caches, interrupted Workspace migrations and local Board remnants, duplicate GitHub identities, orphaned links, field-level sync conflicts, and managed agent setup drift or collisions. Plain non-Git child directories are informational warnings rather than findings, because Workspace discovery only includes direct child repositories; a directory that used to be a repository remains an actionable stale-repository finding. Every diagnostic identifies a severity, affected repository or Task/Issue when applicable, cause, and safe next action. `doctor --fix` removes stale temp files and re-attaches an orphan worktree; `doctor --migrate` performs the legacy migration above. Task-level checks run when a Board is resolved.
+`doctor` runs without a Board and reports the discovery trace. Running without a Board is not itself a failure; the layout findings and task checks determine health. It diagnoses a legacy layout, a half-moved Board (`AMBIGUOUS_BOARD`), an orphan worktree whose `orbit` branch record outlived `DIR` (`ORPHAN_WORKTREE`), a `board.storage` value that disagrees with the Board's Git shape (`STORAGE_MISMATCH`), and managed agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`). From a Workspace root or any child repository it additionally names the resolved Workspace and Board and reports missing or malformed Workspace layout, undiscovered, unreachable, stale, or removed repositories, unsupported origins, stale or partial Remote Issue caches, interrupted Workspace migrations and local Board remnants, duplicate GitHub identities, orphaned links, field-level sync conflicts, and managed agent setup drift or collisions. Plain non-Git child directories are informational warnings rather than findings, because Workspace discovery only includes direct child repositories; a directory that used to be a repository remains an actionable stale-repository finding. Every diagnostic identifies a severity, affected repository or Task/Issue when applicable, cause, and safe next action. `doctor --fix` removes stale temp files and re-attaches an orphan worktree; legacy Board layouts are converted with `orbit migrate`. Task-level checks run when a Board is resolved.
 
-When the Board has a configured GitHub provider, `doctor` also reports GitHub authentication and required scopes, linked-repository access, and (in full mode) organization Issue Field configuration problems. These checks are read-only and are collected alongside Board diagnostics; a GitHub problem does not prevent task or Board integrity checks from running. Workspace diagnostics are likewise read-only unless an explicit deterministic `--fix` or `--migrate` is requested; doctor never resolves semantic conflicts, merges or deletes Tasks, detaches repositories, closes Issues, or overwrites user-authored agent files.
+When the Board has a configured GitHub provider, `doctor` also reports GitHub authentication and required scopes, linked-repository access, and (in full mode) organization Issue Field configuration problems. These checks are read-only and are collected alongside Board diagnostics; a GitHub problem does not prevent task or Board integrity checks from running. Workspace diagnostics are likewise read-only unless an explicit deterministic `--fix` is requested; doctor never resolves semantic conflicts, merges or deletes Tasks, detaches repositories, closes Issues, or overwrites user-authored agent files.
 
 Auto-commit policy: create/update/claim/release/checkpoint/done/cancel/reopen/depend/undepend/delete/comment/label commit immediately as `orbit: <verb> <id>`. Heartbeat and lease-only writes are not committed until the next meaningful mutation or `orbit sync`. A failed commit does not fail the operation: the state is already on disk and the result carries `meta.warnings: ["COMMIT_FAILED: ..."]`. `doctor` reports uncommitted board changes. A slug migration first flushes heartbeat-only writes as `orbit: sync`, then records one `orbit: migrate task prefix from <old> to <new>` commit. The Board's Git branch is never pushed; GitHub auto-push is a separate opt-in API write.
 
@@ -616,7 +611,8 @@ orbit prime [--hook-json] [--repo NAME] [--label LABEL]... [--by NAME]
 orbit export
 orbit setup <claude|cursor|codex|opencode|devin|mattpocock|all> [--scope project|user] [--hooks] [--no-mcp] [--portable-mcp] [--mcp-bin PATH] [--print] [--check] [--remove]
 orbit mcp
-orbit doctor [--fix | --migrate]
+orbit migrate [--apply|--dry-run]
+orbit doctor [--fix]
 orbit sync
 orbit github <status|connect|setup|repo|adopt|create|sync|auto-push>
 orbit triage <context|review|apply>
@@ -755,7 +751,7 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 - `init` accepts `--slug` as a bare word. Explicit invalid input returns `INVALID_SLUG` with a normalized suggestion. Re-runs preserve the stored prefix; an empty Board can change it, a populated Board returns `SLUG_LOCKED` naming `orbit slug migrate <slug>`; `--print` previews the same prefix without writing.
 - `init` derives the slug from `DIR`: the parent folder name when `DIR` is named `.orbit`, otherwise `DIR`'s own name. `--global` and `~/.orbit` use `orb` with a warning. Explicit `--slug` wins.
 - `init` refuses to create a second Board for the same location. A re-run on the same `DIR` is idempotent; an attempt to create `.orbit` while a link, ancestor `.orbit`, main-checkout `.orbit`, or legacy Board already resolves for `DIR` returns `ALREADY_INITIALIZED` and names the existing Board. `unlink` clears a link; move or migrate an ancestor, main-checkout, or legacy Board. `--global` and the `~/.orbit` fallback are exempt.
-- `init --global` creates or reuses `~/.orbit` in `repository` mode. Discovery uses it only when it already exists; no command creates it implicitly.
+- `init --global` creates or reuses `~/.orbit/board` as a standalone Board. Discovery uses it only when it already exists; no command creates it implicitly.
 - `slug show` is read-only and reports the slug, literal prefix, task/SubTask counts, and comment-file count. `slug migrate` is the explicit rewrite path described in [Migrating the slug](#migrating-the-slug); it is not exposed as an MCP tool.
 - `slug migrate` validates the target like `--slug`. The current slug is a no-op with no commit. Applying with live claims requires `--force`; dry-run reports them without refusing. An unhealthy Board returns `MIGRATION_BLOCKED`; a target collision returns `PREFIX_COLLISION`. `--dry-run` writes nothing.
 - A hand-edited `id.prefix` that matches no task file returns one `PREFIX_MISMATCH` from strict loads and `doctor`. Migration refuses this state; restore the configured prefix first.
@@ -772,7 +768,7 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 - `tree <id>` returns one Parent Task and its direct SubTasks, root first, with the same task rows as `list`/`ready`; it refuses a SubTask. `data` carries `root`, `tasks`, and `count`.
 - `doctor` reports missing parents (`DANGLING_PARENT`), nested or self parents (`NESTED_SUBTASK`), parent/ID mismatches (`PARENT_MISMATCH`), and an epic on a SubTask (`INVALID_TYPE`).
 - `doctor` runs without a Board. It reports the discovery trace and the layout findings `LEGACY_LAYOUT`, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and `ABSOLUTE_BOARD_PATH`, then runs task-level checks when a Board is resolved. In a Workspace it also reports `WORKSPACE_LAYOUT`, `WORKSPACE_CACHE_CORRUPT`, `WORKSPACE_REPOSITORIES_NOT_DISCOVERED`, `WORKSPACE_CATALOG_STALE`, `WORKSPACE_REPOSITORIES_EMPTY`, `WORKSPACE_REPOSITORY_MISSING`, `WORKSPACE_REPOSITORY_STALE`, `WORKSPACE_REPOSITORY_INACCESSIBLE`, `WORKSPACE_REPOSITORY_REMOVED`, `WORKSPACE_REPOSITORY_UNSUPPORTED`, `WORKSPACE_MISSING_ORIGIN`, `WORKSPACE_UNSUPPORTED_ORIGIN`, `WORKSPACE_CONFIG_CONFLICT`, `WORKSPACE_ISSUES_NOT_REFRESHED`, `WORKSPACE_ISSUES_STALE`, `WORKSPACE_ISSUES_UNAVAILABLE`, `WORKSPACE_MIGRATION_INCOMPLETE`, `WORKSPACE_MIGRATION_STAGE`, `WORKSPACE_LOCAL_BOARD`, `WORKSPACE_AGENT_CONFIG`, `WORKSPACE_AGENT_DRIFT`, `WORKSPACE_AGENT_CONFLICT`, `MATTPOCOCK_SETUP_DRIFT`, `GITHUB_DUPLICATE_LINK`, `GITHUB_ORPHAN_LINK`, and `GITHUB_SYNC_CONFLICT`. Findings carry `severity`, optional `repository`, `task`, and `issue`, `cause`, and `next_action`. Plain non-Git child directories are reported as non-blocking warnings, not findings; a directory that previously held a repository remains `WORKSPACE_REPOSITORY_STALE`.
-- `doctor --fix` removes stale temp files and re-attaches an orphan `orbit` worktree whose `DIR` was deleted; it repairs the repository that holds `--dir`/`ORBIT_DIR` when given, else the current one. It does not rewrite tasks or comments. `doctor --migrate` performs the explicit, resumable legacy migration described in [Legacy layouts and migration](#legacy-layouts-and-migration). Before it deletes a legacy copy it requires the Task and comment Markdown of both copies to be byte-identical and refuses with `MIGRATION_BLOCKED` otherwise, or when the legacy worktree has uncommitted changes. After a workspace migration it lists a note: other Repositories still linked to the old `board` path must run `orbit link` again.
+- `doctor --fix` removes stale temp files and re-attaches an orphan `orbit` worktree whose `DIR` was deleted; it repairs the repository that holds `--dir`/`ORBIT_DIR` when given, else the current one. It does not rewrite tasks or comments. `orbit migrate` performs the explicit legacy migration described in [Legacy layouts and migration](#legacy-layouts-and-migration): it previews by default, `--apply` converts the Board into a standalone repository in one commit, and a re-run is a no-op. Before it deletes a legacy copy it requires the Task and comment Markdown of both copies to be byte-identical and refuses with `MIGRATION_BLOCKED` otherwise, or when the legacy worktree has uncommitted changes. After a workspace migration it lists a note: other Repositories still linked to the old `board` path must run `orbit link` again.
 - `undepend` is idempotent.
 - `cancel` resolves dependents. It requires the claim holder unless `--force`; on a Parent Task, `--force` also cancels open SubTasks.
 - `label add` and `label remove` are idempotent. Labels are lowercase slugs; invalid labels are rejected with `INVALID_LABEL`.
@@ -922,10 +918,10 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Multi-process tests: concurrent claims, dependencies, and deletes against one board; assert serializability and distinct claims.
 - Crash test: abort a writer between temp write and rename; the old file survives and `doctor --fix` removes the temp.
 - Worktree integration: initialize in the main worktree, claim from a linked worktree, assert one board.
-- Orbit folder tests: a secondary worktree resolves the main checkout's `.orbit`; `init` there reuses it; commands run from `src/` resolve the root Board and `init` there refuses while that Board exists; `git clean -xdff` removes `DIR` and `doctor --fix` re-attaches it with every Task intact; `init` outside a repository creates a `repository`-mode Board; `~/.orbit` resolves only when it exists and `init --global` creates it.
+- Orbit folder tests: a secondary worktree resolves the main checkout's `.orbit/board`; `init` there reuses it; commands run from `src/` resolve the root Board and `init` there refuses while that Board exists; `git clean -xdff` removes `DIR` and `doctor --fix` re-attaches it with every Task intact; `init` outside a repository creates a Workspace Board; `~/.orbit` resolves only when it exists and `init --global` creates `~/.orbit/board`.
 - Workspace-root tests: `init <workspace>` creates `.orbit/board` plus `.orbit/cache` outside Git; Workspace root and nested child Git directories resolve one Board without links; an outside Repository can link the Workspace root; `--dir`/`ORBIT_DIR` accept the Workspace root; child-local Boards and unknown `.orbit` contents are reported without being overwritten; legacy direct `.orbit` Boards remain explicitly addressable.
 - Workspace migration tests: dry-run is read-only; `.board` and child Boards combine; colliding IDs and structured references remap; different source prefixes are preserved; duplicate GitHub links stop before writes; Workspace config wins when a destination exists and a staged Board inherits the legacy Workspace config; interrupted plans resume; new Boards activate only after validation; source Boards remain unchanged.
-- Legacy layout tests: old `<git-common-dir>/orbit/board` and `<workspace>/board` targets resolve with `LEGACY_LAYOUT`; `doctor --migrate` is resumable and preserves Tasks; an interrupted migration reports `AMBIGUOUS_BOARD`; an orphan worktree reports `ORPHAN_WORKTREE`; a wrong `board.storage` reports `STORAGE_MISMATCH`.
+- Legacy layout tests: old `<git-common-dir>/orbit/board`, `.orbit`-as-Board, `<workspace>/board`, and worktree-backed targets resolve with `LEGACY_LAYOUT` and then fail commands with `BOARD_NOT_MIGRATED`; `orbit migrate` previews by default, `--apply` converts to the standalone layout preserving Tasks, and a re-run is a no-op; an interrupted migration reports `AMBIGUOUS_BOARD`; an orphan worktree reports `ORPHAN_WORKTREE`; a leftover `board.storage` reports `STORAGE_MISMATCH`.
 - Link tests: `link DIR` between repositories shares one graph, legacy workspace-root targets still resolve with a warning, `unlink` returns to the main checkout's Board, and `setup --scope user` writes no Board path.
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, `--remove` preserving user content, project versus user scope, and TTY versus non-TTY `init` behavior.
 - Onboarding tests: idempotent `init`, first-board refusal, harness detection and selection, link precedence over a local Board, `--dir`/`ORBIT_DIR` overrides, main-checkout fallback, vanished links, and ephemeral binary rejection.

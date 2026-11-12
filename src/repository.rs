@@ -173,7 +173,7 @@ pub fn child_repositories(anchor: &Path, board: &Board) -> Result<Vec<Repository
     while let Some(directory) = pending.pop() {
         if let Some(main) = repository_main(&directory)? {
             if main != board_root
-                && Board::is_board(&directory) == false
+                && !Board::is_board(&directory)
                 && is_member(&directory, &main, board)?
                 && seen.insert(main.clone())
             {

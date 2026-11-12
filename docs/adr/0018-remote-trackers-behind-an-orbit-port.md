@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # ADR 0018: Remote Trackers behind an Orbit-defined port

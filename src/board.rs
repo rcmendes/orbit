@@ -1818,7 +1818,7 @@ pub(crate) fn classify_link_target(path: &Path) -> Result<(PathBuf, bool)> {
         OrbitError::new(
             code::LINK_NOT_FOUND,
             format!(
-                "the linked Board at {} is missing; run `orbit link <board>` to re-link or restore it",
+                "the linked Board at {} is missing; restore it or re-add the repository with `orbit repo add`",
                 path.display()
             ),
         )
@@ -1865,14 +1865,14 @@ pub(crate) fn read_link_file(path: &Path) -> Result<Option<PathBuf>> {
     let value = content.trim();
     if value.is_empty() {
         return Err(OrbitError::config(format!(
-            "{} is empty; run `orbit unlink` and link the repository again",
+            "{} is empty; delete it or re-add the repository with `orbit repo add`",
             path.display()
         )));
     }
     let candidate = PathBuf::from(value);
     if !candidate.is_absolute() {
         return Err(OrbitError::config(format!(
-            "{} must contain an absolute path; run `orbit link` again",
+            "{} must contain an absolute path; fix it or re-add the repository with `orbit repo add`",
             path.display()
         )));
     }

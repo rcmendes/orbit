@@ -11,7 +11,7 @@ task as a Markdown file on a dedicated Git branch and serves it through this CLI
 Writes are serialized by one lock and published atomically, so several agents
 can share a Board without a database server.
 
-Run `orbit init` once per repository or Workspace root, then let agents take work
+Run `orbit init` once per repository or Board anchor folder, then let agents take work
 with
 `orbit ready --claim`, hold it with `orbit heartbeat`, record a handoff with
 `orbit checkpoint`, and finish it with `orbit done`. Every command accepts --json
@@ -147,6 +147,7 @@ the optional `repo` frontmatter field; `orbit add` fills it from the current\
 Repository automatically.";
 
 pub const REPO_EXAMPLES: &str = "\
+Examples:
   orbit repo list --json\
   orbit repo add ../api --name api\
   orbit repo remove api\

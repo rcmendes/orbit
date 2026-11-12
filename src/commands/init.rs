@@ -680,10 +680,14 @@ struct ChildBoard {
 }
 
 /// Repositories below `anchor` that anchor their own Board. The walk does
-/// not descend into repositories, matching member-Repository discovery.
+/// not descend into repositories, matching member-Repository discovery. A
+/// missing anchor has no children; `run_init` creates it.
 fn child_boards(anchor: &Path, board_root: &Path) -> Result<Vec<ChildBoard>> {
     let board_root = crate::repository::canonical_lenient(board_root);
     let mut found = std::collections::BTreeMap::new();
+    if !anchor.is_dir() {
+        return Ok(Vec::new());
+    }
     let mut pending = vec![anchor.to_path_buf()];
     while let Some(directory) = pending.pop() {
         if directory.join(".git").exists() {

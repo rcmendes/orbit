@@ -70,6 +70,7 @@ fn cmd_add(board: &Board, args: RepoAddArgs) -> Result<CommandOutput> {
         None => "explicit",
     };
     let mut warnings = Vec::new();
+    let mut refreshed = Vec::new();
     if existing.is_none() {
         // Point the repository at this Board. Warn when the repository
         // anchors its own Board or links elsewhere: the pointer wins
@@ -101,10 +102,33 @@ fn cmd_add(board: &Board, args: RepoAddArgs) -> Result<CommandOutput> {
             });
             Ok(())
         })?;
+        // Point configured agent MCP entries at the member's resolved Board,
+        // the way `orbit link` used to refresh them.
+        match crate::setup::refresh(&main) {
+            Ok(outcome) => {
+                refreshed = outcome
+                    .files
+                    .iter()
+                    .filter(|file| {
+                        matches!(
+                            file.action,
+                            crate::setup::Action::Created
+                                | crate::setup::Action::Updated
+                                | crate::setup::Action::Removed
+                        )
+                    })
+                    .map(|file| file.relative.to_string_lossy().into_owned())
+                    .collect();
+            }
+            Err(error) => warnings.push(format!(
+                "could not refresh agent configuration: {error}; run `orbit setup <client>` to update MCP entries"
+            )),
+        }
     }
 
     let data = json!({
         "repository": { "name": name, "path": main, "kind": kind },
+        "refreshed": refreshed,
         "board": board.root,
     });
     let human = match existing {
@@ -179,6 +203,7 @@ fn cmd_remove(board: &Board, args: RepoRemoveArgs) -> Result<CommandOutput> {
 
     // Clear the link pointer when it still targets this Board.
     let mut link_cleared = false;
+    let mut refresh_warning = None;
     if let Some(toplevel) = git::toplevel_containing(&removed.path)
         && let Ok(common) = git::common_dir_at(&toplevel)
         && let Ok(Some(target)) = board::read_link_file(&common.join("orbit").join("link"))
@@ -187,6 +212,13 @@ fn cmd_remove(board: &Board, args: RepoRemoveArgs) -> Result<CommandOutput> {
     {
         board::Board::clear_link_at(&common)?;
         link_cleared = true;
+        // The repository resolves its own Board again; refresh agent entries
+        // the way `orbit unlink` used to.
+        if let Err(error) = crate::setup::refresh(&removed.path) {
+            refresh_warning = Some(format!(
+                "could not refresh agent configuration: {error}; run `orbit setup <client>` to update MCP entries"
+            ));
+        }
     }
 
     let data = json!({
@@ -194,10 +226,14 @@ fn cmd_remove(board: &Board, args: RepoRemoveArgs) -> Result<CommandOutput> {
         "link_cleared": link_cleared,
         "board": board.root,
     });
-    Ok(CommandOutput::new(
+    let mut output = CommandOutput::new(
         data,
         format!("removed member Repository `{}`", removed.name),
-    ))
+    );
+    if let Some(warning) = refresh_warning {
+        output = output.with_warning(warning);
+    }
+    Ok(output)
 }
 
 fn cmd_list(board: &Board) -> Result<CommandOutput> {

@@ -151,6 +151,10 @@ pub enum Command {
     #[command(long_about = help::SYNC_LONG, after_long_help = help::SYNC_EXAMPLES)]
     Sync,
 
+    /// Configure and synchronize the Board's host repository.
+    #[command(long_about = help::BOARD_LONG, after_long_help = help::BOARD_EXAMPLES)]
+    Board(BoardArgs),
+
     /// Link GitHub repositories and synchronize Issues with Tasks.
     #[command(name = "github", long_about = help::GITHUB_LONG, after_long_help = help::GITHUB_EXAMPLES)]
     GitHub(GitHubArgs),
@@ -168,6 +172,10 @@ pub struct InitArgs {
     /// that checkout's ./.orbit instead of using the root as the Board directory.
     #[arg(value_name = "DIR")]
     pub target: Option<PathBuf>,
+
+    /// Create or reuse the global Board at ~/.orbit.
+    #[arg(long, conflicts_with = "target")]
+    pub global: bool,
 
     /// Which harnesses to wire: auto, all, none, ask, or a comma-separated list.
     #[arg(long, value_name = "SELECTOR", conflicts_with = "no_agents")]
@@ -197,6 +205,28 @@ pub struct InitArgs {
     /// Board slug used to prefix Task IDs. Bare word: teramigo, not teramigo-.
     #[arg(long, value_name = "SLUG")]
     pub slug: Option<String>,
+
+    /// Use a visible Board folder instead of the hidden .orbit/board layout.
+    ///
+    /// Bare `--visible` names the folder `board`; `--visible=NAME` picks the
+    /// name. Only applies when the target resolves to a repository or Workspace
+    /// root — an explicit directory is already a visible Board folder.
+    #[arg(
+        long,
+        value_name = "NAME",
+        num_args = 0..=1,
+        require_equals = true,
+        conflicts_with = "global"
+    )]
+    pub visible: Option<Option<String>>,
+
+    /// Set the Board host to a member Repository name/path or git URL whose
+    /// remote stores the Board's `orbit` branch.
+    ///
+    /// Bare `--host` prompts in a terminal; `--host=REPO|URL` sets it without
+    /// prompting. An existing host branch with a different Slug is refused.
+    #[arg(long, value_name = "REPO|URL", num_args = 0..=1, require_equals = true)]
+    pub host: Option<Option<String>>,
 
     /// Preview the files that would change without writing them; harness
     /// selection does not prompt unless --agents ask is given.
@@ -1121,5 +1151,49 @@ pub struct GitHubSyncArgs {
     pub apply: bool,
     /// Resolve a field conflict as `FIELD=orbit` or `FIELD=github`. Repeat as needed.
     #[arg(long = "resolve", value_name = "FIELD=orbit|github", action = clap::ArgAction::Append)]
+    pub resolutions: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct BoardArgs {
+    #[command(subcommand)]
+    pub command: BoardCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BoardCommand {
+    /// Show, set, or clear the Board host repository.
+    ///
+    /// The host is a member Repository name/path or another git URL whose
+    /// remote stores this Board's `orbit` branch. With no argument the current
+    /// host is shown; `--none` clears it without deleting the remote branch.
+    #[command(long_about = help::BOARD_HOST_LONG, after_long_help = help::BOARD_HOST_EXAMPLES)]
+    Host(BoardHostArgs),
+
+    /// Fetch the host, merge Orbit-aware, and push the `orbit` branch.
+    ///
+    /// Different Tasks and different fields merge; Comments union; the earlier
+    /// Claim wins and the loser is told; a same-field conflict stops the sync
+    /// until `--resolve FIELD=local|host` picks a side. History is merged,
+    /// never rebased or force-pushed.
+    #[command(long_about = help::BOARD_SYNC_LONG, after_long_help = help::BOARD_SYNC_EXAMPLES)]
+    Sync(BoardSyncArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BoardHostArgs {
+    /// Member Repository name/path or git URL to host the Board.
+    #[arg(value_name = "REPO|URL")]
+    pub target: Option<String>,
+
+    /// Clear the host without deleting the remote `orbit` branch.
+    #[arg(long, conflicts_with = "target")]
+    pub none: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct BoardSyncArgs {
+    /// Resolve a field conflict as `FIELD=local` or `FIELD=host`. Repeat as needed.
+    #[arg(long = "resolve", value_name = "FIELD=local|host", action = clap::ArgAction::Append)]
     pub resolutions: Vec<String>,
 }

@@ -195,6 +195,10 @@ pub(crate) fn export_repositories(board: &Board) -> Result<Option<Vec<String>>> 
     ))
 }
 
+pub(crate) fn catalog_for_diagnostics(workspace: &Path) -> Result<RepositoryCatalog> {
+    load_catalog(&catalog_path(workspace))
+}
+
 fn load_catalog(path: &Path) -> Result<RepositoryCatalog> {
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)

@@ -1,0 +1,969 @@
+//! `orbit board sync`: fetch the Board host, merge Orbit-aware, push.
+//!
+//! Merge rules (ADR 0019): Tasks and fields merge three-way; Comments union;
+//! a same-field conflict stops until `--resolve FIELD=local|host`; the earlier
+//! of two Claims wins and the loser is told on the Task; history is merged,
+//! never rebased or force-pushed.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+
+use crate::board::{Board, Config, HostSyncMode};
+use crate::board_host;
+use crate::comment::{self, Comment};
+use crate::error::{OrbitError, Result, code};
+use crate::git::{self, CommitOutcome};
+use crate::task::{self, Claim, StrayClaimTimes, Task, TaskFrontmatter};
+
+static SUPPRESSED: AtomicBool = AtomicBool::new(false);
+
+/// Suppress host auto-sync for the rest of this process (`orbit board sync`
+/// performs the sync itself; `--no-sync` sets this too).
+pub fn suppress() {
+    SUPPRESSED.store(true, Ordering::Relaxed);
+}
+
+pub fn suppressed() -> bool {
+    if SUPPRESSED.load(Ordering::Relaxed) {
+        return true;
+    }
+    ["ORBIT_NO_AUTO_SYNC", "ORBIT_NO_HOST_SYNC"]
+        .iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .any(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeSide {
+    Local,
+    Host,
+}
+
+/// Parse `--resolve FIELD=local|host` values into a resolution map.
+pub fn parse_resolutions(values: &[String]) -> Result<BTreeMap<String, MergeSide>> {
+    let mut resolutions = BTreeMap::new();
+    for value in values {
+        let (field, choice) = value.split_once('=').ok_or_else(|| {
+            OrbitError::invalid_argument(format!(
+                "invalid conflict resolution `{value}`; expected FIELD=local or FIELD=host"
+            ))
+        })?;
+        let side = match choice {
+            "local" => MergeSide::Local,
+            "host" => MergeSide::Host,
+            _ => {
+                return Err(OrbitError::invalid_argument(format!(
+                    "invalid conflict resolution `{value}`; choose `local` or `host`"
+                )));
+            }
+        };
+        if field.trim().is_empty() {
+            return Err(OrbitError::invalid_argument(format!(
+                "invalid conflict resolution `{value}`; the field must not be empty"
+            )));
+        }
+        if resolutions.insert(field.to_string(), side).is_some() {
+            return Err(OrbitError::invalid_argument(format!(
+                "field `{field}` has more than one resolution"
+            )));
+        }
+    }
+    Ok(resolutions)
+}
+
+/// A same-field divergence between the local Board and the host.
+#[derive(Debug, Clone)]
+pub struct FieldConflict {
+    /// Resolution key: `<task-id>.<field>` for Task fields, `<task-id>` for a
+    /// whole Task, `<task-id>.comments` for a comment sidecar, `config` for
+    /// config.toml, or the repo-relative path for any other file.
+    pub field: String,
+    pub local: String,
+    pub host: String,
+}
+
+#[derive(Debug)]
+pub struct SyncReport {
+    /// `up_to_date`, `published`, `fast_forwarded`, or `merged`.
+    pub state: &'static str,
+    pub remote_tip: Option<String>,
+    pub merged_files: usize,
+    pub conflicts_resolved: Vec<String>,
+    pub notices: Vec<String>,
+    pub unused_resolutions: Vec<String>,
+}
+
+#[derive(Clone)]
+struct ClaimNotice {
+    task: String,
+    body: String,
+}
+
+struct MergeOutcome {
+    files: BTreeMap<String, Option<String>>,
+    conflicts: Vec<FieldConflict>,
+    notices: Vec<ClaimNotice>,
+    resolutions: BTreeMap<String, MergeSide>,
+    used_resolutions: BTreeSet<String>,
+}
+
+/// Fetch, merge, and push the Board branch on its host.
+pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
+    // Load fresh: `orbit board host` may have changed the config mid-command.
+    let config = Config::load(&board.root)?;
+    let spec = config.board.host.clone().ok_or_else(|| {
+        OrbitError::new(
+            code::BOARD_HOST_NOT_CONFIGURED,
+            "the Board has no host; run `orbit board host <repo|url>` or `orbit init --host`",
+        )
+    })?;
+    let url = board_host::resolve_host_url(board, &spec)?;
+    let branch = config.board.branch.clone();
+    let resolutions = parse_resolutions(resolution_args)?;
+
+    // Persist pending local changes (heartbeats and friends) first.
+    if let CommitOutcome::Failed(message) = board.commit("orbit: sync", true)? {
+        return Err(OrbitError::git(message));
+    }
+
+    board_host::ensure_remote(&board.root, &url)?;
+    git::fetch(&board.root, board_host::HOST_REMOTE)?;
+    let remote_ref = format!("refs/remotes/{}/{}", board_host::HOST_REMOTE, branch);
+    let remote_tip = git::rev_parse(&board.root, &remote_ref)?;
+    let local_head = git::rev_parse(&board.root, "HEAD")?
+        .ok_or_else(|| OrbitError::git("the Board repository has no HEAD commit"))?;
+
+    let push_refspec = || format!("HEAD:refs/heads/{branch}");
+    let Some(remote_tip) = remote_tip else {
+        git::push(&board.root, board_host::HOST_REMOTE, &push_refspec())?;
+        return Ok(SyncReport {
+            state: "published",
+            remote_tip: None,
+            merged_files: 0,
+            conflicts_resolved: Vec::new(),
+            notices: Vec::new(),
+            unused_resolutions: Vec::new(),
+        });
+    };
+    if remote_tip == local_head {
+        return Ok(SyncReport {
+            state: "up_to_date",
+            remote_tip: Some(remote_tip),
+            merged_files: 0,
+            conflicts_resolved: Vec::new(),
+            notices: Vec::new(),
+            unused_resolutions: Vec::new(),
+        });
+    }
+
+    let base = git::merge_base(&board.root, &local_head, &remote_tip)?;
+    if base.as_deref() == Some(remote_tip.as_str()) {
+        // The host is strictly behind: publish local history.
+        git::push(&board.root, board_host::HOST_REMOTE, &push_refspec())?;
+        return Ok(SyncReport {
+            state: "published",
+            remote_tip: Some(remote_tip),
+            merged_files: 0,
+            conflicts_resolved: Vec::new(),
+            notices: Vec::new(),
+            unused_resolutions: Vec::new(),
+        });
+    }
+    if base.as_deref() == Some(local_head.as_str()) {
+        // The local Board is strictly behind: fast-forward, never rebase.
+        git::reset_hard(&board.root, &remote_tip)?;
+        return Ok(SyncReport {
+            state: "fast_forwarded",
+            remote_tip: Some(remote_tip),
+            merged_files: 0,
+            conflicts_resolved: Vec::new(),
+            notices: Vec::new(),
+            unused_resolutions: Vec::new(),
+        });
+    }
+
+    let outcome = merge_trees(
+        &board.root,
+        base.as_deref(),
+        &local_head,
+        &remote_tip,
+        &resolutions,
+    )?;
+    if !outcome.conflicts.is_empty() {
+        return Err(OrbitError::new(
+            code::BOARD_SYNC_CONFLICT,
+            "board sync has unresolved field conflicts; resolve each with --resolve FIELD=local|host",
+        )
+        .with_details(serde_json::json!({
+            "conflicts": outcome.conflicts.iter().map(|conflict| serde_json::json!({
+                "field": conflict.field,
+                "local": conflict.local,
+                "host": conflict.host,
+            })).collect::<Vec<_>>(),
+        })));
+    }
+
+    let merged_files = outcome.files.len();
+    let notices: Vec<String> = outcome.notices.iter().map(|n| n.body.clone()).collect();
+    apply_files(&board.root, &outcome.files)?;
+
+    git::stage_all(&board.root)?;
+    let tree = git::write_tree(&board.root)?;
+    let commit = git::commit_tree_parents(
+        &board.root,
+        &tree,
+        &[&local_head, &remote_tip],
+        "orbit: merge board host",
+    )?;
+    git::reset_hard(&board.root, &commit)?;
+    git::push(&board.root, board_host::HOST_REMOTE, &push_refspec())?;
+
+    let conflicts_resolved: Vec<String> = resolutions
+        .keys()
+        .filter(|field| outcome.used_resolutions.contains(*field))
+        .cloned()
+        .collect();
+    let unused_resolutions: Vec<String> = resolutions
+        .keys()
+        .filter(|field| !outcome.used_resolutions.contains(*field))
+        .cloned()
+        .collect();
+
+    Ok(SyncReport {
+        state: "merged",
+        remote_tip: Some(remote_tip),
+        merged_files,
+        conflicts_resolved,
+        notices,
+        unused_resolutions,
+    })
+}
+
+/// The `host_sync = auto` hook: sync after a committed mutation or at prime.
+/// Failures and contested claims surface as warnings, never errors.
+pub fn auto_after(board: &Board) -> Vec<String> {
+    if suppressed() {
+        return Vec::new();
+    }
+    let Ok(config) = Config::load(&board.root) else {
+        return Vec::new();
+    };
+    if config.board.host_sync != HostSyncMode::Auto || config.board.host.is_none() {
+        return Vec::new();
+    }
+    match sync(board, &[]) {
+        Ok(report) => {
+            let mut warnings = report.notices;
+            if report.state == "merged" {
+                warnings.push(format!(
+                    "board host: merged divergent history and pushed ({} files)",
+                    report.merged_files
+                ));
+            }
+            warnings
+        }
+        Err(error) => vec![format!("BOARD_HOST_SYNC_FAILED: {}", error.message)],
+    }
+}
+
+fn apply_files(root: &Path, files: &BTreeMap<String, Option<String>>) -> Result<()> {
+    for (path, content) in files {
+        let full = root.join(path);
+        match content {
+            Some(text) => {
+                if let Some(parent) = full.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| {
+                        OrbitError::io(format!("create {}", parent.display()), error)
+                    })?;
+                }
+                crate::atomic::write_atomic(&full, text.as_bytes(), true)?;
+            }
+            None => match std::fs::remove_file(&full) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(OrbitError::io(format!("delete {}", full.display()), error));
+                }
+            },
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileKind {
+    Task,
+    Comments,
+    Config,
+    Other,
+}
+
+fn classify(path: &str) -> (FileKind, String) {
+    if path == "config.toml" {
+        return (FileKind::Config, "config".to_string());
+    }
+    for (prefix, kind) in [
+        ("tasks/", FileKind::Task),
+        ("comments/", FileKind::Comments),
+    ] {
+        if let Some(rest) = path.strip_prefix(prefix)
+            && let Some(stem) = rest.strip_suffix(".md")
+            && !stem.contains('/')
+            && !stem.starts_with('.')
+        {
+            let key = if kind == FileKind::Task {
+                stem.to_string()
+            } else {
+                format!("{stem}.comments")
+            };
+            return (kind, key);
+        }
+    }
+    (FileKind::Other, path.to_string())
+}
+
+fn describe_content(content: &Option<String>) -> String {
+    match content {
+        None => "(deleted)".to_string(),
+        Some(text) => {
+            let flat: String = text
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .take(120)
+                .collect();
+            if flat.is_empty() {
+                "(empty)".to_string()
+            } else {
+                flat
+            }
+        }
+    }
+}
+
+fn yaml_desc<T: Serialize>(value: &T) -> String {
+    let rendered = serde_yaml_ng::to_string(value).unwrap_or_default();
+    let rendered = rendered.trim().trim_start_matches("---").trim();
+    rendered.chars().take(200).collect()
+}
+
+/// Three-way field merge. `base` is the field's value in the merge base
+/// (`None` when the Task itself is new on both sides).
+#[allow(clippy::too_many_arguments)]
+fn pick<T>(base: Option<T>, local: T, remote: T, field: &str, outcome: &mut MergeOutcome) -> T
+where
+    T: PartialEq + Clone + Serialize,
+{
+    if local == remote {
+        return local;
+    }
+    if let Some(base) = &base {
+        if *base == local {
+            return remote;
+        }
+        if *base == remote {
+            return local;
+        }
+    }
+    match outcome.resolutions.get(field).copied() {
+        Some(MergeSide::Local) => {
+            outcome.used_resolutions.insert(field.to_string());
+            local
+        }
+        Some(MergeSide::Host) => {
+            outcome.used_resolutions.insert(field.to_string());
+            remote
+        }
+        None => {
+            outcome.conflicts.push(FieldConflict {
+                field: field.to_string(),
+                local: yaml_desc(&local),
+                host: yaml_desc(&remote),
+            });
+            local
+        }
+    }
+}
+
+/// Set-aware variant of `pick` for `depends_on`: order and duplicates do not
+/// make two equal dependency lists conflict.
+fn pick_depends_on(
+    base: Option<Vec<String>>,
+    local: Vec<String>,
+    remote: Vec<String>,
+    field: &str,
+    outcome: &mut MergeOutcome,
+) -> Vec<String> {
+    let canonical = |mut list: Vec<String>| {
+        list.sort();
+        list.dedup();
+        list
+    };
+    pick(
+        base.map(canonical),
+        canonical(local),
+        canonical(remote),
+        field,
+        outcome,
+    )
+}
+
+#[derive(Clone)]
+struct ClaimSide {
+    claim: Option<Claim>,
+    stray: Option<StrayClaimTimes>,
+}
+
+impl ClaimSide {
+    fn of(front: Option<&TaskFrontmatter>) -> Self {
+        Self {
+            claim: front.and_then(|front| front.claim.clone()),
+            stray: front.and_then(|front| front.stray_claim_times.clone()),
+        }
+    }
+
+    fn eq(&self, other: &Self) -> bool {
+        self.claim == other.claim && self.stray == other.stray
+    }
+}
+
+fn claim_identity(claim: &Claim) -> (Option<DateTime<Utc>>, &str) {
+    (claim.claimed_at, claim.holder.as_str())
+}
+
+fn later_time(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn later_stray(
+    a: &Option<StrayClaimTimes>,
+    b: &Option<StrayClaimTimes>,
+) -> Option<StrayClaimTimes> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let key = |s: &StrayClaimTimes| (s.claimed_at, s.lease_until);
+            Some(if key(a) >= key(b) {
+                a.clone()
+            } else {
+                b.clone()
+            })
+        }
+        (Some(a), None) => Some(a.clone()),
+        (None, Some(b)) => Some(b.clone()),
+        (None, None) => None,
+    }
+}
+
+/// The earlier of two Claims wins; a missing timestamp sorts last and the
+/// holder name breaks exact ties deterministically.
+fn earlier_claim<'a>(local: &'a Claim, remote: &'a Claim) -> (&'a Claim, &'a Claim) {
+    let local_key = (
+        local.claimed_at.unwrap_or(DateTime::<Utc>::MAX_UTC),
+        local.holder.as_str(),
+    );
+    let remote_key = (
+        remote.claimed_at.unwrap_or(DateTime::<Utc>::MAX_UTC),
+        remote.holder.as_str(),
+    );
+    if local_key <= remote_key {
+        (local, remote)
+    } else {
+        (remote, local)
+    }
+}
+
+fn claim_notice(task: &str, winner: &Claim, loser: Option<&Claim>) -> ClaimNotice {
+    let body = match loser {
+        Some(loser) => format!(
+            "claim conflict on {task}: the earlier claim by {} (claimed {}) won over {} (claimed {})",
+            winner.holder,
+            winner
+                .claimed_at
+                .map(|at| at.to_rfc3339())
+                .unwrap_or_else(|| "unknown".into()),
+            loser.holder,
+            loser
+                .claimed_at
+                .map(|at| at.to_rfc3339())
+                .unwrap_or_else(|| "unknown".into()),
+        ),
+        None => format!(
+            "claim conflict on {task}: kept the claim by {} (claimed {}); the other side had released it",
+            winner.holder,
+            winner
+                .claimed_at
+                .map(|at| at.to_rfc3339())
+                .unwrap_or_else(|| "unknown".into()),
+        ),
+    };
+    ClaimNotice {
+        task: task.to_string(),
+        body,
+    }
+}
+
+/// Claim merge: the earlier Claim wins and the loser is told; a Claim always
+/// beats a release when both sides changed it differently.
+fn merge_claim(
+    id: &str,
+    base: &ClaimSide,
+    local: &ClaimSide,
+    remote: &ClaimSide,
+    outcome: &mut MergeOutcome,
+) -> ClaimSide {
+    // The same claim on both sides keeps the freshest lease.
+    if let (Some(local_claim), Some(remote_claim)) = (&local.claim, &remote.claim)
+        && claim_identity(local_claim) == claim_identity(remote_claim)
+    {
+        let mut claim = local_claim.clone();
+        claim.lease_until = later_time(local_claim.lease_until, remote_claim.lease_until);
+        return ClaimSide {
+            claim: Some(claim),
+            stray: None,
+        };
+    }
+    if local.claim.is_none() && remote.claim.is_none() {
+        return ClaimSide {
+            claim: None,
+            stray: later_stray(&local.stray, &remote.stray),
+        };
+    }
+    // Ordinary three-way: only one side touched the claim.
+    if local.eq(base) {
+        return remote.clone();
+    }
+    if remote.eq(base) {
+        return local.clone();
+    }
+    // Both sides changed the claim differently.
+    match (&local.claim, &remote.claim) {
+        (Some(local_claim), Some(remote_claim)) => {
+            let (winner, loser) = earlier_claim(local_claim, remote_claim);
+            outcome.notices.push(claim_notice(id, winner, Some(loser)));
+            ClaimSide {
+                claim: Some(winner.clone()),
+                stray: None,
+            }
+        }
+        (Some(local_claim), None) => {
+            outcome.notices.push(claim_notice(id, local_claim, None));
+            ClaimSide {
+                claim: Some(local_claim.clone()),
+                stray: None,
+            }
+        }
+        (None, Some(remote_claim)) => {
+            outcome.notices.push(claim_notice(id, remote_claim, None));
+            ClaimSide {
+                claim: Some(remote_claim.clone()),
+                stray: None,
+            }
+        }
+        (None, None) => ClaimSide {
+            claim: None,
+            stray: later_stray(&local.stray, &remote.stray),
+        },
+    }
+}
+
+/// Merge one Task file three-way. Returns the rendered file plus any
+/// unresolved field conflicts and claim notices.
+fn merge_task(
+    id: &str,
+    base: Option<Task>,
+    local: Task,
+    remote: Task,
+    outcome: &mut MergeOutcome,
+) -> Result<String> {
+    let base_front = base.as_ref().map(|task| &task.front);
+    let key = |field: &str| format!("{id}.{field}");
+
+    let title = pick(
+        base_front.map(|f| f.title.clone()),
+        local.front.title.clone(),
+        remote.front.title.clone(),
+        &key("title"),
+        outcome,
+    );
+    let status = pick(
+        base_front.map(|f| f.status),
+        local.front.status,
+        remote.front.status,
+        &key("status"),
+        outcome,
+    );
+    let task_type = pick(
+        base_front.map(|f| f.task_type),
+        local.front.task_type,
+        remote.front.task_type,
+        &key("type"),
+        outcome,
+    );
+    let priority = pick(
+        base_front.map(|f| f.priority),
+        local.front.priority,
+        remote.front.priority,
+        &key("priority"),
+        outcome,
+    );
+    let labels = pick(
+        base_front.map(|f| f.labels.clone()),
+        local.front.labels.clone(),
+        remote.front.labels.clone(),
+        &key("labels"),
+        outcome,
+    );
+    let depends_on = pick_depends_on(
+        base_front.map(|f| f.depends_on.clone()),
+        local.front.depends_on.clone(),
+        remote.front.depends_on.clone(),
+        &key("depends_on"),
+        outcome,
+    );
+    let parent = pick(
+        base_front.map(|f| f.parent.clone()),
+        local.front.parent.clone(),
+        remote.front.parent.clone(),
+        &key("parent"),
+        outcome,
+    );
+    let waiting_on = pick(
+        base_front.map(|f| f.waiting_on.clone()),
+        local.front.waiting_on.clone(),
+        remote.front.waiting_on.clone(),
+        &key("waiting_on"),
+        outcome,
+    );
+    let checkpoint = pick(
+        base_front.map(|f| f.checkpoint.clone()),
+        local.front.checkpoint.clone(),
+        remote.front.checkpoint.clone(),
+        &key("checkpoint"),
+        outcome,
+    );
+    let area = pick(
+        base_front.map(|f| f.area),
+        local.front.area,
+        remote.front.area,
+        &key("area"),
+        outcome,
+    );
+    let verification = pick(
+        base_front.map(|f| f.verification.clone()),
+        local.front.verification.clone(),
+        remote.front.verification.clone(),
+        &key("verification"),
+        outcome,
+    );
+    let github = pick(
+        base_front.map(|f| f.github.clone()),
+        local.front.github.clone(),
+        remote.front.github.clone(),
+        &key("github"),
+        outcome,
+    );
+    let remote_link = pick(
+        base_front.map(|f| f.remote.clone()),
+        local.front.remote.clone(),
+        remote.front.remote.clone(),
+        &key("remote"),
+        outcome,
+    );
+    let repo = pick(
+        base_front.map(|f| f.repo.clone()),
+        local.front.repo.clone(),
+        remote.front.repo.clone(),
+        &key("repo"),
+        outcome,
+    );
+    let created_at = pick(
+        base_front.map(|f| f.created_at),
+        local.front.created_at,
+        remote.front.created_at,
+        &key("created_at"),
+        outcome,
+    );
+    let updated_at = local.front.updated_at.max(remote.front.updated_at);
+    let body = pick(
+        base.as_ref().map(|task| task.body.clone()),
+        local.body.clone(),
+        remote.body.clone(),
+        &key("body"),
+        outcome,
+    );
+
+    let claim = merge_claim(
+        id,
+        &ClaimSide::of(base_front),
+        &ClaimSide::of(Some(&local.front)),
+        &ClaimSide::of(Some(&remote.front)),
+        outcome,
+    );
+
+    // Unknown frontmatter keys merge per key.
+    let mut extra_keys: BTreeSet<String> = BTreeSet::new();
+    for source in [
+        base_front.map(|f| f.extra.keys()),
+        Some(local.front.extra.keys()),
+        Some(remote.front.extra.keys()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        extra_keys.extend(source.cloned());
+    }
+    let mut extra = BTreeMap::new();
+    for key_name in extra_keys {
+        // `Some(None)` = the base Task exists but lacks the key.
+        let base_value = base_front.map(|f| f.extra.get(&key_name).cloned());
+        let local_value = local.front.extra.get(&key_name).cloned();
+        let remote_value = remote.front.extra.get(&key_name).cloned();
+        if let Some(value) = pick(
+            base_value,
+            local_value,
+            remote_value,
+            &key(&key_name),
+            outcome,
+        ) {
+            extra.insert(key_name, value);
+        }
+    }
+
+    let merged = Task {
+        id: id.to_string(),
+        front: task::TaskFrontmatter {
+            title,
+            status,
+            task_type,
+            priority,
+            labels,
+            depends_on,
+            parent,
+            waiting_on,
+            checkpoint,
+            area,
+            verification,
+            github,
+            remote: remote_link,
+            repo,
+            claim: claim.claim,
+            stray_claim_times: claim.stray,
+            created_at,
+            updated_at,
+            extra,
+        },
+        body,
+    };
+    task::render_task(&merged)
+}
+
+/// Merge the trees of `local` and `remote` three-way against `base`
+/// (`None` for unrelated histories). Every union path resolves to merged
+/// content (`Some`) or deletion (`None`); unmerged divergences land in
+/// `conflicts` unless a `--resolve` covers them.
+fn merge_trees(
+    root: &Path,
+    base: Option<&str>,
+    local: &str,
+    remote: &str,
+    resolutions: &BTreeMap<String, MergeSide>,
+) -> Result<MergeOutcome> {
+    let mut outcome = MergeOutcome {
+        files: BTreeMap::new(),
+        conflicts: Vec::new(),
+        notices: Vec::new(),
+        resolutions: resolutions.clone(),
+        used_resolutions: BTreeSet::new(),
+    };
+
+    let mut paths: BTreeSet<String> = git::tree_files(root, local)?.into_iter().collect();
+    paths.extend(git::tree_files(root, remote)?);
+
+    for path in paths {
+        let local_content = git::show_file(root, local, &path)?;
+        let remote_content = git::show_file(root, remote, &path)?;
+        let base_content = match base {
+            Some(base) => git::show_file(root, base, &path)?,
+            None => None,
+        };
+        resolve_path(
+            &path,
+            base_content,
+            local_content,
+            remote_content,
+            &mut outcome,
+        )?;
+    }
+
+    // Tell every claim loser on their Task's comment sidecar. The notices
+    // stay on the outcome so the report can surface them too.
+    for notice in outcome.notices.clone() {
+        let path = format!("comments/{}.md", notice.task);
+        if outcome.files.get(&path).is_some_and(Option::is_none) {
+            continue; // sidecar deleted on both sides stays deleted
+        }
+        let existing = outcome
+            .files
+            .get(&path)
+            .and_then(|content| content.clone())
+            .unwrap_or_default();
+        let comment = Comment {
+            author: "orbit".to_string(),
+            created_at: Utc::now(),
+            body: notice.body,
+        };
+        let merged = comment::append_comment(&existing, &notice.task, &comment);
+        outcome.files.insert(path, Some(merged));
+    }
+    Ok(outcome)
+}
+
+/// Resolve one path across the three trees. `base`/`local`/`remote` are the
+/// file contents (`None` = absent) at that path.
+fn resolve_path(
+    path: &str,
+    base: Option<String>,
+    local: Option<String>,
+    remote: Option<String>,
+    outcome: &mut MergeOutcome,
+) -> Result<()> {
+    if local == remote {
+        outcome.files.insert(path.to_string(), local);
+        return Ok(());
+    }
+    if local == base {
+        outcome.files.insert(path.to_string(), remote);
+        return Ok(());
+    }
+    if remote == base {
+        outcome.files.insert(path.to_string(), local);
+        return Ok(());
+    }
+
+    // Both sides changed the path differently. A create/delete mismatch is a
+    // file-level conflict regardless of kind.
+    if local.is_none() != remote.is_none() {
+        let (_, field) = classify(path);
+        let chosen = file_conflict(outcome, &field, local, remote);
+        outcome.files.insert(path.to_string(), chosen);
+        return Ok(());
+    }
+
+    let (kind, field) = classify(path);
+    match kind {
+        FileKind::Task => {
+            let id = field.clone();
+            let local_task = local
+                .as_deref()
+                .and_then(|c| task::parse_task(id.clone(), c).ok());
+            let remote_task = remote
+                .as_deref()
+                .and_then(|c| task::parse_task(id.clone(), c).ok());
+            let base_task = base
+                .as_deref()
+                .and_then(|c| task::parse_task(id.clone(), c).ok());
+            match (local_task, remote_task) {
+                (Some(local_task), Some(remote_task)) => {
+                    let content = merge_task(&id, base_task, local_task, remote_task, outcome)?;
+                    outcome.files.insert(path.to_string(), Some(content));
+                }
+                _ => {
+                    // Unparseable on one side: whole-Task conflict.
+                    let chosen = file_conflict(outcome, &id, local, remote);
+                    outcome.files.insert(path.to_string(), chosen);
+                }
+            }
+        }
+        FileKind::Comments => {
+            let id = field
+                .strip_suffix(".comments")
+                .unwrap_or(&field)
+                .to_string();
+            match merge_comments(&id, local.as_deref(), remote.as_deref()) {
+                Ok(content) => {
+                    outcome.files.insert(path.to_string(), Some(content));
+                }
+                Err(()) => {
+                    let chosen = file_conflict(outcome, &field, local, remote);
+                    outcome.files.insert(path.to_string(), chosen);
+                }
+            }
+        }
+        FileKind::Config | FileKind::Other => {
+            let chosen = file_conflict(outcome, &field, local, remote);
+            outcome.files.insert(path.to_string(), chosen);
+        }
+    }
+    Ok(())
+}
+
+/// Record a file-level conflict and return the resolved content (`None` when
+/// unresolved or when the winning side deleted the file).
+fn file_conflict(
+    outcome: &mut MergeOutcome,
+    field: &str,
+    local: Option<String>,
+    remote: Option<String>,
+) -> Option<String> {
+    let local_desc = describe_content(&local);
+    let remote_desc = describe_content(&remote);
+    match outcome.resolutions.get(field).copied() {
+        Some(MergeSide::Local) => {
+            outcome.used_resolutions.insert(field.to_string());
+            local
+        }
+        Some(MergeSide::Host) => {
+            outcome.used_resolutions.insert(field.to_string());
+            remote
+        }
+        None => {
+            outcome.conflicts.push(FieldConflict {
+                field: field.to_string(),
+                local: local_desc,
+                host: remote_desc,
+            });
+            local
+        }
+    }
+}
+
+/// Union two comment sidecars: identical comments (same author, timestamp,
+/// and body) collapse, the rest sort by `(created_at, author, body)`.
+fn merge_comments(
+    task_id: &str,
+    local: Option<&str>,
+    remote: Option<&str>,
+) -> std::result::Result<String, ()> {
+    let mut comments: Vec<Comment> = Vec::new();
+    for content in [local, remote].into_iter().flatten() {
+        let parsed = comment::parse_comments(content).map_err(|_| ())?;
+        for comment in parsed {
+            if !comments.iter().any(|existing| {
+                existing.author == comment.author
+                    && existing.created_at == comment.created_at
+                    && existing.body == comment.body
+            }) {
+                comments.push(comment);
+            }
+        }
+    }
+    comments.sort_by(|a, b| {
+        (a.created_at, &a.author, &a.body).cmp(&(b.created_at, &b.author, &b.body))
+    });
+    Ok(comment::render_comments_file(task_id, &comments))
+}

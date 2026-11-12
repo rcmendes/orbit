@@ -2619,12 +2619,15 @@ mod tests {
     fn init_args(print: bool, agents: Option<&str>) -> crate::cli::InitArgs {
         crate::cli::InitArgs {
             target: None,
+            global: false,
             agents: agents.map(str::to_string),
             no_agents: false,
             hooks: false,
             mcp_bin: None,
             portable_mcp: false,
             slug: None,
+            visible: None,
+            host: None,
             print,
         }
     }

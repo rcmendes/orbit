@@ -1,5 +1,10 @@
 # Markdown board on a dedicated orphan branch
 
+> **Superseded by [ADR 0019](./0019-board-folder-is-its-own-repository.md).**
+> The Board is no longer an orphan branch of the code repository checked out in
+> a hidden worktree; every Board folder is its own Git repository on branch
+> `orbit`, optionally pushed to a Board host. This document is kept for history.
+
 Orbit stores Tasks as Markdown files on a dedicated `orbit` branch, checked out in a hidden worktree under `<git-common-dir>/orbit/board` and shared by every worktree of the repository. The board is auto-committed on meaningful mutations, so `git log orbit` is the task audit trail and task changes never enter code PRs. `ORBIT_DIR` can point at an external board root for monorepos or local-only use.
 
 > **Extended by ADR 0006:** a repository may link to an external Board shared with related repositories; the local worktree remains the default.

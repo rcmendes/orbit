@@ -19,7 +19,7 @@
 
 ---
 
-**Orbit is a local issue tracker whose tasks are Markdown files in your Git repository.** Every task and comment lives on a dedicated orphan branch, so people and agents work from the same reviewable source of truth. Mutations are serialized by one lock and published with `fsync` + rename; meaningful changes are committed to Git. There is no database, daemon, server, or context-window tax.
+**Orbit is a local issue tracker whose tasks are Markdown files in a Git repository.** Every task and comment lives on a dedicated `orbit` branch in the Board's own Git repository, so people and agents work from the same reviewable source of truth. Mutations are serialized by one lock and published with `fsync` + rename; meaningful changes are committed to Git. There is no database, daemon, server, or context-window tax.
 
 Claude Code, Cursor, Codex, OpenCode, Devin, and any shell-capable agent get a deterministic, dependency-aware ready queue through a strict JSON CLI or an MCP server. Every claim is atomic, so two agents never take the same task. Humans get readable Git diffs and exactly the same board.
 
@@ -64,7 +64,7 @@ Most trackers were designed for humans clicking through a web UI. Agents need so
 
 | The usual problem | Orbit's answer |
 | --- | --- |
-| Task state lives in a database nobody can review | Tasks are Markdown files on an orphan Git branch, diffable like code |
+| Task state lives in a database nobody can review | Tasks are Markdown files on a dedicated Git branch, diffable like code |
 | Two agents grab the same ticket | `ready --claim` is atomic; the loser gets a typed error |
 | An agent dies mid-task and the ticket is lost | Claims expire after a lease; recover with `claim --steal` |
 | Agents burn tokens parsing the whole backlog | A dependency-aware ready queue returns one actionable task |
@@ -138,7 +138,7 @@ cd your-repository
 orbit init
 ```
 
-In a Git repository, `orbit init` creates the Board at `./.orbit/board` — a standalone Git repository anchored by the `./.orbit` Orbit folder, with the rebuildable cache at `./.orbit/cache`; the Orbit folder is hidden through `.git/info/exclude`. `orbit init .` and a `DIR` that is already a repository root do the same. At a non-Git folder, `orbit init` treats the folder as a Board anchor and stores the Board at `<anchor>/.orbit/board`; member Repositories are discovered below it, and `orbit init` merges any child Boards it finds into the new Board, keeping the children on disk as backups. It derives the Task-ID slug from the repository or anchor folder and prints a numbered setup report: the Board path, branch, storage mode, Task-ID prefix, and Git exclusion; the coding agents it wired, the MCP command, and every file it created or updated; then `orbit doctor` and the next commands, each with a short explanation. In a terminal it asks whether to wire the coding-agent harnesses it detects; without a terminal it writes no agent files and explains how to wire them. Pass `--agents` to decide up front, and `--print` to see the same report in future tense without writing anything.
+In a Git repository, `orbit init` creates the Board at `./.orbit/board` — a standalone Git repository anchored by the `./.orbit` Orbit folder, with the rebuildable cache at `./.orbit/cache`; the Orbit folder is hidden through `.git/info/exclude`. `orbit init .` and a `DIR` that is already a repository root do the same. At a non-Git folder, `orbit init` treats the folder as a Board anchor and stores the Board at `<anchor>/.orbit/board`; member Repositories are discovered below it, and `orbit init` merges any child Boards it finds into the new Board, keeping the children on disk as backups. It derives the Task-ID slug from the repository or anchor folder and prints a numbered setup report: the Board path, branch, layout, Task-ID prefix, and Git exclusion; the coding agents it wired, the MCP command, and every file it created or updated; then `orbit doctor` and the next commands, each with a short explanation. In a terminal it asks whether to wire the coding-agent harnesses it detects; without a terminal it writes no agent files and explains how to wire them. Pass `--agents` to decide up front, and `--print` to see the same report in future tense without writing anything.
 
 ```bash
 orbit init                    # repo ./.orbit/board, or anchor ./.orbit/board
@@ -286,7 +286,7 @@ The full definitions, including the words Orbit avoids, are in [GLOSSARY.md](./d
 
 ## How it works
 
-Orbit is one binary with two front doors: the JSON CLI and the MCP stdio server. A command is a short-lived process. It resolves one Board, takes the right lock, rebuilds the task graph from Markdown, applies one transition, publishes changed files atomically, and optionally commits to the orphan `orbit` branch.
+Orbit is one binary with two front doors: the JSON CLI and the MCP stdio server. A command is a short-lived process. It resolves one Board, takes the right lock, rebuilds the task graph from Markdown, applies one transition, publishes changed files atomically, and optionally commits to the `orbit` branch.
 
 ```mermaid
 flowchart LR
@@ -312,7 +312,7 @@ flowchart LR
         TASKS["tasks/ID.md"]
         COMMENTS["comments/ID.md"]
         CONFIG["config.toml"]
-        BRANCH["orphan branch: orbit"]
+        BRANCH["board branch: orbit"]
     end
 
     subgraph Harness["Harness files"]
@@ -360,16 +360,18 @@ The full component map, board-resolution flow, domain model, state machine, read
 
 ### Board anatomy
 
-The board is real Git history on an orphan branch, checked out in the Orbit folder:
+The Board is real Git history in its own repository, anchored by the Orbit folder:
 
 ```text
-<project>/.orbit/                       # DIR: shared by every worktree
-├── config.toml                         # branch, storage mode, lease, priorities, hold labels
-├── tasks/
-│   ├── orb-a7b2c9.md                   # a top-level Task
-│   └── orb-a7b2c9.d4b3df.md            # a SubTask
-└── comments/
-    └── orb-a7b2c9.md                   # append-only thread
+<project>/.orbit/                       # the Orbit folder: anchors the Board
+├── board/                              # DIR: a Git repo on branch `orbit`
+│   ├── config.toml                     # branch, lease, priorities, hold labels
+│   ├── tasks/
+│   │   ├── orb-a7b2c9.md               # a top-level Task
+│   │   └── orb-a7b2c9.d4b3df.md        # a SubTask
+│   └── comments/
+│       └── orb-a7b2c9.md               # append-only thread
+└── cache/                              # rebuildable; never in the Board repo
 ```
 
 Every Board is a standalone Git repository on the `orbit` branch (ADR 0019). Inside a Git working tree the hidden Board lives at `./.orbit/board`, anchored by the `./.orbit` Orbit folder; outside Git an anchor folder stores it at `<anchor>/.orbit/board`. The Orbit folder also holds the rebuildable `cache/` and merged-child `backups/`. `--visible[=NAME]` instead places the Board in a visible folder that `.orbit/board` points to. All layouts expose the same Board files and CLI contract.
@@ -395,16 +397,16 @@ Body text, acceptance criteria, and notes.
 
 The filename is the ID. There is no `id` field in frontmatter. A SubTask ID is the parent ID, a dot, and a fresh suffix (`orb-a7b2c9.d4b3df`). One dot, one level. A claimed Task may also carry one `checkpoint` block with `by`, `at`, `progress`, and optional `next` and `blocker`; Orbit replaces it in place and it never changes readiness.
 
-### Why an orphan branch?
+### Why a separate repository?
 
-Task churn does not belong in your feature PRs. The `orbit` branch is separate from `main`, so an agent can update a ticket while a human reviews code without either change polluting the other. A Board created at the main checkout's `.orbit` is resolved by every linked worktree, so a claim made from a worktree and a claim made from the main checkout serialize on the same lock and see the same tasks.
+Task churn does not belong in your feature PRs. Every Board is its own Git repository on the `orbit` branch, so an agent can update a ticket while a human reviews code without either change polluting the other. A Board created at the main checkout's `.orbit` is resolved by every linked worktree, so a claim made from a worktree and a claim made from the main checkout serialize on the same lock and see the same tasks.
 
 ### Safety without a server
 
 - **One writer at a time.** Mutations take a Board-wide exclusive lock; readers take it shared for a consistent snapshot.
 - **Atomic publishes.** Each file is written to a temp file, fsynced, renamed, and the directory is fsynced on Unix. A crash cannot leave a half-written task.
 - **No persistent index.** Every command rebuilds the graph from Markdown. There is no cache to corrupt and no watcher to miss an event.
-- **Auto-commit with an escape hatch.** Meaningful mutations commit to the `orbit` branch. Heartbeats are lease-only and wait for the next mutation or `orbit sync`. The Board's Git branch is never pushed; opted-in GitHub Issue auto-push is separate.
+- **Auto-commit with an escape hatch.** Meaningful mutations commit to the `orbit` branch. Heartbeats are lease-only and wait for the next mutation or `orbit sync`. The branch is pushed only to a configured Board host (`orbit board sync` or `board.host_sync = "auto"`); opted-in Remote Issue auto-push is separate.
 - **Typed failures.** `LOCKED` is retryable; dependency, claim, label, and parent failures carry the IDs you need to resolve them.
 
 ## The agent loop
@@ -655,7 +657,7 @@ ORBIT_DIR=~/src/acme/.orbit orbit ready --json
 
 ### GitHub Issues (optional)
 
-Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Orbit is authoritative for linked Task fields; sync is explicit unless the Board opts into `auto_push`, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. Review and resolve conflicts with `--resolve FIELD=orbit|github` before applying. See [docs/github-sync.md](./docs/github-sync.md).
+Boards can link GitHub repositories and map Tasks to Issues by repository and issue number. Orbit is authoritative for linked Task fields; sync is explicit unless the Board opts into `auto_push`, detects field-level conflicts, and keeps Orbit claims separate from GitHub assignees. Review and resolve conflicts with `--resolve FIELD=orbit|remote` before applying. See [docs/github-sync.md](./docs/github-sync.md).
 
 GitHub Projects are a downstream view over Issues. Orbit does not synchronize ProjectV2 membership, Status, views, or custom fields; use Project auto-add and item added/closed/reopened workflows for reporting, and keep Project Status out of Orbit's sync loop. Only GitHub's separate Auto-close issue workflow can turn a card move into an Issue close. See [the Projects boundary](./docs/github-sync.md#github-projects).
 
@@ -677,12 +679,13 @@ orbit remote sync orb-a7b2c9 # preview only
 orbit remote sync orb-a7b2c9 --apply
 ```
 
-For a personal-account `origin`, `connect` reports the exact `[github]` entries
+For a personal-account `origin`, `connect` reports the exact
+`[[remote.projects]]` and `[remote.github]` entries
 to add or merge into the Board's `config.toml`, without changing the Board.
-Preserve other linked repositories. Set `mode = "basic"` and include the
+Preserve other Remote Projects. Set `mode = "basic"` and include the
 repository name as described below before creating or syncing Issues.
 
-`orbit remote connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports the exact basic-mode `[github]` entries to add or merge into the Board's `config.toml`, preserving other linked repositories. Use `orbit remote connect --json` for machine-readable status, including the same guidance in `remediation` and `next_actions`.
+`orbit remote connect` checks `gh` authentication and access to the current checkout's GitHub `origin`. For an organization-owned repository, it validates the organization Issue Fields and writes the Board configuration. For a personal-account repository, it leaves configuration unchanged and reports the exact basic-mode entries to add or merge into the Board's `config.toml`, preserving other Remote Projects. Use `orbit remote connect --json` for machine-readable status, including the same guidance in `remediation` and `next_actions`.
 
 Run `orbit remote status` for a read-only diagnostic of the authenticated account and scopes, linked repositories, applicable Issue Fields, linked Task count, pending sync changes, conflicts, and unsupported relationships. `orbit doctor` includes GitHub configuration checks when GitHub is configured on the Board.
 
@@ -699,15 +702,18 @@ The equivalent Board configuration is:
 [remote]
 auto_push = true
 
-[github]
+[[remote.projects]]
+tracker = "github"
+project = "alice/widget"
+
+[remote.github]
 mode = "basic"
-repositories = ["alice/widget"]
 ```
 
 Auto-push is push-only. `orbit add` creates an Issue when exactly one repository is available; title, body, labels, status, `area`, and `verification` changes are pushed; `done` closes with `state_reason: completed`, `cancelled` with `not_planned`, and `claim` adds the reserved `orbit:in-progress` label. It never pulls, never overwrites a field that changed on GitHub, and never creates an Issue for an existing Local Task. Priority, type, comments, claims, checkpoints, and relationships do not trigger a push. Conflicts and failed pushes are warnings, not command failures; the baseline stays unchanged so `orbit remote sync <task>` can resolve them. Use `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. See [github-sync.md](./docs/github-sync.md#automatic-push).
 
 ```bash
-# Personal repository: [github] mode = "basic" + repositories in config.toml.
+# Personal repository: [remote.github] mode = "basic" + a [[remote.projects]] entry.
 orbit remote connect alice/widget
 orbit remote create orb-a7b2c9 --project alice/widget
 orbit remote create orb-a7b2c9 --project alice/widget --apply

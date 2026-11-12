@@ -19,7 +19,7 @@ pub struct Cli {
     #[arg(global = true, long)]
     pub json: bool,
 
-    /// Workspace root or Orbit Board directory override. Also read from ORBIT_DIR.
+    /// Board anchor or Orbit Board directory override. Also read from ORBIT_DIR.
     #[arg(global = true, long, env = "ORBIT_DIR", value_name = "PATH")]
     pub dir: Option<PathBuf>,
 
@@ -210,8 +210,8 @@ pub struct InitArgs {
     /// Use a visible Board folder instead of the hidden .orbit/board layout.
     ///
     /// Bare `--visible` names the folder `board`; `--visible=NAME` picks the
-    /// name. Only applies when the target resolves to a repository or Workspace
-    /// root — an explicit directory is already a visible Board folder.
+    /// name. Only applies when the target resolves to a repository or Board
+    /// anchor — an explicit directory is already a visible Board folder.
     #[arg(
         long,
         value_name = "NAME",

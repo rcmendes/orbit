@@ -20,7 +20,8 @@ and then prints exactly one JSON object on stdout.
 Board discovery order: --dir or ORBIT_DIR, then the repository link pointer,
 then the nearest .orbit walking up across Git boundaries, then the same walk
 restarted from a worktree's main checkout, then nothing. A Board in the home
-directory is an ordinary Board found by that walk; there is no global flag.
+directory is an ordinary Board found by that walk; `orbit init --global`
+creates or reuses it at ~/.orbit/board.
 
 Run `orbit init <ANCHOR>` once on a folder that holds several repositories;
 child repositories discover the Board across their Git boundary, and init
@@ -144,17 +145,17 @@ Examples:
   orbit init --mcp-bin /usr/local/bin/orbit";
 
 pub const REPO_LONG: &str = "\
-Manage the Board's member Repositories. A Board has zero or more member\
-Repositories: Git repositories discovered under the folder that anchors the\
-Board, plus Repositories added explicitly. Tasks record their Repository in\
-the optional `repo` frontmatter field; `orbit add` fills it from the current\
+Manage the Board's member Repositories. A Board has zero or more member \
+Repositories: Git repositories discovered under the folder that anchors the \
+Board, plus Repositories added explicitly. Tasks record their Repository in \
+the optional `repo` frontmatter field; `orbit add` fills it from the current \
 Repository automatically.";
 
 pub const REPO_EXAMPLES: &str = "\
 Examples:
-  orbit repo list --json\
-  orbit repo add ../api --name api\
-  orbit repo remove api\
+  orbit repo list --json
+  orbit repo add ../api --name api
+  orbit repo remove api
   orbit repo refresh --json";
 
 pub const SLUG_LONG: &str = "\
@@ -857,9 +858,9 @@ Examples:
 
 pub const MCP_LONG: &str = "\
 Runs the Model Context Protocol server over stdio. Editors start this process from
-their MCP configuration, so it is rarely run by hand. It exposes 17 tools (ready,
+their MCP configuration, so it is rarely run by hand. It exposes 14 tools (ready,
 list, get, create, update, claim, release, heartbeat, checkpoint, finish, link,
-delete, label, comment, issue_refresh, issue_list, issue_inspect) and the orbit://tasks/{id} Markdown resource, reusing the
+delete, label, comment) and the orbit://tasks/{id} Markdown resource, reusing the
 CLI's lock, atomic writes, and auto-commit. `create` accepts `parent` to make a
 SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint`
 records the claim holder's handoff. `list` and `ready` accept `parent`, `repo`,
@@ -921,7 +922,7 @@ Examples:
 pub const SYNC_LONG: &str = "\
 Commits pending board changes, usually the lease updates written by heartbeat, to
 the board branch. Heartbeats deliberately do not commit on every call; a later
-mutation, or this command, persists them. The Board's Git branch is never pushed; Remote auto-push is opt-in and toggled with `orbit remote auto-push on|off`, not this command.
+mutation, or this command, persists them. This command never pushes: pushing to a Board host is `orbit board sync`, and Remote Issue auto-push is opt-in via `orbit remote auto-push on|off`.
 
 Use sync after a long heartbeat-only period, or when doctor reports uncommitted
 Board changes.";

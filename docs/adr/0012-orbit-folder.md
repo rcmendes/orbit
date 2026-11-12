@@ -1,6 +1,8 @@
 # 0012. One Orbit folder for every Board
 
-- Status: Accepted
+- Status: Superseded by [ADR 0019](./0019-board-folder-is-its-own-repository.md) —
+  the Board folder became its own Git repository; `link`/`unlink`, the storage
+  modes, and the Workspace layout it describes are retired.
 - Date: 2026-10-25
 
 ## Context

@@ -290,3 +290,24 @@ fn top_level_help_hides_no_sync() {
         assert!(!help.contains("--no-sync"), "{args:?}: {help}");
     }
 }
+
+#[test]
+fn local_mutations_make_no_remote_calls() {
+    let repo = TestRepo::new();
+    repo.init();
+    // A fixture path that cannot load: any attempt to build a Remote Tracker
+    // client fails loudly instead of silently passing.
+    let fixture = repo.path().join("missing-fixture.json");
+    let fixture = fixture.to_str().unwrap();
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture)];
+
+    let value = repo.ok_json_with_env(&["add", "Local task", "--json"], &env);
+    let id = value["data"]["id"].as_str().unwrap().to_string();
+    let task = repo.read_task(&id);
+    assert!(!task.contains("remote:"), "{task}");
+    assert!(!task.contains("github:"), "{task}");
+
+    repo.ok_json_with_env(&["done", &id, "--by", "test", "--json"], &env);
+    repo.ok_json_with_env(&["prime", "--json"], &env);
+    repo.ok_json_with_env(&["doctor", "--json"], &env);
+}

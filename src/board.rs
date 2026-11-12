@@ -972,6 +972,7 @@ impl Board {
             }
             if let Some(board) = resolve_orbit_dir(&path.join(".orbit"))
                 && board.root() != dir
+                && !is_global_board(board.root())
             {
                 return Ok(Some(board.root().to_path_buf()));
             }
@@ -1526,7 +1527,14 @@ fn global_board(home: &Path) -> Option<OrbitBoard> {
 }
 
 fn is_global_board(path: &Path) -> bool {
-    home_dir().is_some_and(|home| path == home.join(".orbit"))
+    let Some(home) = home_dir() else {
+        return false;
+    };
+    let orbit = home.join(ORBIT_DIR);
+    // The global Board folder is `~/.orbit` itself (legacy) or the Board the
+    // Orbit folder resolves to — `~/.orbit/board` hidden or a visible folder.
+    path == orbit
+        || resolve_orbit_dir(&orbit).is_some_and(|board| board.root() == path)
 }
 
 /// The Board folder an Orbit folder resolves to, plus whether that resolution

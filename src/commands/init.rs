@@ -295,7 +295,11 @@ fn render_init_human(report: &InitReport<'_>) -> String {
         report.board_root.display()
     ));
     human.push_str(&format!("   {:<9}{}\n", "branch", report.branch));
-    let storage = "repository (standalone Board folder on branch `orbit`)";
+    let storage = if report.workspace {
+        "repository (Workspace Board at <workspace>/.orbit/board)"
+    } else {
+        "repository (standalone Board folder on branch `orbit`)"
+    };
     human.push_str(&format!("   {:<9}{storage}\n", "storage"));
     let prefix = report.prefix;
     let prefix_detail = match prefix.strip_suffix('-') {
@@ -543,6 +547,36 @@ fn init_layout(
         let canonical_requested =
             dunce::canonicalize(requested).unwrap_or_else(|_| requested.to_path_buf());
         if toplevel == canonical_requested {
+            // Re-initializing an existing Board folder: the target is itself
+            // a standalone Board repository. Anchor it through the Orbit
+            // folder that already names it — a hidden `.orbit/board` parent,
+            // the enclosing repository's `.orbit`, or a sibling `.orbit`.
+            if Board::is_board(requested) {
+                let orbit = requested
+                    .parent()
+                    .filter(|parent| {
+                        parent.file_name().and_then(|name| name.to_str()) == Some(".orbit")
+                    })
+                    .map(|parent| parent.to_path_buf())
+                    .or_else(|| {
+                        requested.parent().and_then(|parent| {
+                            crate::git::toplevel_containing(parent).and_then(|toplevel| {
+                                let common = crate::git::common_dir_at(&toplevel).ok()?;
+                                Some(
+                                    crate::board::main_checkout_for(&toplevel, &common)
+                                        .join(".orbit"),
+                                )
+                            })
+                        })
+                    })
+                    .or_else(|| {
+                        requested
+                            .parent()
+                            .map(|parent| parent.join(".orbit"))
+                    })
+                    .unwrap_or_else(|| requested.join(".orbit"));
+                return Ok((orbit, requested.to_path_buf(), true));
+            }
             let common = crate::git::common_dir_at(&toplevel)?;
             let main = crate::board::main_checkout_for(&toplevel, &common);
             let orbit = main.join(".orbit");

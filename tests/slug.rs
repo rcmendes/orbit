@@ -198,7 +198,8 @@ fn init_dir_rejects_an_invalid_slug_with_a_suggestion() {
 fn reruns_preserve_the_prefix_and_same_slug_does_not_commit() {
     let repo = TestRepo::new();
     let named = repo.named_repo("teramigo");
-    let board = named.join(".orbit");
+    // Commits land in the standalone Board repository at `.orbit/board`.
+    let board = named.join(".orbit/board");
 
     let first = repo.ok_json_in(&named, &["init", "--agents", "none", "--json"]);
     assert_eq!(first["data"]["prefix"], "teramigo-");
@@ -264,7 +265,7 @@ fn init_after_unlink_uses_the_current_directory_slug() {
 
     let local = repo.ok_json_in(&named, &["init", "--agents", "none", "--json"]);
     assert_eq!(local["data"]["prefix"], "teramigo-");
-    assert_eq!(local["data"]["storage"], "worktree");
+    assert_eq!(local["data"]["storage"], "repository");
 
     let changed = repo.ok_json_in(
         &named,
@@ -442,8 +443,8 @@ fn init_in_a_named_orbit_folder_uses_the_parent_slug() {
     );
 
     assert_eq!(value["data"]["prefix"], "work-");
-    assert_eq!(value["data"]["storage"], "worktree");
-    assert!(dir.join("config.toml").is_file());
+    assert_eq!(value["data"]["storage"], "repository");
+    assert!(dir.join("board/config.toml").is_file());
 }
 
 #[test]

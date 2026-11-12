@@ -18,17 +18,21 @@ fn configure_remote_project(repo: &TestRepo) {
     .unwrap();
 }
 
-/// Link the Task to `acme/widget#42` through a `remote:` frontmatter entry,
-/// without configuring any Remote Project.
-fn link_task(repo: &TestRepo, id: &str) {
+/// Link the Task to `acme/widget#<issue>` through a `remote:` frontmatter
+/// entry, without configuring any Remote Project.
+fn link_task_as(repo: &TestRepo, id: &str, issue: &str) {
     let content = repo.read_task(id);
     let linked = content.replacen(
         "---\n",
-        "---\nremote:\n  tracker: github\n  project: acme/widget\n  id: \"42\"\n",
+        &format!("---\nremote:\n  tracker: github\n  project: acme/widget\n  id: \"{issue}\"\n"),
         1,
     );
     assert_ne!(linked, content, "task {id} has no frontmatter block");
     repo.write_task(id, &linked);
+}
+
+fn link_task(repo: &TestRepo, id: &str) {
+    link_task_as(repo, id, "42");
 }
 
 fn list_header(repo: &TestRepo) -> String {
@@ -212,6 +216,66 @@ fn list_help_shows_remote_material_when_a_task_is_linked() {
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(help.contains("--linked"), "{help}");
     assert!(help.contains("--local"), "{help}");
+}
+
+#[test]
+fn doctor_warns_once_for_links_without_remote_configuration() {
+    let repo = TestRepo::new();
+    repo.init();
+    let first = repo.add("Linked one", &[]);
+    let second = repo.add("Linked two", &[]);
+    link_task_as(&repo, &first, "42");
+    link_task_as(&repo, &second, "43");
+    repo.add("Plain task", &[]);
+
+    // A fixture that would fail if doctor tried to reach a tracker: the
+    // unconfigured Board must not make remote calls at all.
+    let output = repo.orbit_with_env(
+        &["doctor", "--json"],
+        &[(
+            "ORBIT_GITHUB_FIXTURE",
+            repo.path().join("missing-fixture.json").to_str().unwrap(),
+        )],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json["data"]["healthy"], true, "{json}");
+    assert_eq!(
+        json["data"]["issues"].as_array().unwrap().len(),
+        0,
+        "{json}"
+    );
+
+    let remote_warnings: Vec<&str> = json["data"]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|warning| warning.as_str())
+        .filter(|warning| warning.contains("Remote Tracker"))
+        .collect();
+    assert_eq!(remote_warnings.len(), 1, "{json}");
+    assert!(remote_warnings[0].contains("2 task(s)"), "{json}");
+    // The links stay untouched.
+    assert!(repo.read_task(&first).contains("remote:"));
+}
+
+#[test]
+fn doctor_stays_quiet_when_remote_is_configured() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Linked task", &[]);
+    link_task(&repo, &id);
+    configure_remote_project(&repo);
+
+    let (_, json) = repo.json(&["doctor", "--json"]);
+    let remote_warnings: Vec<&str> = json["data"]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|warning| warning.as_str())
+        .filter(|warning| warning.contains("Remote Tracker"))
+        .collect();
+    assert!(remote_warnings.is_empty(), "{json}");
 }
 
 #[test]

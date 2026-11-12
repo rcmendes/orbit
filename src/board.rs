@@ -523,6 +523,12 @@ impl BoardAccess {
     pub fn board(&self) -> &Board {
         &self.board
     }
+
+    /// Releases the Board lock and keeps the Board, for work such as host
+    /// network I/O that must not block other agents.
+    pub fn into_board(self) -> Board {
+        self.board
+    }
 }
 
 impl Board {

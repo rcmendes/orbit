@@ -378,7 +378,9 @@ Repository name/path or git URL whose remote stores the Board's `orbit`
 branch — or shows/clears it. `orbit board sync` fetches the host, merges
 Orbit-aware (different Tasks and fields merge, Comments union, the earlier
 Claim wins, a same-field conflict stops until `--resolve FIELD=local|host`),
-and pushes; history is merged, never rebased or force-pushed.
+and pushes; history is merged, never rebased or force-pushed. The Slug is
+re-checked against the host before every merge, and the Board lock is held
+only around local steps, never across the fetch or push.
 `board.host_sync = "auto"` syncs at `orbit prime` and after commits.
 
 ### Slugs
@@ -625,6 +627,8 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 `TYPE` is one of `task`, `epic`, `spike`, `chore`, or `decision`. `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` matches the Task's `repo` field or a legacy `repo:NAME` label. `--linked` and `--local` are mutually exclusive filters on `list`; `--local` includes Tasks whose Remote identity is retained as inactive provenance.
 
 ### Milestones
+
+Entries record what each release delivered. Some name commands that were later retired or renamed; [CHANGELOG.md](../CHANGELOG.md) maps each retired command to its replacement.
 
 - M0: core CLI, JSON contract, global lock, atomic writes, auto-commit, and tests. Implemented.
 - M1: `setup` recipes, `prime --hook-json`, Claude hooks, skill files, the mattpocock bridge, and anchor-level agent guidance. Implemented.

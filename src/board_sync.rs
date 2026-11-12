@@ -149,6 +149,10 @@ struct MergeOutcome {
 }
 
 /// Fetch, merge, and push the Board branch on its host.
+///
+/// The caller must not hold the Board lock: it is taken only around the
+/// local commit, merge and reset, never across the network fetch or push, so
+/// a slow host never blocks other agents on the Board.
 pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
     // Load fresh: `orbit board host` may have changed the config mid-command.
     let config = Config::load(&board.root)?;
@@ -162,39 +166,70 @@ pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
     let branch = config.board.branch.clone();
     let resolutions = parse_resolutions(resolution_args)?;
 
-    // Persist pending local changes (heartbeats and friends) first.
-    if let CommitOutcome::Failed(message) = board.commit("orbit: sync", true)? {
-        return Err(OrbitError::git(message));
-    }
-
     board_host::ensure_remote(&board.root, &url)?;
     git::fetch(&board.root, board_host::HOST_REMOTE)?;
     let remote_ref = format!("refs/remotes/{}/{}", board_host::HOST_REMOTE, branch);
     let remote_tip = git::rev_parse(&board.root, &remote_ref)?;
+    // One Board per host: the host branch may have been replaced since
+    // `orbit board host` checked it.
+    if let Some(tip) = &remote_tip {
+        let slug = crate::slug::slug_of_prefix(&config.id.prefix).to_string();
+        board_host::check_host_slug(&board.root, tip, &slug)?;
+    }
+
+    let (report, push) = {
+        let _lock = board.lock_exclusive()?;
+        reconcile(board, remote_tip, &resolutions)?
+    };
+    if let Some(commit) = push {
+        let refspec = format!("{commit}:refs/heads/{branch}");
+        git::push(&board.root, board_host::HOST_REMOTE, &refspec)?;
+    }
+    Ok(report)
+}
+
+/// The locked part of `sync`: commit pending local changes, then publish,
+/// fast-forward, or merge against `remote_tip`. Returns the report and the
+/// commit to push, if any.
+fn reconcile(
+    board: &Board,
+    remote_tip: Option<String>,
+    resolutions: &BTreeMap<String, MergeSide>,
+) -> Result<(SyncReport, Option<String>)> {
+    // Persist pending local changes (heartbeats and friends) first.
+    if let CommitOutcome::Failed(message) = board.commit("orbit: sync", true)? {
+        return Err(OrbitError::git(message));
+    }
     let local_head = git::rev_parse(&board.root, "HEAD")?
         .ok_or_else(|| OrbitError::git("the Board repository has no HEAD commit"))?;
 
-    let push_refspec = || format!("HEAD:refs/heads/{branch}");
     let Some(remote_tip) = remote_tip else {
-        git::push(&board.root, board_host::HOST_REMOTE, &push_refspec())?;
-        return Ok(SyncReport::terminal(SyncState::Published, None));
+        return Ok((
+            SyncReport::terminal(SyncState::Published, None),
+            Some(local_head),
+        ));
     };
     if remote_tip == local_head {
-        return Ok(SyncReport::terminal(SyncState::UpToDate, Some(remote_tip)));
+        return Ok((
+            SyncReport::terminal(SyncState::UpToDate, Some(remote_tip)),
+            None,
+        ));
     }
 
     let base = git::merge_base(&board.root, &local_head, &remote_tip)?;
     if base.as_deref() == Some(remote_tip.as_str()) {
         // The host is strictly behind: publish local history.
-        git::push(&board.root, board_host::HOST_REMOTE, &push_refspec())?;
-        return Ok(SyncReport::terminal(SyncState::Published, Some(remote_tip)));
+        return Ok((
+            SyncReport::terminal(SyncState::Published, Some(remote_tip)),
+            Some(local_head),
+        ));
     }
     if base.as_deref() == Some(local_head.as_str()) {
         // The local Board is strictly behind: fast-forward, never rebase.
         git::reset_hard(&board.root, &remote_tip)?;
-        return Ok(SyncReport::terminal(
-            SyncState::FastForwarded,
-            Some(remote_tip),
+        return Ok((
+            SyncReport::terminal(SyncState::FastForwarded, Some(remote_tip)),
+            None,
         ));
     }
 
@@ -203,7 +238,7 @@ pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
         base.as_deref(),
         &local_head,
         &remote_tip,
-        &resolutions,
+        resolutions,
     )?;
     if !outcome.conflicts.is_empty() {
         return Err(OrbitError::new(
@@ -221,18 +256,14 @@ pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
 
     let merged_files = outcome.files.len();
     let notices: Vec<String> = outcome.notices.iter().map(|n| n.body.clone()).collect();
-    apply_files(&board.root, &outcome.files)?;
-
-    git::stage_all(&board.root)?;
-    let tree = git::write_tree(&board.root)?;
-    let commit = git::commit_tree_parents(
-        &board.root,
-        &tree,
-        &[&local_head, &remote_tip],
-        "orbit: merge board host",
-    )?;
+    let commit = match write_merge(&board.root, &outcome.files, &local_head, &remote_tip) {
+        Ok(commit) => commit,
+        Err(error) => {
+            rollback_merge(&board.root, &outcome.files, &local_head);
+            return Err(error);
+        }
+    };
     git::reset_hard(&board.root, &commit)?;
-    git::push(&board.root, board_host::HOST_REMOTE, &push_refspec())?;
 
     let conflicts_resolved: Vec<String> = resolutions
         .keys()
@@ -245,14 +276,47 @@ pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
         .cloned()
         .collect();
 
-    Ok(SyncReport {
-        state: SyncState::Merged,
-        remote_tip: Some(remote_tip),
-        merged_files,
-        conflicts_resolved,
-        notices,
-        unused_resolutions,
-    })
+    Ok((
+        SyncReport {
+            state: SyncState::Merged,
+            remote_tip: Some(remote_tip),
+            merged_files,
+            conflicts_resolved,
+            notices,
+            unused_resolutions,
+        },
+        Some(commit),
+    ))
+}
+
+/// Writes the merged files and records them as a merge commit of both tips.
+fn write_merge(
+    root: &Path,
+    files: &BTreeMap<String, Option<String>>,
+    local_head: &str,
+    remote_tip: &str,
+) -> Result<String> {
+    apply_files(root, files)?;
+    git::stage_all(root)?;
+    let tree = git::write_tree(root)?;
+    git::commit_tree_parents(
+        root,
+        &tree,
+        &[local_head, remote_tip],
+        "orbit: merge board host",
+    )
+}
+
+/// Undoes a half-applied merge so the next commit cannot sweep it up: the
+/// tree was clean at `local_head`, so reset to it and drop the files the
+/// merge added. Best effort; the original error is what the caller reports.
+fn rollback_merge(root: &Path, files: &BTreeMap<String, Option<String>>, local_head: &str) {
+    let _ = git::reset_hard(root, local_head);
+    for path in files.keys() {
+        if matches!(git::show_file(root, local_head, path), Ok(None)) {
+            let _ = std::fs::remove_file(root.join(path));
+        }
+    }
 }
 
 /// The `host_sync = auto` hook: sync after a committed mutation or at prime.

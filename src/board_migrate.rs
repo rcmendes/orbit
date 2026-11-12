@@ -110,7 +110,8 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
         return Ok(output);
     }
 
-    let commit = apply(&board, &discovery, &layout, content_needed)?;
+    let mut warnings = board.warnings.clone();
+    let commit = apply(&board, &discovery, &layout, content_needed, &mut warnings)?;
     let mut data = report;
     data["applied"] = json!(true);
     data["commit"] = commit.map(|commit| json!(commit)).unwrap_or(Value::Null);
@@ -119,7 +120,7 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
         human.push_str(&format!("  committed as {hash}\n"));
     }
     let mut output = CommandOutput::new(data, human);
-    output.warnings = board.warnings.clone();
+    output.warnings = warnings;
     Ok(output)
 }
 
@@ -314,39 +315,27 @@ fn plan_content(board: &Board) -> Result<ContentStats> {
 
     let tasks_dir = board.root.join("tasks");
     let mut areas = std::collections::BTreeSet::new();
-    if let Ok(entries) = std::fs::read_dir(&tasks_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if id.starts_with('.') {
-                continue;
-            }
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| OrbitError::io(format!("read {}", path.display()), e))?;
-            let task = task::parse_task(id.to_string(), &content)?;
-            stats.tasks_scanned += 1;
-            if task.front.github.is_some() {
-                stats.github_links += 1;
-            }
-            if task.front.remote.is_some() {
-                stats.remote_links += 1;
-            }
-            if task
-                .front
-                .labels
-                .iter()
-                .any(|label| label.starts_with("repo:"))
-            {
-                stats.repo_labels += 1;
-            }
-            if let Some(area) = &task.front.area {
-                areas.insert(area.clone());
-            }
+    for (id, path) in task_files(&tasks_dir)? {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| OrbitError::io(format!("read {}", path.display()), e))?;
+        let task = task::parse_task(id.to_string(), &content)?;
+        stats.tasks_scanned += 1;
+        if task.front.github.is_some() {
+            stats.github_links += 1;
+        }
+        if task.front.remote.is_some() {
+            stats.remote_links += 1;
+        }
+        if task
+            .front
+            .labels
+            .iter()
+            .any(|label| label.starts_with("repo:"))
+        {
+            stats.repo_labels += 1;
+        }
+        if let Some(area) = &task.front.area {
+            areas.insert(area.clone());
         }
     }
     if config.board.areas.is_empty() && !areas.is_empty() {
@@ -362,6 +351,7 @@ fn apply(
     discovery: &Discovery,
     layout: &Layout,
     content_needed: bool,
+    warnings: &mut Vec<String>,
 ) -> Result<Option<String>> {
     match layout {
         Layout::InPlace => {
@@ -371,11 +361,11 @@ fn apply(
                 migrate_content(&board.root)?;
             }
             let commit = commit_migration(&board.root)?;
-            hide_in_working_tree(board, discovery)?;
+            hide_in_working_tree(board, discovery, warnings);
             Ok(commit)
         }
         Layout::ToOrbitBoard { orbit, target } => {
-            migrate_to_orbit_board(board, discovery, orbit, target, content_needed)
+            migrate_to_orbit_board(board, discovery, orbit, target, content_needed, warnings)
         }
     }
 }
@@ -388,6 +378,21 @@ fn ensure_board_repo(root: &Path, branch: &str) -> Result<()> {
     if root.join(".git").exists() {
         return Ok(());
     }
+    // A nested repository over files an enclosing repository tracks would
+    // split their history; leave that to the user.
+    let canonical = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if let Some(top) = crate::git::toplevel_containing(&canonical)
+        && let Ok(top) = dunce::canonicalize(&top)
+        && let Ok(relative) = canonical.strip_prefix(&top)
+        && !relative.as_os_str().is_empty()
+        && crate::git::is_git_tracked(&top, &relative.to_string_lossy())
+    {
+        return Err(OrbitError::config(format!(
+            "the Board folder {} holds files tracked by the repository at {}; untrack them (git rm -r --cached) before migrating",
+            root.display(),
+            top.display()
+        )));
+    }
     crate::git::init_repo(root)?;
     crate::git::set_head(root, branch)?;
     Ok(())
@@ -395,18 +400,20 @@ fn ensure_board_repo(root: &Path, branch: &str) -> Result<()> {
 
 /// Keeps a Board that stays inside a Git working tree hidden through
 /// `.git/info/exclude`, never `.gitignore` (ADR 0019).
-fn hide_in_working_tree(board: &Board, discovery: &Discovery) -> Result<()> {
-    match orbit_dir_of(board, discovery) {
+fn hide_in_working_tree(board: &Board, discovery: &Discovery, warnings: &mut Vec<String>) {
+    let result = match orbit_dir_of(board, discovery) {
         Some(orbit) => {
             let visible =
                 (board.root.parent() != Some(orbit.as_path())).then_some(board.root.as_path());
-            let _ = board::ensure_orbit_excluded(&orbit, visible);
+            board::ensure_orbit_excluded(&orbit, visible).map(drop)
         }
-        None => {
-            let _ = Board::ensure_excluded(&board.root);
-        }
+        None => Board::ensure_excluded(&board.root).map(drop),
+    };
+    if let Err(error) = result {
+        warnings.push(format!(
+            "could not hide the Board via .git/info/exclude: {error}"
+        ));
     }
-    Ok(())
 }
 
 /// Commits pending Board changes as the single migration commit and reports
@@ -427,6 +434,7 @@ fn migrate_to_orbit_board(
     orbit: &Path,
     target: &Path,
     content_needed: bool,
+    warnings: &mut Vec<String>,
 ) -> Result<Option<String>> {
     let _lock = board.lock_exclusive()?;
     let source = board.root.clone();
@@ -434,7 +442,7 @@ fn migrate_to_orbit_board(
     if source.join(".git").is_file() {
         // Worktree-backed Board: build a standalone repository preserving the
         // `orbit` branch history, then convert in one commit.
-        return migrate_worktree(board, orbit, target, content_needed);
+        return migrate_worktree(board, orbit, target, content_needed, warnings);
     }
 
     if source == *target {
@@ -443,7 +451,7 @@ fn migrate_to_orbit_board(
             migrate_content(target)?;
         }
         let commit = commit_migration(target)?;
-        hide_in_working_tree(board, discovery)?;
+        hide_in_working_tree(board, discovery, warnings);
         return Ok(commit);
     }
 
@@ -455,7 +463,7 @@ fn migrate_to_orbit_board(
         migrate_content(target)?;
     }
     let commit = commit_migration(target)?;
-    finish_orbit_folder(orbit, target)?;
+    finish_orbit_folder(orbit, target, warnings)?;
     Ok(commit)
 }
 
@@ -495,10 +503,7 @@ fn move_board_folder(source: &Path, target: &Path) -> Result<()> {
             .unwrap_or_else(|| ".orbit".to_string()),
         std::process::id()
     ));
-    if temp.exists() {
-        std::fs::remove_dir_all(&temp)
-            .map_err(|e| OrbitError::io(format!("remove stale {}", temp.display()), e))?;
-    }
+    refuse_stale(&temp)?;
     std::fs::rename(source, &temp).map_err(|e| {
         OrbitError::io(
             format!("move {} to {}", source.display(), temp.display()),
@@ -534,12 +539,16 @@ fn move_board_folder(source: &Path, target: &Path) -> Result<()> {
 /// Creates `<orbit>/cache` beside the Board folder and hides the Orbit
 /// folder — plus a visible Board folder — inside a Git working tree through
 /// `.git/info/exclude` (never `.gitignore`).
-fn finish_orbit_folder(orbit: &Path, target: &Path) -> Result<()> {
+fn finish_orbit_folder(orbit: &Path, target: &Path, warnings: &mut Vec<String>) -> Result<()> {
     let cache = orbit.join(board::CACHE_DIR);
     std::fs::create_dir_all(&cache)
         .map_err(|e| OrbitError::io(format!("create {}", cache.display()), e))?;
     let visible = (target.parent() != Some(orbit)).then_some(target);
-    let _ = board::ensure_orbit_excluded(orbit, visible);
+    if let Err(error) = board::ensure_orbit_excluded(orbit, visible) {
+        warnings.push(format!(
+            "could not hide the Orbit folder via .git/info/exclude: {error}"
+        ));
+    }
     Ok(())
 }
 
@@ -550,6 +559,7 @@ fn migrate_worktree(
     orbit: &Path,
     target: &Path,
     content_needed: bool,
+    warnings: &mut Vec<String>,
 ) -> Result<Option<String>> {
     let source = board.root.clone();
     let context = Board::repo_context_at(&source)?.ok_or_else(|| {
@@ -557,27 +567,31 @@ fn migrate_worktree(
     })?;
     let branch = board.config.board.branch.clone();
 
+    // Validate before anything destructive: the target must be free.
+    if target.exists() {
+        return Err(OrbitError::config(format!(
+            "migration target {} already exists",
+            target.display()
+        )));
+    }
+    // The stage only captures committed history and the worktree is removed
+    // with `--force`: commit pending Board edits first so none are lost.
+    if git_has_changes(&source)? {
+        crate::git::commit(&source, "orbit: save pending changes before migrate")?;
+    }
+
     // Stage a standalone clone of the Board branch next to the Orbit folder.
     let stage = orbit
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(format!(".orbit-migrate-{}", std::process::id()));
-    if stage.exists() {
-        std::fs::remove_dir_all(&stage)
-            .map_err(|e| OrbitError::io(format!("remove stale {}", stage.display()), e))?;
-    }
+    refuse_stale(&stage)?;
     std::fs::create_dir_all(&stage)
         .map_err(|e| OrbitError::io(format!("create {}", stage.display()), e))?;
     crate::git::init_repo(&stage)?;
-    git_out(
-        &stage,
-        &[
-            "fetch",
-            context.main_checkout.to_str().unwrap_or_default(),
-            &branch,
-        ],
-    )?;
-    git_out(&stage, &["checkout", "-b", &branch, "FETCH_HEAD"])?;
+    let main_checkout = context.main_checkout.to_str().unwrap_or_default();
+    let tip = crate::git::fetch_head(&stage, main_checkout, &branch)?;
+    git_out(&stage, &["checkout", "-b", &branch, &tip])?;
 
     // Content conversion + the single migration commit inside the stage.
     if content_needed {
@@ -585,7 +599,9 @@ fn migrate_worktree(
     }
     let commit = commit_migration(&stage)?;
 
-    // Remove the old worktree, then place the standalone Board folder.
+    // Remove the old worktree, then place the standalone Board folder. The
+    // target may sit inside the worktree (`.orbit` → `.orbit/board`), so the
+    // stage can only move in after the removal.
     crate::git::worktree_remove(&context.main_checkout, &source)?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
@@ -604,14 +620,31 @@ fn migrate_worktree(
         )
     })?;
 
-    finish_orbit_folder(orbit, target)?;
+    finish_orbit_folder(orbit, target, warnings)?;
 
     // The code repository no longer owns Board history: drop its `orbit`
     // branch when it still points at the migrated tip.
-    if crate::git::branch_exists(&context.main_checkout, &branch)? {
-        let _ = crate::git::delete_branch(&context.main_checkout, &branch);
+    let current = crate::git::rev_parse(&context.main_checkout, &format!("refs/heads/{branch}"))?;
+    if current.as_deref() == Some(tip.as_str())
+        && let Err(error) = crate::git::delete_branch(&context.main_checkout, &branch)
+    {
+        warnings.push(format!(
+            "could not delete the code repository's `{branch}` branch: {error}"
+        ));
     }
     Ok(commit)
+}
+
+/// A leftover staging folder means an earlier migration was interrupted;
+/// it may hold the only copy of the Board, so never delete it silently.
+fn refuse_stale(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Err(OrbitError::config(format!(
+            "{} is left over from an interrupted migration; inspect it, then move or remove it",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn git_has_changes(root: &Path) -> Result<bool> {
@@ -667,74 +700,62 @@ fn migrate_content(root: &Path) -> Result<ContentStats> {
     // Seed `board.areas` from the Area values Tasks actually use.
     let tasks_dir = root.join("tasks");
     let mut areas = std::collections::BTreeSet::new();
-    if let Ok(entries) = std::fs::read_dir(&tasks_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if id.starts_with('.') {
-                continue;
-            }
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| OrbitError::io(format!("read {}", path.display()), e))?;
-            let mut task = task::parse_task(id.to_string(), &content)?;
-            stats.tasks_scanned += 1;
-            let before = task::render_task(&task)?;
-            let mut changed = false;
+    for (id, path) in task_files(&tasks_dir)? {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| OrbitError::io(format!("read {}", path.display()), e))?;
+        let mut task = task::parse_task(id.to_string(), &content)?;
+        stats.tasks_scanned += 1;
+        let before = task::render_task(&task)?;
+        let mut changed = false;
 
-            // `github:` frontmatter → provider-neutral `remote:`.
-            if let Some(github) = task.front.github.take() {
-                if task.front.remote.is_none() {
-                    task.front.remote = Some(RemoteLink {
-                        tracker: "github".to_string(),
-                        project: github.repo.clone(),
-                        id: github.number.to_string(),
-                        url: Some(format!(
-                            "https://github.com/{}/issues/{}",
-                            github.repo, github.number
-                        )),
-                        active: github.active,
-                        baseline: github
-                            .last_sync
-                            .as_ref()
-                            .and_then(|baseline| serde_yaml_ng::to_value(baseline).ok()),
-                    });
-                }
-                stats.github_links += 1;
-                changed = true;
+        // `github:` frontmatter → provider-neutral `remote:`.
+        if let Some(github) = task.front.github.take() {
+            if task.front.remote.is_none() {
+                task.front.remote = Some(RemoteLink {
+                    tracker: "github".to_string(),
+                    project: github.repo.clone(),
+                    id: github.number.to_string(),
+                    url: Some(format!(
+                        "https://github.com/{}/issues/{}",
+                        github.repo, github.number
+                    )),
+                    active: github.active,
+                    baseline: github
+                        .last_sync
+                        .as_ref()
+                        .and_then(|baseline| serde_yaml_ng::to_value(baseline).ok()),
+                });
             }
-            // `repo:*` labels → the `repo` field.
-            let repo_label = task
-                .front
+            stats.github_links += 1;
+            changed = true;
+        }
+        // `repo:*` labels → the `repo` field.
+        let repo_label = task
+            .front
+            .labels
+            .iter()
+            .find_map(|label| label.strip_prefix("repo:"))
+            .map(|name| name.to_string());
+        if repo_label.is_some() {
+            if task.front.repo.is_none()
+                && let Some(name) = &repo_label
+            {
+                task.front.repo = Some(name.clone());
+            }
+            task.front
                 .labels
-                .iter()
-                .find_map(|label| label.strip_prefix("repo:"))
-                .map(|name| name.to_string());
-            if repo_label.is_some() {
-                if task.front.repo.is_none()
-                    && let Some(name) = &repo_label
-                {
-                    task.front.repo = Some(name.clone());
-                }
-                task.front
-                    .labels
-                    .retain(|label| !label.starts_with("repo:"));
-                stats.repo_labels += 1;
-                changed = true;
-            }
-            if let Some(area) = &task.front.area {
-                areas.insert(area.clone());
-            }
+                .retain(|label| !label.starts_with("repo:"));
+            stats.repo_labels += 1;
+            changed = true;
+        }
+        if let Some(area) = &task.front.area {
+            areas.insert(area.clone());
+        }
 
-            if changed {
-                let rendered = task::render_task(&task)?;
-                if rendered != before {
-                    crate::atomic::write_atomic(&path, rendered.as_bytes(), true)?;
-                }
+        if changed {
+            let rendered = task::render_task(&task)?;
+            if rendered != before {
+                crate::atomic::write_atomic(&path, rendered.as_bytes(), true)?;
             }
         }
     }
@@ -750,4 +771,36 @@ fn migrate_content(root: &Path) -> Result<ContentStats> {
         crate::atomic::write_atomic(&root.join("config.toml"), toml.as_bytes(), true)?;
     }
     Ok(stats)
+}
+
+/// The `<id>.md` Task files under `tasks_dir`, shared by the preview and the
+/// apply pass so both see the same Tasks. A missing folder has none; any
+/// other read error is reported, never mistaken for "nothing to migrate".
+fn task_files(tasks_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let entries = match std::fs::read_dir(tasks_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(OrbitError::io(
+                format!("read {}", tasks_dir.display()),
+                error,
+            ));
+        }
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|e| OrbitError::io(format!("read {}", tasks_dir.display()), e))?
+            .path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if !id.starts_with('.') {
+            files.push((id.to_string(), path.clone()));
+        }
+    }
+    Ok(files)
 }

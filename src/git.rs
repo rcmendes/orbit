@@ -592,11 +592,12 @@ pub fn init_repo(path: &Path) -> Result<()> {
 
 /// Adds a remote, or updates its URL when it already exists.
 pub fn remote_set_url(repo: &Path, name: &str, url: &str) -> Result<()> {
-    let output = run_git_raw(Some(repo), &["remote", "set-url", name, url], None)?;
+    // `--` keeps a URL that starts with `-` from being read as an option.
+    let output = run_git_raw(Some(repo), &["remote", "set-url", "--", name, url], None)?;
     if output.status.success() {
         return Ok(());
     }
-    run_git(Some(repo), &["remote", "add", name, url], None)?;
+    run_git(Some(repo), &["remote", "add", "--", name, url], None)?;
     Ok(())
 }
 
@@ -622,7 +623,7 @@ pub fn remote_url(repo: &Path, name: &str) -> Result<Option<String>> {
 /// Resolves a remote ref to its tip commit without fetching objects.
 /// Returns `None` when the remote does not advertise the ref.
 pub fn ls_remote(repo: &Path, remote: &str, reference: &str) -> Result<Option<String>> {
-    let output = run_git_raw(Some(repo), &["ls-remote", remote, reference], None)?;
+    let output = run_git_network(repo, &["ls-remote", "--", remote, reference])?;
     if !output.status.success() {
         return Err(git_failure(&["ls-remote", remote, reference], &output));
     }
@@ -636,21 +637,21 @@ pub fn ls_remote(repo: &Path, remote: &str, reference: &str) -> Result<Option<St
 
 /// Fetches every branch the remote advertises into `refs/remotes/<remote>/*`.
 pub fn fetch(repo: &Path, remote: &str) -> Result<()> {
-    run_git(Some(repo), &["fetch", remote], None)?;
+    run_git_network_ok(repo, &["fetch", "--", remote])?;
     Ok(())
 }
 
 /// Fetches one branch from an explicit URL without configuring a remote and
 /// returns the fetched tip commit.
 pub fn fetch_head(repo: &Path, url: &str, branch: &str) -> Result<String> {
-    run_git(Some(repo), &["fetch", url, branch], None)?;
+    run_git_network_ok(repo, &["fetch", "--", url, branch])?;
     rev_parse(repo, "FETCH_HEAD")?
         .ok_or_else(|| OrbitError::git(format!("git fetch {url} {branch} left no FETCH_HEAD")))
 }
 
 /// Pushes `refspec` (for example `HEAD:refs/heads/orbit`) to `remote`.
 pub fn push(repo: &Path, remote: &str, refspec: &str) -> Result<()> {
-    run_git(Some(repo), &["push", remote, refspec], None)?;
+    run_git_network_ok(repo, &["push", "--", remote, refspec])?;
     Ok(())
 }
 
@@ -753,6 +754,38 @@ pub fn commit_tree_parents(
         return Err(OrbitError::git("git commit-tree returned no commit hash"));
     }
     Ok(commit)
+}
+
+/// Runs a git command that talks to a remote. It never prompts for
+/// credentials and aborts an HTTP transfer that stalls, so a dead host fails
+/// fast instead of hanging an agent. User-set values win.
+// shortcut: SSH hosts keep the user's ssh config (no connect timeout forced),
+// add a process timeout if hung SSH hosts show up in practice.
+fn run_git_network(repo: &Path, args: &[&str]) -> Result<Output> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo).args(args);
+    for (key, value) in [
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GIT_HTTP_LOW_SPEED_LIMIT", "1000"),
+        ("GIT_HTTP_LOW_SPEED_TIME", "30"),
+    ] {
+        if std::env::var_os(key).is_none() {
+            command.env(key, value);
+        }
+    }
+    command
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| OrbitError::git(format!("could not run git: {error}")))
+}
+
+fn run_git_network_ok(repo: &Path, args: &[&str]) -> Result<Output> {
+    let output = run_git_network(repo, args)?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(git_failure(args, &output))
+    }
 }
 
 fn run_git(cwd: Option<&Path>, args: &[&str], stdin: Option<&str>) -> Result<Output> {

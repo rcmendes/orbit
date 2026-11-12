@@ -842,6 +842,13 @@ Area values Tasks already use. Board commands refuse legacy layouts with
 `BOARD_NOT_MIGRATED` until this runs; `orbit doctor` reports the same finding
 with `LEGACY_LAYOUT`.
 
+`--apply` checks before it changes anything: it refuses when the target
+folder already exists, when a staging folder from an interrupted run is left
+over, or when the Board folder holds files that an enclosing repository
+tracks. A worktree-backed Board's uncommitted edits are committed to its
+branch first, so none are lost. The code repository's `orbit` branch is
+deleted only when it still points at the migrated tip.
+
 **Good fit:** once per Board after upgrading Orbit past
 ADR-0019, or when `doctor`/`list` answers `BOARD_NOT_MIGRATED`.
 
@@ -892,7 +899,8 @@ A Board has no host by default — its history stays on this machine — or
 exactly one host whose remote stores the Board's `orbit` branch (ADR 0019).
 The host may be a member Repository name, a local repository path, or a git
 URL. One Board per host: when the host already serves an `orbit` branch it
-must hold a Board with the same Slug.
+must hold a Board with the same Slug; `orbit board sync` checks this again
+before every merge (`BOARD_HOST_CONFLICT`). A host spec cannot start with `-`.
 
 `orbit board host` shows the current host with no argument, sets it with a
 repository path or URL, and clears it with `--none` — clearing never deletes
@@ -908,6 +916,11 @@ file, `<task-id>.comments` a comment sidecar).
 Set `board.host_sync = "auto"` in the Board's `config.toml` to also sync at
 `orbit prime` and after every committed mutation; automatic failures are
 warnings, never errors, and `--no-sync` suppresses them.
+
+Sync holds the Board lock only for the local commit and merge, never during
+the fetch or push, so a slow host does not block other agents. Host git
+commands never prompt for credentials, and an HTTP transfer that stalls
+for 30 seconds is aborted. Set `GIT_HTTP_LOW_SPEED_TIME` to change that.
 
 **Good fit:** keeping one Board's history on a shared repository so several
 machines or clones work from the same Tasks.

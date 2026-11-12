@@ -666,3 +666,41 @@ fn host_sync_auto_runs_at_prime() {
         "prime did not pull the host's Task"
     );
 }
+
+#[test]
+fn board_host_rejects_a_spec_that_looks_like_a_git_option() {
+    let repo = TestRepo::new();
+    repo.init();
+
+    let (_, error) = repo.err_json(&["board", "host", "--json", "--", "-x.y:z"]);
+    assert_eq!(error["error"]["code"], "INVALID_ARGUMENT", "{error}");
+}
+
+#[test]
+fn sync_refuses_a_host_branch_replaced_by_another_board() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.add("First task", &[]);
+    let host = bare_host(&repo, "host.git");
+    repo.ok_json(&["board", "host", &host_arg(&host), "--json"]);
+    repo.ok_json(&["board", "sync", "--json"]);
+
+    // Another Board takes over the host's `orbit` branch.
+    let peer = peer_clone(&repo, &host);
+    let config: String = peer_read(&peer, "config.toml")
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("prefix") {
+                "prefix = \"zzz-\"".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    peer_write(&peer, "config.toml", &config);
+    peer_commit(&repo, &peer, "other board");
+
+    let (_, error) = repo.err_json(&["board", "sync", "--json"]);
+    assert_eq!(error["error"]["code"], "BOARD_HOST_CONFLICT", "{error}");
+}

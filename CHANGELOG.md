@@ -26,7 +26,20 @@
   Remote Issue identities are provider-neutral: `TRACKER:PROJECT#ID` (for example `github:acme/widget#42`), `PROJECT#ID`, or a tracker Issue URL. Task links are stored as `remote:` frontmatter; legacy `github:` links keep working and are materialized on write.
 - **Breaking:** every Board folder is now its own Git repository on branch `orbit` (ADR 0019); the `board.storage` modes and the code-repository `orbit` branch are retired. Run `orbit migrate` (previews by default, `--apply` converts) to convert a pre-revamp Board; commands on an unmigrated Board fail with `BOARD_NOT_MIGRATED`. The conversion also rewrites `github:` frontmatter links to `remote:`, `repo:*` labels to the `repo` field, `[github]` configuration into `[[remote.projects]]` + `[remote.github]`, and seeds `board.areas` — in one commit.
 - **Breaking:** `orbit link`, `orbit unlink`, and `orbit workspace` are removed. A Board now has member Repositories: repositories discovered under the Board's anchor folder are members automatically, and `orbit repo add` joins a Repository from outside it (writing the `.git/orbit/link` pointer). `orbit repo remove|list|refresh` manage membership and the rebuildable `.orbit/cache/member-repositories.json` inventory. `orbit init <ANCHOR>` on a folder that contains child Boards previews and merges them, preserving Task IDs, recording each Task's Repository, moving child prefixes to `id.accepted_prefixes`, and keeping the children under `<anchor>/.orbit/backups/`.
+
+  Other removed commands and flags, with no aliases:
+
+  | Old | New |
+  | --- | --- |
+  | `orbit doctor --migrate` | `orbit migrate [--apply]` |
+  | `orbit workspace migrate` | `orbit migrate [--apply]`, or `orbit init <ANCHOR>` to merge child Boards |
+  | `orbit workspace status` / `refresh` | `orbit repo list` / `orbit repo refresh` |
+  | `orbit workspace setup` | `orbit setup` in each Repository |
+  | `orbit link BOARD` (from a repository) / `orbit unlink` | `orbit repo add PATH` (from the Board) / `orbit repo remove REPOSITORY` |
+  | `orbit init --global` | `orbit init` in `~` (an ordinary Board) |
+  | `orbit list --all` (show closed work) | `orbit list --include-closed`; `--all` now widens to the whole Board |
 - Added an optional Board host (ADR 0019): `orbit board host` sets or clears the repository whose remote stores the Board's `orbit` branch, `orbit board sync` fetches, merges Orbit-aware (different Tasks/fields merge, Comments union, earlier Claim wins, `--resolve FIELD=local|host` for same-field conflicts), and pushes — never rebased or force-pushed. `board.host_sync = "auto"` also syncs at `orbit prime` and after commits; `--no-sync`/`ORBIT_NO_AUTO_SYNC=1` suppresses it.
+- `orbit migrate --apply` commits a worktree Board's uncommitted edits before converting it. It also refuses an existing target, a staging folder left by an interrupted run, and a Board folder whose files an enclosing repository tracks, all before it changes anything. `orbit board sync` re-checks the host's Slug before merging, holds the Board lock only around local steps, and runs host git commands without credential prompts and with an HTTP stall timeout. Host specs that start with `-` are rejected.
 - Remote Tracker configuration is provider-neutral (ADR 0018): `[remote] auto_push`, `[[remote.projects]]`, and `[remote.github]` adapter settings replace `[github]`; legacy `[github]` config keeps working until `orbit migrate` converts it.
 - `orbit list` and `orbit ready` inside a member Repository now scope to that Repository's Tasks plus Board-wide Tasks; `--all` widens to the whole Board (the former `--all` behavior moved to `--include-closed`).
 - Task `area` values are free-form lowercase slugs constrained by `board.areas` (the fixed Area enum is gone), and Tasks record their owning Repository in the `repo` frontmatter field; `orbit add` fills it from the current Repository.

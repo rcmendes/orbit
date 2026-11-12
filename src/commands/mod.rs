@@ -119,9 +119,15 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             crate::cli::BoardCommand::Sync(sync_args) => {
                 // The command performs the sync itself; do not auto-sync again.
                 crate::board_sync::suppress();
-                with_board(dir.as_deref(), true, |board| {
-                    board::cmd_sync(board, sync_args)
-                })
+                // `sync` takes the Board lock itself, only around local steps.
+                let board = crate::board::BoardAccess::open(
+                    dir.as_deref(),
+                    crate::board::AccessMode::Write,
+                )?
+                .into_board();
+                let mut output = board::cmd_sync(&board, sync_args)?;
+                output.warnings.extend(board.warnings.iter().cloned());
+                Ok(output)
             }
         },
         Command::Remote(args) => {
@@ -234,8 +240,12 @@ where
                 ));
         }
     }
+    // Host sync does network I/O: release the Board lock first.
+    let board = access.into_board();
     if matches!(mode, crate::board::AccessMode::Write) {
-        output.warnings.extend(crate::board_sync::auto_after(board));
+        output
+            .warnings
+            .extend(crate::board_sync::auto_after(&board));
     }
     output.warnings.extend(board.warnings.iter().cloned());
     Ok(output)
@@ -249,13 +259,13 @@ fn prime_with_host_sync(
     args: crate::cli::PrimeArgs,
 ) -> Result<crate::output::CommandOutput> {
     if host_sync_at_prime(dir) {
-        let access = crate::board::BoardAccess::open(dir, crate::board::AccessMode::Write)?;
-        let board = access.board();
-        let mut warnings = crate::board_sync::auto_after(board);
-        let mut output = cmd_prime(board, args)?;
+        // `sync` takes the Board lock itself, only around local steps.
+        let board =
+            crate::board::BoardAccess::open(dir, crate::board::AccessMode::Write)?.into_board();
+        let mut warnings = crate::board_sync::auto_after(&board);
+        let mut output = with_board(dir, false, |board| cmd_prime(board, args))?;
         warnings.append(&mut output.warnings);
         output.warnings = warnings;
-        output.warnings.extend(board.warnings.iter().cloned());
         return Ok(output);
     }
     with_board(dir, false, |board| cmd_prime(board, args))

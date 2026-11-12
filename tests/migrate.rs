@@ -161,6 +161,43 @@ fn migrate_apply_converts_a_worktree_backed_board() {
 }
 
 #[test]
+fn migrate_apply_keeps_uncommitted_worktree_board_edits() {
+    let repo = TestRepo::new();
+    let board = repo.orbit_path();
+    repo.legacy_worktree_board(&board);
+    write_task(&board, "orb-b8c3d0", &task_content("Committed task", ""));
+    commit_all(&repo, &board, "task");
+    // Left uncommitted, as with `board.auto_commit = false`.
+    write_task(&board, "orb-e1f6a3", &task_content("Pending task", ""));
+
+    let value = repo.ok_json(&["migrate", "--apply", "--json"]);
+
+    assert_eq!(value["data"]["applied"], true, "{value}");
+    let migrated = repo.board_path();
+    assert!(migrated.join("tasks").join("orb-e1f6a3.md").is_file());
+    assert!(migrated.join("tasks").join("orb-b8c3d0.md").is_file());
+}
+
+#[test]
+fn migrate_apply_refuses_an_existing_target_before_touching_the_worktree() {
+    let repo = TestRepo::new();
+    let board = repo.orbit_path();
+    repo.legacy_worktree_board(&board);
+    write_task(&board, "orb-b8c3d0", &task_content("Worktree task", ""));
+    commit_all(&repo, &board, "task");
+    std::fs::create_dir_all(repo.board_path()).unwrap();
+
+    let (code, value) = repo.err_json(&["migrate", "--apply", "--json"]);
+
+    assert_ne!(code, 0);
+    assert!(value.to_string().contains("already exists"), "{value}");
+    // The worktree Board and its branch are untouched.
+    assert!(board.join("tasks").join("orb-b8c3d0.md").is_file());
+    let branches = repo.git(&["branch", "--list", "orbit"]);
+    assert!(!String::from_utf8_lossy(&branches.stdout).trim().is_empty());
+}
+
+#[test]
 fn migrate_apply_moves_a_legacy_workspace_board() {
     let creator = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();

@@ -71,6 +71,12 @@ fn classify(spec: &str) -> Result<HostSpec> {
         return Ok(HostSpec::Path(canonical));
     }
 
+    // git would read a leading `-` as an option, never as a URL or name.
+    if spec.starts_with('-') {
+        return Err(OrbitError::invalid_argument(format!(
+            "invalid Board host `{spec}`; a host must not start with `-`"
+        )));
+    }
     if looks_like_url(spec) {
         return Ok(HostSpec::Url(spec.to_string()));
     }

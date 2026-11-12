@@ -4,6 +4,8 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 ## Released versions
 
+Entries record what each release delivered. Some name commands that were later retired or renamed; [CHANGELOG.md](../CHANGELOG.md) maps each retired command to its replacement.
+
 - `v0.10.10` — maintenance republish of v0.10.9; no source or behavior changes
 - `v0.10.9` — `orbit doctor` matches orbit MCP commands case-insensitively on Windows, and `orbit workspace doctor` finds nested local Boards like `workspace migrate`
 - `v0.10.8` — adds the `devin` harness to `orbit init`/`orbit setup`, and `orbit remote issues` honors custom Issue Field names

@@ -40,7 +40,7 @@ The work shape of a Task: `task`, `epic`, `spike`, `chore`, or `decision`. Type 
 _Avoid_: Kind, category, label
 
 **Area**:
-An optional, single controlled classification of where work primarily lands (`board`, `cli`, `mcp`, `setup`, `docs`, or `release`). Area is shared metadata for filtering and agent routing; it is not personal or session-local state.
+An optional, single classification of where work primarily lands. Each Board defines its own Areas; a Board that defines none accepts any short lowercase name. Area is shared metadata for filtering and agent routing; it is not personal or session-local state.
 _Avoid_: Label, component tag, free-form tag
 
 **Verification**:
@@ -111,127 +111,133 @@ _Avoid_: Expired claim, abandoned
 A process that reads and mutates Tasks on behalf of a developer.
 _Avoid_: Worker, bot, client
 
-**Workspace**:
-An ordinary, non-Git folder that contains repositories and one Workspace Board.
-Repositories inside it discover that Board by walking through their Git boundary;
-repositories outside it can join with `orbit link`.
-_Avoid_: Project, database
-
 **Board**:
-The versioned store of Tasks and configuration for a Workspace. In a repository,
-the Board lives at `<repository>/.orbit`; in a Workspace it lives at
-`<workspace>/.orbit/board`. Both have one `orbit` branch.
-_Avoid_: Database, store, project
+The versioned store of Tasks and configuration shared by its member
+Repositories. A Board may have no Repository, one, or many, and grows from one
+to many without changing kind. A Board in the home folder serves as a personal
+Board for any directory that has no closer one.
+_Avoid_: Database, store, project, Workspace, Global Board
 
-**Orbit folder** (DIR):
-The Board directory that holds `config.toml`, `tasks/`, and `comments/`. It is
-`<repository>/.orbit` for a repository-local Board and
-`<workspace>/.orbit/board` for a Workspace Board. `--dir` and `ORBIT_DIR` may
-name either the Orbit folder or its Workspace root. Inside a Git working tree it
-is a worktree of that repository on `orbit`; outside one it is a standalone Git
-repository.
+**Repository**:
+A Git repository that is a member of a Board. A Repository joins either by
+living inside the folder that holds the Board's Orbit folder, or by being added
+explicitly from elsewhere. Every worktree of a Repository is that same
+Repository, wherever the worktree lives. A Task belongs to at most one Repository: a Task
+without one is Board-wide, such as an epic spanning Repositories, and a SubTask
+may belong to a different Repository than its Parent Task. A Repository may name
+one Remote Project where its new Tasks are published.
+_Avoid_: Linked Repository, project, submodule, workspace member
+
+**Orbit folder**:
+The `.orbit/` folder that anchors a Board. Orbit finds a Board by finding the
+nearest Orbit folder at or above the current directory, crossing Git
+boundaries. It holds the Board folder and the Board cache, or a pointer to the
+Board folder when that folder is visible.
 _Avoid_: Workspace root, data directory, hidden worktree
 
-**Storage mode**:
-How an Orbit folder is backed by Git: `worktree` when DIR is inside a working tree and shared by every worktree of the repository, or `repository` when DIR is its own Git repository. The mode is recorded in `config.toml` and changes only Git plumbing, never the Board contract.
-_Avoid_: Layout, backend, external board
+**Board folder** (DIR):
+The folder that holds the Board's `config.toml`, `tasks/`, and `comments/`. It
+is `.orbit/board` by default, or a visible folder with a chosen name, such as
+`board/`, next to the Orbit folder. The Board folder keeps its own history,
+separate from every code repository: Task changes never enter code branches or
+code pull requests.
+_Avoid_: Orbit folder, data directory, storage mode
 
-**Global Board**:
-The opt-in Board at `~/.orbit`, created only by `orbit init --global`. It is the last discovery fallback and is never created implicitly by a command.
-_Avoid_: Default board, user board, central board
+**Board host**:
+The one Git repository whose remote stores a Board's history. A Board has no
+Board host (the default: its history never leaves the machine) or exactly one,
+which may be one of its Repositories or another repository. The host can be set,
+changed, or cleared later; clearing it never deletes the history already stored
+there. A Repository can host at most one Board, and cloning a hosted Repository
+lets a teammate join that Board instead of creating a second one. Being hosted
+is independent of having a Remote Tracker.
+_Avoid_: Tracked Board, synced Board, published Board
 
-**Workspace cache**:
-The reserved, rebuildable local data directory at `<workspace>/.orbit/cache`.
-It stores the last explicitly refreshed Workspace repository inventory at
-`repositories.json` and Remote Issue summaries at `issues.json`, and is separate
-from the versioned Board at `<workspace>/.orbit/board`. Repository status is a
-snapshot: `orbit workspace status` does not poll or rescan; `orbit workspace
-refresh` updates repository discovery, while `orbit workspace issues refresh`
-also refreshes the Issue catalog. Detached Remote Issue summaries remain in the
-`archived_issues` section of `issues.json` and are excluded from normal catalog
-listing.
-_Avoid_: Board, task store
+**Board cache**:
+The rebuildable, never-versioned local data in the Orbit folder: the Repository
+inventory from the last explicit refresh and the Remote Issue catalog. It is a
+snapshot; nothing polls or rescans it, and deleting it loses nothing a refresh
+cannot rebuild.
+_Avoid_: Board, task store, Workspace cache
+
+**Remote Tracker**:
+An external issue tracker a Board may connect to, such as GitHub Issues, GitLab,
+Linear, or Jira. Orbit is local-first: a Board works fully without one, and
+connecting is an explicit opt-in. Orbit talks to every Remote Tracker in Orbit's
+own vocabulary; each tracker's terms stay at its boundary.
+_Avoid_: Provider, backend, integration, remote
+
+**Remote Project**:
+The container of Remote Issues in a Remote Tracker that a Board is connected to:
+a GitHub repository, a GitLab project, a Linear team, or a Jira project. A Board
+may connect to several Remote Projects, on the same or different Remote Trackers.
+_Avoid_: Remote repository, linked repository
 
 **Remote Issue**:
-A GitHub Issue summary in the Workspace's local catalog. It is not a Task, is
-never claimable, and stays outside the Board until an explicit import creates or
-links a Task. Its body and comments are fetched on demand when inspected.
+An item in a Remote Project, known to the Board as a cached summary. It is not a
+Task, is never claimable, and stays outside the Board until an explicit import
+creates or links a Task. Its full content is fetched on demand when inspected.
 _Avoid_: Task, claimable Issue
 
 **Remote Issue catalog**:
-The rebuildable per-Workspace cache of GitHub Issue summaries at
-`<workspace>/.orbit/cache/issues.json`. Explicit refresh paginates open and closed
-Issues (not pull requests); per-repository failures retain the previous snapshot
-and mark it stale. Explicitly detached summaries move to a non-claimable archive
-in the same cache file.
-_Avoid_: Board, Task list, GitHub mirror
+The rebuildable local cache of Remote Issue summaries for a Board's Remote
+Projects. Refresh is explicit; a Remote Project whose refresh fails keeps its
+previous snapshot, marked stale. Detached summaries are archived, never
+claimable, and excluded from normal listing.
+_Avoid_: Board, Task list, mirror
+
+**Mapped field**:
+A Task field that a given Remote Project can represent, and that therefore takes
+part in sync. Which fields are mapped depends on the Remote Tracker and how the
+Remote Project is configured; every other field stays local-only and is never
+published or overwritten.
+_Avoid_: Capability, synced field
 
 **Linked Task**:
-A Task actively paired with one GitHub Issue by stable `owner/repo#number` identity. A
-new import copies the Issue fields; linking an existing Local Task preserves its
-Orbit values and previews differences. Orbit owns the Task's editable fields and
-lifecycle; GitHub remains unchanged until an explicit sync or an enabled
-**Auto-push** writes it.
+A Task actively paired with one Remote Issue by its stable identity. A new import
+copies the Remote Issue's Mapped fields; linking an existing Local Task keeps its
+Orbit values and previews differences. Orbit owns the Task's fields and
+lifecycle; the Remote Issue changes only through an explicit sync or an enabled
+**Auto-push**.
 _Avoid_: Remote Issue, mirrored Issue
 
 **Auto-push**:
-An opt-in Board policy that publishes a Linked Task's changed mapped fields to
-its GitHub Issue after a local mutation. Auto-push is push-only: it never pulls,
-never resolves a conflict by overwriting, and never creates an Issue for an
+An opt-in Board policy that publishes a Linked Task's changed Mapped fields to
+its Remote Issue after a local mutation. Auto-push is push-only: it never pulls,
+never resolves a conflict by overwriting, and never creates a Remote Issue for an
 existing Local Task.
 _Avoid_: Auto-sync, bidirectional sync, mirror
 
-**Reserved status label**:
-The GitHub label `orbit:in-progress` that projects a Task's `in_progress` Status
-onto its Issue. Orbit manages it separately from user Labels; it is excluded from
-Label sync and is never read back as a Status.
-_Avoid_: Status label, claim label
-
-**GitHub Project**:
-A downstream GitHub view over Issues. Orbit does not read or write ProjectV2
-membership, Status, views, or custom fields; Project auto-add and close/reopen
-workflows keep Projects aligned at the Issue level. Project custom fields are
-not organization Issue Fields. Without GitHub's **Auto-close issue** workflow, a
-Project card move does not change an Orbit Task; with it, the card move closes
-the Issue, and Orbit sees the Issue change on pull sync, never Project Status.
-_Avoid_: Board, Orbit Board, Project field authority
-
 **Local Task**:
-A Task managed only by Orbit. A detached Linked Task becomes a Local Task without
-losing its Task data; its prior GitHub identity remains as inactive provenance
-until that exact Issue is explicitly reattached.
+A Task not paired with any Remote Issue. Every Task on a Board without a Remote
+Tracker is a Local Task. A detached Linked Task becomes a Local Task without
+losing its Task data and keeps Remote provenance.
 _Avoid_: Unlinked Issue
 
-**Inactive GitHub provenance**:
-The retained `owner/repo#number` identity and last sync baseline on a Local Task
-after detach. It is not an active link, does not sync, and cannot be replaced by
-import or export. Reattach previews the exact Issue and its sync plan before
+**Remote provenance**:
+The retained Remote Issue identity and last sync baseline on a Local Task after
+detach. It is not an active link, does not sync, and cannot be replaced by import
+or export. Reattach previews the exact Remote Issue and its sync plan before
 confirmation.
-_Avoid_: Active GitHub link, Remote Issue
+_Avoid_: Active link, inactive GitHub provenance
 
 **Legacy layout**:
-A Board from before the current path contract: the hidden worktree at
-`<git-common-dir>/orbit/board`, a shared `<workspace>/board`, a Board directly at
-`<workspace>/.orbit`, a legacy `<workspace>/.board`, or an old `--board` path.
-Legacy layouts keep resolving where supported with a warning; `orbit init
-<workspace>` reports a direct `<workspace>/.orbit` Board and refuses to shadow
-it. `orbit doctor --migrate` moves one legacy layout to its current path;
-`orbit workspace migrate` consolidates legacy Workspace and child-repository
-Boards while retaining the source Boards as backups.
+A Board stored anywhere other than a Board folder under an Orbit folder: a Board
+directly in `.orbit/` (including the former `~/.orbit` Global Board), the hidden
+worktree at `<git-common-dir>/orbit/board`, `<workspace>/board`, or
+`<workspace>/.board`. Discovery does not resolve a Legacy layout; a one-time
+migration converts it to the current layout.
 _Avoid_: Old mode, compatibility board
-
-**Linked Repository**:
-A Repository whose Agents use a Board that does not live inside it.
-_Avoid_: Submodule, project, workspace
 
 ## Compatibility vocabulary
 
 Beads, Linear, and Matt Pocock's skills call the unit an **Issue**, a child a
 **Sub-issue**, and a grouping issue an **Epic**. These are translations, not
-stored types. GitHub Issues are Remote Issues until explicitly imported:
+stored types. An issue in a Remote Tracker is a Remote Issue until explicitly
+imported:
 
-- **Beads/Linear Issue** = Task
-- **GitHub Remote Issue** = catalog entry; after import, its linked Orbit work is a Task
+- **Beads Issue** = Task
+- **GitHub, GitLab, Linear, or Jira Issue** = Remote Issue; after import, its linked Orbit work is a Task
 - **Sub-issue** = SubTask, created with `--parent`
 - **Epic** or **spec** = top-level Task with `type: epic`
 

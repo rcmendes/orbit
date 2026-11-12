@@ -924,13 +924,15 @@ GitHub sync and Triage run through the built-in GitHub Remote Tracker adapter
 Connects the current checkout's origin repository, adopts or creates Issues, and
 runs bidirectional sync with conflict detection. `orbit remote connect` checks
 `gh` authentication and repository access. For an organization-owned repository,
-it validates Issue Fields and writes `[github]` configuration. For a personal
+it validates Issue Fields and writes the `[[remote.projects]]` and
+`[remote.github]` configuration. For a personal
 repository, it leaves configuration unchanged and reports the exact settings to
-configure basic mode: add `[github]`, `mode = "basic"`, and the repository to
+configure basic mode: add a `[[remote.projects]]` entry and `[remote.github]`
+with `mode = "basic"` to
 the Board's `config.toml` or merge them into an existing section while
-preserving other linked repositories; the response includes those exact entries
-and links to the setup guide. Existing integrations can link repositories
-explicitly. Sync requires the `gh` CLI and `[github]` in
+preserving other Remote Projects; the response includes those exact entries
+and links to the setup guide. Existing integrations can connect repositories
+explicitly. Sync requires the `gh` CLI and a configured Remote Project in
 `config.toml`; full mode uses organization Issue Fields, while basic mode limits
 Triage to labels. `orbit remote status` is a read-only diagnostic that reports
 authentication and scopes, linked repositories, Issue Field configuration when

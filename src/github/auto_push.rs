@@ -126,7 +126,17 @@ fn auto_create(board: &Board, client: &dyn GitHubClient, task: &Task) -> Vec<Str
         return Vec::new();
     }
     let repositories = match crate::workspace::export_repositories(board) {
-        Ok(Some(repositories)) => repositories,
+        Ok(Some(mut repositories)) => {
+            for repository in &board.config.github.repositories {
+                if !repositories
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(repository))
+                {
+                    repositories.push(repository.clone());
+                }
+            }
+            repositories
+        }
         Ok(None) => board.config.github.repositories.clone(),
         Err(error) => {
             return vec![format!(

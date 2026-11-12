@@ -184,7 +184,7 @@ fn init_dir_prints_a_next_step() {
     assert!(stdout.contains("Orbit setup complete."), "{stdout}");
     assert!(stdout.contains("1. Board (created)"), "{stdout}");
     assert!(
-        stdout.contains("Workspace Board at <workspace>/.orbit/board"),
+        stdout.contains("Board at <anchor>/.orbit/board"),
         "{stdout}"
     );
     assert!(!stdout.contains("orbit link"), "{stdout}");

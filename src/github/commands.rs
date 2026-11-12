@@ -1135,7 +1135,7 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
     let task = graph.get(&args.task)?.clone();
     if task.front.github.as_ref().is_some_and(|link| !link.active) {
         return Err(OrbitError::invalid_argument(format!(
-            "task {} retains inactive GitHub provenance; use `orbit workspace issues reattach {}#{}` after reviewing it",
+            "task {} retains inactive GitHub provenance from {}#{}; review it before adopting another Issue",
             args.task,
             task.front
                 .github
@@ -1185,12 +1185,18 @@ fn cmd_adopt(board: &Board, args: GitHubAdoptArgs) -> Result<crate::output::Comm
 fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::CommandOutput> {
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let workspace_repositories = crate::workspace::export_repositories(board)?;
-    let repositories = workspace_repositories
-        .clone()
-        .unwrap_or_else(|| board.config.github.repositories.clone());
-    if workspace_repositories.as_ref().is_some_and(Vec::is_empty) && args.repo.is_none() {
+    let mut repositories = workspace_repositories.clone().unwrap_or_default();
+    for repository in &board.config.github.repositories {
+        if !repositories
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(repository))
+        {
+            repositories.push(repository.clone());
+        }
+    }
+    if repositories.is_empty() && args.repo.is_none() {
         return Err(OrbitError::invalid_argument(
-            "the Workspace repository catalog has no included repositories; run `orbit workspace refresh` or include a repository before exporting",
+            "no GitHub repositories are linked or included; run `orbit github repo link OWNER/REPO` or pass `--repo OWNER/REPO` before exporting",
         ));
     }
     let repo = select_create_repo(&repositories, args.repo.as_deref())?;
@@ -1643,8 +1649,15 @@ fn cmd_auto_push(board: &Board, args: GitHubAutoPushArgs) -> Result<crate::outpu
         warnings.extend(crate::mutation::commit_warning(outcome));
     }
     if changed && enabled {
-        let repositories = crate::workspace::export_repositories(board)?
-            .unwrap_or_else(|| board.config.github.repositories.clone());
+        let mut repositories = crate::workspace::export_repositories(board)?.unwrap_or_default();
+        for repository in &board.config.github.repositories {
+            if !repositories
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(repository))
+            {
+                repositories.push(repository.clone());
+            }
+        }
         match repositories.len() {
             1 => {}
             0 => warnings.push(
@@ -1652,7 +1665,7 @@ fn cmd_auto_push(board: &Board, args: GitHubAutoPushArgs) -> Result<crate::outpu
                     .to_string(),
             ),
             count => warnings.push(format!(
-                "new Tasks will stay local: {count} repositories are available, so Issue creation has no single destination; keep one included repository or pass `--repo OWNER/REPO` to `orbit github create`"
+                "new Tasks will stay local: {count} repositories are available, so Issue creation has no single destination; keep one linked repository or pass `--repo OWNER/REPO` to `orbit github create`"
             )),
         }
     }

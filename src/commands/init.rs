@@ -411,7 +411,7 @@ fn render_init_human(report: &InitReport<'_>) -> String {
     ));
     human.push_str(&format!("   {:<9}{}\n", "branch", report.branch));
     let storage = if report.workspace {
-        "repository (Workspace Board at <workspace>/.orbit/board)"
+        "repository (Board at <anchor>/.orbit/board)"
     } else {
         "repository (standalone Board folder on branch `orbit`)"
     };
@@ -523,7 +523,7 @@ fn render_init_human(report: &InitReport<'_>) -> String {
         && !report.workspace;
     if external {
         human.push_str(&format!(
-            "  orbit link {}   # join this Board from each repository\n",
+            "  orbit repo add {}   # join this Board from each repository\n",
             report.board_root.display()
         ));
     }
@@ -600,9 +600,7 @@ fn run_init(
         });
     }
 
-    if print
-        && let Some(existing) = Board::conflicting_board_for(board_root, global)?
-    {
+    if print && let Some(existing) = Board::conflicting_board_for(board_root, global)? {
         return Err(crate::board::already_initialized(&existing));
     }
 
@@ -804,7 +802,7 @@ fn validate_workspace_layout(workspace: &Path) -> Result<()> {
     let orbit = workspace.join(".orbit");
     if Board::is_board(&orbit) {
         return Err(OrbitError::config(format!(
-            "found a legacy Board at {}; it remains available with `--dir {}`. Back it up and migrate it to {}/.orbit/board before initializing this Workspace",
+            "found a legacy Board at {}; it remains available with `--dir {}`. Back it up and migrate it to {}/.orbit/board before initializing this anchor folder",
             orbit.display(),
             orbit.display(),
             workspace.display()

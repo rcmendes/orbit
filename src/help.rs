@@ -816,12 +816,12 @@ tasks, dangling dependencies, missing or nested parents, cycles, orphan or
 corrupt comments, stale temp files, uncommitted changes, the checked-out branch,
 and a SessionStart hook that cannot find the Orbit binary on PATH.
 
-From a Workspace root or any child repository it also reports the resolved
-Workspace and Board, repository discovery and access failures, stale or partial
-Remote Issue caches, interrupted migrations and local Board remnants, duplicate
-GitHub identities, orphaned links, field-level sync conflicts, and missing or
-conflicting managed agent setup. Every finding identifies severity, affected
-repository/Task/Issue, cause, and a safe next action.
+From a Board anchor or any member Repository it also reports the resolved
+Board, Repository discovery and access failures, interrupted migrations and
+local Board remnants, duplicate GitHub identities, orphaned links,
+field-level sync conflicts, and missing or conflicting managed agent setup.
+Every finding identifies severity, affected repository/Task/Issue, cause, and
+a safe next action.
 
 Doctor is read-only unless `--fix` is requested. --fix removes
 stale temp files and re-attaches an orphan orbit worktree. Boards that still
@@ -842,12 +842,11 @@ Examples:
   # Inspect the discovery trace and reported issues as JSON
   orbit doctor --json
 
-  # Diagnose the shared Workspace from a child repository
+  # Diagnose the shared Board from a member Repository
   cd api && orbit doctor
 
-  # Preview Workspace repositories and their cached Issues
-  orbit workspace status
-  orbit workspace issues list --state open";
+  # List the Board's member Repositories
+  orbit repo list";
 
 pub const SYNC_LONG: &str = "\
 Commits pending board changes, usually the lease updates written by heartbeat, to

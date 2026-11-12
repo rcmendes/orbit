@@ -49,6 +49,16 @@ pub enum Command {
     #[command(long_about = help::SLUG_LONG, after_long_help = help::SLUG_EXAMPLES)]
     Slug(SlugArgs),
 
+    /// Convert a pre-ADR-0019 Board into a standalone Board folder.
+    ///
+    /// Previews the migration by default; pass --apply to convert the Board
+    /// into its own Git repository on branch `orbit` under `.orbit/board`
+    /// (or a visible folder anchored by `.orbit`), rewriting `github:` links
+    /// to `remote:`, `[github]` to remote project entries, `repo:*` labels to
+    /// the `repo` field, and seeding `board.areas` — all in one commit.
+    #[command(long_about = help::BOARD_MIGRATE_LONG)]
+    Migrate(BoardMigrateArgs),
+
     /// Create a task.
     #[command(long_about = help::ADD_LONG, after_long_help = help::ADD_EXAMPLES)]
     Add(AddArgs),
@@ -253,6 +263,17 @@ pub enum SlugCommand {
         after_long_help = help::SLUG_MIGRATE_EXAMPLES
     )]
     Migrate(SlugMigrateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BoardMigrateArgs {
+    /// Apply the migration. Without this flag the command only previews.
+    #[arg(long, conflicts_with = "dry_run")]
+    pub apply: bool,
+
+    /// Preview the migration without writing anything (the default).
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]

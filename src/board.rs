@@ -89,6 +89,8 @@ pub struct Discovery {
     pub warnings: Vec<String>,
     pub legacy: Option<String>,
     pub ambiguous: Option<(PathBuf, PathBuf)>,
+    /// The `.orbit` folder the resolved Board hangs off, when known.
+    pub orbit_dir: Option<PathBuf>,
     pub error: Option<OrbitError>,
 }
 
@@ -101,6 +103,7 @@ impl Default for Discovery {
             warnings: Vec::new(),
             legacy: None,
             ambiguous: None,
+            orbit_dir: None,
             error: None,
         }
     }
@@ -122,8 +125,14 @@ pub struct Config {
     pub board: BoardConfig,
     #[serde(default)]
     pub id: IdConfig,
+    /// Legacy GitHub provider section; `orbit migrate` rewrites it to `remote`.
     #[serde(default)]
     pub github: crate::github::GitHubConfig,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::remote::RemoteConfig::is_empty"
+    )]
+    pub remote: crate::remote::RemoteConfig,
     #[serde(
         default,
         skip_serializing_if = "crate::workspace::WorkspaceConfig::is_empty"
@@ -173,6 +182,13 @@ impl Config {
             if !task::is_valid_label(label) {
                 return Err(OrbitError::config(format!(
                     "board.non_ready_labels contains invalid label `{label}`"
+                )));
+            }
+        }
+        for area in &self.board.areas {
+            if !crate::task::is_valid_area(area) {
+                return Err(OrbitError::config(format!(
+                    "board.areas contains invalid area `{area}`"
                 )));
             }
         }
@@ -231,8 +247,14 @@ impl StorageMode {
 pub struct BoardConfig {
     #[serde(default = "default_branch")]
     pub branch: String,
+    /// Retired by ADR 0019: every Board folder is a standalone repository.
+    /// Still parsed so `orbit migrate` can read pre-migration Boards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<StorageMode>,
+    /// Optional per-Board Area vocabulary. When empty, any short lowercase
+    /// Area name is accepted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub areas: Vec<String>,
     #[serde(default = "default_lease")]
     pub lease_minutes: i64,
     #[serde(default = "task::default_priority")]
@@ -250,6 +272,7 @@ impl Default for BoardConfig {
         Self {
             branch: default_branch(),
             storage: None,
+            areas: Vec::new(),
             lease_minutes: default_lease(),
             default_priority: task::default_priority(),
             non_ready_labels: default_non_ready_labels(),
@@ -387,6 +410,11 @@ pub struct Board {
     pub lock_path: PathBuf,
     pub config: Config,
     pub warnings: Vec<String>,
+    /// The `.orbit` folder anchoring this Board when it resolved through one:
+    /// the parent of a hidden `.orbit/board`, or the folder holding the
+    /// pointer file for a visible Board folder. `None` for legacy, explicit,
+    /// or otherwise unanchored Boards.
+    pub orbit_dir: Option<PathBuf>,
     /// Set when a non-forced commit failed during this process.
     pub(crate) commit_failed: std::cell::Cell<bool>,
 }
@@ -409,16 +437,36 @@ pub struct BoardAccess {
 
 impl BoardAccess {
     pub fn open(dir: Option<&Path>, mode: AccessMode) -> Result<Self> {
-        let board = if matches!(mode, AccessMode::Inspect) {
-            let discovery = Board::discovery(dir);
+        let (board, discovery) = if matches!(mode, AccessMode::Inspect) {
+            let mut discovery = Board::discovery(dir);
             if let Some(error) = discovery.error {
                 return Err(error);
             }
-            let root = discovery.root.ok_or_else(OrbitError::board_not_found)?;
-            Board::at_root(root, discovery.warnings)?
+            let orbit_dir = discovery.orbit_dir.clone();
+            let root = discovery
+                .root
+                .clone()
+                .ok_or_else(OrbitError::board_not_found)?;
+            let warnings = std::mem::take(&mut discovery.warnings);
+            let mut board = Board::at_root(root, warnings)?;
+            board.orbit_dir = orbit_dir.or_else(|| discovery_orbit_dir(&board.root));
+            (board, Some(discovery))
         } else {
-            Board::discover(dir)?
+            let board = Board::discover(dir)?;
+            // `discover` re-resolves after orphan repair; refresh the trace so
+            // the migration check sees the post-repair layout.
+            let discovery = Board::discovery(dir);
+            (board, Some(discovery))
         };
+        if board.needs_migration(discovery.as_ref()) {
+            return Err(OrbitError::new(
+                code::BOARD_NOT_MIGRATED,
+                format!(
+                    "the Board at {} uses a pre-ADR-0019 layout; run `orbit migrate` to convert it to a standalone Board folder",
+                    board.root.display()
+                ),
+            ));
+        }
         let lock = if matches!(mode, AccessMode::Write) {
             board.lock_exclusive()?
         } else {
@@ -460,7 +508,9 @@ impl Board {
             return Err(OrbitError::board_not_found());
         };
         let linked = matches!(discovery.source, DiscoverySource::Link);
+        let orbit_dir = discovery.orbit_dir.clone();
         let mut board = Self::at_root(root, discovery.warnings)?;
+        board.orbit_dir = orbit_dir.or_else(|| discovery_orbit_dir(&board.root));
         if linked && board.config.board.storage.is_none() {
             push_warning(
                 &mut board.warnings,
@@ -487,6 +537,7 @@ impl Board {
             lock_path,
             config,
             warnings,
+            orbit_dir: None,
             commit_failed: Default::default(),
         })
     }
@@ -527,19 +578,62 @@ impl Board {
         }))
     }
 
+    /// The default local Board folder: `<main-checkout>/.orbit/board`.
     pub fn local_root() -> Result<PathBuf> {
-        Ok(slug::main_checkout_anchor()?.join(".orbit"))
+        Ok(slug::main_checkout_anchor()?
+            .join(".orbit")
+            .join("board"))
     }
 
     /// A Workspace Board lives internally at `<workspace>/.orbit/board`; the
-    /// Workspace root is the user-facing directory.
+    /// Workspace root is the user-facing directory. A repository-local Board
+    /// at `<repo>/.orbit/board` has the same shape, so the Orbit folder's
+    /// parent must sit outside every Git working tree to count as a Workspace.
     pub fn is_workspace_board(&self) -> bool {
-        self.root.file_name().is_some_and(|name| name == "board")
-            && self
+        let Some(orbit) = self.orbit_dir.clone().or_else(|| discovery_orbit_dir(&self.root))
+        else {
+            return false;
+        };
+        let Some(workspace) = orbit.parent() else {
+            return false;
+        };
+        git::toplevel_containing(workspace).is_none()
+    }
+
+    /// Whether the Board still uses a pre-ADR-0019 layout or configuration
+    /// that `orbit migrate` must convert before Board commands may run.
+    pub fn needs_migration(&self, discovery: Option<&Discovery>) -> bool {
+        // `board.storage` only existed to pick a worktree or in-repo layout.
+        if self.config.board.storage.is_some() {
+            return true;
+        }
+        // A Board backed by a Git worktree of another repository.
+        if self.root.join(".git").is_file() {
+            return true;
+        }
+        // A Board folder sitting directly in an Orbit folder, or in the
+        // retired `.board` folder: both predate `.orbit/board`.
+        if self.root.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR)
+            || self
                 .root
                 .parent()
-                .and_then(Path::file_name)
-                .is_some_and(|name| name == ".orbit")
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str())
+                == Some(LEGACY_BOARD_DIR)
+        {
+            return true;
+        }
+        // A non-default `[github]` section predates `[remote]`.
+        if self.config.github != crate::github::GitHubConfig::default() {
+            return true;
+        }
+        // Discovery flagged a legacy or half-migrated layout.
+        if let Some(discovery) = discovery
+            && (discovery.legacy.is_some() || discovery.ambiguous.is_some())
+        {
+            return true;
+        }
+        false
     }
 
     pub fn storage_mode(&self) -> StorageMode {
@@ -569,9 +663,10 @@ impl Board {
         if Self::is_board(&root) {
             return Ok((root, false));
         }
-        let workspace = root.join(".orbit").join("board");
-        if Self::is_board(&workspace) {
-            return Ok((workspace, false));
+        // An Orbit folder resolves its hidden `board/` or the `board` pointer.
+        let orbit = root.join(".orbit");
+        if let Some(board) = resolve_orbit_dir(&orbit) {
+            return Ok((board.root().to_path_buf(), board.is_legacy()));
         }
         let legacy_orbit = root.join(".orbit");
         if Self::is_board(&legacy_orbit) {
@@ -748,16 +843,16 @@ impl Board {
         self.commit_failed.get()
     }
 
+    /// Creates a standalone Board folder at `dir`: its own Git repository on
+    /// the `orbit` branch (ADR 0019). `dir` is the Board folder itself —
+    /// `<anchor>/.orbit/board` for the hidden layout or a visible folder the
+    /// caller anchors with an Orbit-folder pointer.
     pub fn init_dir(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
         let root = resolve_external(dir)?;
         if let Some(existing) = Self::conflicting_board_for(&root, false)? {
             return Err(already_initialized(&existing));
         }
-        if git::toplevel_containing(&root).is_some() {
-            init_worktree_at(&root, slug)
-        } else {
-            init_external(&root, slug)
-        }
+        init_external(&root, slug)
     }
 
     pub fn init_repository(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
@@ -785,7 +880,13 @@ impl Board {
         }
 
         let main = main_checkout_for(&repo_root, &common).join(".orbit");
-        if main != dir && Self::is_board(&main) && !is_global_board(&main) {
+        if let Some(board) = resolve_orbit_dir(&main)
+            && board.root() != dir
+            && !is_global_board(board.root())
+        {
+            return Ok(Some(board.root().to_path_buf()));
+        }
+        if Self::is_board(&main) && main != dir && !is_global_board(&main) {
             return Ok(Some(main));
         }
 
@@ -800,15 +901,26 @@ impl Board {
             .flat_map(|parent| git::ancestors_through(parent, Some(repo_root.as_path())))
         {
             let candidate = parent.join(".orbit");
-            if candidate != dir && Self::is_board(&candidate) && !is_global_board(&candidate) {
-                return Ok(Some(candidate));
+            if let Some(board) = resolve_orbit_dir(&candidate)
+                && board.root() != dir
+                && !is_global_board(board.root())
+            {
+                return Ok(Some(board.root().to_path_buf()));
             }
         }
 
         for path in git::worktree_paths(&repo_root)? {
             let path = dunce::canonicalize(&path).unwrap_or(path);
-            if path != dir && Self::is_board(&path) && !is_global_board(&path) {
+            if path == dir || is_global_board(&path) {
+                continue;
+            }
+            if Self::is_board(&path) {
                 return Ok(Some(path));
+            }
+            if let Some(board) = resolve_orbit_dir(&path.join(".orbit"))
+                && board.root() != dir
+            {
+                return Ok(Some(board.root().to_path_buf()));
             }
         }
         Ok(None)
@@ -885,95 +997,6 @@ fn resolve_prefix(slug: Option<&str>) -> Result<String> {
     }
 }
 
-fn init_worktree_at(board_root: &Path, slug: Option<&str>) -> Result<InitResult> {
-    let repo = git::toplevel_containing(board_root).ok_or_else(|| {
-        OrbitError::new(
-            code::NOT_A_REPOSITORY,
-            format!(
-                "{} is not inside a Git working tree; use a standalone Board directory",
-                board_root.display()
-            ),
-        )
-    })?;
-    let repo = dunce::canonicalize(&repo).unwrap_or(repo);
-    let prefix = resolve_prefix(slug)?;
-
-    if board_root.join("config.toml").exists() {
-        return Err(already_initialized(board_root));
-    }
-    if board_root.is_dir()
-        && std::fs::read_dir(board_root)
-            .map_err(|error| OrbitError::io(format!("read {}", board_root.display()), error))?
-            .next()
-            .is_some()
-    {
-        return Err(OrbitError::config(format!(
-            "board directory {} must be empty; pass a new or empty directory, or run `orbit init` inside it to use {}/.orbit",
-            board_root.display(),
-            board_root.display()
-        )));
-    }
-
-    let common = git::common_dir_at(&repo)?;
-    let bootstrap = common.join("orbit");
-    std::fs::create_dir_all(&bootstrap)
-        .map_err(|error| OrbitError::io(format!("create {}", bootstrap.display()), error))?;
-    let _init_lock = BoardLock::acquire(&bootstrap.join("init.lock"), 2000, true)?;
-
-    git::ensure_identity(&repo)?;
-
-    let branch = "orbit";
-    let branch_existed = git::branch_exists(&repo, branch)?;
-    if branch_existed && !git::branch_contains_file(&repo, branch, "config.toml")? {
-        return Err(OrbitError::config(
-            "branch 'orbit' already exists and is not an Orbit board; rename it before running `orbit init`",
-        ));
-    }
-
-    let created_branch = !branch_existed;
-    if created_branch {
-        let tree = git::empty_tree(&repo)?;
-        let commit = git::commit_tree(&repo, &tree, "orbit: create board branch")?;
-        git::create_branch(&repo, branch, &commit)?;
-    }
-
-    git::worktree_prune(&repo)?;
-    if let Err(error) = git::worktree_add(&repo, board_root, branch) {
-        if created_branch {
-            let _ = git::delete_branch(&repo, branch);
-        }
-        return Err(error);
-    }
-
-    if let Err(error) = git::ensure_exclude_entry(&repo, board_root) {
-        let _ = git::worktree_remove(&repo, board_root);
-        if created_branch {
-            let _ = git::delete_branch(&repo, branch);
-        }
-        return Err(error);
-    }
-
-    if board_root.join("config.toml").exists() {
-        let config = Config::load(board_root)?;
-        return Ok(InitResult {
-            board: board_root.to_path_buf(),
-            branch: branch.to_string(),
-            external: false,
-            prefix: config.id.prefix,
-            storage: config.board.storage.unwrap_or(StorageMode::Worktree),
-        });
-    }
-
-    let result = initialize_board_files(board_root, branch, false, &prefix, StorageMode::Worktree);
-    if result.is_err() {
-        let _ = git::worktree_remove(&repo, board_root);
-        if created_branch {
-            let _ = git::delete_branch(&repo, branch);
-        }
-    }
-    result
-}
-
 fn init_external(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
     let root = resolve_external(dir)?;
     let prefix = resolve_prefix(slug)?;
@@ -1014,7 +1037,7 @@ fn init_external(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
 
     git::ensure_identity(&root)?;
     git::set_head(&root, "orbit")?;
-    initialize_board_files(&root, "orbit", true, &prefix, StorageMode::Repository)
+    initialize_board_files(&root, "orbit", true, &prefix)
 }
 
 fn initialize_board_files(
@@ -1022,11 +1045,9 @@ fn initialize_board_files(
     branch: &str,
     external: bool,
     prefix: &str,
-    storage: StorageMode,
 ) -> Result<InitResult> {
     let mut config = Config::default();
     config.id.prefix = prefix.to_string();
-    config.board.storage = Some(storage);
     config.validate()?;
     let config_toml = config.to_toml()?;
 
@@ -1051,7 +1072,7 @@ fn initialize_board_files(
         branch: branch.to_string(),
         external,
         prefix: prefix.to_string(),
-        storage,
+        storage: StorageMode::Repository,
     })
 }
 
@@ -1071,17 +1092,29 @@ fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
             return;
         }
     };
-    let internal = root.join(".orbit").join("board");
-    let legacy_orbit = root.join(".orbit");
-    let legacy_nested = root.join("board");
-    let (selected_root, workspace, legacy) = if Board::is_board(&root) {
-        (root.clone(), false, false)
-    } else if Board::is_board(&internal) {
-        (internal, true, false)
-    } else if Board::is_board(&legacy_orbit) {
-        (legacy_orbit.clone(), true, true)
+    // An Orbit folder passed directly resolves its Board (`board/` or the
+    // `board` pointer); a Board folder passed directly is used as-is.
+    let orbit_board = if root.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR) {
+        resolve_orbit_dir(&root)
+    } else {
+        resolve_orbit_dir(&root.join(ORBIT_DIR))
+    };
+    let legacy_nested = root.join(BOARD_DIR);
+    let legacy_board = root.join(LEGACY_BOARD_DIR);
+    let (selected_root, workspace, legacy, orbit_dir) = if Board::is_board(&root) {
+        (root.clone(), false, false, None)
+    } else if let Some(board) = orbit_board {
+        let legacy = board.is_legacy();
+        (
+            board.root().to_path_buf(),
+            !legacy,
+            legacy,
+            Some(board.orbit().to_path_buf()),
+        )
     } else if Board::is_board(&legacy_nested) {
-        (legacy_nested, true, true)
+        (legacy_nested, true, true, None)
+    } else if Board::is_board(&legacy_board) {
+        (legacy_board, true, true, None)
     } else {
         discovery
             .steps
@@ -1093,6 +1126,7 @@ fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
     step.found = true;
     step.selected = true;
     discovery.root = Some(selected_root.clone());
+    discovery.orbit_dir = orbit_dir;
     discovery.source = DiscoverySource::Dir;
     if legacy {
         let warning = format!(
@@ -1102,7 +1136,11 @@ fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
         discovery.legacy = Some(warning.clone());
         push_warning(&mut discovery.warnings, warning);
     }
-    if workspace && selected_root != legacy_orbit && Board::is_board(&legacy_orbit) {
+    let legacy_orbit = root.join(ORBIT_DIR);
+    if workspace
+        && selected_root != legacy_orbit
+        && Board::is_board(&legacy_orbit)
+    {
         discovery.ambiguous = Some((selected_root.clone(), legacy_orbit.clone()));
         push_warning(
             &mut discovery.warnings,
@@ -1173,8 +1211,8 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         let link = common.join("orbit").join("link");
         let legacy_local = legacy_local_path(&common);
         let nearest = nearest_orbit(&cwd, &repo_root, home.as_deref());
-        let workspace = nearest_workspace_board(&cwd);
-        let main = main_checkout_for(&repo_root, &common).join(".orbit");
+        let workspace = nearest_workspace_board(&cwd, home.as_deref());
+        let main = resolve_orbit_dir(&main_checkout_for(&repo_root, &common).join(".orbit"));
         let global = home.as_deref().and_then(global_board);
 
         let mut link_root = None;
@@ -1199,15 +1237,15 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         discovery.steps[link_step].found = link_root.is_some();
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::Workspace,
-            workspace.clone(),
+            workspace.as_ref().map(|board| orbit_root(board)),
         ));
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::Nearest,
-            nearest.clone(),
+            nearest.as_ref().map(|board| orbit_root(board)),
         ));
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::MainCheckout,
-            Some(main.clone()),
+            main.as_ref().map(|board| orbit_root(board)),
         ));
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::LegacyLocal,
@@ -1215,12 +1253,10 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         ));
         discovery
             .steps
-            .push(DiscoveryStep::missing(DiscoverySource::Global));
-        if let Some(global) = &global {
-            let index = discovery.steps.len() - 1;
-            discovery.steps[index] =
-                DiscoveryStep::new(DiscoverySource::Global, Some(global.clone()));
-        }
+            .push(DiscoveryStep::new(
+                DiscoverySource::Global,
+                global.as_ref().map(|board| orbit_root(board)),
+            ));
 
         let selected = if discovery.error.is_some() {
             None
@@ -1234,8 +1270,14 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
                 push_warning(&mut discovery.warnings, warning);
             }
             Some((DiscoverySource::Link, root))
-        } else if let Some(root) = workspace {
-            if let Some(local) = nearest.as_ref().filter(|local| *local != &root) {
+        } else if let Some(board) = workspace {
+            let (root, _) = orbit_selection(&board);
+            discovery.orbit_dir = Some(board.orbit().to_path_buf());
+            if let Some(local) = nearest
+                .as_ref()
+                .map(|local| orbit_selection(local).0)
+                .filter(|local| *local != root)
+            {
                 discovery.ambiguous = Some((root.clone(), local.clone()));
                 push_warning(
                     &mut discovery.warnings,
@@ -1247,12 +1289,32 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
                 );
             }
             Some((DiscoverySource::Workspace, root))
-        } else if let Some(root) = nearest {
+        } else if let Some(board) = nearest {
+            discovery.orbit_dir = Some(board.orbit().to_path_buf());
+            let (root, legacy) = orbit_selection(&board);
+            if legacy {
+                let warning = format!(
+                    "{LEGACY_LAYOUT}: using a legacy Board directly at {}",
+                    root.display()
+                );
+                discovery.legacy = Some(warning.clone());
+                push_warning(&mut discovery.warnings, warning);
+            }
             warn_if_ambiguous(&mut discovery.warnings, &root, &legacy_local);
             Some((DiscoverySource::Nearest, root))
-        } else if Board::is_board(&main) {
-            warn_if_ambiguous(&mut discovery.warnings, &main, &legacy_local);
-            Some((DiscoverySource::MainCheckout, main.clone()))
+        } else if let Some(board) = main {
+            discovery.orbit_dir = Some(board.orbit().to_path_buf());
+            let (root, legacy) = orbit_selection(&board);
+            if legacy {
+                let warning = format!(
+                    "{LEGACY_LAYOUT}: using a legacy Board at {}",
+                    root.display()
+                );
+                discovery.legacy = Some(warning.clone());
+                push_warning(&mut discovery.warnings, warning);
+            }
+            warn_if_ambiguous(&mut discovery.warnings, &root, &legacy_local);
+            Some((DiscoverySource::MainCheckout, root))
         } else if Board::is_board(&legacy_local) {
             let warning = format!(
                 "{LEGACY_LAYOUT}: using legacy Board at {}",
@@ -1262,16 +1324,18 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
             push_warning(&mut discovery.warnings, warning);
             Some((DiscoverySource::LegacyLocal, legacy_local.clone()))
         } else {
-            global.map(|global| (DiscoverySource::Global, global))
+            global.map(|board| {
+                discovery.orbit_dir = Some(board.orbit().to_path_buf());
+                let (root, _) = orbit_selection(&board);
+                (DiscoverySource::Global, root)
+            })
         };
 
-        if Board::is_board(&legacy_local) {
-            let new_local = [&main].into_iter().find(|path| Board::is_board(path));
-            if let Some(new_local) = new_local
-                && new_local != &legacy_local
-            {
-                discovery.ambiguous = Some((new_local.clone(), legacy_local.clone()));
-            }
+        if Board::is_board(&legacy_local)
+            && let Some((_, root)) = &selected
+            && root != &legacy_local
+        {
+            discovery.ambiguous = Some((root.clone(), legacy_local.clone()));
         }
 
         match selected {
@@ -1298,22 +1362,29 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         .filter(|home| cwd.starts_with(home))
         .unwrap_or_else(|| Path::new("/"));
     let nearest = nearest_orbit(&cwd, stop, home.as_deref());
-    let workspace = nearest_workspace_board(&cwd);
+    let workspace = nearest_workspace_board(&cwd, home.as_deref());
     let global = home.as_deref().and_then(global_board);
     discovery.steps.push(DiscoveryStep::new(
         DiscoverySource::Workspace,
-        workspace.clone(),
+        workspace.as_ref().map(|board| orbit_root(board)),
     ));
     discovery.steps.push(DiscoveryStep::new(
         DiscoverySource::Nearest,
-        nearest.clone(),
+        nearest.as_ref().map(|board| orbit_root(board)),
     ));
-    discovery
-        .steps
-        .push(DiscoveryStep::new(DiscoverySource::Global, global.clone()));
+    discovery.steps.push(DiscoveryStep::new(
+        DiscoverySource::Global,
+        global.as_ref().map(|board| orbit_root(board)),
+    ));
 
-    if let Some(root) = workspace {
-        if let Some(legacy) = nearest.as_ref().filter(|path| *path != &root) {
+    if let Some(board) = workspace {
+        discovery.orbit_dir = Some(board.orbit().to_path_buf());
+        let (root, _) = orbit_selection(&board);
+        if let Some(legacy) = nearest
+            .as_ref()
+            .map(|board| orbit_selection(board).0)
+            .filter(|path| *path != root)
+        {
             discovery.ambiguous = Some((root.clone(), legacy.clone()));
             push_warning(
                 &mut discovery.warnings,
@@ -1327,9 +1398,11 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         discovery.source = DiscoverySource::Workspace;
         discovery.root = Some(root);
         discovery.steps[0].selected = true;
-    } else if let Some(root) = nearest {
+    } else if let Some(board) = nearest {
+        discovery.orbit_dir = Some(board.orbit().to_path_buf());
         discovery.source = DiscoverySource::Nearest;
-        if root.file_name().and_then(|name| name.to_str()) == Some(".orbit") {
+        let (root, legacy) = orbit_selection(&board);
+        if legacy || root.file_name().and_then(|name| name.to_str()) == Some(".orbit") {
             let warning = format!(
                 "{LEGACY_LAYOUT}: using a legacy Board directly at {}",
                 root.display()
@@ -1339,7 +1412,17 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
         }
         discovery.root = Some(root);
         discovery.steps[1].selected = true;
-    } else if let Some(root) = global {
+    } else if let Some(board) = global {
+        discovery.orbit_dir = Some(board.orbit().to_path_buf());
+        let (root, legacy) = orbit_selection(&board);
+        if legacy {
+            let warning = format!(
+                "{LEGACY_LAYOUT}: using a legacy Board directly at {}",
+                root.display()
+            );
+            discovery.legacy = Some(warning.clone());
+            push_warning(&mut discovery.warnings, warning);
+        }
         discovery.source = DiscoverySource::Global;
         discovery.root = Some(root);
         discovery.steps[2].selected = true;
@@ -1385,32 +1468,54 @@ fn home_dir() -> Option<PathBuf> {
     git::home_dir().and_then(|home| dunce::canonicalize(home).ok())
 }
 
-fn global_board(home: &Path) -> Option<PathBuf> {
-    let root = home.join(".orbit");
-    Board::is_board(&root).then_some(root)
+fn global_board(home: &Path) -> Option<OrbitBoard> {
+    resolve_orbit_dir(&home.join(".orbit"))
 }
 
 fn is_global_board(path: &Path) -> bool {
     home_dir().is_some_and(|home| path == home.join(".orbit"))
 }
 
-fn nearest_orbit(start: &Path, stop: &Path, skip: Option<&Path>) -> Option<PathBuf> {
+/// The Board folder an Orbit folder resolves to, plus whether that resolution
+/// is a pre-ADR-0019 layout `orbit migrate` must convert.
+fn orbit_selection(board: &OrbitBoard) -> (PathBuf, bool) {
+    (board.root().to_path_buf(), board.is_legacy())
+}
+
+/// The Board folder an `OrbitBoard` resolves to, for discovery steps.
+fn orbit_root(board: &OrbitBoard) -> PathBuf {
+    board.root().to_path_buf()
+}
+
+fn nearest_orbit(start: &Path, stop: &Path, skip: Option<&Path>) -> Option<OrbitBoard> {
     for dir in git::ancestors_through(start, Some(stop)) {
         if skip != Some(dir) {
-            let candidate = dir.join(".orbit");
-            if Board::is_board(&candidate) {
-                return Some(candidate);
+            if let Some(board) = resolve_orbit_dir(&dir.join(".orbit")) {
+                return Some(board);
             }
         }
     }
     None
 }
 
-fn nearest_workspace_board(start: &Path) -> Option<PathBuf> {
+/// The nearest Workspace-level Orbit folder walking up across Git boundaries.
+/// Orbit folders inside a Git working tree belong to that repository and are
+/// skipped here; the caller's repository-local walk handles them.
+fn nearest_workspace_board(start: &Path, skip: Option<&Path>) -> Option<OrbitBoard> {
     for directory in git::ancestors_through(start, None) {
-        let candidate = directory.join(".orbit").join("board");
-        if Board::is_board(&candidate) {
-            return Some(candidate);
+        if skip == Some(directory) {
+            continue;
+        }
+        if git::toplevel_containing(&directory).is_some() {
+            continue;
+        }
+        match resolve_orbit_dir(&directory.join(".orbit")) {
+            Some(board)
+                if matches!(board, OrbitBoard::Hidden { .. } | OrbitBoard::Visible { .. }) =>
+            {
+                return Some(board);
+            }
+            _ => {}
         }
     }
     None
@@ -1424,6 +1529,127 @@ pub(crate) fn workspace_child_board(workspace: &Path) -> Result<Option<PathBuf>>
 pub(crate) const ORBIT_DIR: &str = ".orbit";
 pub(crate) const BOARD_DIR: &str = "board";
 pub(crate) const LEGACY_BOARD_DIR: &str = ".board";
+pub(crate) const CACHE_DIR: &str = "cache";
+
+/// How an Orbit folder `.orbit` resolves to a Board folder (ADR 0019):
+/// `board/` is the hidden default, a `board` pointer file names a visible
+/// Board folder, and a Board directly inside `.orbit` is a legacy layout.
+/// Every variant carries the `.orbit` folder and the resolved Board root.
+#[derive(Debug, Clone)]
+pub(crate) enum OrbitBoard {
+    /// `.orbit/board/` is itself the Board folder.
+    Hidden { orbit: PathBuf, root: PathBuf },
+    /// `.orbit/board` is a pointer file to a visible Board folder.
+    Visible { orbit: PathBuf, root: PathBuf },
+    /// `.orbit` is itself a Board: a pre-ADR-0019 layout that `orbit migrate`
+    /// must convert.
+    Legacy { orbit: PathBuf, root: PathBuf },
+}
+
+impl OrbitBoard {
+    /// The resolved Board folder.
+    pub(crate) fn root(&self) -> &Path {
+        match self {
+            Self::Hidden { root, .. }
+            | Self::Visible { root, .. }
+            | Self::Legacy { root, .. } => root,
+        }
+    }
+
+    /// The `.orbit` folder the resolution went through.
+    pub(crate) fn orbit(&self) -> &Path {
+        match self {
+            Self::Hidden { orbit, .. }
+            | Self::Visible { orbit, .. }
+            | Self::Legacy { orbit, .. } => orbit,
+        }
+    }
+
+    /// Whether the resolution is a pre-ADR-0019 layout.
+    pub(crate) fn is_legacy(&self) -> bool {
+        matches!(self, Self::Legacy { .. })
+    }
+}
+
+/// Resolves an Orbit folder to its Board folder, if it anchors one.
+pub(crate) fn resolve_orbit_dir(orbit: &Path) -> Option<OrbitBoard> {
+    let hidden = orbit.join(BOARD_DIR);
+    if hidden.is_dir() && Board::is_board(&hidden) {
+        return Some(OrbitBoard::Hidden {
+            orbit: orbit.to_path_buf(),
+            root: hidden,
+        });
+    }
+    if hidden.is_file() {
+        if let Ok(Some(target)) = read_pointer_file(&hidden)
+            && Board::is_board(&target)
+        {
+            return Some(OrbitBoard::Visible {
+                orbit: orbit.to_path_buf(),
+                root: target,
+            });
+        }
+        return None;
+    }
+    if Board::is_board(orbit) {
+        return Some(OrbitBoard::Legacy {
+            orbit: orbit.to_path_buf(),
+            root: orbit.to_path_buf(),
+        });
+    }
+    None
+}
+
+/// The `.orbit` folder anchoring `root` when the Board sits at the canonical
+/// `.orbit/board` path.
+fn discovery_orbit_dir(root: &Path) -> Option<PathBuf> {
+    let parent = root.parent()?;
+    (parent.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR))
+        .then(|| parent.to_path_buf())
+}
+
+/// Reads the `.orbit/board` pointer file naming a visible Board folder.
+pub(crate) fn read_pointer_file(path: &Path) -> Result<Option<PathBuf>> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(OrbitError::io(format!("read {}", path.display()), error)),
+    };
+    let value = content.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let candidate = PathBuf::from(value);
+    if !candidate.is_absolute() {
+        return Err(OrbitError::config(format!(
+            "{} must contain an absolute path; fix it or re-run `orbit migrate`",
+            path.display()
+        )));
+    }
+    Ok(Some(candidate))
+}
+
+/// Writes the `.orbit/board` pointer file naming a visible Board folder.
+pub(crate) fn write_pointer_file(orbit: &Path, board: &Path) -> Result<()> {
+    let path = orbit.join(BOARD_DIR);
+    crate::atomic::write_atomic(&path, format!("{}\n", board.display()).as_bytes(), true)
+}
+
+/// The Board cache directory beside the Board folder: `<orbit>/cache` when
+/// the Orbit folder is known, else `<root>/../cache` for `.orbit/board`.
+pub fn board_cache_dir(board: &Board) -> PathBuf {
+    if let Some(orbit) = &board.orbit_dir {
+        return orbit.join(CACHE_DIR);
+    }
+    board
+        .root
+        .parent()
+        .filter(|parent| {
+            parent.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR)
+        })
+        .map(|parent| parent.join(CACHE_DIR))
+        .unwrap_or_else(|| board.root.join(CACHE_DIR))
+}
 
 /// Every Board that sits beside or under `workspace` other than its Workspace
 /// Board: the workspace-level legacy layouts plus child-repository Boards.
@@ -1483,7 +1709,49 @@ pub(crate) fn workspace_child_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
-fn main_checkout_for(repo_root: &Path, common: &Path) -> PathBuf {
+/// The `.git/info/exclude` entries needed to hide an Orbit folder — and an
+/// optional visible Board folder — inside a Git working tree. Reports only;
+/// use `ensure_orbit_excluded` to write them. `.gitignore` is never touched.
+pub fn orbit_exclude_entries(
+    orbit: &Path,
+    visible_board: Option<&Path>,
+) -> Result<Vec<String>> {
+    let mut entries = Vec::new();
+    if let Some((_, entry)) = worktree_exclusion(orbit)? {
+        entries.push(entry);
+    }
+    if let Some(board) = visible_board
+        && let Some((_, entry)) = worktree_exclusion(board)?
+        && !entries.contains(&entry)
+    {
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+/// Writes the `.git/info/exclude` entries hiding an Orbit folder and an
+/// optional visible Board folder inside a Git working tree (ADR 0019).
+pub fn ensure_orbit_excluded(
+    orbit: &Path,
+    visible_board: Option<&Path>,
+) -> Result<Vec<String>> {
+    let mut entries = Vec::new();
+    if let Some((repo, entry)) = worktree_exclusion(orbit)? {
+        git::ensure_exclude_entry(&repo, orbit)?;
+        entries.push(entry);
+    }
+    if let Some(board) = visible_board
+        && let Some((repo, entry)) = worktree_exclusion(board)?
+    {
+        git::ensure_exclude_entry(&repo, board)?;
+        if !entries.contains(&entry) {
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
+}
+
+pub(crate) fn main_checkout_for(repo_root: &Path, common: &Path) -> PathBuf {
     if common.file_name().and_then(|name| name.to_str()) == Some(".git")
         && let Some(parent) = common.parent()
     {

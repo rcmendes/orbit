@@ -1,4 +1,5 @@
 use std::io::IsTerminal;
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
@@ -13,7 +14,7 @@ struct InitTarget {
     prefix: String,
     storage: crate::board::StorageMode,
     branch: String,
-    exclude: Option<String>,
+    exclude: Vec<String>,
     warnings: Vec<String>,
 }
 
@@ -40,12 +41,12 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         (global_dir.clone().expect("global home was checked"), true)
     } else if let Some(target) = args.target.as_deref() {
         (
-            resolve_init_root(crate::board::resolve_external(target)?)?,
+            crate::board::resolve_external(target)?,
             false,
         )
     } else if let Some(dir) = dir {
         (
-            resolve_init_root(crate::board::resolve_external(dir)?)?,
+            crate::board::resolve_external(dir)?,
             false,
         )
     } else {
@@ -59,15 +60,21 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     } else {
         cwd.clone()
     };
-    let board_root = if workspace_root {
-        requested_root.join(".orbit").join("board")
-    } else {
-        requested_root.clone()
-    };
+    // ADR 0019: the Board folder is a standalone repository. Hidden Boards
+    // live at `<anchor>/.orbit/board`; a visible folder is anchored by the
+    // `.orbit/board` pointer file instead.
+    let (orbit_dir, board_root, visible_board) = init_layout(
+        &requested_root,
+        workspace_root,
+        explicit_global,
+        global_dir.as_deref(),
+        &cwd,
+        in_repo,
+    )?;
     let global = explicit_global
         || global_dir
             .as_ref()
-            .is_some_and(|global| global == &board_root);
+            .is_some_and(|global| global.join("board") == board_root);
 
     if workspace_root {
         validate_workspace_layout(&requested_root)?;
@@ -75,6 +82,24 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
             && let Some(existing) = crate::board::workspace_child_board(&requested_root)?
         {
             return Err(crate::board::already_initialized(&existing));
+        }
+    }
+
+    // A Board that still uses a pre-ADR-0019 layout must go through
+    // `orbit migrate`; `init` must not silently reuse or duplicate it.
+    for candidate in [&orbit_dir, &board_root] {
+        let discovery = Board::discovery(Some(candidate));
+        if let Some(root) = discovery.root.clone()
+            && let Ok(board) = Board::at_root(root, Vec::new())
+            && board.needs_migration(Some(&discovery))
+        {
+            return Err(OrbitError::new(
+                code::BOARD_NOT_MIGRATED,
+                format!(
+                    "the Board at {} uses a pre-ADR-0019 layout; run `orbit migrate` to convert it",
+                    board.root.display()
+                ),
+            ));
         }
     }
 
@@ -89,7 +114,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         prefix,
         storage,
         branch,
-        mut exclude,
+        exclude: _,
         mut warnings,
     } = run_init(
         &board_root,
@@ -99,17 +124,36 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         global,
     )?;
 
-    if workspace_root && !args.print {
-        std::fs::create_dir_all(requested_root.join(".orbit/cache")).map_err(|error| {
-            OrbitError::io(
-                format!("create {}", requested_root.join(".orbit/cache").display()),
-                error,
-            )
+    if !args.print {
+        // The Orbit folder anchors the Board: `.orbit/board` hidden, or a
+        // `board` pointer file naming a visible Board folder. `cache/` sits
+        // beside the Board folder inside the Orbit folder.
+        if visible_board {
+            std::fs::create_dir_all(&orbit_dir).map_err(|error| {
+                OrbitError::io(format!("create {}", orbit_dir.display()), error)
+            })?;
+            crate::board::write_pointer_file(&orbit_dir, &board_root)?;
+        } else {
+            std::fs::create_dir_all(orbit_dir.join("board")).map_err(|error| {
+                OrbitError::io(
+                    format!("create {}", orbit_dir.join("board").display()),
+                    error,
+                )
+            })?;
+        }
+        let cache = orbit_dir.join("cache");
+        std::fs::create_dir_all(&cache).map_err(|error| {
+            OrbitError::io(format!("create {}", cache.display()), error)
         })?;
     }
 
-    if !args.print && storage == crate::board::StorageMode::Worktree {
-        exclude = Board::ensure_excluded(&board_root)?;
+    let mut exclude = Vec::new();
+    if !args.print {
+        // A Board folder inside a Git working tree is hidden only through
+        // `.git/info/exclude`, never `.gitignore` (ADR 0019).
+        exclude = crate::board::ensure_orbit_excluded(&orbit_dir, visible_board.then_some(board_root.as_path()))?;
+    } else {
+        exclude = crate::board::orbit_exclude_entries(&orbit_dir, visible_board.then_some(board_root.as_path()))?;
     }
 
     let mut file_outcomes: Vec<crate::setup::FileOutcome> = Vec::new();
@@ -161,7 +205,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         prefix: &prefix,
         storage,
         branch: &branch,
-        exclude: exclude.as_deref(),
+        exclude: exclude.as_slice(),
         global,
         clients: &clients,
         files: &file_outcomes,
@@ -198,7 +242,7 @@ struct InitReport<'a> {
     prefix: &'a str,
     storage: crate::board::StorageMode,
     branch: &'a str,
-    exclude: Option<&'a str>,
+    exclude: &'a [String],
     global: bool,
     clients: &'a [crate::setup::SetupClient],
     files: &'a [crate::setup::FileOutcome],
@@ -236,18 +280,7 @@ fn render_init_human(report: &InitReport<'_>) -> String {
         report.board_root.display()
     ));
     human.push_str(&format!("   {:<9}{}\n", "branch", report.branch));
-    let storage = match (report.storage, report.global) {
-        (crate::board::StorageMode::Worktree, _) => {
-            "worktree (shared by every Git worktree of this repository)"
-        }
-        (crate::board::StorageMode::Repository, true) => "repository (global fallback at ~/.orbit)",
-        (crate::board::StorageMode::Repository, false) if report.workspace => {
-            "repository (Workspace Board at <workspace>/.orbit/board)"
-        }
-        (crate::board::StorageMode::Repository, false) => {
-            "repository (standalone Board folder; link repositories with `orbit link`)"
-        }
-    };
+    let storage = "repository (standalone Board folder on branch `orbit`)";
     human.push_str(&format!("   {:<9}{storage}\n", "storage"));
     let prefix = report.prefix;
     let prefix_detail = match prefix.strip_suffix('-') {
@@ -257,7 +290,7 @@ fn render_init_human(report: &InitReport<'_>) -> String {
         _ => format!("{prefix} (Task IDs start with {prefix})"),
     };
     human.push_str(&format!("   {:<9}{prefix_detail}\n", "prefix"));
-    if let Some(exclude) = report.exclude {
+    for exclude in report.exclude {
         let detail = if preview {
             "would be listed in .git/info/exclude"
         } else {
@@ -415,19 +448,13 @@ fn run_init(
     if Board::is_board(board_root) {
         let board = Board::discover(Some(board_root))?;
         let prefix = reconcile_prefix(&board, slug_arg, print)?;
-        let storage = board.storage_mode();
-        let exclude = if storage == crate::board::StorageMode::Worktree {
-            Board::exclude_entry(board_root)?
-        } else {
-            None
-        };
         return Ok(InitTarget {
             board_root: board_root.to_path_buf(),
             created: false,
             prefix,
-            storage,
+            storage: crate::board::StorageMode::Repository,
             branch: board.config.board.branch,
-            exclude,
+            exclude: Vec::new(),
             warnings: board.warnings,
         });
     }
@@ -444,83 +471,119 @@ fn run_init(
         None => slug::auto_slug_for_dir(slug_root.unwrap_or(board_root)),
     };
     let prefix = slug::prefix(&slug);
-    let storage = if global {
-        crate::board::StorageMode::Repository
-    } else {
-        crate::board::StorageMode::for_new_dir(board_root)
-    };
-    let exclude = if storage == crate::board::StorageMode::Worktree {
-        Board::exclude_entry(board_root)?
-    } else {
-        None
-    };
 
     if print {
         return Ok(InitTarget {
             board_root: board_root.to_path_buf(),
             created: true,
             prefix,
-            storage,
+            storage: crate::board::StorageMode::Repository,
             branch: "orbit".to_string(),
-            exclude,
+            exclude: Vec::new(),
             warnings: warning.into_iter().collect(),
         });
     }
 
-    let result = if global {
-        Board::init_repository(board_root, Some(&slug))?
-    } else {
-        Board::init_dir(board_root, Some(&slug))?
-    };
+    let result = Board::init_dir(board_root, Some(&slug))?;
     Ok(InitTarget {
         board_root: result.board,
         created: true,
         prefix: result.prefix,
         storage: result.storage,
         branch: result.branch,
-        exclude,
+        exclude: Vec::new(),
         warnings: warning.into_iter().collect(),
     })
+}
+
+/// Maps the requested init target to the ADR 0019 layout: the Orbit folder
+/// and the Board folder it anchors. Returns `(orbit_dir, board_dir, visible)`
+/// where `visible` means the Board folder is named explicitly and `.orbit`
+/// holds a pointer file instead of a `board/` directory.
+fn init_layout(
+    requested: &Path,
+    workspace_root: bool,
+    global: bool,
+    global_dir: Option<&Path>,
+    _cwd: &Path,
+    in_repo: bool,
+) -> Result<(PathBuf, PathBuf, bool)> {
+    if global {
+        let orbit = global_dir
+            .ok_or_else(|| OrbitError::config("HOME or USERPROFILE is not set"))?
+            .to_path_buf();
+        return Ok((orbit.clone(), orbit.join("board"), false));
+    }
+    // An Orbit folder target anchors a hidden `.orbit/board` Board.
+    if requested.file_name().and_then(|name| name.to_str()) == Some(".orbit") {
+        return Ok((requested.to_path_buf(), requested.join("board"), false));
+    }
+    if workspace_root {
+        return Ok((
+            requested.join(".orbit"),
+            requested.join(".orbit").join("board"),
+            false,
+        ));
+    }
+    if in_repo {
+        // A target that is a working-tree root (repository root, `.`, or a
+        // linked worktree) means "this repository's Board": the main
+        // checkout's Orbit folder.
+        let is_toplevel = crate::git::toplevel_containing(requested)
+            .map(|toplevel| {
+                let toplevel = dunce::canonicalize(&toplevel).unwrap_or(toplevel);
+                toplevel == requested
+            })
+            .unwrap_or(false);
+        if is_toplevel {
+            let repo = crate::git::toplevel_containing(requested)
+                .ok_or_else(|| OrbitError::new(code::NOT_A_REPOSITORY, "not a Git repository"))?;
+            let repo = dunce::canonicalize(&repo).unwrap_or(repo);
+            let common = crate::git::common_dir_at(&repo)?;
+            let main = crate::board::main_checkout_for(&repo, &common);
+            let orbit = main.join(".orbit");
+            return Ok((orbit.clone(), orbit.join("board"), false));
+        }
+        // Any other directory inside the repository is a visible Board
+        // folder anchored by the repository's Orbit folder.
+        let repo = crate::git::toplevel_containing(requested)
+            .ok_or_else(|| OrbitError::new(code::NOT_A_REPOSITORY, "not a Git repository"))?;
+        let repo = dunce::canonicalize(&repo).unwrap_or(repo);
+        let common = crate::git::common_dir_at(&repo)?;
+        let main = crate::board::main_checkout_for(&repo, &common);
+        let orbit = main.join(".orbit");
+        return Ok((orbit, requested.to_path_buf(), true));
+    }
+    // Outside Git and not a Workspace root: a `board`-named or existing Board
+    // directory becomes a visible Board folder anchored by a sibling `.orbit`.
+    let orbit = requested
+        .parent()
+        .map(|parent| parent.join(".orbit"))
+        .unwrap_or_else(|| requested.join(".orbit"));
+    Ok((orbit, requested.to_path_buf(), true))
 }
 
 fn default_init_dir(cwd: &Path) -> Result<std::path::PathBuf> {
     let discovery = Board::discovery(None);
     if discovery.source == crate::board::DiscoverySource::Workspace
         && let Some(board) = discovery.root
-        && let Some(workspace) = board.parent().and_then(Path::parent)
     {
-        return Ok(workspace.to_path_buf());
+        // The Workspace root is the Orbit folder's parent.
+        let workspace = discovery
+            .orbit_dir
+            .as_ref()
+            .and_then(|orbit| orbit.parent())
+            .or_else(|| board.parent().and_then(Path::parent))
+            .map(|path| path.to_path_buf());
+        if let Some(workspace) = workspace {
+            return Ok(workspace);
+        }
     }
     let Ok(repo_root) = crate::git::repo_root() else {
         return Ok(cwd.to_path_buf());
     };
     let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
     let main = slug::main_checkout_anchor().unwrap_or_else(|_| repo_root.clone());
-    if repo_root != main {
-        return Ok(main.join(".orbit"));
-    }
-    Ok(cwd.join(".orbit"))
-}
-
-/// Git cannot add a Board worktree over a populated checkout, so a target that
-/// is itself a working-tree root means "initialize here": use the repository's
-/// `.orbit`, or the main checkout's `.orbit` from a linked worktree, exactly
-/// like `orbit init` without a target. `orbit init .` therefore does not fail
-/// with a raw `git worktree add` error.
-fn resolve_init_root(root: std::path::PathBuf) -> Result<std::path::PathBuf> {
-    let Some(toplevel) = crate::git::toplevel_containing(&root) else {
-        return Ok(root);
-    };
-    let toplevel = dunce::canonicalize(&toplevel).unwrap_or(toplevel);
-    if root != toplevel || Board::is_board(&root) {
-        return Ok(root);
-    }
-    let common = crate::git::common_dir_at(&toplevel)?;
-    let main = if common.file_name().and_then(|name| name.to_str()) == Some(".git") {
-        common.parent().unwrap_or(&toplevel).to_path_buf()
-    } else {
-        toplevel
-    };
     Ok(main.join(".orbit"))
 }
 
@@ -561,7 +624,9 @@ fn validate_workspace_layout(workspace: &Path) -> Result<()> {
         }
     }
     let board = orbit.join("board");
-    if board.exists() && !Board::is_board(&board) {
+    // `board` may be the hidden Board folder or the pointer file naming a
+    // visible one; only a non-Board directory is a conflict.
+    if board.is_dir() && !Board::is_board(&board) {
         return Err(crate::board::already_initialized(&board));
     }
     let cache = orbit.join("cache");

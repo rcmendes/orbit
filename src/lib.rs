@@ -1,5 +1,6 @@
 pub mod atomic;
 pub mod board;
+pub mod board_migrate;
 pub mod cli;
 pub mod commands;
 pub mod comment;
@@ -17,6 +18,7 @@ pub mod mcp;
 pub mod migrate;
 pub mod mutation;
 pub mod output;
+pub mod remote;
 pub mod setup;
 pub mod slug;
 pub mod task;

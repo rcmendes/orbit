@@ -22,6 +22,7 @@ pub mod code {
     pub const INVALID_SLUG: &str = "INVALID_SLUG";
     pub const SLUG_LOCKED: &str = "SLUG_LOCKED";
     pub const MIGRATION_BLOCKED: &str = "MIGRATION_BLOCKED";
+    pub const BOARD_NOT_MIGRATED: &str = "BOARD_NOT_MIGRATED";
     pub const PREFIX_COLLISION: &str = "PREFIX_COLLISION";
     pub const PREFIX_MISMATCH: &str = "PREFIX_MISMATCH";
     pub const INVALID_TYPE: &str = "INVALID_TYPE";

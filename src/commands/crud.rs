@@ -86,6 +86,8 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
             area,
             verification,
             github: None,
+            remote: None,
+            repo: None,
             claim: None,
             stray_claim_times: None,
             created_at: now,

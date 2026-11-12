@@ -3,7 +3,7 @@
 
 Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
 
-From any child repository in a Workspace, these commands resolve the shared Workspace Board across the Git boundary. Tasks, dependencies, and claims are shared across its repositories.
+From any member Repository, these commands resolve the shared Board across the Git boundary. Tasks, dependencies, and claims are shared across its Repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
@@ -14,7 +14,7 @@ From any child repository in a Workspace, these commands resolve the shared Work
 - Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
-- In a multi-repository workspace, add `--repo <name>` to `orbit ready` or `orbit list`.
+- In a multi-Repository Board, add `--repo <name>` to `orbit ready` or `orbit list`.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.

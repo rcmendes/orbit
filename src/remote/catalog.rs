@@ -30,6 +30,10 @@ pub struct RemoteIssueCatalog {
     /// Key: `tracker` → project id → cached project.
     #[serde(default)]
     pub projects: BTreeMap<String, BTreeMap<String, CachedRemoteProject>>,
+    /// Detached Remote Issues kept out of `projects` listings until reattach:
+    /// `tracker` → project id → issue id → summary.
+    #[serde(default)]
+    pub archived: BTreeMap<String, BTreeMap<String, BTreeMap<String, RemoteIssueSummary>>>,
 }
 
 pub fn cache_path(workspace: &Path) -> PathBuf {
@@ -66,23 +70,31 @@ pub fn issue_key(project: &RemoteProject, id: &str) -> String {
     format!("{}:{}#{}", project.tracker, project.project, id)
 }
 
-/// Records a Remote Issue Orbit just created in the Workspace cache.
+/// The folder anchoring the Remote Issue cache: the Workspace root for
+/// Workspace Boards, the Repository root for standalone Boards.
+pub(crate) fn root_for_board(board: &Board) -> Result<PathBuf> {
+    if let Some(workspace) = crate::workspace::workspace_root_if_board(board) {
+        return Ok(workspace);
+    }
+    let orbit = board.resolved_orbit_dir().ok_or_else(|| {
+        OrbitError::config("cannot locate the Orbit folder for the Remote Issue catalog")
+    })?;
+    Ok(orbit.parent().unwrap_or(&orbit).to_path_buf())
+}
+
+/// Records a Remote Issue Orbit just created in the Remote Issue catalog.
 ///
 /// An explicit catalog refresh stays the source of truth for project
 /// completeness and `last_refreshed_at`. This incremental upsert only
 /// prevents the freshly linked Issue from looking orphaned to `doctor`
-/// before the next refresh. Standalone Boards have no Workspace cache, so
-/// this is a no-op there.
+/// before the next refresh.
 pub fn remember_created_issue(
     board: &Board,
     project: &RemoteProject,
     issue: &crate::remote::model::RemoteIssue,
 ) -> Result<()> {
-    if !board.is_workspace_board() {
-        return Ok(());
-    }
-    let workspace = crate::workspace::workspace_root(board)?;
-    let path = cache_path(&workspace);
+    let root = root_for_board(board)?;
+    let path = cache_path(&root);
     let mut catalog = load(&path)?;
     let entry = catalog
         .projects

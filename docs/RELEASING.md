@@ -6,9 +6,9 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 - `v0.10.10` — maintenance republish of v0.10.9; no source or behavior changes
 - `v0.10.9` — `orbit doctor` matches orbit MCP commands case-insensitively on Windows, and `orbit workspace doctor` finds nested local Boards like `workspace migrate`
-- `v0.10.8` — adds the `devin` harness to `orbit init`/`orbit setup`, and `orbit workspace issues` honors custom Issue Field names
-- `v0.10.7` — `orbit github sync` compares labels as a set, so label order no longer causes repeated pushes or false conflicts
-- `v0.10.6` — `orbit github auto-push on|off` toggles opt-in push, and `github create` uses `--include-closed`
+- `v0.10.8` — adds the `devin` harness to `orbit init`/`orbit setup`, and `orbit remote issues` honors custom Issue Field names
+- `v0.10.7` — `orbit remote sync` compares labels as a set, so label order no longer causes repeated pushes or false conflicts
+- `v0.10.6` — `orbit remote auto-push on|off` toggles opt-in push, and `orbit remote create` uses `--include-closed`
 - `v0.10.5` — `orbit init .` initializes a repository-root target, and opt-in `[github] auto_push` publishes mapped Task changes to linked Issues
 - `v0.10.4` — `orbit list` marks Local, Linked, and detached Tasks in an `ISSUE` column with `--linked`/`--local` filters, and Task frontmatter parsing no longer ends early on an indented `---`
 - `v0.10.3` — agent setup preserves an `AGENTS.md` symlink, plus Windows-only test fixes
@@ -85,7 +85,7 @@ Until then, the README leads with the shell, PowerShell, and npm installers.
    gh workflow run "Install smoke" --ref v0.10.1
    ```
 
-    A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, onboarding, `orbit github`/`orbit triage` help, and a fixture-backed GitHub flow (connect, status, adopt/create, sync preview/apply, and Triage review/apply) without network access, plus a real MCP initialize/tools-list handshake. A red run means the published artifacts are broken even though the release exists.
+    A release created by `GITHUB_TOKEN` does not emit a downstream workflow event, so `Install smoke` does not start automatically. It installs the latest public shell/PowerShell installers and the npm package, then exercises `orbit --version`, onboarding, `orbit remote`/`orbit triage` help, and a fixture-backed GitHub flow (connect, status, adopt/create, sync preview/apply, and Triage review/apply) without network access, plus a real MCP initialize/tools-list handshake. A red run means the published artifacts are broken even though the release exists.
 
 ### Recover a skipped npm publish
 

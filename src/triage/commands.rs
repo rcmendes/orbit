@@ -367,16 +367,10 @@ fn publishability(board: &Board, task: &Task) -> Publishability {
     }
 }
 
-/// The command that publishes a Linked Task's mapped fields. GitHub keeps
-/// its dedicated spelling until `orbit remote` lands; other trackers use
-/// the provider-neutral command.
-fn publish_command(link: &RemoteLinkView, task: &str) -> String {
-    let base = if link.tracker == "github" {
-        "orbit github sync"
-    } else {
-        "orbit remote sync"
-    };
-    format!("{base} {task} --direction push --apply")
+/// The command that publishes a Linked Task's mapped fields through the
+/// provider-neutral Remote Tracker surface.
+fn publish_command(_link: &RemoteLinkView, task: &str) -> String {
+    format!("orbit remote sync {task} --direction push --apply")
 }
 
 fn publish_note(publish: &Publishability, task: &str) -> String {

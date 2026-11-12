@@ -124,26 +124,40 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 })
             }
         },
-        Command::GitHub(args) => {
-            if matches!(
-                &args.command,
-                crate::cli::GitHubCommand::Status
-                    | crate::cli::GitHubCommand::Create(crate::cli::GitHubCreateArgs {
-                        apply: false,
-                        ..
-                    })
-            ) {
+        Command::Remote(args) => {
+            if remote_is_read_only(&args) {
                 return with_board_read_only(dir.as_deref(), |board| {
-                    crate::github::commands::run(board, args)
+                    crate::remote::commands::run(board, args)
                 });
             }
             with_board(dir.as_deref(), true, |board| {
-                crate::github::commands::run(board, args)
+                crate::remote::commands::run(board, args)
             })
         }
         Command::Triage(args) => with_task_board(dir.as_deref(), true, |board| {
             crate::triage::commands::run(board, args, json)
         }),
+    }
+}
+
+/// `orbit remote` previews and read-only views run without the exclusive
+/// Board lock; anything that writes configuration, the catalog, or Tasks
+/// keeps the normal write path.
+fn remote_is_read_only(args: &crate::cli::RemoteArgs) -> bool {
+    use crate::cli::{RemoteCommand, RemoteIssuesCommand};
+    match &args.command {
+        RemoteCommand::Status | RemoteCommand::List => true,
+        RemoteCommand::Issues(issues) => {
+            !matches!(issues.command, Some(RemoteIssuesCommand::Refresh))
+        }
+        RemoteCommand::Import(args) => !args.apply,
+        RemoteCommand::Detach(args) | RemoteCommand::Reattach(args) => !args.apply,
+        RemoteCommand::Create(args) => !args.apply,
+        RemoteCommand::Sync(args) => !args.apply,
+        RemoteCommand::Connect(_)
+        | RemoteCommand::Disconnect(_)
+        | RemoteCommand::Link(_)
+        | RemoteCommand::AutoPush(_) => false,
     }
 }
 

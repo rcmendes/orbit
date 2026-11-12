@@ -1,6 +1,5 @@
 pub mod adapter;
 pub mod client;
-pub mod commands;
 pub mod config;
 pub mod link;
 pub mod model;

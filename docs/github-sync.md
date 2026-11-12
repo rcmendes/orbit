@@ -3,15 +3,15 @@
 Orbit ships a built-in **GitHub Remote Tracker adapter** (ADR 0018). The
 provider-neutral sync engine owns baselines, three-way conflict detection,
 previews, Auto-push, relationships, and the Remote Issue catalog; the GitHub
-adapter translates GitHub Issues into Orbit field terms. `orbit github`
+adapter translates GitHub Issues into Orbit field terms. `orbit remote`
 commands are the GitHub-facing surface of that port — there is no optional
 build feature and no minimum-version gate.
 
 Orbit remains local-first: Task edits stay on the Board; Issue creation
-occurs only with `orbit github create --apply` or an opted-in auto-push
+occurs only with `orbit remote create --apply` or an opted-in auto-push
 during `orbit add`, and Orbit persists the Issue link only after GitHub
 confirms creation. Changes to an existing Issue are published only with
-`orbit github sync --apply` or an opted-in auto-push. See
+`orbit remote sync --apply` or an opted-in auto-push. See
 [Automatic push](#automatic-push).
 
 ## Quick start
@@ -22,14 +22,14 @@ Board in the repository checkout and authenticate GitHub CLI:
 ```bash
 orbit init
 gh auth login
-orbit github connect
-orbit github status
+orbit remote connect
+orbit remote status
 orbit add "First GitHub task" -p 1
 # Copy the ID printed by `orbit add` and replace orb-a7b2c9 below.
-orbit github create orb-a7b2c9
-orbit github create orb-a7b2c9 --apply
-orbit github sync orb-a7b2c9        # inspect the plan; writes nothing
-orbit github sync orb-a7b2c9 --apply
+orbit remote create orb-a7b2c9
+orbit remote create orb-a7b2c9 --apply
+orbit remote sync orb-a7b2c9        # inspect the plan; writes nothing
+orbit remote sync orb-a7b2c9 --apply
 ```
 
 ## Provider modes
@@ -42,17 +42,17 @@ The GitHub adapter supports two modes, configured under `[github]` (or
 
 - Requires organization-level Issue Fields named **Area** and
   **Verification** (names are configurable under `[github.issue_fields]`).
-- Run `orbit github setup` to resolve and store the Issue Field GraphQL ids.
-  Use `orbit github setup --validate-only` to check configuration without
+- Run `orbit remote connect --fields` to resolve and store the Issue Field GraphQL ids.
+  Use `orbit remote connect --fields --validate-only` to check configuration without
   writing ids.
 - Full mode syncs Orbit `area` and `verification` through those organization
   Issue Fields.
 
 Connect an organization-owned repository from its checkout with
-`orbit github connect`. It checks `gh auth status` and repository access,
+`orbit remote connect`. It checks `gh auth status` and repository access,
 validates the organization fields, and writes the `[github]` configuration. It
 preserves other Board settings and is safe to rerun. Use
-`orbit github connect --json` for machine-readable status. To configure the
+`orbit remote connect --json` for machine-readable status. To configure the
 Board manually, use:
 
 ```toml
@@ -66,13 +66,13 @@ area_name = "Area"
 verification_name = "Verification"
 ```
 
-For manual configuration, run `orbit github setup` to resolve existing Issue
+For manual configuration, run `orbit remote connect --fields` to resolve existing Issue
 Fields and store their GraphQL ids. This default command does not create
-fields. Use `orbit github setup --validate-only` to check configuration
+fields. Use `orbit remote connect --fields --validate-only` to check configuration
 without writing ids.
 
 To let Orbit create missing fields, explicitly run
-`orbit github setup --create-fields`. It creates **Area** as a single-select
+`orbit remote connect --fields --create-fields`. It creates **Area** as a single-select
 field whose options are the Board's `board.areas` (or the canonical `board`,
 `cli`, `mcp`, `setup`, `docs`, `release` set when the Board defines no Areas),
 and **Verification** as a text field. Existing fields with those names are
@@ -82,13 +82,13 @@ If the membership check fails, refresh the `read:org` scope with
 `gh auth refresh --hostname github.com --scopes read:org`. If field creation
 is denied, confirm that `gh` is authenticated as an organization administrator
 with permission to create organization Issue Fields. An administrator can also
-create the fields in GitHub and rerun the default `orbit github setup` to
+create the fields in GitHub and rerun the default `orbit remote connect --fields` to
 store their ids.
 
 ### Basic mode (personal repositories)
 
 Basic mode supports personal repositories without organization Issue Fields
-or `orbit github setup`:
+or `orbit remote connect --fields`:
 
 ```toml
 [github]
@@ -111,12 +111,12 @@ and push sync fail with a clear error when a Task has either value, rather
 than silently dropping it. Pull-only sync preserves Orbit's local values.
 Triage context reports these capabilities as unavailable; Triage review/apply
 may change labels, but proposals that change `area` or `verification` are
-rejected. `orbit github setup` is unavailable in basic mode. Do not set
+rejected. `orbit remote connect --fields` is unavailable in basic mode. Do not set
 `organization`, custom Issue Field names, or Issue Field ids with
 `mode = "basic"`.
 
 To upgrade, change `mode` to `"full"`, configure `organization` and the field
-names, then run `orbit github setup`. Once the Issue Field ids are stored,
+names, then run `orbit remote connect --fields`. Once the Issue Field ids are stored,
 create and push sync can publish `area` and `verification`.
 
 ### Connect behavior and prerequisites
@@ -124,7 +124,7 @@ create and push sync can publish `area` and `verification`.
 - GitHub CLI (`gh`) authenticated for the repositories you link.
 - Organization-level Issue Fields only when using full mode.
 
-`orbit github connect` reads the current checkout's GitHub `origin`, checks
+`orbit remote connect` reads the current checkout's GitHub `origin`, checks
 authentication and access, and detects whether the owner is an organization or
 a personal account. For a personal-account repository it leaves configuration
 unchanged and reports the exact `[github]` entries for the Board's `config.toml`
@@ -138,13 +138,13 @@ origin, it also includes `next_actions` and `remediation` with those entries
 and a link to the basic-mode setup instructions; human output shows the same
 guidance. No configuration is changed by this response.
 
-For manual full-mode configuration, run `orbit github setup` to resolve and
-store the Issue Field GraphQL ids. Use `orbit github setup --validate-only` to
+For manual full-mode configuration, run `orbit remote connect --fields` to resolve and
+store the Issue Field GraphQL ids. Use `orbit remote connect --fields --validate-only` to
 check configuration without writing ids.
 
 ## Diagnose the integration
 
-`orbit github status` checks the current `gh` authentication identity and
+`orbit remote status` checks the current `gh` authentication identity and
 scopes, linked repository access, and—when using full mode—the configured
 organization and whether its Area and Verification Issue Fields are present
 with current stored ids. It also loads linked Tasks and previews their sync
@@ -167,8 +167,8 @@ configured, `orbit doctor` also reports authentication, repository access, and
 Issue Field configuration problems alongside normal Board diagnostics.
 
 ```bash
-orbit github status
-orbit github status --json
+orbit remote status
+orbit remote status --json
 orbit doctor --json
 ```
 
@@ -190,41 +190,41 @@ orbit list --json | jq -r '.data.tasks[] |
   [.id, (if .github then "\(.github.repo)#\(.github.number)" else "local" end), .title] | @tsv'
 ```
 
-Sync state is computed, not stored. `orbit github status` compares each
+Sync state is computed, not stored. `orbit remote status` compares each
 sync baseline with the current Task and Issue and reports pending pulls,
-pushes, and conflicts. `orbit github sync <TASK>` previews one Task and
+pushes, and conflicts. `orbit remote sync <TASK>` previews one Task and
 changes nothing without `--apply`.
 
 ## Link repositories
 
 Remote Projects are linked explicitly; Orbit does not bulk-import an entire
-repository. On a Board that has run `orbit migrate`, `orbit github repo link`
+repository. On a Board that has run `orbit migrate`, `orbit remote connect`
 writes a `[remote] projects` entry for the `github` tracker; on a legacy
 Board it appends to `[github] repositories`. Both shapes feed the same
 adapter configuration.
 
 ```bash
-orbit github repo link acme-corp/widget
-orbit github repo list
-orbit github repo unlink acme-corp/widget
+orbit remote connect acme-corp/widget
+orbit remote list
+orbit remote disconnect acme-corp/widget
 ```
 
 On a multi-Repository Board, member Repositories discovered by
 `orbit repo refresh` are also valid Remote Projects: a member Repository's
 `origin` (`owner/repo`) is implicitly available to adopt, create, status, and
-sync without a separate `orbit github repo link`.
+sync without a separate `orbit remote connect`.
 
 ## Automatic push
 
 Auto-push is provider-neutral: the flag lives in `[remote] auto_push` and
-covers every configured Remote Tracker. `orbit github auto-push on|off`
+covers every configured Remote Tracker. `orbit remote auto-push on|off`
 toggles it without editing TOML; the command writes the Board config,
 commits it, and reports the previous value. The legacy `[github] auto_push`
 key is still honored until migration rewrites it.
 
 ```bash
-orbit github auto-push on
-orbit github auto-push off
+orbit remote auto-push on
+orbit remote auto-push off
 ```
 
 The equivalent Board configuration is:
@@ -247,7 +247,7 @@ What triggers a push:
 
 - Creating a Task: `orbit add` creates an Issue when exactly one repository
   is linked or implied. With zero or multiple repositories the Task stays
-  local and the command warns. Use `orbit github create` for the explicit
+  local and the command warns. Use `orbit remote create` for the explicit
   path.
 - A change to title, body, labels, status, `area`, or `verification`.
 - Status transitions: `claim` adds the reserved `orbit:in-progress` label;
@@ -264,45 +264,44 @@ labels, `area`, and `verification`.
 
 If a field changed on both sides, auto-push skips it and warns. Remote-only
 changes produce a pending-change warning. Both leave the sync baseline
-unchanged, so `orbit github sync <task>` can still review and resolve the
+unchanged, so `orbit remote sync <task>` can still review and resolve the
 difference. A failed push is also a warning — the local Task is never rolled
 back. If the local commit failed, auto-push is skipped.
 
 `orbit:in-progress` is an adapter-managed label, not part of the Task's user
 Labels. The GitHub adapter reconciles it from the Orbit status on every
 push: it is added while a Task is `in_progress` and removed otherwise. Orbit
-never reads it back as a user label or a status. `orbit github connect`,
+never reads it back as a user label or a status. `orbit remote connect`,
 `setup`, and `repo link` ensure the label exists in each linked repository;
 pull sync ignores it. Enabling `auto_push` backfills nothing: existing Local
-Tasks still need `orbit github create`, and existing `in_progress` Tasks
-receive the label on their next mapped change or explicit sync. `orbit
-github status` shows whether auto-push is enabled and how many local Tasks
+Tasks still need `orbit remote create`, and existing `in_progress` Tasks
+receive the label on their next mapped change or explicit sync. `orbit remote status` shows whether auto-push is enabled and how many local Tasks
 have no Issue; `orbit doctor` reports a missing reserved label or no linked
 repository.
 
 Use `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a one-off
-local-only mutation. Explicit `orbit github sync` is never suppressed.
+local-only mutation. Explicit `orbit remote sync` is never suppressed.
 
 ## Adopt or create Issues
 
 - **Adopt** an existing Issue from its URL:
-  `orbit github adopt <task-id> https://github.com/acme-corp/widget/issues/42`
-- **Adopt** an Issue with the legacy form:
-  `orbit github adopt <task-id> --repo acme-corp/widget --number 42`
+  `orbit remote link <task-id> https://github.com/acme-corp/widget/issues/42`
+- **Adopt** an Issue with the shorthand identity form:
+  `orbit remote link <task-id> acme-corp/widget#42`
 - **Preview** Issue creation for one or more Local Tasks with
-  `orbit github create <task-id> [<task-id> ...]`. Preview shows repository,
+  `orbit remote create <task-id> [<task-id> ...]`. Preview shows repository,
   title, body, labels, Area, Verification, Task status, and the resulting
   open/closed Issue state. It does not write to Orbit or GitHub.
-- **Apply** a reviewed export with `orbit github create <task-id> --apply`. A
+- **Apply** a reviewed export with `orbit remote create <task-id> --apply`. A
   batch uses an explicit list of Task IDs; it never exports the whole Board.
   Done and cancelled Tasks require `--include-closed`; the former
   `--include-terminal` spelling is still accepted as a hidden alias.
 - Full mode includes Task `area` and `verification` values as organization
-  Issue Fields when configured with `orbit github setup`. Basic mode rejects
+  Issue Fields when configured with `orbit remote connect --fields`. Basic mode rejects
   Tasks with those values instead of dropping them.
 - A repository is inferred only when exactly one repository is available. On
   a multi-Repository Board, member Repositories from `orbit repo refresh`
-  count as available destinations. Pass `--repo OWNER/REPO` when the
+  count as available destinations. Pass `--project OWNER/REPO` when the
   destination is ambiguous.
 - GitHub creates each Issue before Orbit persists the link and sync baseline.
   Batch output reports each success or failure. A failure after the Issue
@@ -310,28 +309,28 @@ local-only mutation. Explicit `orbit github sync` is never suppressed.
   could not be closed) is reported per Task with `created: true` and the
   Issue number, and the batch continues; it never aborts the remaining Tasks.
   If the link could not be written, the result's `next_action` gives the
-  `orbit github adopt` command that links the created Issue. If a Task already
-  has a link, retry is refused and directs you to `orbit github sync`; this
+  `orbit remote link` command that links the created Issue. If a Task already
+  has a link, retry is refused and directs you to `orbit remote sync`; this
   prevents a second Issue from being created.
 
 Preview and apply examples:
 
 ```bash
-orbit github create orb-a7b2c9
-orbit github create orb-a7b2c9 --apply
-orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme-corp/widget --apply
-orbit github create orb-a7b2c9 --include-closed --apply
+orbit remote create orb-a7b2c9
+orbit remote create orb-a7b2c9 --apply
+orbit remote create orb-a7b2c9 orb-d4e5f6 --project acme-corp/widget --apply
+orbit remote create orb-a7b2c9 --include-closed --apply
 ```
 
 When using a URL, Orbit reads `owner/repo` and the issue number from the
-standard GitHub Issue URL. Optional `--repo` or `--number` values can confirm
-the URL; if provided, they must match it. Without a URL, both legacy options
-are required. Titles and bodies are not used as identifiers.
+standard GitHub Issue URL. Identities may also be written `PROJECT#ID`
+(for example `acme-corp/widget#42`) or `TRACKER:PROJECT#ID` (for example
+`github:acme-corp/widget#42`). Titles and bodies are not used as identifiers.
 
 On a single-Repository Board, Orbit selects the only linked repository
 automatically. On a multi-Repository Board, the member Repository catalog is
 used. If zero or multiple repositories are available, link or include one, or
-pass `--repo OWNER/REPO`. An explicit destination must be a linked Remote
+pass `--project OWNER/REPO`. An explicit destination must be a linked Remote
 Project or a member Repository's `origin`.
 
 ## Sync behavior
@@ -339,7 +338,7 @@ Project or a member Repository's `origin`.
 Preview (default):
 
 ```bash
-orbit github sync <task-id>
+orbit remote sync <task-id>
 ```
 
 The default preview is human-readable and does not write to Orbit or GitHub.
@@ -352,9 +351,9 @@ machine-readable plan and conflict details.
 Apply changes:
 
 ```bash
-orbit github sync <task-id> --apply
-orbit github sync --apply                 # all linked Tasks
-orbit github sync <task-id> --apply --direction pull
+orbit remote sync <task-id> --apply
+orbit remote sync --apply                 # all linked Tasks
+orbit remote sync <task-id> --apply --direction pull
 ```
 
 Rules:
@@ -371,15 +370,14 @@ Rules:
 Conflicts return `REMOTE_ISSUE_CONFLICT` with per-field details and both
 values. No write occurs while any selected Task has an unresolved conflict.
 Choose a side for each conflicting field with repeatable
-`--resolve FIELD=orbit` or `--resolve FIELD=github` (`github` is accepted as
-the GitHub spelling of the provider-neutral `remote` choice), then require
-`--apply` to write. `orbit` keeps the Orbit value and pushes it; `github`/
-`remote` pulls the remote value. A resolution can be previewed without
+`--resolve FIELD=orbit` or `--resolve FIELD=remote`, then require
+`--apply` to write. `orbit` keeps the Orbit value and pushes it; `remote`
+pulls the remote value. A resolution can be previewed without
 writing:
 
 ```bash
-orbit github sync orb-a7b2c9 --resolve title=orbit
-orbit github sync orb-a7b2c9 --resolve title=orbit --resolve labels=github --apply
+orbit remote sync orb-a7b2c9 --resolve title=orbit
+orbit remote sync orb-a7b2c9 --resolve title=orbit --resolve labels=remote --apply
 ```
 
 For a batch, one resolution applies to every selected Task that has a
@@ -394,20 +392,20 @@ unchanged and `error.details` includes the original `cause` and the same
 `remediation`, plus the affected organization, Remote Project, Task, Issue,
 or fields when known.
 
-- `GITHUB_NOT_CONFIGURED`: run `orbit github connect` from the checkout with
+- `GITHUB_NOT_CONFIGURED`: run `orbit remote connect` from the checkout with
   the intended GitHub origin; authenticate first with `gh auth login` if
   needed.
-- `GITHUB_SETUP_INCOMPLETE`: run `orbit github setup` to resolve field ids.
+- `GITHUB_SETUP_INCOMPLETE`: run `orbit remote connect --fields` to resolve field ids.
   If a named Issue Field is missing, create it under organization
   **Settings > Projects > Issue fields** or run
-  `orbit github setup --create-fields` as an organization administrator. Run
-  `orbit github connect` if the organization is not configured.
+  `orbit remote connect --fields --create-fields` as an organization administrator. Run
+  `orbit remote connect` if the organization is not configured.
 - `REMOTE_PROJECT_NOT_LINKED`: the Remote Project (`owner/repo` on the
   `github` tracker) is not available to this Board. Link it with
-  `orbit github repo link OWNER/REPO`, or run `orbit repo refresh` on a
+  `orbit remote connect OWNER/REPO`, or run `orbit repo refresh` on a
   multi-Repository Board so a member Repository's `origin` counts.
 - `REMOTE_ISSUE_CONFLICT`: the error names the Task, Remote Issue, and
-  conflicting fields. Review both values with `orbit github sync
+  conflicting fields. Review both values with `orbit remote sync
   <task-id>`, choose each side with `--resolve FIELD=orbit|github`, then
   apply with `--apply`.
 
@@ -474,7 +472,7 @@ gh project item-add 1 --owner acme \
 
 Do not enable **Auto-close issue** unless Project Status should be able to
 close Issues. When that workflow is on, moving an item to `Done` closes the
-Issue, and a later `orbit github sync` can pull that close into the Task.
+Issue, and a later `orbit remote sync` can pull that close into the Task.
 That is a GitHub workflow changing the Issue, not Orbit reading Project
 Status.
 
@@ -485,10 +483,10 @@ From a Board linked to `acme/widget`:
 ```bash
 orbit init
 gh auth login
-orbit github connect
+orbit remote connect
 orbit add "Rotate API tokens" -p 1
 # Use the Task ID printed by `orbit add` in the next command.
-orbit github create orb-a7b2c9 --apply
+orbit remote create orb-a7b2c9 --apply
 ```
 
 The export output names the new Issue, for example `acme/widget#42`. With the
@@ -512,7 +510,7 @@ URL:
 
 ```bash
 orbit add "Rotate API tokens" -p 1
-orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
+orbit remote link orb-a7b2c9 https://github.com/acme/widget/issues/42
 ```
 
 Adopt copies the Issue's title, body, labels, and status onto the Task and
@@ -527,11 +525,11 @@ finishing the Task:
 ```bash
 orbit claim orb-a7b2c9 --by agent
 orbit done orb-a7b2c9 --by agent --comment "Shipped and verified"
-orbit github sync orb-a7b2c9 --apply
+orbit remote sync orb-a7b2c9 --apply
 ```
 
 `orbit done` changes the local Task to `done`; it does not contact GitHub by
-itself. An explicit `github sync` (or auto-push) closes Issue
+itself. An explicit `orbit remote sync` (or auto-push) closes Issue
 `acme/widget#42`. If the Project has the **Item closed** workflow enabled,
 GitHub then moves the item to its `Done` Status. Verify both sides:
 
@@ -544,7 +542,7 @@ Reopening works in the other direction:
 
 ```bash
 orbit reopen orb-a7b2c9
-orbit github sync orb-a7b2c9 --apply
+orbit remote sync orb-a7b2c9 --apply
 ```
 
 The Issue reopens and the **Item reopened** workflow can return the Project
@@ -564,7 +562,7 @@ the sync:
 ```bash
 orbit label add orb-a7b2c9 wontfix
 orbit cancel orb-a7b2c9 --comment "Superseded by the new token service"
-orbit github sync orb-a7b2c9 --apply
+orbit remote sync orb-a7b2c9 --apply
 ```
 
 The Issue is closed with `wontfix`. Orbit does not add that label
@@ -622,7 +620,7 @@ effect on Orbit.
   repository. Check the workflow's filter; an auto-add filter can exclude
   the Issue. Auto-add only handles new or updated items, so add existing
   Issues with `gh project item-add`.
-- **Closing the Issue did not move the card:** run `orbit github sync
+- **Closing the Issue did not move the card:** run `orbit remote sync
   <task-id> --apply` after `orbit done` or `orbit cancel`. Then confirm the
   Project's **Item closed** workflow is enabled.
 - **A card move did not update Orbit:** this is expected unless the Project

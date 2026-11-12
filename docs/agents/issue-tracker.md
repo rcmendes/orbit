@@ -217,8 +217,7 @@ commands are in [Wayfinding operations](#wayfinding-operations).
 Remote Tracker sync and Triage require Orbit 0.9.0 or newer. For Linked Tasks,
 use the structured workflow in
 [`triage-workflow.md`](./triage-workflow.md): `orbit triage context`, `review`, and
-`apply --approve`, then the Remote Tracker sync (for GitHub,
-`orbit github sync --direction push --apply`).
+`apply --approve`, then `orbit remote sync --direction push --apply`.
 
 ## When a skill says "fetch the relevant ticket"
 

@@ -921,7 +921,7 @@ Examples:
 pub const SYNC_LONG: &str = "\
 Commits pending board changes, usually the lease updates written by heartbeat, to
 the board branch. Heartbeats deliberately do not commit on every call; a later
-mutation, or this command, persists them. The Board's Git branch is never pushed; GitHub auto-push is opt-in and toggled with `orbit github auto-push on|off`, not this command.
+mutation, or this command, persists them. The Board's Git branch is never pushed; Remote auto-push is opt-in and toggled with `orbit remote auto-push on|off`, not this command.
 
 Use sync after a long heartbeat-only period, or when doctor reports uncommitted
 Board changes.";
@@ -931,155 +931,180 @@ Examples:
   orbit sync
   orbit sync --json";
 
-pub const GITHUB_LONG: &str = "\
-Connects an Orbit Board to explicitly linked GitHub repositories. Each durable
-Task can map one-to-one to a GitHub Issue identified by repository and issue
-number. Orbit owns linked titles, bodies, statuses, labels, and supported
-metadata. Sync is explicit unless the Board opts into `[github] auto_push =
-true`, which pushes mapped changes after a local mutation; `orbit github
-auto-push on|off` toggles that setting and commits it to the Board. Auto-push is
-push-only: it never pulls, never overwrites a remote conflict, and never creates
-an Issue for an existing Local Task. It detects field-level conflicts and never
-maps GitHub assignees to Orbit claims.
+pub const REMOTE_LONG: &str = "\
+Connects an Orbit Board to Remote Trackers. A Remote Tracker is an external
+issue tracker behind Orbit's provider-neutral port; the built-in adapter is
+GitHub. Each durable Task can map one-to-one to a Remote Issue identified by
+Remote Project and issue id. Orbit owns linked titles, bodies, statuses,
+labels, and supported metadata. Sync is explicit unless the Board opts into
+`[remote] auto_push = true`, which pushes mapped changes after a local
+mutation; `orbit remote auto-push on|off` toggles that setting and commits it
+to the Board. Auto-push is push-only: it never pulls, never overwrites a
+remote conflict, and never creates an Issue for an existing Local Task. It
+detects field-level conflicts and never maps Remote assignees to Orbit
+claims.
 
-Full mode (the default) uses organization-level Issue Fields for Orbit-owned
-area and verification values; run setup after editing config.toml. Basic mode
-supports personal repositories without setup, but cannot sync area or
-verification. Triage in basic mode supports labels only. `orbit github connect`
-checks the current origin and configures organization-owned repositories; for a
-personal-account origin, it leaves the Board unchanged and reports the exact
-`config.toml` entries to add or merge for basic mode, preserving other linked
-repositories.
+`orbit remote connect` detects the `origin` Git remote and configures the
+GitHub adapter; for a personal-account origin it leaves the Board unchanged
+and reports the exact `config.toml` entries to add. `orbit remote connect
+--fields` resolves and stores the mapped organization Issue Fields; add
+`--validate-only` to check without writing, or `--create-fields` to create
+missing fields (requires organization administrator access). `orbit remote
+disconnect` removes a Remote Project from the Board. `orbit remote list`
+shows the connected Remote Projects; `orbit remote status` is a read-only
+health report of authentication, scopes, Remote Projects, Issue Fields when
+applicable, pending changes, conflicts, unsupported relationships, and the
+next recommended action.
 
-`orbit github setup` resolves existing fields by default. Creating missing
-fields is opt-in with `--create-fields` and requires organization administrator
-access. Run `orbit github status` for a read-only health report of authentication
-and scopes, linked repositories, Issue Fields when applicable, pending changes,
-conflicts, unsupported relationships, and the next recommended action. `orbit
-doctor` also checks GitHub configuration when the provider is enabled. With
-auto-push enabled, priority, type, comments, claims, checkpoints, and
+`orbit remote issues refresh` rebuilds the cached Remote Issue catalog for
+every connected Remote Project; `orbit remote issues list` browses the cache
+with filters and never fetches issue bodies; `orbit remote issues show` fetches
+one Remote Issue live. `orbit remote import` previews selected Remote Issues
+or, with `--apply`, creates Local Tasks or links them to existing Tasks via
+`--link REMOTE_ISSUE=TASK`; the tracker is never written. `orbit remote link`
+attaches an existing Local Task to a Remote Issue. `orbit remote detach`
+previews or applies detaching a Linked Task from its Remote Issue while
+keeping the identity as inactive provenance; `orbit remote reattach` reverses
+it after review. `orbit remote create` previews one or more Local Tasks by
+default; pass `--apply` to create Remote Issues and persist their links; done
+and cancelled Tasks also require `--include-closed`. `orbit remote sync`
+previews field-level synchronization for Linked Tasks; pass `--apply` to
+write. Conflict resolutions use `--resolve FIELD=orbit|remote`. `orbit
+doctor` also checks Remote Tracker configuration when a tracker is enabled.
+With auto-push enabled, priority, type, comments, claims, checkpoints, and
 relationships do not trigger a push; use `orbit --no-sync <command>` or
-`ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. `github create` previews one or more Local Tasks by
-default. Pass `--apply` to create Issues and persist their links; done and cancelled
-Tasks also require `--include-closed`. Workspace Boards infer the destination
-from the included repository catalog when exactly one repository is available.";
+`ORBIT_NO_AUTO_SYNC=1` for a local-only mutation.";
 
-pub const GITHUB_EXAMPLES: &str = "\
+pub const REMOTE_EXAMPLES: &str = "\
 Examples:
-  orbit github status
-  orbit github status --json
-  orbit github connect
-  orbit github connect --json
-  orbit github repo link acme/widget
-  orbit github setup
-  orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
-  orbit github adopt orb-a7b2c9 --repo acme/widget --number 42
-  orbit github create orb-a7b2c9                 # preview only
-  orbit github create orb-a7b2c9 --apply
-  orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
-  orbit github create orb-d4e5f6 --include-closed --apply
-  orbit github sync orb-a7b2c9
-  orbit github sync orb-a7b2c9 --apply
-  orbit github sync orb-a7b2c9 --resolve title=orbit --apply
-  orbit github auto-push on
-  orbit github auto-push off";
+  orbit remote status
+  orbit remote status --json
+  orbit remote connect
+  orbit remote connect --json
+  orbit remote connect --fields
+  orbit remote disconnect owner/repo
+  orbit remote list
+  orbit remote issues refresh
+  orbit remote issues list --project owner/repo --state open --label bug
+  orbit remote issues list --text authentication --unlinked
+  orbit remote issues show owner/repo#42
+  orbit remote import owner/repo#42 owner/repo#8
+  orbit remote import owner/repo#42 --link owner/repo#42=orb-a7b2c9 --apply
+  orbit remote link orb-a7b2c9 owner/repo#42
+  orbit remote detach owner/repo#42
+  orbit remote detach owner/repo#42 --apply
+  orbit remote reattach owner/repo#42
+  orbit remote reattach owner/repo#42 --apply
+  orbit remote create orb-a7b2c9                 # preview only
+  orbit remote create orb-a7b2c9 --apply
+  orbit remote create orb-a7b2c9 orb-d4e5f6 --project owner/repo --apply
+  orbit remote create orb-d4e5f6 --include-closed --apply
+  orbit remote sync orb-a7b2c9
+  orbit remote sync orb-a7b2c9 --apply
+  orbit remote sync orb-a7b2c9 --resolve title=orbit --apply
+  orbit remote auto-push on
+  orbit remote auto-push off";
 
-pub const WORKSPACE_ISSUE_DETACH_LONG: &str = "\
-Preview a Linked Task selected by exact OWNER/REPO#NUMBER identity. Pass --apply
-to make the Task local-only, retain its GitHub identity as inactive provenance,
-and move the cached Remote Issue snapshot to the non-claimable archive. Task data
-is preserved and GitHub is never changed. Repeating detach is safe.
-";
-
-pub const WORKSPACE_ISSUE_REATTACH_LONG: &str = "\
-Preview the Local Task that retains the exact OWNER/REPO#NUMBER provenance and
-compare its current fields with GitHub. The sync plan includes pending changes
-and field-level conflicts. Pass --apply to reactivate the link after review;
-this does not resolve conflicts or write GitHub. Resolve conflicts in a separate
-explicit `orbit github sync` operation. Repeating reattach is safe.
-";
-
-pub const WORKSPACE_ISSUES_EXAMPLES: &str = "\
+pub const REMOTE_STATUS_EXAMPLES: &str = "\
 Examples:
-  orbit workspace issues refresh
-  orbit workspace issues list --repo acme/api --state open --label bug
-  orbit workspace issues list --text authentication --unlinked
-  orbit workspace issues inspect acme/api#42
-  orbit workspace issues import acme/api#42 acme/web#8
-  orbit workspace issues import acme/api#42 --link acme/api#42=orb-a7b2c9 --apply
-  orbit workspace issues detach acme/api#42
-  orbit workspace issues detach acme/api#42 --apply
-  orbit workspace issues reattach acme/api#42
-  orbit workspace issues reattach acme/api#42 --apply";
+  orbit remote status
+  orbit remote status --json";
 
-pub const WORKSPACE_ISSUE_IMPORT_LONG: &str = "\
-Import only the explicitly selected Remote Issues. The default is a preview;
-review creates, links, terminal status mappings, skipped duplicates, and errors
-before rerunning with --apply. Import reads GitHub Issue details but never writes
-to GitHub.
-
-By default, each selected Issue creates a Linked Task with Issue fields and stable
-owner/repo#number identity. Repeat --link OWNER/REPO#NUMBER=TASK to link an Issue
-to a specific Local Task instead. Existing Orbit values are preserved, and the
-preview reports differences before the link is applied. Already-linked Issues
-and Tasks are skipped as duplicates using repository and Issue number, not title.
-
-Closed Issues map to done, or cancelled when labeled wontfix.";
-
-pub const GITHUB_STATUS_EXAMPLES: &str = "\
+pub const REMOTE_CONNECT_EXAMPLES: &str = "\
 Examples:
-  # Check GitHub configuration and the next recommended action
-  orbit github status
+  # Detect the origin remote and connect its Remote Tracker
+  orbit remote connect
+  orbit remote connect --json
 
-  # Read the same diagnostic fields as JSON
-  orbit github status --json";
+  # Connect an explicit Remote Project
+  orbit remote connect acme/widget
+  orbit remote connect github:acme/widget
 
-pub const GITHUB_CONNECT_EXAMPLES: &str = "\
+  # Resolve and store the tracker's mapped fields
+  orbit remote connect --fields
+  orbit remote connect --fields --validate-only
+  orbit remote connect --fields --create-fields";
+
+pub const REMOTE_DISCONNECT_EXAMPLES: &str = "\
 Examples:
-  # Detect origin, authenticate with gh, and configure an organization-owned repo
-  orbit github connect
+  orbit remote disconnect acme/widget
+  orbit remote disconnect github:acme/widget";
 
-  # Inspect the detected owner, fields, and next action as JSON
-  orbit github connect --json";
-
-pub const GITHUB_SETUP_EXAMPLES: &str = "\
+pub const REMOTE_LIST_EXAMPLES: &str = "\
 Examples:
-  orbit github setup --validate-only
-  orbit github setup
-  orbit github setup --create-fields";
+  orbit remote list
+  orbit remote list --json";
 
-pub const GITHUB_REPO_LINK_EXAMPLES: &str = "\
+pub const REMOTE_ISSUES_EXAMPLES: &str = "\
 Examples:
-  orbit github repo link acme/widget
-  orbit github repo unlink acme/widget
-  orbit github repo list";
+  orbit remote issues
+  orbit remote issues --state open --label bug
+  orbit remote issues list --text authentication --unlinked";
 
-pub const GITHUB_ADOPT_EXAMPLES: &str = "\
+pub const REMOTE_ISSUES_REFRESH_EXAMPLES: &str = "\
 Examples:
-  orbit github adopt orb-a7b2c9 https://github.com/acme/widget/issues/42
-  orbit github adopt orb-a7b2c9 --repo acme/widget --number 42";
+  orbit remote issues refresh
+  orbit remote issues refresh --json";
 
-pub const GITHUB_CREATE_EXAMPLES: &str = "\
+pub const REMOTE_ISSUES_LIST_EXAMPLES: &str = "\
 Examples:
-  orbit github create orb-a7b2c9
-  orbit github create orb-a7b2c9 --apply
-  orbit github create orb-a7b2c9 orb-d4e5f6 --repo acme/widget --apply
-  orbit github create orb-d4e5f6 --include-closed --apply";
+  orbit remote issues list
+  orbit remote issues list --state open --label bug
+  orbit remote issues list --project acme/widget --text authentication --unlinked
+  orbit remote issues list --linked --json";
 
-pub const GITHUB_AUTO_PUSH_EXAMPLES: &str = "\
+pub const REMOTE_ISSUES_SHOW_EXAMPLES: &str = "\
 Examples:
-  orbit github auto-push on
-  orbit github auto-push off
-  orbit github auto-push enable          # alias for on
-  orbit github auto-push disable         # alias for off";
+  orbit remote issues show acme/widget#42
+  orbit remote issues show github:acme/widget#42
+  orbit remote issues show https://github.com/acme/widget/issues/42";
 
-pub const GITHUB_SYNC_CMD_EXAMPLES: &str = "\
+pub const REMOTE_IMPORT_EXAMPLES: &str = "\
 Examples:
-  orbit github sync
-  orbit github sync orb-a7b2c9
-  orbit github sync orb-a7b2c9 --resolve title=orbit
-  orbit github sync orb-a7b2c9 --resolve title=orbit --apply
-  orbit github sync orb-a7b2c9 --apply --direction pull";
+  # Preview selected Remote Issues; nothing is written
+  orbit remote import acme/widget#42 acme/widget#8
+
+  # Link one Issue to an existing Local Task, then apply
+  orbit remote import acme/widget#42 --link acme/widget#42=orb-a7b2c9 --apply";
+
+pub const REMOTE_LINK_EXAMPLES: &str = "\
+Examples:
+  orbit remote link orb-a7b2c9 acme/widget#42
+  orbit remote link orb-a7b2c9 https://github.com/acme/widget/issues/42";
+
+pub const REMOTE_CREATE_EXAMPLES: &str = "\
+Examples:
+  orbit remote create orb-a7b2c9                 # preview only
+  orbit remote create orb-a7b2c9 --apply
+  orbit remote create orb-a7b2c9 orb-d4e5f6 --project acme/widget --apply
+  orbit remote create orb-d4e5f6 --include-closed --apply";
+
+pub const REMOTE_DETACH_EXAMPLES: &str = "\
+Examples:
+  orbit remote detach acme/widget#42
+  orbit remote detach acme/widget#42 --apply
+  orbit remote detach orb-a7b2c9 --apply";
+
+pub const REMOTE_REATTACH_EXAMPLES: &str = "\
+Examples:
+  orbit remote reattach acme/widget#42
+  orbit remote reattach acme/widget#42 --apply
+  orbit remote reattach orb-a7b2c9 --apply";
+
+pub const REMOTE_SYNC_EXAMPLES: &str = "\
+Examples:
+  orbit remote sync
+  orbit remote sync orb-a7b2c9
+  orbit remote sync orb-a7b2c9 --resolve title=orbit
+  orbit remote sync orb-a7b2c9 --resolve title=orbit --apply
+  orbit remote sync orb-a7b2c9 --apply --direction pull";
+
+pub const REMOTE_AUTO_PUSH_EXAMPLES: &str = "\
+Examples:
+  orbit remote auto-push on
+  orbit remote auto-push off
+  orbit remote auto-push enable          # alias for on
+  orbit remote auto-push disable         # alias for off";
 
 pub const TRIAGE_LONG: &str = "\
 Review Tasks and apply approved metadata changes on the Orbit Board first.
@@ -1089,7 +1114,7 @@ labels. It works on Local Tasks and Linked Tasks alike; for a Linked Task, only 
 Project's Mapped fields can be proposed, since those are the only fields a later sync publishes.
 It does not change Task title, body, status, or open/closed state, and it does not run
 verification commands. After approving a review or `triage apply --approve` on a Linked Task,
-publish changes with the Remote Tracker sync (for GitHub, `orbit github sync`).
+publish changes with `orbit remote sync`.
 
 Agents draft a proposal JSON file and run `triage review` to see a field-by-field preview. With a
 proposal file and both stdin and stdout connected to a terminal, review prompts for explicit
@@ -1125,7 +1150,7 @@ Examples:
 pub const TRIAGE_APPLY_EXAMPLES: &str = "\
 Examples:
   orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json
-  orbit github sync orb-a7b2c9 --direction push --apply";
+  orbit remote sync orb-a7b2c9 --direction push --apply";
 
 pub const BOARD_LONG: &str = "\
 Manage the Board's host repository (ADR 0019). A Board has no host by default —

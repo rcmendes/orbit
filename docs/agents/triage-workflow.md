@@ -21,7 +21,7 @@ A proposal may change:
 
 - Gather context, verify a claim, or grill
 - Write an agent brief ([`agent-brief.md`](./agent-brief.md)) or maintain `.out-of-scope/`
-- Adopt or import Remote Issues (use the Remote Tracker commands; see
+- Adopt or import Remote Issues (use `orbit remote link` and `orbit remote import`; see
   [github-sync.md](../github-sync.md) for GitHub)
 - Change Task title, body, status, or open/closed state (edit those through
   normal Orbit Task commands, then review and explicitly sync them)
@@ -118,7 +118,7 @@ commands.
    `orbit remote sync`):
 
    ```bash
-   orbit github sync <ID> --direction push --apply
+   orbit remote sync <ID> --direction push --apply
    ```
 
    Local Tasks have no Remote Issue; apply reports `sync_required: false` and

@@ -28,7 +28,7 @@ pub struct SyncRequest<'a> {
     pub direction: SyncDirection,
     pub resolutions: &'a [String],
     pub apply: bool,
-    /// Restrict targets to links on this tracker (`orbit github` passes
+    /// Restrict targets to links on this tracker (the GitHub adapter path passes
     /// `"github"`); `None` syncs every linked Task.
     pub tracker: Option<&'a str>,
 }
@@ -548,7 +548,7 @@ pub fn require_project_available<R: RemoteResolver + ?Sized>(
     Err(OrbitError::new(code::REMOTE_PROJECT_NOT_LINKED, message).with_details(json!({
         "tracker": project.tracker,
         "project": project.project,
-        "remediation": format!("configure the Remote Project on the Board, e.g. `orbit remote project link {} {}`", project.tracker, project.project),
+        "remediation": format!("connect the Remote Project to the Board with `orbit remote connect {}:{}`", project.tracker, project.project),
     })))
 }
 

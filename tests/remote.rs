@@ -51,6 +51,19 @@ fn write_fixture(dir: &TempDir) -> std::path::PathBuf {
       "area": "cli",
       "verification": "cargo test"
     }
+  },
+  "catalog_issues": {
+    "acme/widget": [
+      {
+        "number": 42,
+        "title": "Imported issue",
+        "state": "open",
+        "labels": ["bug"],
+        "area": "cli",
+        "verification": "cargo test",
+        "updated_at": "2026-10-23T13:00:00Z"
+      }
+    ]
   }
 }"#,
     )
@@ -79,10 +92,10 @@ fn unlinked_repository_errors_include_safe_remediation_in_json_and_human_output(
     let id = repo.add("Create issue", &[]);
 
     let (_, json_error) = repo.json(&[
-        "github",
+        "remote",
         "create",
         id.as_str(),
-        "--repo",
+        "--project",
         "acme/private",
         "--json",
     ]);
@@ -91,7 +104,7 @@ fn unlinked_repository_errors_include_safe_remediation_in_json_and_human_output(
     let remediation = json_error["error"]["details"]["remediation"]
         .as_str()
         .expect("JSON error should include remediation");
-    assert!(remediation.contains("orbit github repo link acme/private"));
+    assert!(remediation.contains("orbit remote connect github:acme/private"));
     assert!(
         json_error["error"]["message"]
             .as_str()
@@ -99,7 +112,7 @@ fn unlinked_repository_errors_include_safe_remediation_in_json_and_human_output(
             .contains(remediation)
     );
 
-    let human = repo.orbit(&["github", "create", id.as_str(), "--repo", "acme/private"]);
+    let human = repo.orbit(&["remote", "create", id.as_str(), "--project", "acme/private"]);
     assert!(!human.status.success());
     let human = String::from_utf8_lossy(&human.stderr);
     assert!(human.contains("acme/private"));
@@ -125,13 +138,14 @@ fn github_not_configured_errors_include_login_and_connect_actions() {
         fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let (status, value) = repo.json(&["github", "setup", "--validate-only", "--json"]);
+    let (status, value) =
+        repo.json(&["remote", "connect", "--fields", "--validate-only", "--json"]);
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "GITHUB_NOT_CONFIGURED");
     let remediation = value["error"]["details"]["remediation"]
         .as_str()
         .expect("JSON error should include remediation");
-    assert!(remediation.contains("orbit github connect"));
+    assert!(remediation.contains("orbit remote connect"));
     assert!(remediation.contains("gh auth login"));
     let cause = value["error"]["details"]["cause"].as_str().unwrap();
     assert!(
@@ -140,7 +154,7 @@ fn github_not_configured_errors_include_login_and_connect_actions() {
     );
     assert!(!value.to_string().contains(secret));
 
-    let human = repo.orbit(&["github", "setup", "--validate-only"]);
+    let human = repo.orbit(&["remote", "connect", "--fields", "--validate-only"]);
     assert!(!human.status.success());
     assert!(String::from_utf8_lossy(&human.stderr).contains(remediation));
 }
@@ -155,7 +169,7 @@ fn github_setup_incomplete_errors_name_the_missing_field_and_resolution_action()
     write_github_config(&repo);
 
     let (status, value) = repo.json_with_env(
-        &["github", "setup", "--json"],
+        &["remote", "connect", "--fields", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(status, 1);
@@ -165,7 +179,7 @@ fn github_setup_incomplete_errors_name_the_missing_field_and_resolution_action()
     let remediation = value["error"]["details"]["remediation"]
         .as_str()
         .expect("JSON error should include remediation");
-    assert!(remediation.contains("orbit github setup --create-fields"));
+    assert!(remediation.contains("orbit remote connect --fields --create-fields"));
     assert!(
         value["error"]["details"]["cause"]
             .as_str()
@@ -174,7 +188,7 @@ fn github_setup_incomplete_errors_name_the_missing_field_and_resolution_action()
     );
 
     let human = repo.orbit_with_env(
-        &["github", "setup"],
+        &["remote", "connect", "--fields"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(!human.status.success());
@@ -208,16 +222,7 @@ fn adopt_fixture_task(repo: &TestRepo, fixture: &std::path::Path, title: &str) -
     write_github_config(repo);
     let id = repo.add(title, &[]);
     repo.ok_json_with_env(
-        &[
-            "github",
-            "adopt",
-            id.as_str(),
-            "--repo",
-            "acme/widget",
-            "--number",
-            "42",
-            "--json",
-        ],
+        &["remote", "link", id.as_str(), "acme/widget#42", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     id
@@ -255,28 +260,20 @@ fn set_task_frontmatter(repo: &TestRepo, id: &str, field: &str, value: &str) {
 }
 
 #[test]
-fn github_repo_link_and_adopt_use_fixture_client() {
+fn remote_connect_and_link_use_fixture_client() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
     let repo = TestRepo::new();
     repo.init();
     write_github_config(&repo);
 
-    let link = repo.ok_json(&["github", "repo", "link", "acme/widget", "--json"]);
-    assert_eq!(link["data"]["repository"], "acme/widget");
+    let link = repo.ok_json(&["remote", "connect", "acme/widget", "--json"]);
+    assert_eq!(link["data"]["project"], "acme/widget");
+    assert_eq!(link["data"]["tracker"], "github");
 
     let id = repo.add("Sync me", &[]);
     let adopt = repo.ok_json_with_env(
-        &[
-            "github",
-            "adopt",
-            id.as_str(),
-            "--repo",
-            "acme/widget",
-            "--number",
-            "42",
-            "--json",
-        ],
+        &["remote", "link", id.as_str(), "acme/widget#42", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(adopt["data"]["github"]["number"], 42);
@@ -353,30 +350,12 @@ fn one_github_issue_cannot_be_adopted_by_two_tasks() {
     for id in [&first, &second] {
         if id == &first {
             repo.ok_json_with_env(
-                &[
-                    "github",
-                    "adopt",
-                    id.as_str(),
-                    "--repo",
-                    "acme/widget",
-                    "--number",
-                    "42",
-                    "--json",
-                ],
+                &["remote", "link", id.as_str(), "acme/widget#42", "--json"],
                 &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
             );
         } else {
             let (status, error) = repo.json_with_env(
-                &[
-                    "github",
-                    "adopt",
-                    id.as_str(),
-                    "--repo",
-                    "acme/widget",
-                    "--number",
-                    "42",
-                    "--json",
-                ],
+                &["remote", "link", id.as_str(), "acme/widget#42", "--json"],
                 &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
             );
             assert_eq!(status, 1);
@@ -398,7 +377,7 @@ fn github_setup_validate_only_reads_fixture_fields() {
     repo.init();
     write_github_config(&repo);
     let setup = repo.ok_json_with_env(
-        &["github", "setup", "--validate-only", "--json"],
+        &["remote", "connect", "--fields", "--validate-only", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(setup["data"]["area_id"], "AREA_ID");
@@ -423,7 +402,7 @@ fn github_setup_create_fields_creates_required_fields_and_reuses_them() {
     write_github_config(&repo);
 
     let setup = repo.ok_json_with_env(
-        &["github", "setup", "--create-fields", "--json"],
+        &["remote", "connect", "--fields", "--create-fields", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(setup["data"]["area_id"], "CREATED_AREA_ID");
@@ -439,7 +418,7 @@ fn github_setup_create_fields_creates_required_fields_and_reuses_them() {
     assert_eq!(created["created_fields"][1]["data_type"], "TEXT");
 
     let again = repo.ok_json_with_env(
-        &["github", "setup", "--create-fields", "--json"],
+        &["remote", "connect", "--fields", "--create-fields", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(again["data"]["area_id"], "CREATED_AREA_ID");
@@ -470,7 +449,7 @@ fn github_setup_create_fields_reuses_existing_fields_without_overwriting_them() 
     write_github_config(&repo);
 
     let setup = repo.ok_json_with_env(
-        &["github", "setup", "--create-fields", "--json"],
+        &["remote", "connect", "--fields", "--create-fields", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(setup["data"]["area_id"], "EXISTING_AREA_ID");
@@ -500,7 +479,7 @@ fn github_setup_create_fields_requires_organization_administration() {
     write_github_config(&repo);
 
     let (status, result) = repo.json_with_env(
-        &["github", "setup", "--create-fields", "--json"],
+        &["remote", "connect", "--fields", "--create-fields", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_ne!(status, 0);
@@ -543,7 +522,7 @@ fn github_setup_without_create_fields_only_resolves_existing_fields() {
     write_github_config(&repo);
 
     let setup = repo.ok_json_with_env(
-        &["github", "setup", "--json"],
+        &["remote", "connect", "--fields", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(setup["data"]["area_id"], "AREA_ID");
@@ -565,21 +544,12 @@ fn github_sync_dry_run_reports_assignee_warning() {
     write_github_config(&repo);
     let id = repo.add("Local title", &[]);
     repo.ok_json_with_env(
-        &[
-            "github",
-            "adopt",
-            id.as_str(),
-            "--repo",
-            "acme/widget",
-            "--number",
-            "42",
-            "--json",
-        ],
+        &["remote", "link", id.as_str(), "acme/widget#42", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
 
     let plan = repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--json"],
+        &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(plan["data"]["count"], 1);
@@ -604,7 +574,7 @@ fn basic_mode_rejects_organization_issue_field_configuration() {
     );
     fs::write(path, config).unwrap();
 
-    let (status, value) = repo.json(&["github", "repo", "list", "--json"]);
+    let (status, value) = repo.json(&["remote", "list", "--json"]);
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "CONFIG_ERROR");
     assert!(
@@ -629,10 +599,10 @@ fn basic_mode_rejects_create_when_task_has_structured_metadata() {
 
     let (status, value) = repo.json_with_env(
         &[
-            "github",
+            "remote",
             "create",
             id.as_str(),
-            "--repo",
+            "--project",
             "personal/widget",
             "--apply",
             "--json",
@@ -667,10 +637,10 @@ fn basic_mode_creates_personal_repository_issue_without_setup() {
 
     let created = repo.ok_json_with_env(
         &[
-            "github",
+            "remote",
             "create",
             id.as_str(),
-            "--repo",
+            "--project",
             "personal/widget",
             "--apply",
             "--json",
@@ -695,7 +665,7 @@ fn basic_mode_does_not_run_issue_field_setup() {
     repo.init();
     write_basic_github_config(&repo);
 
-    let (status, value) = repo.json(&["github", "setup", "--json"]);
+    let (status, value) = repo.json(&["remote", "connect", "--fields", "--json"]);
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
     assert!(
@@ -722,13 +692,10 @@ fn basic_mode_adopts_and_syncs_without_importing_issue_fields() {
 
     let adopted = repo.ok_json_with_env(
         &[
-            "github",
-            "adopt",
+            "remote",
+            "link",
             id.as_str(),
-            "--repo",
-            "personal/widget",
-            "--number",
-            "42",
+            "personal/widget#42",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
@@ -740,7 +707,7 @@ fn basic_mode_adopts_and_syncs_without_importing_issue_fields() {
     assert!(show["data"]["verification"].is_null());
 
     let sync = repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--json"],
+        &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(sync["data"]["count"], 1);
@@ -758,7 +725,7 @@ fn basic_mode_adopts_and_syncs_without_importing_issue_fields() {
     ]);
     let (status, value) = repo.json_with_env(
         &[
-            "github",
+            "remote",
             "sync",
             id.as_str(),
             "--direction",
@@ -811,7 +778,7 @@ fn github_connect_configures_organization_and_is_idempotent() {
     ]);
 
     let first = repo.ok_json_with_env(
-        &["github", "connect", "--json"],
+        &["remote", "connect", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(first["data"]["owner_type"], "organization");
@@ -831,13 +798,13 @@ fn github_connect_configures_organization_and_is_idempotent() {
     assert!(config.contains("verification_id = \"VERIFICATION_ID\""));
 
     let second = repo.ok_json_with_env(
-        &["github", "connect", "--json"],
+        &["remote", "connect", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(second["data"]["changed"], false);
 
     let human = repo.orbit_with_env(
-        &["github", "connect"],
+        &["remote", "connect"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(human.status.success());
@@ -865,7 +832,7 @@ fn github_connect_personal_owner_reports_choices_without_changing_config() {
     repo.git(&["remote", "add", "origin", "git@github.com:riley/widget.git"]);
 
     let result = repo.ok_json_with_env(
-        &["github", "connect", "--json"],
+        &["remote", "connect", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(result["data"]["status"], "blocked");
@@ -882,7 +849,7 @@ fn github_connect_personal_owner_reports_choices_without_changing_config() {
     assert!(remediation.contains("preserve any other linked repositories"));
     assert!(remediation.contains("mode = \"basic\""));
     assert!(remediation.contains("repositories = [\"riley/widget\"]"));
-    assert!(remediation.contains("orbit github status"));
+    assert!(remediation.contains("orbit remote status"));
     assert!(remediation.contains("docs/github-sync.md#basic-mode-personal-repositories"));
     assert!(!remediation.contains("orbit github basic"));
     let next_actions = result["data"]["next_actions"].as_array().unwrap();
@@ -892,7 +859,7 @@ fn github_connect_personal_owner_reports_choices_without_changing_config() {
     assert!(!config.contains("[github]"));
 
     let human = repo.orbit_with_env(
-        &["github", "connect"],
+        &["remote", "connect"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(human.status.success());
@@ -926,7 +893,7 @@ fn github_connect_reports_authentication_access_and_field_blockers() {
     )
     .unwrap();
     let auth = repo.ok_json_with_env(
-        &["github", "connect", "--json"],
+        &["remote", "connect", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(auth["data"]["next_action"], "authenticate_gh");
@@ -950,7 +917,7 @@ fn github_connect_reports_authentication_access_and_field_blockers() {
     )
     .unwrap();
     let access = repo.ok_json_with_env(
-        &["github", "connect", "--json"],
+        &["remote", "connect", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(access["data"]["next_action"], "grant_repository_access");
@@ -974,7 +941,7 @@ fn github_connect_reports_authentication_access_and_field_blockers() {
     )
     .unwrap();
     let fields = repo.ok_json_with_env(
-        &["github", "connect", "--json"],
+        &["remote", "connect", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(fields["data"]["field_status"]["area"], "ready");
@@ -996,7 +963,7 @@ fn github_sync_human_dry_run_marks_clean_plan_as_all_clear() {
     let id = adopt_fixture_task(&repo, &fixture, "Local title");
 
     let output = repo.orbit_with_env(
-        &["github", "sync", id.as_str()],
+        &["remote", "sync", id.as_str()],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(output.status.success());
@@ -1016,7 +983,7 @@ fn github_sync_human_dry_run_explains_empty_plan() {
     write_github_config(&repo);
 
     let output = repo.orbit_with_env(
-        &["github", "sync"],
+        &["remote", "sync"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(output.status.success());
@@ -1039,14 +1006,17 @@ fn github_sync_human_dry_run_lists_pull_changes() {
     );
 
     let output = repo.orbit_with_env(
-        &["github", "sync", id.as_str()],
+        &["remote", "sync", id.as_str()],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(output.status.success());
     let human = String::from_utf8_lossy(&output.stdout);
     assert!(human.contains("Pull into Orbit:"), "{human}");
     assert!(human.contains("title: \"Updated remotely\""), "{human}");
-    assert!(human.contains("Push to GitHub:\n  (none)"), "{human}");
+    assert!(
+        human.contains("Push to Remote Tracker:\n  (none)"),
+        "{human}"
+    );
     assert!(human.contains("nothing was written"), "{human}");
 }
 
@@ -1060,13 +1030,13 @@ fn github_sync_human_dry_run_lists_push_changes() {
     set_task_frontmatter(&repo, &id, "updated_at", "2026-10-24T14:00:00Z");
 
     let output = repo.orbit_with_env(
-        &["github", "sync", id.as_str(), "--direction", "push"],
+        &["remote", "sync", id.as_str(), "--direction", "push"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(output.status.success());
     let human = String::from_utf8_lossy(&output.stdout);
     assert!(human.contains("Pull into Orbit:\n  (none)"), "{human}");
-    assert!(human.contains("Push to GitHub:"), "{human}");
+    assert!(human.contains("Push to Remote Tracker:"), "{human}");
     assert!(human.contains("area: \"setup\""), "{human}");
     assert!(human.contains("nothing was written"), "{human}");
 }
@@ -1081,7 +1051,7 @@ fn orbit_title_edits_are_previewed_as_github_pushes() {
     set_task_frontmatter(&repo, &id, "updated_at", "2026-10-24T14:00:00Z");
 
     let preview = repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--json"],
+        &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
 
@@ -1115,7 +1085,7 @@ fn github_sync_treats_reordered_labels_as_unchanged() {
     repo.ok_json(&["label", "add", id.as_str(), "beta", "--json"]);
 
     let preview = repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--json"],
+        &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(
@@ -1125,11 +1095,11 @@ fn github_sync_treats_reordered_labels_as_unchanged() {
     assert!(preview["data"]["tasks"][0]["plan"]["apply_labels"].is_null());
 
     repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &["remote", "sync", id.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let again = repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--json"],
+        &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(
@@ -1152,7 +1122,7 @@ fn linked_task_status_labels_and_metadata_push_from_orbit() {
     set_task_frontmatter(&repo, &id, "updated_at", "2026-10-25T14:00:00Z");
 
     let preview = repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--json"],
+        &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let plan = &preview["data"]["tasks"][0]["plan"];
@@ -1165,7 +1135,7 @@ fn linked_task_status_labels_and_metadata_push_from_orbit() {
     );
 
     repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &["remote", "sync", id.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
@@ -1204,7 +1174,7 @@ fn remote_only_label_and_metadata_changes_pull_when_orbit_is_unchanged() {
     );
 
     let preview = repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--json"],
+        &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let plan = &preview["data"]["tasks"][0]["plan"];
@@ -1216,7 +1186,7 @@ fn remote_only_label_and_metadata_changes_pull_when_orbit_is_unchanged() {
     );
 
     repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &["remote", "sync", id.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
@@ -1239,12 +1209,12 @@ fn remote_issue_close_pulls_a_terminal_orbit_status() {
     );
 
     let preview = repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--json"],
+        &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(preview["data"]["tasks"][0]["plan"]["apply_status"], "done");
     repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &["remote", "sync", id.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
@@ -1261,21 +1231,12 @@ fn supported_subtask_relationships_are_previewed_and_applied() {
     let parent = adopt_fixture_task(&repo, &fixture, "Parent issue");
     let child = repo.add("Child work", &["--parent", parent.as_str()]);
     repo.ok_json_with_env(
-        &[
-            "github",
-            "adopt",
-            child.as_str(),
-            "--repo",
-            "acme/widget",
-            "--number",
-            "43",
-            "--json",
-        ],
+        &["remote", "link", child.as_str(), "acme/widget#43", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
 
     let preview = repo.ok_json_with_env(
-        &["github", "sync", parent.as_str(), "--json"],
+        &["remote", "sync", parent.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(
@@ -1288,7 +1249,7 @@ fn supported_subtask_relationships_are_previewed_and_applied() {
     );
 
     repo.ok_json_with_env(
-        &["github", "sync", parent.as_str(), "--apply", "--json"],
+        &["remote", "sync", parent.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
@@ -1308,13 +1269,10 @@ fn supported_blocked_by_relationships_are_previewed_and_applied() {
     let dependency = repo.add("Dependency", &[]);
     repo.ok_json_with_env(
         &[
-            "github",
-            "adopt",
+            "remote",
+            "link",
             dependency.as_str(),
-            "--repo",
-            "acme/widget",
-            "--number",
-            "43",
+            "acme/widget#43",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
@@ -1322,7 +1280,7 @@ fn supported_blocked_by_relationships_are_previewed_and_applied() {
     repo.ok_json(&["depend", task.as_str(), dependency.as_str(), "--json"]);
 
     let preview = repo.ok_json_with_env(
-        &["github", "sync", task.as_str(), "--json"],
+        &["remote", "sync", task.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(
@@ -1330,7 +1288,7 @@ fn supported_blocked_by_relationships_are_previewed_and_applied() {
         "blocked_by"
     );
     repo.ok_json_with_env(
-        &["github", "sync", task.as_str(), "--apply", "--json"],
+        &["remote", "sync", task.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
@@ -1350,26 +1308,23 @@ fn removing_a_synced_dependency_removes_the_github_blocked_by_relationship() {
     let dependency = repo.add("Dependency", &[]);
     repo.ok_json_with_env(
         &[
-            "github",
-            "adopt",
+            "remote",
+            "link",
             dependency.as_str(),
-            "--repo",
-            "acme/widget",
-            "--number",
-            "43",
+            "acme/widget#43",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     repo.ok_json(&["depend", task.as_str(), dependency.as_str(), "--json"]);
     repo.ok_json_with_env(
-        &["github", "sync", task.as_str(), "--apply", "--json"],
+        &["remote", "sync", task.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     repo.ok_json(&["undepend", task.as_str(), dependency.as_str(), "--json"]);
 
     let preview = repo.ok_json_with_env(
-        &["github", "sync", task.as_str(), "--json"],
+        &["remote", "sync", task.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(
@@ -1382,7 +1337,7 @@ fn removing_a_synced_dependency_removes_the_github_blocked_by_relationship() {
     );
 
     repo.ok_json_with_env(
-        &["github", "sync", task.as_str(), "--apply", "--json"],
+        &["remote", "sync", task.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
@@ -1404,13 +1359,10 @@ fn batch_sync_reports_partial_failures_and_retries_without_advancing_failed_base
     let second = repo.add("Second task", &[]);
     repo.ok_json_with_env(
         &[
-            "github",
-            "adopt",
+            "remote",
+            "link",
             second.as_str(),
-            "--repo",
-            "acme/widget",
-            "--number",
-            "43",
+            "acme/widget#43",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
@@ -1423,7 +1375,7 @@ fn batch_sync_reports_partial_failures_and_retries_without_advancing_failed_base
     fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
 
     let first_apply = repo.ok_json_with_env(
-        &["github", "sync", "--apply", "--json"],
+        &["remote", "sync", "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(first_apply["data"]["success_count"], 1);
@@ -1448,7 +1400,7 @@ fn batch_sync_reports_partial_failures_and_retries_without_advancing_failed_base
     data["update_failures"] = serde_json::json!({});
     fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
     let retry = repo.ok_json_with_env(
-        &["github", "sync", "--apply", "--json"],
+        &["remote", "sync", "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(retry["data"]["failure_count"], 0);
@@ -1478,14 +1430,14 @@ fn github_sync_human_dry_run_shows_conflicting_values_and_keeps_json_plan() {
     let fixture_before = fs::read(&fixture).unwrap();
 
     let human_output = repo.orbit_with_env(
-        &["github", "sync", id.as_str()],
+        &["remote", "sync", id.as_str()],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(human_output.status.success());
     let human = String::from_utf8_lossy(&human_output.stdout);
     assert!(human.contains("Conflicts:"), "{human}");
     assert!(
-        human.contains("title: Orbit = \"Local edit\"; GitHub = \"Remote edit\""),
+        human.contains("title: Orbit = \"Local edit\"; Remote = \"Remote edit\""),
         "{human}"
     );
     assert!(human.contains("nothing was written"), "{human}");
@@ -1493,7 +1445,7 @@ fn github_sync_human_dry_run_shows_conflicting_values_and_keeps_json_plan() {
     assert_eq!(fs::read(&fixture).unwrap(), fixture_before);
 
     let json = repo.ok_json_with_env(
-        &["github", "sync", id.as_str(), "--json"],
+        &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let plan = &json["data"]["tasks"][0]["plan"];
@@ -1504,7 +1456,7 @@ fn github_sync_human_dry_run_shows_conflicting_values_and_keeps_json_plan() {
     assert_eq!(conflict["remote_value"], "Remote edit");
 
     let (status, error) = repo.json_with_env(
-        &["github", "sync", id.as_str(), "--apply", "--json"],
+        &["remote", "sync", id.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(status, 1);
@@ -1525,7 +1477,7 @@ fn github_sync_human_dry_run_shows_conflicting_values_and_keeps_json_plan() {
     );
 
     let human = repo.orbit_with_env(
-        &["github", "sync", id.as_str(), "--apply"],
+        &["remote", "sync", id.as_str(), "--apply"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(!human.status.success());
@@ -1549,7 +1501,7 @@ fn github_sync_can_keep_orbit_value_for_a_field_conflict() {
 
     let result = repo.ok_json_with_env(
         &[
-            "github",
+            "remote",
             "sync",
             id.as_str(),
             "--resolve",
@@ -1581,8 +1533,8 @@ fn github_adopt_accepts_issue_url_and_legacy_arguments() {
     let by_url = repo.add("URL issue", &[]);
     let adopted = repo.ok_json_with_env(
         &[
-            "github",
-            "adopt",
+            "remote",
+            "link",
             by_url.as_str(),
             "https://github.com/acme/widget/issues/42",
             "--json",
@@ -1595,13 +1547,10 @@ fn github_adopt_accepts_issue_url_and_legacy_arguments() {
     let legacy = repo.add("Legacy issue", &[]);
     let adopted = repo.ok_json_with_env(
         &[
-            "github",
-            "adopt",
+            "remote",
+            "link",
             legacy.as_str(),
-            "--repo",
-            "acme/widget",
-            "--number",
-            "43",
+            "acme/widget#43",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
@@ -1611,7 +1560,7 @@ fn github_adopt_accepts_issue_url_and_legacy_arguments() {
 }
 
 #[test]
-fn github_adopt_rejects_malformed_urls_and_mismatched_identifiers() {
+fn remote_link_rejects_malformed_refs_and_unconnected_projects() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
     let repo = TestRepo::new();
@@ -1621,8 +1570,8 @@ fn github_adopt_rejects_malformed_urls_and_mismatched_identifiers() {
     let malformed_task = repo.add("Malformed URL", &[]);
     let (_, malformed) = repo.json_with_env(
         &[
-            "github",
-            "adopt",
+            "remote",
+            "link",
             malformed_task.as_str(),
             "https://github.com/acme/widget/pull/42",
             "--json",
@@ -1637,49 +1586,37 @@ fn github_adopt_rejects_malformed_urls_and_mismatched_identifiers() {
             .contains("GitHub Issue URL")
     );
 
-    let mismatched_task = repo.add("Mismatched URL", &[]);
-    let (_, mismatched) = repo.json_with_env(
+    let shapeless_task = repo.add("Missing issue id", &[]);
+    let (_, shapeless) = repo.json_with_env(
         &[
-            "github",
-            "adopt",
-            mismatched_task.as_str(),
-            "https://github.com/acme/widget/issues/42",
-            "--repo",
-            "acme/other",
-            "--number",
-            "43",
+            "remote",
+            "link",
+            shapeless_task.as_str(),
+            "acme/widget",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(mismatched["error"]["code"], "INVALID_ARGUMENT");
+    assert_eq!(shapeless["error"]["code"], "INVALID_ARGUMENT");
     assert!(
-        mismatched["error"]["message"]
+        shapeless["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("does not match")
+            .contains("invalid Remote Issue")
     );
 
-    let mismatched_number_task = repo.add("Mismatched issue number", &[]);
-    let (_, mismatched_number) = repo.json_with_env(
+    let unconnected_task = repo.add("Unconnected project", &[]);
+    let (_, unconnected) = repo.json_with_env(
         &[
-            "github",
-            "adopt",
-            mismatched_number_task.as_str(),
-            "https://github.com/acme/widget/issues/42",
-            "--number",
-            "43",
+            "remote",
+            "link",
+            unconnected_task.as_str(),
+            "acme/missing#7",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(mismatched_number["error"]["code"], "INVALID_ARGUMENT");
-    assert!(
-        mismatched_number["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("issue number 43 does not match")
-    );
+    assert_eq!(unconnected["error"]["code"], "REMOTE_PROJECT_NOT_LINKED");
 }
 
 #[test]
@@ -1692,7 +1629,7 @@ fn github_create_applies_to_only_linked_repository() {
     let id = repo.add("Create issue", &[]);
 
     let created = repo.ok_json_with_env(
-        &["github", "create", id.as_str(), "--apply", "--json"],
+        &["remote", "create", id.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(created["data"]["tasks"][0]["github"]["repo"], "acme/widget");
@@ -1713,7 +1650,7 @@ fn github_create_previews_issue_without_writing_until_apply() {
     let fixture_before = fs::read(&fixture).unwrap();
 
     let preview = repo.ok_json_with_env(
-        &["github", "create", id.as_str(), "--json"],
+        &["remote", "create", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
 
@@ -1722,14 +1659,14 @@ fn github_create_previews_issue_without_writing_until_apply() {
     assert_eq!(preview["data"]["preview_count"], 1);
     assert!(preview["data"]["success_count"].is_null());
     assert_eq!(preview["data"]["tasks"][0]["task"], id);
-    assert_eq!(preview["data"]["tasks"][0]["repository"], "acme/widget");
+    assert_eq!(preview["data"]["tasks"][0]["project"], "github:acme/widget");
     assert_eq!(preview["data"]["tasks"][0]["title"], "Preview issue");
     assert_eq!(preview["data"]["tasks"][0]["labels"][0], "bug");
     assert_eq!(fs::read(&fixture).unwrap(), fixture_before);
     assert_eq!(repo.read_task(&id), task_before);
 
     let human = repo.orbit_with_env(
-        &["github", "create", &id],
+        &["remote", "create", &id],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(human.status.success());
@@ -1740,7 +1677,7 @@ fn github_create_previews_issue_without_writing_until_apply() {
         "Description for GitHub",
         "Labels: bug",
         "Task status: todo",
-        "GitHub Issue state: open",
+        "Remote Issue state: open",
         "Apply with --apply",
     ] {
         assert!(human.contains(expected), "missing {expected:?} in {human}");
@@ -1764,7 +1701,7 @@ fn github_create_batches_report_partial_failures_and_persist_successful_links() 
     let failed = repo.add("Will fail", &[]);
 
     let result = repo.ok_json_with_env(
-        &["github", "create", &created, &failed, "--apply", "--json"],
+        &["remote", "create", &created, &failed, "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
 
@@ -1803,7 +1740,7 @@ fn github_create_includes_configured_issue_fields_in_the_created_issue() {
     );
 
     let result = repo.ok_json_with_env(
-        &["github", "create", &id, "--apply", "--json"],
+        &["remote", "create", &id, "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
 
@@ -1828,7 +1765,7 @@ fn github_create_requires_closed_opt_in_and_closes_opted_in_tasks() {
     repo.ok_json(&["done", &id, "--by", "test", "--json"]);
 
     let refused = repo.ok_json_with_env(
-        &["github", "create", &id, "--apply", "--json"],
+        &["remote", "create", &id, "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(refused["data"]["failure_count"], 1);
@@ -1843,7 +1780,7 @@ fn github_create_requires_closed_opt_in_and_closes_opted_in_tasks() {
 
     let result = repo.ok_json_with_env(
         &[
-            "github",
+            "remote",
             "create",
             &id,
             "--include-closed",
@@ -1871,7 +1808,7 @@ fn github_create_accepts_legacy_terminal_alias() {
 
     let result = repo.ok_json_with_env(
         &[
-            "github",
+            "remote",
             "create",
             &id,
             "--include-terminal",
@@ -1894,15 +1831,15 @@ fn github_create_retry_rejects_already_linked_task_without_duplicate_issue() {
     let id = repo.add("Create once", &[]);
     let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
 
-    let first = repo.ok_json_with_env(&["github", "create", &id, "--apply", "--json"], &env);
+    let first = repo.ok_json_with_env(&["remote", "create", &id, "--apply", "--json"], &env);
     assert_eq!(first["data"]["success_count"], 1);
-    let second = repo.ok_json_with_env(&["github", "create", &id, "--apply", "--json"], &env);
+    let second = repo.ok_json_with_env(&["remote", "create", &id, "--apply", "--json"], &env);
     assert_eq!(second["data"]["failure_count"], 1);
     assert!(
         second["data"]["tasks"][0]["error"]
             .as_str()
             .unwrap()
-            .contains("orbit github sync")
+            .contains("orbit remote sync")
     );
     let fixture: serde_json::Value = serde_json::from_slice(&fs::read(fixture).unwrap()).unwrap();
     assert_eq!(fixture["issues"].as_object().unwrap().len(), 2);
@@ -1916,13 +1853,13 @@ fn github_create_requires_repo_when_selection_is_ambiguous_or_missing() {
         write_github_config_for_repositories(&repo, repositories);
         let id = repo.add("Create issue", &[]);
 
-        let (_, error) = repo.json(&["github", "create", id.as_str(), "--json"]);
+        let (_, error) = repo.json(&["remote", "create", id.as_str(), "--json"]);
         assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
         assert!(
             error["error"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("--repo")
+                .contains("--project")
         );
     }
 
@@ -1934,10 +1871,10 @@ fn github_create_requires_repo_when_selection_is_ambiguous_or_missing() {
     let id = repo.add("Explicit repository", &[]);
     let created = repo.ok_json_with_env(
         &[
-            "github",
+            "remote",
             "create",
             id.as_str(),
-            "--repo",
+            "--project",
             "acme/other",
             "--apply",
             "--json",
@@ -1960,7 +1897,7 @@ fn github_status_reports_healthy_configuration_and_is_read_only() {
     let board_status_before = repo.git_in(&repo.board_path(), &["status", "--porcelain"]);
 
     let status = repo.ok_json_with_env(
-        &["github", "status", "--json"],
+        &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
 
@@ -1997,7 +1934,7 @@ fn github_status_reports_healthy_configuration_and_is_read_only() {
     assert_eq!(board_status_after.stdout, board_status_before.stdout);
 
     let human = repo.orbit_with_env(
-        &["github", "status"],
+        &["remote", "status"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(human.status.success());
@@ -2015,11 +1952,11 @@ fn github_status_reports_unconfigured_and_missing_fields() {
     repo.init();
 
     let unconfigured = repo.ok_json_with_env(
-        &["github", "status", "--json"],
+        &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(unconfigured["data"]["configured"], false);
-    assert_eq!(unconfigured["data"]["next_action"], "orbit github connect");
+    assert_eq!(unconfigured["data"]["next_action"], "orbit remote connect");
 
     let mut fixture_data: serde_json::Value =
         serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
@@ -2027,7 +1964,7 @@ fn github_status_reports_unconfigured_and_missing_fields() {
         serde_json::json!("Logged in to github.com account agent (keyring)\nToken scopes: 'repo'");
     fs::write(&fixture, serde_json::to_vec_pretty(&fixture_data).unwrap()).unwrap();
     let missing_scope = repo.ok_json_with_env(
-        &["github", "status", "--json"],
+        &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(
@@ -2046,7 +1983,7 @@ fn github_status_reports_unconfigured_and_missing_fields() {
     fixture_data["auth_message"] = serde_json::json!("not logged in");
     fs::write(&fixture, serde_json::to_vec_pretty(&fixture_data).unwrap()).unwrap();
     let unauthenticated = repo.ok_json_with_env(
-        &["github", "status", "--json"],
+        &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(unauthenticated["data"]["auth"]["authenticated"], false);
@@ -2057,18 +1994,24 @@ fn github_status_reports_unconfigured_and_missing_fields() {
     fixture_data["org_fields"] = serde_json::json!({ "acme/Area": "AREA_ID" });
     fs::write(&fixture, serde_json::to_vec_pretty(&fixture_data).unwrap()).unwrap();
     let missing = repo.ok_json_with_env(
-        &["github", "status", "--json"],
+        &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(missing["data"]["fields"]["area"]["resolved"], true);
     assert_eq!(missing["data"]["fields"]["verification"]["resolved"], false);
-    assert_eq!(missing["data"]["next_action"], "orbit github setup");
-    assert_eq!(missing["data"]["next_command"], "orbit github setup");
+    assert_eq!(
+        missing["data"]["next_action"],
+        "orbit remote connect --fields"
+    );
+    assert_eq!(
+        missing["data"]["next_command"],
+        "orbit remote connect --fields"
+    );
 
     fixture_data["org_fields"] = serde_json::json!({});
     fs::write(&fixture, serde_json::to_vec_pretty(&fixture_data).unwrap()).unwrap();
     let missing_both = repo.ok_json_with_env(
-        &["github", "status", "--json"],
+        &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(missing_both["data"]["fields"]["area"]["resolved"], false);
@@ -2096,7 +2039,7 @@ fn github_status_reports_conflicts_and_doctor_reports_configuration_problems() {
     );
 
     let status = repo.ok_json_with_env(
-        &["github", "status", "--json"],
+        &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(status["data"]["conflicts"], 1, "{status}");
@@ -2109,7 +2052,7 @@ fn github_status_reports_conflicts_and_doctor_reports_configuration_problems() {
     );
     assert_eq!(
         status["data"]["next_command"],
-        format!("orbit github sync {id}")
+        format!("orbit remote sync {id}")
     );
 
     let mut fixture_data: serde_json::Value =
@@ -2152,8 +2095,8 @@ fn github_status_reports_unlinked_repositories_and_cross_repo_relationships() {
     let child = repo.add("Child", &["--parent", parent.as_str()]);
     repo.ok_json_with_env(
         &[
-            "github",
-            "adopt",
+            "remote",
+            "link",
             parent.as_str(),
             "https://github.com/acme/widget/issues/42",
             "--json",
@@ -2162,18 +2105,18 @@ fn github_status_reports_unlinked_repositories_and_cross_repo_relationships() {
     );
     repo.ok_json_with_env(
         &[
-            "github",
-            "adopt",
+            "remote",
+            "link",
             child.as_str(),
             "https://github.com/acme/other/issues/43",
             "--json",
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    repo.ok_json(&["github", "repo", "unlink", "acme/other", "--json"]);
+    repo.ok_json(&["remote", "disconnect", "acme/other", "--json"]);
 
     let status = repo.ok_json_with_env(
-        &["github", "status", "--json"],
+        &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
 
@@ -2200,7 +2143,7 @@ fn github_status_does_not_repair_an_orphan_board_during_discovery() {
     repo.add("Orphaned task", &[]);
     fs::remove_dir_all(repo.board_path()).unwrap();
 
-    let (status, result) = repo.json(&["github", "status", "--json"]);
+    let (status, result) = repo.json(&["remote", "status", "--json"]);
 
     assert_ne!(status, 0);
     assert_eq!(result["ok"], false);
@@ -2224,7 +2167,7 @@ fn github_status_handles_basic_mode_without_issue_fields() {
     write_basic_github_config(&repo);
 
     let status = repo.ok_json_with_env(
-        &["github", "status", "--json"],
+        &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(status["data"]["configured"], true);
@@ -2271,7 +2214,7 @@ fn github_status_and_doctor_report_the_same_missing_scopes_in_each_mode() {
         }
 
         let status = repo.ok_json_with_env(
-            &["github", "status", "--json"],
+            &["remote", "status", "--json"],
             &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
         );
         assert_eq!(
@@ -2404,7 +2347,7 @@ fn sync_reports_commit_failure_without_losing_pulled_changes() {
     );
     let applied = repo.ok_json_with_env(
         &[
-            "github",
+            "remote",
             "sync",
             &id,
             "--direction",
@@ -2523,16 +2466,7 @@ fn injected_sync_rejects_issue_fields_in_basic_mode() {
     write_basic_github_config(&repo);
     let id = repo.add("Local task", &[]);
     repo.ok_json_with_env(
-        &[
-            "github",
-            "adopt",
-            &id,
-            "--repo",
-            "personal/widget",
-            "--number",
-            "42",
-            "--json",
-        ],
+        &["remote", "link", &id, "personal/widget#42", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     repo.ok_json(&["update", &id, "--area", "cli", "--json"]);
@@ -2553,7 +2487,7 @@ fn github_auto_push_toggle_commits_the_board_flag() {
     repo.init();
     write_github_config(&repo);
 
-    let on = repo.ok_json(&["github", "auto-push", "on", "--json"]);
+    let on = repo.ok_json(&["remote", "auto-push", "on", "--json"]);
     assert_eq!(on["data"]["auto_push"]["enabled"], true);
     assert_eq!(on["data"]["auto_push"]["previous"], false);
     assert_eq!(on["data"]["auto_push"]["changed"], true);
@@ -2562,14 +2496,14 @@ fn github_auto_push_toggle_commits_the_board_flag() {
     let log = repo.git_in(&repo.board_path(), &["log", "-1", "--format=%s"]);
     assert_eq!(
         String::from_utf8_lossy(&log.stdout).trim(),
-        "orbit: github auto-push on"
+        "orbit: remote auto-push on"
     );
 
-    let again = repo.ok_json(&["github", "auto-push", "enable", "--json"]);
+    let again = repo.ok_json(&["remote", "auto-push", "enable", "--json"]);
     assert_eq!(again["data"]["auto_push"]["enabled"], true);
     assert_eq!(again["data"]["auto_push"]["changed"], false);
 
-    let off = repo.ok_json(&["github", "auto-push", "disable", "--json"]);
+    let off = repo.ok_json(&["remote", "auto-push", "disable", "--json"]);
     assert_eq!(off["data"]["auto_push"]["enabled"], false);
     assert_eq!(off["data"]["auto_push"]["previous"], true);
     let config = fs::read_to_string(repo.board_path().join("config.toml")).unwrap();
@@ -2857,7 +2791,7 @@ fn github_status_reports_auto_push_state() {
     let (_fixture_dir, fixture) = auto_push_fixture();
     let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
 
-    let status = repo.ok_json_with_env(&["github", "status", "--json"], &env);
+    let status = repo.ok_json_with_env(&["remote", "status", "--json"], &env);
     assert_eq!(status["data"]["auto_push"]["enabled"], true);
     assert_eq!(
         status["data"]["auto_push"]["reserved_label"],
@@ -2929,4 +2863,312 @@ fn auto_push_is_skipped_when_the_local_commit_fails() {
     let fixture_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
     assert!(fixture_json["issues"].as_object().unwrap().is_empty());
+}
+
+// ===== Remote Issue catalog, import, and link lifecycle =====
+
+/// Fixture with a listable catalog (`catalog_issues`) for `acme/widget`:
+/// one open bug and one closed chore. `issues` stays empty so fetches go
+/// through the catalog fallback in the fixture client.
+fn write_catalog_fixture(dir: &TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("catalog-fixture.json");
+    fs::write(
+        &path,
+        r#"{
+  "authenticated": true,
+  "repositories": {
+    "acme/widget": { "owner_type": "Organization", "accessible": true }
+  },
+  "org_fields": {
+    "acme/Area": "AREA_ID",
+    "acme/Verification": "VERIFICATION_ID"
+  },
+  "issues": {},
+  "catalog_issues": {
+    "acme/widget": [
+      {
+        "number": 42,
+        "title": "Catalog bug",
+        "state": "open",
+        "labels": ["bug"],
+        "area": "cli",
+        "verification": "cargo test",
+        "updated_at": "2026-10-23T13:00:00Z"
+      },
+      {
+        "number": 43,
+        "title": "Catalog chore",
+        "state": "closed",
+        "labels": [],
+        "updated_at": "2026-10-23T13:00:00Z"
+      }
+    ]
+  }
+}"#,
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn remote_issues_refresh_populates_the_catalog_and_list_filters_it() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_catalog_fixture(&fixture_dir);
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+
+    // Before any refresh the catalog is empty.
+    let empty = repo.ok_json(&["remote", "issues", "list", "--json"]);
+    assert_eq!(empty["data"]["count"], 0);
+
+    let refreshed = repo.ok_json_with_env(&["remote", "issues", "refresh", "--json"], &env);
+    assert_eq!(refreshed["data"]["refreshed_count"], 1);
+    assert_eq!(refreshed["data"]["issue_count"], 2);
+    assert_eq!(refreshed["data"]["errors"].as_array().unwrap().len(), 0);
+
+    let all = repo.ok_json(&["remote", "issues", "list", "--json"]);
+    assert_eq!(all["data"]["count"], 2);
+    let issues = all["data"]["issues"].as_array().unwrap();
+    assert_eq!(issues[0]["id"], "42");
+    assert_eq!(issues[0]["tracker"], "github");
+    assert_eq!(issues[0]["project"], "acme/widget");
+    assert_eq!(issues[0]["linked"], false);
+
+    let open = repo.ok_json(&["remote", "issues", "list", "--state", "open", "--json"]);
+    assert_eq!(open["data"]["count"], 1);
+    assert_eq!(open["data"]["issues"][0]["id"], "42");
+
+    let labeled = repo.ok_json(&["remote", "issues", "list", "--label", "bug", "--json"]);
+    assert_eq!(labeled["data"]["count"], 1);
+
+    let text = repo.ok_json(&["remote", "issues", "list", "--text", "chore", "--json"]);
+    assert_eq!(text["data"]["count"], 1);
+    assert_eq!(text["data"]["issues"][0]["id"], "43");
+
+    let unlinked = repo.ok_json(&["remote", "issues", "list", "--unlinked", "--json"]);
+    assert_eq!(unlinked["data"]["count"], 2);
+
+    let shown = repo.ok_json_with_env(
+        &["remote", "issues", "show", "acme/widget#42", "--json"],
+        &env,
+    );
+    assert_eq!(shown["data"]["id"], "42");
+    assert_eq!(shown["data"]["title"], "Catalog bug");
+    assert_eq!(shown["data"]["linked"], false);
+}
+
+#[test]
+fn remote_import_previews_then_creates_and_links_tasks() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_catalog_fixture(&fixture_dir);
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    repo.ok_json_with_env(&["remote", "issues", "refresh", "--json"], &env);
+
+    // Preview writes nothing.
+    let preview = repo.ok_json_with_env(
+        &[
+            "remote",
+            "import",
+            "acme/widget#42",
+            "acme/widget#43",
+            "--json",
+        ],
+        &env,
+    );
+    assert_eq!(preview["data"]["apply"], false);
+    assert_eq!(preview["data"]["creates"].as_array().unwrap().len(), 2);
+    assert_eq!(preview["data"]["imported"].as_array().unwrap().len(), 0);
+
+    // Apply creates two Linked Tasks.
+    let applied = repo.ok_json_with_env(
+        &[
+            "remote",
+            "import",
+            "acme/widget#42",
+            "acme/widget#43",
+            "--apply",
+            "--json",
+        ],
+        &env,
+    );
+    let imported = applied["data"]["imported"].as_array().unwrap();
+    assert_eq!(imported.len(), 2);
+    let bug = imported
+        .iter()
+        .find(|entry| entry["identity"] == "github:acme/widget#42")
+        .expect("bug import entry");
+    let task_id = bug["task"].as_str().unwrap();
+    let shown = repo.ok_json(&["show", task_id, "--json"]);
+    assert_eq!(shown["data"]["title"], "Catalog bug");
+    assert_eq!(shown["data"]["remote"]["tracker"], "github");
+    assert_eq!(shown["data"]["remote"]["id"], "42");
+    assert_eq!(shown["data"]["remote"]["active"], true);
+
+    // The catalog now reports the issue as linked.
+    let listed = repo.ok_json(&["remote", "issues", "list", "--json"]);
+    let bug_row = listed["data"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["id"] == "42")
+        .unwrap();
+    assert_eq!(bug_row["linked"], true);
+
+    // Re-importing the same Issue is a duplicate, not a second Task.
+    let again = repo.ok_json_with_env(
+        &["remote", "import", "acme/widget#42", "--apply", "--json"],
+        &env,
+    );
+    assert_eq!(again["data"]["imported"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        again["data"]["skipped_duplicates"][0]["reason"],
+        "issue_already_linked"
+    );
+}
+
+#[test]
+fn remote_import_links_an_issue_to_an_existing_task() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_catalog_fixture(&fixture_dir);
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    repo.ok_json_with_env(&["remote", "issues", "refresh", "--json"], &env);
+    let id = repo.add("Existing local task", &[]);
+
+    let link_arg = format!("acme/widget#42={id}");
+    let preview = repo.ok_json_with_env(
+        &[
+            "remote",
+            "import",
+            "acme/widget#42",
+            "--link",
+            link_arg.as_str(),
+            "--json",
+        ],
+        &env,
+    );
+    assert_eq!(preview["data"]["links"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["data"]["links"][0]["task"], id);
+
+    let applied = repo.ok_json_with_env(
+        &[
+            "remote",
+            "import",
+            "acme/widget#42",
+            "--link",
+            &format!("acme/widget#42={id}"),
+            "--apply",
+            "--json",
+        ],
+        &env,
+    );
+    assert_eq!(applied["data"]["imported"][0]["action"], "linked");
+    assert_eq!(applied["data"]["imported"][0]["task"], id);
+    let shown = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(shown["data"]["remote"]["id"], "42");
+    // Linking preserves the Local Task's own title; sync reconciles later.
+    assert_eq!(shown["data"]["title"], "Existing local task");
+}
+
+#[test]
+fn remote_detach_and_reattach_toggle_the_link_without_touching_the_tracker() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+    let repo = TestRepo::new();
+    let id = adopt_fixture_task(&repo, &fixture, "Detach me");
+    repo.ok_json_with_env(&["remote", "issues", "refresh", "--json"], &env);
+    let catalog_has_issue = |repo: &TestRepo| {
+        repo.ok_json(&["remote", "issues", "list", "--json"])["data"]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["id"] == "42")
+    };
+    assert!(catalog_has_issue(&repo));
+
+    // Preview detaches nothing.
+    let preview = repo.ok_json_with_env(&["remote", "detach", "acme/widget#42", "--json"], &env);
+    assert_eq!(preview["data"]["apply"], false);
+    assert_eq!(preview["data"]["already_detached"], false);
+    assert_eq!(
+        repo.ok_json(&["show", &id, "--json"])["data"]["remote"]["active"],
+        true
+    );
+
+    let detached = repo.ok_json_with_env(
+        &["remote", "detach", "acme/widget#42", "--apply", "--json"],
+        &env,
+    );
+    assert_eq!(detached["data"]["detached"][0]["task"], id);
+    let shown = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(shown["data"]["remote"]["active"], false);
+    // Detached provenance stays visible but inactive.
+    assert_eq!(shown["data"]["remote"]["id"], "42");
+    // The Issue left the claimable catalog list (archived snapshot).
+    assert!(!catalog_has_issue(&repo));
+
+    // Reattach previews the sync plan, then applies the link flip.
+    let reattach_preview =
+        repo.ok_json_with_env(&["remote", "reattach", "acme/widget#42", "--json"], &env);
+    assert_eq!(reattach_preview["data"]["apply"], false);
+    assert!(reattach_preview["data"]["tasks"][0]["sync_plan"].is_object());
+
+    let reattached = repo.ok_json_with_env(
+        &["remote", "reattach", "acme/widget#42", "--apply", "--json"],
+        &env,
+    );
+    assert_eq!(reattached["data"]["reattached"][0]["task"], id);
+    assert_eq!(
+        repo.ok_json(&["show", &id, "--json"])["data"]["remote"]["active"],
+        true
+    );
+    // The archived catalog snapshot was restored.
+    assert!(catalog_has_issue(&repo));
+
+    // Detach also accepts a Task id target.
+    let by_task = repo.ok_json_with_env(&["remote", "detach", &id, "--apply", "--json"], &env);
+    assert_eq!(by_task["data"]["detached"][0]["task"], id);
+    assert_eq!(
+        repo.ok_json(&["show", &id, "--json"])["data"]["remote"]["active"],
+        false
+    );
+}
+
+#[test]
+fn remote_connect_list_and_disconnect_manage_projects() {
+    let repo = TestRepo::new();
+    repo.init();
+
+    let empty = repo.ok_json(&["remote", "list", "--json"]);
+    assert_eq!(empty["data"]["count"], 0);
+
+    let connected = repo.ok_json(&["remote", "connect", "acme/widget", "--json"]);
+    assert_eq!(connected["data"]["status"], "connected");
+    assert_eq!(connected["data"]["tracker"], "github");
+    assert_eq!(connected["data"]["project"], "acme/widget");
+
+    let listed = repo.ok_json(&["remote", "list", "--json"]);
+    assert_eq!(listed["data"]["count"], 1);
+    assert_eq!(listed["data"]["projects"][0]["project"], "acme/widget");
+    assert_eq!(listed["data"]["projects"][0]["tracker"], "github");
+
+    // Disconnecting an unknown project is an error, not a silent no-op.
+    let (status, missing) = repo.json(&["remote", "disconnect", "acme/other", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(missing["error"]["code"], "REMOTE_PROJECT_NOT_LINKED");
+
+    let disconnected = repo.ok_json(&["remote", "disconnect", "acme/widget", "--json"]);
+    assert_eq!(disconnected["data"]["connected"], false);
+    assert_eq!(
+        repo.ok_json(&["remote", "list", "--json"])["data"]["count"],
+        0
+    );
 }

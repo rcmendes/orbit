@@ -156,9 +156,9 @@ pub enum Command {
     #[command(long_about = help::BOARD_LONG, after_long_help = help::BOARD_EXAMPLES)]
     Board(BoardArgs),
 
-    /// Link GitHub repositories and synchronize Issues with Tasks.
-    #[command(name = "github", long_about = help::GITHUB_LONG, after_long_help = help::GITHUB_EXAMPLES)]
-    GitHub(GitHubArgs),
+    /// Connect Remote Trackers and synchronize Remote Issues with Tasks.
+    #[command(name = "remote", long_about = help::REMOTE_LONG, after_long_help = help::REMOTE_EXAMPLES)]
+    Remote(RemoteArgs),
 
     /// Review and apply agent triage proposals for Tasks.
     #[command(long_about = help::TRIAGE_LONG, after_long_help = help::TRIAGE_EXAMPLES)]
@@ -931,54 +931,62 @@ pub struct TriageApplyArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubArgs {
+pub struct RemoteArgs {
     #[command(subcommand)]
-    pub command: GitHubCommand,
+    pub command: RemoteCommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum GitHubCommand {
-    /// Report GitHub integration health without changing the Board or GitHub.
-    #[command(after_long_help = help::GITHUB_STATUS_EXAMPLES)]
+pub enum RemoteCommand {
+    /// Report Remote Tracker health without changing the Board or tracker.
+    #[command(after_long_help = help::REMOTE_STATUS_EXAMPLES)]
     Status,
-    /// Detect the origin repository and configure GitHub for this Board.
-    #[command(after_long_help = help::GITHUB_CONNECT_EXAMPLES)]
-    Connect,
-    /// Validate org Issue Fields, optionally create missing fields, and persist their ids.
-    #[command(after_long_help = help::GITHUB_SETUP_EXAMPLES)]
-    Setup(GitHubSetupArgs),
-    /// Manage explicitly linked GitHub repositories.
-    #[command(subcommand, after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
-    Repo(GitHubRepoCommand),
-    /// Adopt an existing GitHub Issue for a Task.
-    #[command(after_long_help = help::GITHUB_ADOPT_EXAMPLES)]
-    Adopt(GitHubAdoptArgs),
-    /// Preview or create GitHub Issues for selected Local Tasks.
-    #[command(after_long_help = help::GITHUB_CREATE_EXAMPLES)]
-    Create(GitHubCreateArgs),
-    /// Preview or apply bidirectional sync for linked Tasks.
-    #[command(after_long_help = help::GITHUB_SYNC_CMD_EXAMPLES)]
-    Sync(GitHubSyncArgs),
-    /// Enable or disable automatic push of Task changes to linked Issues.
-    #[command(after_long_help = help::GITHUB_AUTO_PUSH_EXAMPLES)]
-    AutoPush(GitHubAutoPushArgs),
-}
-
-#[derive(Debug, Subcommand)]
-pub enum GitHubRepoCommand {
-    /// Link a repository to this Board.
-    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
-    Link(GitHubRepoLinkArgs),
-    /// Remove a linked repository.
-    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
-    Unlink(GitHubRepoLinkArgs),
-    /// List linked repositories.
-    #[command(after_long_help = help::GITHUB_REPO_LINK_EXAMPLES)]
+    /// Detect the origin Remote Project and connect its Remote Tracker, or
+    /// configure the connected tracker's mapped fields.
+    #[command(after_long_help = help::REMOTE_CONNECT_EXAMPLES)]
+    Connect(RemoteConnectArgs),
+    /// Disconnect a Remote Project from this Board.
+    #[command(after_long_help = help::REMOTE_DISCONNECT_EXAMPLES)]
+    Disconnect(RemoteProjectArgs),
+    /// List the Remote Projects connected to this Board.
+    #[command(after_long_help = help::REMOTE_LIST_EXAMPLES)]
     List,
+    /// Browse and refresh the Remote Issue catalog.
+    #[command(after_long_help = help::REMOTE_ISSUES_EXAMPLES)]
+    Issues(RemoteIssuesArgs),
+    /// Preview selected Remote Issues or explicitly apply their import.
+    #[command(after_long_help = help::REMOTE_IMPORT_EXAMPLES)]
+    Import(RemoteImportArgs),
+    /// Link a Local Task to a Remote Issue.
+    #[command(after_long_help = help::REMOTE_LINK_EXAMPLES)]
+    Link(RemoteLinkArgs),
+    /// Preview or create Remote Issues for selected Local Tasks.
+    #[command(after_long_help = help::REMOTE_CREATE_EXAMPLES)]
+    Create(RemoteCreateArgs),
+    /// Preview or detach a Linked Task from its Remote Issue.
+    #[command(after_long_help = help::REMOTE_DETACH_EXAMPLES)]
+    Detach(RemoteMutationArgs),
+    /// Preview or reattach a Local Task by its inactive Remote provenance.
+    #[command(after_long_help = help::REMOTE_REATTACH_EXAMPLES)]
+    Reattach(RemoteMutationArgs),
+    /// Preview or apply synchronization for Linked Tasks.
+    #[command(after_long_help = help::REMOTE_SYNC_EXAMPLES)]
+    Sync(RemoteSyncArgs),
+    /// Enable or disable automatic push of Task changes to Remote Issues.
+    #[command(after_long_help = help::REMOTE_AUTO_PUSH_EXAMPLES)]
+    AutoPush(RemoteAutoPushArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubSetupArgs {
+pub struct RemoteConnectArgs {
+    /// Remote Project to connect: `TRACKER:PROJECT` or `PROJECT` when the
+    /// tracker is unambiguous. Omit to detect the `origin` remote instead.
+    #[arg(value_name = "REMOTE_PROJECT")]
+    pub project: Option<String>,
+    /// Configure the connected Remote Tracker's mapped fields instead of
+    /// detecting `origin`; resolves and stores field ids.
+    #[arg(long)]
+    pub fields: bool,
     /// Validate configuration without writing field ids.
     #[arg(long, conflicts_with = "create_fields")]
     pub validate_only: bool,
@@ -988,28 +996,95 @@ pub struct GitHubSetupArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubRepoLinkArgs {
-    #[arg(value_name = "OWNER/REPO")]
-    pub repository: String,
+pub struct RemoteProjectArgs {
+    /// Remote Project identity: `TRACKER:PROJECT` or `PROJECT` when the
+    /// tracker is unambiguous (for GitHub, `owner/repo`).
+    #[arg(value_name = "REMOTE_PROJECT")]
+    pub project: String,
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubAdoptArgs {
+pub struct RemoteIssuesArgs {
+    #[command(subcommand)]
+    pub command: Option<RemoteIssuesCommand>,
+    /// Filters for the default listing; `issues list` accepts the same
+    /// flags directly.
+    #[command(flatten)]
+    pub filters: RemoteIssueFilters,
+}
+
+#[derive(Debug, Default, Args)]
+pub struct RemoteIssueFilters {
+    /// Filter by Remote Tracker.
+    #[arg(long, value_name = "TRACKER")]
+    pub tracker: Option<String>,
+    /// Filter by Remote Project.
+    #[arg(long, value_name = "PROJECT")]
+    pub project: Option<String>,
+    /// Filter by Remote Issue state.
+    #[arg(long, value_parser = ["open", "closed"])]
+    pub state: Option<String>,
+    /// Require each label. Repeat to require more than one label.
+    #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
+    pub label: Vec<String>,
+    /// Case-insensitive text search in issue titles.
+    #[arg(long, value_name = "TEXT")]
+    pub text: Option<String>,
+    /// Show only Issues linked to Orbit Tasks.
+    #[arg(long, conflicts_with = "unlinked")]
+    pub linked: bool,
+    /// Show only Issues without an Orbit Task link.
+    #[arg(long)]
+    pub unlinked: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RemoteIssuesCommand {
+    /// Refresh every connected Remote Project's catalog snapshot.
+    #[command(after_long_help = help::REMOTE_ISSUES_REFRESH_EXAMPLES)]
+    Refresh,
+    /// List cached Remote Issues without fetching their bodies.
+    #[command(after_long_help = help::REMOTE_ISSUES_LIST_EXAMPLES)]
+    List(RemoteIssueFilters),
+    /// Show one Remote Issue, fetched live from its Remote Tracker.
+    #[command(after_long_help = help::REMOTE_ISSUES_SHOW_EXAMPLES)]
+    Show(RemoteIssueRefArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteIssueRefArgs {
+    /// Remote Issue identity: `TRACKER:PROJECT#ID`, `PROJECT#ID`, or a
+    /// Remote Tracker Issue URL (for GitHub, `OWNER/REPO#NUMBER` or
+    /// `https://github.com/OWNER/REPO/issues/NUMBER`).
+    #[arg(value_name = "REMOTE_ISSUE")]
+    pub issue: String,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteImportArgs {
+    /// Explicit Remote Issue identities to review; repeat for a batch.
+    #[arg(value_name = "REMOTE_ISSUE", required = true, num_args = 1..)]
+    pub issues: Vec<String>,
+    /// Link this selected Issue to a specific Local Task. Repeat as IDENTITY=TASK.
+    #[arg(long, value_name = "REMOTE_ISSUE=TASK", action = clap::ArgAction::Append)]
+    pub link: Vec<String>,
+    /// Apply the reviewed selection to the Orbit Board. The tracker is never written.
+    #[arg(long)]
+    pub apply: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteLinkArgs {
     #[arg(value_name = "TASK")]
     pub task: String,
-    /// Standard GitHub Issue URL, for example https://github.com/acme/widget/issues/42.
-    #[arg(value_name = "GITHUB_ISSUE_URL")]
-    pub issue_url: Option<String>,
-    /// Repository for the legacy --repo/--number form, or to confirm the URL.
-    #[arg(long, value_name = "OWNER/REPO")]
-    pub repo: Option<String>,
-    /// Issue number for the legacy --repo/--number form, or to confirm the URL.
-    #[arg(long)]
-    pub number: Option<u64>,
+    /// Remote Issue identity or URL: `TRACKER:PROJECT#ID`, `PROJECT#ID`,
+    /// or a Remote Tracker Issue URL.
+    #[arg(value_name = "REMOTE_ISSUE")]
+    pub issue: String,
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubCreateArgs {
+pub struct RemoteCreateArgs {
     #[arg(
         value_name = "TASK",
         required = true,
@@ -1019,10 +1094,10 @@ pub struct GitHubCreateArgs {
     pub tasks: Vec<String>,
     #[arg(
         long,
-        value_name = "OWNER/REPO",
-        help = "Choose an included repository (inferred only when one is available)"
+        value_name = "REMOTE_PROJECT",
+        help = "Choose a connected Remote Project (inferred only when one is available)"
     )]
-    pub repo: Option<String>,
+    pub project: Option<String>,
     /// Create Issues and link Tasks. Without this flag, show a read-only preview.
     #[arg(long)]
     pub apply: bool,
@@ -1032,7 +1107,40 @@ pub struct GitHubCreateArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct GitHubAutoPushArgs {
+pub struct RemoteMutationArgs {
+    /// Remote Issue identity (`TRACKER:PROJECT#ID`, `PROJECT#ID`) or a Task
+    /// id whose Remote link should be detached or reattached.
+    #[arg(value_name = "REMOTE_ISSUE|TASK")]
+    pub target: String,
+    /// Apply the reviewed operation. Without this flag, nothing is written.
+    #[arg(long)]
+    pub apply: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum RemoteSyncDirection {
+    #[default]
+    Both,
+    Pull,
+    Push,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteSyncArgs {
+    #[arg(value_name = "TASK")]
+    pub task: Option<String>,
+    #[arg(long, value_enum, default_value_t = RemoteSyncDirection::Both)]
+    pub direction: RemoteSyncDirection,
+    /// Apply the planned sync. Without this flag the command is a dry run.
+    #[arg(long)]
+    pub apply: bool,
+    /// Resolve a field conflict as `FIELD=orbit` or `FIELD=remote`. Repeat as needed.
+    #[arg(long = "resolve", value_name = "FIELD=orbit|remote", action = clap::ArgAction::Append)]
+    pub resolutions: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteAutoPushArgs {
     /// Turn automatic push on or off.
     #[arg(value_name = "STATE")]
     pub state: AutoPushState,
@@ -1044,28 +1152,6 @@ pub enum AutoPushState {
     On,
     #[value(alias = "disable", alias = "false")]
     Off,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum, Default)]
-pub enum GitHubSyncDirection {
-    #[default]
-    Both,
-    Pull,
-    Push,
-}
-
-#[derive(Debug, Args)]
-pub struct GitHubSyncArgs {
-    #[arg(value_name = "TASK")]
-    pub task: Option<String>,
-    #[arg(long, value_enum, default_value_t = GitHubSyncDirection::Both)]
-    pub direction: GitHubSyncDirection,
-    /// Apply the planned sync. Without this flag the command is a dry run.
-    #[arg(long)]
-    pub apply: bool,
-    /// Resolve a field conflict as `FIELD=orbit` or `FIELD=github`. Repeat as needed.
-    #[arg(long = "resolve", value_name = "FIELD=orbit|github", action = clap::ArgAction::Append)]
-    pub resolutions: Vec<String>,
 }
 
 #[derive(Debug, Args)]

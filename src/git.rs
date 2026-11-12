@@ -141,14 +141,14 @@ pub fn origin_url() -> Result<String> {
     let output = run_git(None, &["remote", "get-url", "origin"], None).map_err(|_| {
         OrbitError::new(
             crate::error::code::GITHUB_NOT_CONFIGURED,
-            "could not read the `origin` Git remote; add a GitHub origin and rerun `orbit github connect`",
+            "could not read the `origin` Git remote; add a GitHub origin and rerun `orbit remote connect`",
         )
     })?;
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if url.is_empty() {
         return Err(OrbitError::new(
             crate::error::code::GITHUB_NOT_CONFIGURED,
-            "the `origin` Git remote is empty; add a GitHub origin and rerun `orbit github connect`",
+            "the `origin` Git remote is empty; add a GitHub origin and rerun `orbit remote connect`",
         ));
     }
     Ok(url)

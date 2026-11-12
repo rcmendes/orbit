@@ -12,22 +12,29 @@ fn configured_github_board_loads_with_the_builtin_provider() {
     std::fs::write(config, contents).unwrap();
 
     // GitHub is a built-in Remote Tracker adapter (ADR 0018): a configured
-    // Board loads normally and `orbit github` commands are always available.
+    // Board loads normally and `orbit remote` commands are always available.
     let (status, output) = repo.json(&["list", "--json"]);
     assert_eq!(status, 0, "{output}");
     assert_eq!(output["ok"], true);
 
-    let status_output = repo.json(&["github", "status", "--json"]);
+    let status_output = repo.json(&["remote", "status", "--json"]);
     assert_eq!(status_output.0, 0, "{}", status_output.1);
 }
 
 #[test]
-fn binary_help_exposes_github_and_triage_commands() {
+fn binary_help_exposes_remote_and_triage_commands() {
     let output = TestRepo::new().orbit(&["--help"]);
     assert!(output.status.success());
     let help = String::from_utf8_lossy(&output.stdout);
-    assert!(help.contains("github"), "{help}");
+    assert!(help.contains("remote"), "{help}");
     assert!(help.contains("triage"), "{help}");
+    assert!(!help.contains("github"), "{help}");
+
+    // `orbit github` is gone for good: no alias, no compat flag.
+    let rejected = TestRepo::new().orbit(&["github", "status"]);
+    assert!(!rejected.status.success());
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(stderr.contains("unrecognized subcommand"), "{stderr}");
 }
 
 #[test]

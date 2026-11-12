@@ -42,19 +42,10 @@ fn write_fixture(dir: &TempDir) -> std::path::PathBuf {
 
 fn adopt_linked(repo: &TestRepo, fixture: &std::path::Path) -> String {
     write_github_config(repo);
-    repo.ok_json(&["github", "repo", "link", "acme/widget", "--json"]);
+    repo.ok_json(&["remote", "connect", "acme/widget", "--json"]);
     let id = repo.add("Triage me", &["--label", "needs-triage"]);
     repo.ok_json_with_env(
-        &[
-            "github",
-            "adopt",
-            id.as_str(),
-            "--repo",
-            "acme/widget",
-            "--number",
-            "7",
-            "--json",
-        ],
+        &["remote", "link", id.as_str(), "acme/widget#7", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     id
@@ -70,19 +61,10 @@ fn adopt_basic_linked(repo: &TestRepo, fixture: &std::path::Path) -> String {
         .replace("acme/widget#7", "personal/widget#7")
         .replace("acme/widget", "personal/widget");
     fs::write(fixture, fixture_content).unwrap();
-    repo.ok_json(&["github", "repo", "link", "personal/widget", "--json"]);
+    repo.ok_json(&["remote", "connect", "personal/widget", "--json"]);
     let id = repo.add("Triage me", &["--label", "needs-triage"]);
     repo.ok_json_with_env(
-        &[
-            "github",
-            "adopt",
-            id.as_str(),
-            "--repo",
-            "personal/widget",
-            "--number",
-            "7",
-            "--json",
-        ],
+        &["remote", "link", id.as_str(), "personal/widget#7", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     id
@@ -183,7 +165,7 @@ fn triage_linked_task_reports_remote_link_and_publish_command() {
         "--json",
     ]);
     let note = review["data"]["sync_note"].as_str().unwrap();
-    assert!(note.contains("orbit github sync"), "{note}");
+    assert!(note.contains("orbit remote sync"), "{note}");
     assert!(note.contains("--direction push --apply"), "{note}");
 
     let applied = repo.ok_json(&[
@@ -198,7 +180,7 @@ fn triage_linked_task_reports_remote_link_and_publish_command() {
     assert_eq!(applied["data"]["applied"], true);
     assert_eq!(applied["data"]["sync_required"], true);
     let command = applied["data"]["sync_command"].as_str().unwrap();
-    assert!(command.contains("orbit github sync"), "{command}");
+    assert!(command.contains("orbit remote sync"), "{command}");
     assert!(command.contains(&id), "{command}");
     assert!(command.contains("--direction push --apply"), "{command}");
 }

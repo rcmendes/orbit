@@ -497,9 +497,9 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | --- | --- | --- |
 | Bootstrap | `init`, `link`, `unlink`, `setup`, `repo add` | Create or select the Board; optionally wire harness files and MCP entries, or register a member Repository on a multi-Repository Board. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `github status`, `github create`/`sync` preview, `repo list` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. Sync and create previews do not write; only `--apply` changes Board state or GitHub. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `remote status`, `remote create`/`sync` preview, `repo list` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. Sync and create previews do not write; only `--apply` changes Board state or GitHub. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
-| Maintenance | `doctor`, `sync`, `github`, `repo`, `slug`, `mcp` | Check Board and configured Remote Tracker health, commit heartbeat-only changes, explicitly create or synchronize Remote Issues or push mapped changes when auto-push is enabled, manage member Repositories and the rebuildable repository catalog, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
+| Maintenance | `doctor`, `sync`, `remote`, `repo`, `slug`, `mcp` | Check Board and configured Remote Tracker health, commit heartbeat-only changes, explicitly create or synchronize Remote Issues or push mapped changes when auto-push is enabled, manage member Repositories and the rebuildable repository catalog, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Board layouts and initialization
 
@@ -514,9 +514,9 @@ the single owner shared by every discovered origin and saves it to the Board.
 The resulting snapshot is outside the
 Board Git repository. `workspace status` reads that snapshot without network or
 filesystem discovery. Stale and removed entries remain in the cache.
-`workspace issues refresh` reconciles that inventory and stores paginated Issue summaries separately at
+`orbit remote issues refresh` reconciles that inventory and stores paginated Issue summaries separately at
 `.orbit/cache/issues.json`; per-repository errors retain the last successful
-snapshot. `workspace issues list` reads cached summaries, while `inspect` fetches
+snapshot. `orbit remote issues list` reads cached summaries, while `show` fetches
 the live body and comments. `import` explicitly previews selected catalog
 identities, then optionally creates Linked Tasks or links Local Tasks without
 overwriting Orbit fields. Duplicate checks use stable identity and import does

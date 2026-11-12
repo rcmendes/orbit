@@ -335,7 +335,7 @@ fn matches_repo(task: &Task, repo: Option<&str>) -> bool {
                 .front
                 .labels
                 .iter()
-                .any(|label| label == &format!("repo:{repo}"))
+                .any(|label| label.eq_ignore_ascii_case(&format!("repo:{repo}")))
     })
 }
 

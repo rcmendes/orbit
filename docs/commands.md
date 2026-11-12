@@ -553,7 +553,8 @@ exclusive. The `ISSUE` column and both flags appear in human output and
 are hidden but still accepted. `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
 any listed shape. `--label` is repeatable and every label must match;
 `--exclude-label` is repeatable and hides a task carrying any of the named labels.
-`--repo NAME` matches the Task's `repo` field or its legacy `repo:NAME` label;
+`--repo NAME` matches the Task's exact `repo` field or its legacy `repo:NAME` label
+(case-insensitive, as with label normalization);
 explicit `--label` filters remain additional requirements. This applies to
 `list`, `ready` (including `--claim`), and `prime`. Prime reports the Repository
 filter separately as `repo` in JSON and `repository:` in human output; its

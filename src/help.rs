@@ -45,6 +45,17 @@ Change a Board's Task-ID prefix:
 
 pub const BOARD_MIGRATE_LONG: &str = "Convert a pre-ADR-0019 Board into a standalone Board folder. Previews by default; --apply converts legacy layouts and worktree-mode Boards, rewrites github: links to remote:, [github] to remote project entries, repo:* labels to the repo field, and seeds board.areas, in one commit.";
 
+pub const BOARD_MIGRATE_EXAMPLES: &str = "\
+Examples:
+  # Preview the migration without writing anything
+  orbit migrate
+
+  # Convert the Board in place, preserving Task history in one commit
+  orbit migrate --apply
+
+  # Migrate a specific Board directory
+  orbit --dir ~/src/acme/.orbit migrate --apply";
+
 pub const INIT_LONG: &str = "\
 Creates or reuses a Board. In a Git working tree, the default Board directory is
 ./.orbit, a worktree on the orbit branch. Outside a Git working tree, the current

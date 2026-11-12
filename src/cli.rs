@@ -56,7 +56,7 @@ pub enum Command {
     /// (or a visible folder anchored by `.orbit`), rewriting `github:` links
     /// to `remote:`, `[github]` to remote project entries, `repo:*` labels to
     /// the `repo` field, and seeding `board.areas` — all in one commit.
-    #[command(long_about = help::BOARD_MIGRATE_LONG)]
+    #[command(long_about = help::BOARD_MIGRATE_LONG, after_long_help = help::BOARD_MIGRATE_EXAMPLES)]
     Migrate(BoardMigrateArgs),
 
     /// Create a task.

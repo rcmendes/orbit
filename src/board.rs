@@ -196,6 +196,11 @@ impl Config {
         if self.board.branch.trim().is_empty() {
             return Err(OrbitError::config("board.branch must be non-empty"));
         }
+        if let Some(host) = &self.board.host
+            && host.trim().is_empty()
+        {
+            return Err(OrbitError::config("board.host must be non-empty"));
+        }
         self.github.validate()?;
         self.workspace.validate()?;
         Ok(())
@@ -262,6 +267,39 @@ pub struct BoardConfig {
     pub auto_commit: bool,
     #[serde(default = "default_lock_timeout")]
     pub lock_timeout_ms: u64,
+    /// The Board host: a member Repository name/path or another git URL whose
+    /// remote stores this Board's `orbit` branch (ADR 0019). `None` keeps the
+    /// history local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// When the host is synchronized: `manual` only on `orbit board sync`,
+    /// `auto` also at `orbit prime` and after commits.
+    #[serde(default, skip_serializing_if = "HostSyncMode::is_manual")]
+    pub host_sync: HostSyncMode,
+}
+
+/// Opt-in frequency for pushing the Board branch to its host.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostSyncMode {
+    /// Only `orbit board sync` talks to the host.
+    #[default]
+    Manual,
+    /// `orbit prime` and every committed mutation also sync the host.
+    Auto,
+}
+
+impl HostSyncMode {
+    fn is_manual(&self) -> bool {
+        *self == Self::Manual
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Auto => "auto",
+        }
+    }
 }
 
 impl Default for BoardConfig {
@@ -275,6 +313,8 @@ impl Default for BoardConfig {
             non_ready_labels: default_non_ready_labels(),
             auto_commit: true,
             lock_timeout_ms: default_lock_timeout(),
+            host: None,
+            host_sync: HostSyncMode::Manual,
         }
     }
 }

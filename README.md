@@ -160,6 +160,8 @@ orbit init --global           # create the global Board at ~/.orbit
 | `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents without a prompt: `none`, `all`, `auto`, or a comma-separated client list. | `orbit init --agents all` |
 | `--print` | Preview the Board, exclusion entry, and generated agent files without writing or prompting. | `orbit init DIR --print` |
+| `--visible[=NAME]` | Use a visible Board folder (default name `board`) instead of the hidden `.orbit/board` layout when the target is a repository or Workspace root. | `orbit init --visible=tracker` |
+| `--host[=REPO\|URL]` | Set the Board host — a member Repository name/path or git URL whose remote stores the Board's `orbit` branch. Bare `--host` prompts in a terminal. | `orbit init --host=../board-host` |
 
 **Choose by scenario**
 

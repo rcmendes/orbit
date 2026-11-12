@@ -71,7 +71,11 @@ including `.`, means \"initialize here\" and uses that checkout's ./.orbit/board
 (or the main checkout's from a linked worktree). Any other directory inside a
 repository becomes a visible Board folder anchored by the repository's
 .orbit/board pointer file; outside Git it is anchored by a sibling .orbit
-folder. A non-empty Board directory is refused with CONFIG_ERROR.
+folder. Pass --visible[=NAME] to choose a visible folder (default name
+`board`) instead of the hidden layout, and --host[=REPO|URL] to set the
+Board's host — a member Repository name/path or git URL whose remote stores
+the Board's `orbit` branch; an existing host branch with a different Slug is
+refused. A non-empty Board directory is refused with CONFIG_ERROR.
 
 Inside a Workspace, child repositories find the Workspace Board across their Git
 boundary and need no `orbit link`. Repositories outside it can link the Workspace
@@ -1212,3 +1216,51 @@ pub const TRIAGE_APPLY_EXAMPLES: &str = "\
 Examples:
   orbit triage apply orb-a7b2c9 --proposal-file proposal.json --approve --json
   orbit github sync orb-a7b2c9 --direction push --apply";
+
+pub const BOARD_LONG: &str = "\
+Manage the Board's host repository (ADR 0019). A Board has no host by default —
+its history stays on this machine — or exactly one host whose remote stores the
+Board's `orbit` branch. `board host` shows, sets, or clears the host;
+`board sync` fetches, merges Orbit-aware, and pushes. Set `board.host_sync =
+auto` in config.toml (or via init/setup later) to also sync at `orbit prime`
+and after every committed mutation; automatic failures are warnings, never
+errors.";
+
+pub const BOARD_EXAMPLES: &str = "\
+Examples:
+  orbit board host
+  orbit board host ./host-repo
+  orbit board host git@github.com:org/board-host.git
+  orbit board host --none
+  orbit board sync
+  orbit board sync --resolve orb-a1b2c3.title=host --json";
+
+pub const BOARD_HOST_LONG: &str = "\
+Show, set, or clear the Board host. The host may be a member Repository name,
+a local repository path, or a git URL; the Board's `orbit` branch is pushed
+there. When the host already serves an `orbit` branch it must hold a Board with
+the same Slug — one Board per host. `--none` clears the local configuration and
+removes the local `host` remote; it never deletes the remote `orbit` branch.";
+
+pub const BOARD_HOST_EXAMPLES: &str = "\
+Examples:
+  orbit board host
+  orbit board host ../board-host
+  orbit board host https://github.com/org/board-host.git
+  orbit board host --none";
+
+pub const BOARD_SYNC_LONG: &str = "\
+Synchronize the Board with its host: commit pending changes, fetch the host's
+`orbit` branch, merge, and push — never rebase, never force-push. Different
+Tasks merge, different fields of the same Task merge, and Comments union.
+Claims resolve by the earlier `claimed_at`; the loser gets a comment telling
+them their claim lost. A same-field conflict stops the sync with
+BOARD_SYNC_CONFLICT; rerun with `--resolve FIELD=local|host` (repeatable) to
+pick a side per field. `config` resolves config.toml and `<task-id>` resolves a
+whole Task file.";
+
+pub const BOARD_SYNC_EXAMPLES: &str = "\
+Examples:
+  orbit board sync
+  orbit board sync --resolve orb-a1b2c3.title=local --resolve config=host
+  orbit board sync --json";

@@ -28,7 +28,7 @@ contract.
 | `--json` | Print exactly one JSON object on stdout, including errors. |
 | `--dir <PATH>` | Use a Workspace root or a specific Board directory for this command. |
 | `ORBIT_DIR` | Environment equivalent of `--dir`. |
-| `--no-sync` | Skip GitHub auto-push for this command. `ORBIT_NO_AUTO_SYNC=1` does the same for a process. Explicit `orbit github sync` is unaffected. |
+| `--no-sync` | Skip GitHub auto-push and Board host auto-sync for this command. `ORBIT_NO_AUTO_SYNC=1` (or `ORBIT_NO_HOST_SYNC=1`) does the same for a process. Explicit `orbit github sync` and `orbit board sync` are unaffected. |
 
 Exit codes are `0` for success, `1` for a domain failure (for example
 `DEPENDENCY_BLOCKED` or a failing `doctor`), and `2` for a usage error.
@@ -65,6 +65,7 @@ outside Git and a repository-local Board inside Git. See
 | Collect or archive the board | `orbit export` |
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
 | Recover or maintain the board | `orbit doctor`, `orbit sync` |
+| Host and synchronize the Board | `orbit board host`, `orbit board sync` |
 | Link GitHub Issues (optional) | `orbit github` — see [github-sync.md](./github-sync.md) |
 | Triage linked Tasks | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
 
@@ -101,6 +102,9 @@ orbit init --portable-mcp        # MCP command `orbit`; editor PATH must find it
 orbit init ~/src/acme            # Workspace Board at ~/src/acme/.orbit/board
 orbit init --global              # Board at ~/.orbit/board
 orbit init --slug teramigo       # Task IDs become teramigo-…
+orbit init --visible             # visible Board folder ./board instead of ./.orbit/board
+orbit init --visible=tracker     # visible Board folder ./tracker
+orbit init --host=../board-host  # also set the Board host (repo path or git URL)
 ```
 
 **Core options**
@@ -113,6 +117,8 @@ orbit init --slug teramigo       # Task IDs become teramigo-…
 | `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents non-interactively: `none`, `all`, `auto`, or a client list. | `orbit init --agents all` |
 | `--print` | Preview the Board, exclusion entries, and generated agent files without writing or prompting. | `orbit init DIR --print` |
+| `--visible[=NAME]` | Use a visible Board folder instead of the hidden `.orbit/board` layout. Bare `--visible` names it `board`; `=NAME` picks the name. Applies when the target resolves to a repository or Workspace root — an explicit directory is already visible. Conflicts with `--global`. | `orbit init --visible=tracker` |
+| `--host[=REPO\|URL]` | Set the Board host: a member Repository name/path or git URL whose remote stores the Board's `orbit` branch. Bare `--host` prompts in a terminal; `=REPO\|URL` sets it without prompting. An existing host branch with a different Slug is refused (`BOARD_HOST_CONFLICT`); a matching one is joined. | `orbit init --host=../board-host` |
 
 **Choose by scenario**
 
@@ -121,6 +127,7 @@ orbit init --slug teramigo       # Task IDs become teramigo-…
 - **CI or scripted setup:** preview with `--print`, then use `--agents none` and an explicit `--slug` when the machine should not receive editor files and IDs must be stable.
 - **Global fallback:** use `--global` only for an intentional machine-wide Board. Project-local Boards still win in discovery.
 - **Joining an existing Board:** use `orbit link DIR`; `init` is for creating or reusing the target `DIR`, not for joining another Board.
+- **Sharing a Board across machines:** pass `--host` (or run `orbit board host` later) so the Board's `orbit` branch lives on one host repository; `orbit board sync` merges and pushes, and `board.host_sync = "auto"` syncs at `orbit prime` and after commits.
 - **Migrating a pre-ADR-0019 Board:** use `orbit migrate`; `init` refuses legacy layouts with `BOARD_NOT_MIGRATED`. To consolidate separate Workspace and child-repository Boards, use `orbit workspace migrate`, which creates the Workspace Board after validation when needed.
 
 **Supporting options**
@@ -1042,6 +1049,40 @@ changes.
 
 ```bash
 orbit sync
+```
+
+### `orbit board` — host and synchronize the Board
+
+A Board has no host by default — its history stays on this machine — or
+exactly one host whose remote stores the Board's `orbit` branch (ADR 0019).
+The host may be a member Repository name, a local repository path, or a git
+URL. One Board per host: when the host already serves an `orbit` branch it
+must hold a Board with the same Slug.
+
+`orbit board host` shows the current host with no argument, sets it with a
+repository path or URL, and clears it with `--none` — clearing never deletes
+the remote `orbit` branch. `orbit board sync` commits pending changes,
+fetches the host, merges Orbit-aware, and pushes: different Tasks merge,
+different fields of the same Task merge, Comments union, the earlier Claim
+wins and the loser is told on the Task, and history is merged — never
+rebased or force-pushed. A same-field conflict stops the sync with
+`BOARD_SYNC_CONFLICT`; rerun with repeatable `--resolve FIELD=local|host`
+to pick a side (`config` resolves `config.toml`, `<task-id>` a whole Task
+file, `<task-id>.comments` a comment sidecar).
+
+Set `board.host_sync = "auto"` in the Board's `config.toml` to also sync at
+`orbit prime` and after every committed mutation; automatic failures are
+warnings, never errors, and `--no-sync` suppresses them.
+
+**Good fit:** keeping one Board's history on a shared repository so several
+machines or clones work from the same Tasks.
+
+```bash
+orbit board host                     # show the current host
+orbit board host ../board-host       # set or change the host
+orbit board host --none              # clear it; remote branch untouched
+orbit board sync                     # fetch, merge, push
+orbit board sync --resolve orb-a1b2c3.title=host --json
 ```
 
 ### `orbit github` — GitHub Issue provider

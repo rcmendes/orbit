@@ -2626,6 +2626,8 @@ mod tests {
             mcp_bin: None,
             portable_mcp: false,
             slug: None,
+            visible: None,
+            host: None,
             print,
         }
     }

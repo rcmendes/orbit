@@ -1,4 +1,4 @@
-use std::io::IsTerminal;
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
@@ -56,11 +56,13 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     // ADR 0019: the Board folder is a standalone repository. Hidden Boards
     // live at `<anchor>/.orbit/board`; a visible folder is anchored by the
     // `.orbit/board` pointer file instead.
-    let (orbit_dir, mut board_root, mut visible_board) = init_layout(
+    let visible_choice = VisibleChoice::from_args(&args.visible)?;
+    let (mut orbit_dir, mut board_root, mut visible_board) = init_layout(
         &requested_root,
         workspace_root,
         explicit_global,
         global_dir.as_deref(),
+        &visible_choice,
     )?;
     // The Orbit folder may already anchor a Board: a hidden `.orbit/board`
     // directory or a `board` pointer file naming a visible folder. Reuse
@@ -73,6 +75,66 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         || global_dir
             .as_ref()
             .is_some_and(|global| global.join("board") == board_root);
+
+    // Interactive runs ask for the Board layout (when the default would be
+    // hidden) and for a host. The stdin lock is scoped so `selected_agents`
+    // can take its own lock afterwards.
+    let interactive = std::io::stdin().is_terminal();
+    let mut prompted_host = None;
+    if interactive && !args.print && !Board::is_board(&board_root) {
+        let stdin = std::io::stdin();
+        let mut input = stdin.lock();
+        let mut prompt = std::io::stderr();
+        if !visible_board && matches!(visible_choice, VisibleChoice::Default) {
+            if prompt_board_layout(&mut input, &mut prompt)? {
+                let name = prompt_board_name(&mut input, &mut prompt)?;
+                let choice = VisibleChoice::Named(Some(name));
+                let (orbit, root, visible) = init_layout(
+                    &requested_root,
+                    workspace_root,
+                    explicit_global,
+                    global_dir.as_deref(),
+                    &choice,
+                )?;
+                orbit_dir = orbit;
+                board_root = root;
+                visible_board = visible;
+                if let Some(resolved) = crate::board::resolve_orbit_dir(&orbit_dir) {
+                    board_root = resolved.root().to_path_buf();
+                    visible_board =
+                        matches!(resolved, crate::board::OrbitBoard::Visible { .. });
+                }
+            }
+        }
+        if args.host.is_none() {
+            prompted_host = prompt_board_host(&mut input, &mut prompt)?;
+        }
+    }
+    if let VisibleChoice::Named(Some(name)) = &visible_choice
+        && visible_board
+        && board_root.file_name().and_then(|n| n.to_str()) != Some(name.as_str())
+    {
+        return Err(OrbitError::invalid_argument(format!(
+            "--visible={name} does not match the Board folder {}",
+            board_root.display()
+        )));
+    }
+    let host_spec = match &args.host {
+        Some(Some(spec)) => Some(spec.clone()),
+        Some(None) => {
+            if interactive && !args.print {
+                let stdin = std::io::stdin();
+                let mut input = stdin.lock();
+                let mut prompt = std::io::stderr();
+                prompt_board_host(&mut input, &mut prompt)?
+            } else {
+                return Err(OrbitError::invalid_argument(
+                    "--host requires a value when the command is not interactive; pass --host=<repo|url>",
+                ));
+            }
+        }
+        None => prompted_host,
+    };
 
     if workspace_root {
         validate_workspace_layout(&requested_root)?;
@@ -101,7 +163,6 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         }
     }
 
-    let interactive = std::io::stdin().is_terminal();
     let clients = crate::setup::selected_agents(&args, &setup_root)?;
     let selected_portable_mcp = crate::setup::selected_portable_mcp(&args, &clients, &setup_root)?;
     let ignored_portable_mcp = args.portable_mcp && !clients.iter().any(|client| client.uses_mcp());
@@ -127,6 +188,14 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         args.print,
         global,
     )?;
+
+    // `--host` / the host prompt: validate the host and, for a fresh Board,
+    // adopt an existing same-Slug host branch instead of publishing over it.
+    let mut host_joined = false;
+    if !args.print && let Some(spec) = &host_spec {
+        let outcome = crate::board_host::set_host(&board_root, spec, created)?;
+        host_joined = outcome.joined;
+    }
 
     if !args.print {
         // The Orbit folder anchors the Board: `.orbit/board` hidden, or a
@@ -215,6 +284,8 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         branch: &branch,
         exclude: exclude.as_slice(),
         global,
+        host: host_spec.as_deref(),
+        host_joined,
         clients: &clients,
         files: &file_outcomes,
         mcp_command: mcp_command.as_deref(),
@@ -229,6 +300,8 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
             "prefix": prefix,
             "storage": storage.as_str(),
             "global": global,
+            "host": host_spec,
+            "host_joined": host_joined,
             "exclude": exclude,
             "created": created,
             "preview": args.print,
@@ -252,6 +325,8 @@ struct InitReport<'a> {
     branch: &'a str,
     exclude: &'a [String],
     global: bool,
+    host: Option<&'a str>,
+    host_joined: bool,
     clients: &'a [crate::setup::SetupClient],
     files: &'a [crate::setup::FileOutcome],
     mcp_command: Option<&'a str>,
@@ -302,6 +377,14 @@ fn render_init_human(report: &InitReport<'_>) -> String {
         _ => format!("{prefix} (Task IDs start with {prefix})"),
     };
     human.push_str(&format!("   {:<9}{prefix_detail}\n", "prefix"));
+    if let Some(host) = report.host {
+        let detail = if report.host_joined {
+            format!("{host} (joined the existing host `orbit` branch)")
+        } else {
+            host.to_string()
+        };
+        human.push_str(&format!("   {:<9}{detail}\n", "host"));
+    }
     for exclude in report.exclude {
         let detail = if preview {
             "would be listed in .git/info/exclude"
@@ -505,6 +588,49 @@ fn run_init(
     })
 }
 
+/// How `--visible` / the interactive layout prompt resolved the Board folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum VisibleChoice {
+    /// The default layout for the target (hidden `.orbit/board` where it applies).
+    Default,
+    /// A visible Board folder; `None` is bare `--visible` (name `board`).
+    Named(Option<String>),
+}
+
+impl VisibleChoice {
+    fn from_args(flag: &Option<Option<String>>) -> Result<Self> {
+        match flag {
+            None => Ok(Self::Default),
+            Some(None) => Ok(Self::Named(None)),
+            Some(Some(name)) => Ok(Self::Named(Some(board_folder_name(name)?))),
+        }
+    }
+
+    /// The folder name a visible choice implies, when it forces one.
+    fn forced_name(&self) -> Option<String> {
+        match self {
+            Self::Default => None,
+            Self::Named(name) => Some(name.clone().unwrap_or_else(|| "board".to_string())),
+        }
+    }
+}
+
+/// A visible Board folder name must be a single path component.
+fn board_folder_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+    {
+        return Err(OrbitError::invalid_argument(format!(
+            "invalid Board folder name `{name}`; use a single directory name"
+        )));
+    }
+    Ok(name.to_string())
+}
+
 /// Maps the requested init target to the ADR 0019 layout: the Orbit folder
 /// and the Board folder it anchors. Returns `(orbit_dir, board_dir, visible)`
 /// where `visible` means the Board folder is named explicitly and `.orbit`
@@ -514,6 +640,7 @@ fn init_layout(
     workspace_root: bool,
     global: bool,
     global_dir: Option<&Path>,
+    visible: &VisibleChoice,
 ) -> Result<(PathBuf, PathBuf, bool)> {
     if global {
         let orbit = global_dir
@@ -523,14 +650,19 @@ fn init_layout(
     }
     // An Orbit folder target anchors a hidden `.orbit/board` Board.
     if requested.file_name().and_then(|name| name.to_str()) == Some(".orbit") {
+        if matches!(visible, VisibleChoice::Named(_)) {
+            return Err(OrbitError::invalid_argument(
+                "--visible cannot anchor a Board inside an Orbit folder; pass a directory or omit --visible",
+            ));
+        }
         return Ok((requested.to_path_buf(), requested.join("board"), false));
     }
     if workspace_root {
-        return Ok((
-            requested.join(".orbit"),
-            requested.join(".orbit").join("board"),
-            false,
-        ));
+        let orbit = requested.join(".orbit");
+        return match visible.forced_name() {
+            Some(name) => Ok((orbit, requested.join(name), true)),
+            None => Ok((orbit.clone(), orbit.join("board"), false)),
+        };
     }
     // The target's own Git membership decides the layout, not the caller's
     // directory: `orbit init /elsewhere/board` from inside a repository still
@@ -569,7 +701,10 @@ fn init_layout(
             let common = crate::git::common_dir_at(&toplevel)?;
             let main = crate::board::main_checkout_for(&toplevel, &common);
             let orbit = main.join(".orbit");
-            return Ok((orbit.clone(), orbit.join("board"), false));
+            return match visible.forced_name() {
+                Some(name) => Ok((orbit, toplevel.join(name), true)),
+                None => Ok((orbit.clone(), orbit.join("board"), false)),
+            };
         }
         // Any other directory inside the repository is a visible Board
         // folder anchored by the repository's Orbit folder.
@@ -692,4 +827,84 @@ fn reconcile_prefix(board: &Board, slug: Option<&str>, print: bool) -> Result<St
         board.set_prefix(&requested)?;
     }
     Ok(requested)
+}
+
+fn prompt_board_layout(input: &mut impl BufRead, prompt: &mut impl Write) -> Result<bool> {
+    writeln!(prompt, "Board layout:")
+        .map_err(|error| OrbitError::io("write the layout prompt", error))?;
+    writeln!(prompt, "  1. hidden .orbit/board (default)")
+        .map_err(|error| OrbitError::io("write the layout prompt", error))?;
+    writeln!(prompt, "  2. visible folder inside the repository")
+        .map_err(|error| OrbitError::io("write the layout prompt", error))?;
+    writeln!(prompt, "Choose 1 or 2 [Enter = 1 hidden]")
+        .map_err(|error| OrbitError::io("write the layout prompt", error))?;
+    loop {
+        write!(prompt, "> ").map_err(|error| OrbitError::io("write the layout prompt", error))?;
+        prompt
+            .flush()
+            .map_err(|error| OrbitError::io("flush the layout prompt", error))?;
+        let mut line = String::new();
+        if input
+            .read_line(&mut line)
+            .map_err(|error| OrbitError::io("read the layout choice", error))?
+            == 0
+        {
+            return Ok(false);
+        }
+        match line.trim() {
+            "" | "1" | "hidden" => return Ok(false),
+            "2" | "visible" => return Ok(true),
+            _ => {
+                writeln!(prompt, "Enter 1 or 2.")
+                    .map_err(|error| OrbitError::io("write the layout prompt", error))?;
+            }
+        }
+    }
+}
+
+fn prompt_board_name(input: &mut impl BufRead, prompt: &mut impl Write) -> Result<String> {
+    writeln!(prompt, "Visible Board folder name [board]:")
+        .map_err(|error| OrbitError::io("write the folder prompt", error))?;
+    write!(prompt, "> ").map_err(|error| OrbitError::io("write the folder prompt", error))?;
+    prompt
+        .flush()
+        .map_err(|error| OrbitError::io("flush the folder prompt", error))?;
+    let mut line = String::new();
+    if input
+        .read_line(&mut line)
+        .map_err(|error| OrbitError::io("read the folder name", error))?
+        == 0
+    {
+        return Ok("board".to_string());
+    }
+    let name = line.trim();
+    if name.is_empty() {
+        return Ok("board".to_string());
+    }
+    board_folder_name(name)
+}
+
+fn prompt_board_host(input: &mut impl BufRead, prompt: &mut impl Write) -> Result<Option<String>> {
+    writeln!(
+        prompt,
+        "Board host — a member Repository name/path or git URL whose remote stores the Board's `orbit` branch [Enter = none]:"
+    )
+    .map_err(|error| OrbitError::io("write the host prompt", error))?;
+    write!(prompt, "> ").map_err(|error| OrbitError::io("write the host prompt", error))?;
+    prompt
+        .flush()
+        .map_err(|error| OrbitError::io("flush the host prompt", error))?;
+    let mut line = String::new();
+    if input
+        .read_line(&mut line)
+        .map_err(|error| OrbitError::io("read the host", error))?
+        == 0
+    {
+        return Ok(None);
+    }
+    let answer = line.trim();
+    if answer.is_empty() || answer.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    Ok(Some(answer.to_string()))
 }

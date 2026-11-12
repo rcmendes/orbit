@@ -618,6 +618,25 @@ pub fn remote_url(repo: &Path, name: &str) -> Result<Option<String>> {
     Ok((!url.is_empty()).then_some(url))
 }
 
+/// Resolves a remote ref to its tip commit without fetching objects.
+/// Returns `None` when the remote does not advertise the ref.
+pub fn ls_remote(repo: &Path, remote: &str, reference: &str) -> Result<Option<String>> {
+    let output = run_git_raw(
+        Some(repo),
+        &["ls-remote", remote, reference],
+        None,
+    )?;
+    if !output.status.success() {
+        return Err(git_failure(&["ls-remote", remote, reference], &output));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .map(str::to_string))
+}
+
 /// Fetches every branch the remote advertises into `refs/remotes/<remote>/*`.
 pub fn fetch(repo: &Path, remote: &str) -> Result<()> {
     run_git(Some(repo), &["fetch", remote], None)?;
@@ -701,6 +720,12 @@ pub fn show_file(repo: &Path, commit: &str, path: &str) -> Result<Option<String>
     }
     let output = run_git(Some(repo), &["show", &object], None)?;
     Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
+}
+
+/// Stages every change in the working tree (`git add -A`).
+pub fn stage_all(repo: &Path) -> Result<()> {
+    run_git(Some(repo), &["add", "-A"], None)?;
+    Ok(())
 }
 
 /// Writes the current index as a tree object.

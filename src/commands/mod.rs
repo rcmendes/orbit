@@ -1,3 +1,4 @@
+mod board;
 mod crud;
 mod init;
 mod lifecycle;
@@ -37,6 +38,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     } = cli;
     if no_sync {
         crate::github::auto_push::suppress();
+        crate::board_sync::suppress();
     }
 
     if json && matches!(&command, Command::Prime(args) if args.hook_json) {
@@ -97,13 +99,31 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             with_board(dir.as_deref(), true, |board| cmd_undepend(board, args))
         }
         Command::Delete(args) => with_board(dir.as_deref(), true, |board| cmd_delete(board, args)),
-        Command::Prime(args) => with_board(dir.as_deref(), false, |board| cmd_prime(board, args)),
+        Command::Prime(args) => prime_with_host_sync(dir.as_deref(), args),
         Command::Export => with_board(dir.as_deref(), false, cmd_export),
         Command::Setup(args) => crate::setup::run(args, dir.as_deref()),
         Command::Mcp => crate::mcp::serve(dir.as_deref())
             .map(|()| crate::output::CommandOutput::new(Value::Null, "").with_silent()),
         Command::Doctor(args) => crate::doctor::run(dir.as_deref(), args),
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
+        Command::Board(args) => match &args.command {
+            crate::cli::BoardCommand::Host(host_args) => {
+                if host_args.target.is_none() && !host_args.none {
+                    with_board(dir.as_deref(), false, |board| {
+                        board::cmd_host(board, host_args)
+                    })
+                } else {
+                    with_board(dir.as_deref(), true, |board| board::cmd_host(board, host_args))
+                }
+            }
+            crate::cli::BoardCommand::Sync(sync_args) => {
+                // The command performs the sync itself; do not auto-sync again.
+                crate::board_sync::suppress();
+                with_board(dir.as_deref(), true, |board| {
+                    board::cmd_sync(board, sync_args)
+                })
+            }
+        },
         Command::GitHub(args) => {
             if matches!(
                 &args.command,
@@ -218,8 +238,46 @@ where
                 .extend(crate::github::auto_push::after_command(board, &before));
         }
     }
+    if matches!(mode, crate::board::AccessMode::Write) {
+        output
+            .warnings
+            .extend(crate::board_sync::auto_after(board));
+    }
     output.warnings.extend(board.warnings.iter().cloned());
     Ok(output)
+}
+
+/// `orbit prime` syncs the Board host first when `board.host_sync = auto`,
+/// so the primed view already includes the host's changes. Failures surface
+/// as warnings; prime itself never fails because of the host.
+fn prime_with_host_sync(
+    dir: Option<&Path>,
+    args: crate::cli::PrimeArgs,
+) -> Result<crate::output::CommandOutput> {
+    if host_sync_at_prime(dir) {
+        let access = crate::board::BoardAccess::open(dir, crate::board::AccessMode::Write)?;
+        let board = access.board();
+        let mut warnings = crate::board_sync::auto_after(board);
+        let mut output = cmd_prime(board, args)?;
+        warnings.append(&mut output.warnings);
+        output.warnings = warnings;
+        output.warnings.extend(board.warnings.iter().cloned());
+        return Ok(output);
+    }
+    with_board(dir, false, |board| cmd_prime(board, args))
+}
+
+fn host_sync_at_prime(dir: Option<&Path>) -> bool {
+    if crate::board_sync::suppressed() {
+        return false;
+    }
+    let Ok(board) = Board::discover(dir) else {
+        return false;
+    };
+    let Ok(config) = crate::board::Config::load(&board.root) else {
+        return false;
+    };
+    config.board.host_sync == crate::board::HostSyncMode::Auto && config.board.host.is_some()
 }
 
 fn mutation_output(

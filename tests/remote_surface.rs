@@ -164,3 +164,65 @@ fn linked_and_local_flags_still_filter_without_remote_material() {
     let local = repo.ok_json(&["list", "--local", "--json"]);
     assert_eq!(local["data"]["count"], 2, "{local}");
 }
+
+#[test]
+fn list_help_hides_remote_material_without_remote_details() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.add("Plain task", &[]);
+
+    for args in [
+        &["list", "--help"][..],
+        &["list", "-h"][..],
+        &["help", "list"][..],
+    ] {
+        let output = repo.orbit(args);
+        assert!(output.status.success(), "{args:?}");
+        let help = String::from_utf8_lossy(&output.stdout);
+        assert!(!help.contains("--linked"), "{args:?}: {help}");
+        assert!(!help.contains("--local"), "{args:?}: {help}");
+        assert!(!help.contains("ISSUE"), "{args:?}: {help}");
+    }
+}
+
+#[test]
+fn list_help_shows_remote_material_when_connected() {
+    let repo = TestRepo::new();
+    repo.init();
+    configure_remote_project(&repo);
+    repo.add("Plain task", &[]);
+
+    let output = repo.orbit(&["list", "--help"]);
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("--linked"), "{help}");
+    assert!(help.contains("--local"), "{help}");
+    assert!(help.contains("ISSUE"), "{help}");
+}
+
+#[test]
+fn list_help_shows_remote_material_when_a_task_is_linked() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Linked task", &[]);
+    link_task(&repo, &id);
+
+    let output = repo.orbit(&["list", "--help"]);
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("--linked"), "{help}");
+    assert!(help.contains("--local"), "{help}");
+}
+
+#[test]
+fn top_level_help_hides_no_sync() {
+    let repo = TestRepo::new();
+    repo.init();
+
+    for args in [&["--help"][..], &["-h"][..], &["list", "--help"][..]] {
+        let output = repo.orbit(args);
+        assert!(output.status.success(), "{args:?}");
+        let help = String::from_utf8_lossy(&output.stdout);
+        assert!(!help.contains("--no-sync"), "{args:?}: {help}");
+    }
+}

@@ -65,11 +65,8 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
 
     if workspace_root {
         validate_workspace_layout(&requested_root)?;
-        if !Board::is_board(&board_root)
-            && let Some(existing) = crate::board::workspace_child_board(&requested_root)?
-        {
-            return Err(crate::board::already_initialized(&existing));
-        }
+        // Child Boards are merge sources, not conflicts: `apply_child_merge`
+        // imports their history and relocates them under `.orbit/backups/`.
     }
 
     // A Board that still uses a pre-ADR-0019 layout must go through
@@ -737,6 +734,15 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
     let mut notes = Vec::new();
     for child in children {
         let source = Board::at_root(child.board.clone(), Vec::new())?;
+        if source.needs_migration(None) {
+            return Err(OrbitError::new(
+                code::BOARD_NOT_MIGRATED,
+                format!(
+                    "the child Board at {} uses a pre-ADR-0019 layout; run `orbit migrate` inside its repository first",
+                    child.board.display()
+                ),
+            ));
+        }
         let repo_name = child
             .repository
             .file_name()

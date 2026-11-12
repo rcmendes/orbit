@@ -1502,6 +1502,7 @@ fn nearest_orbit_board(start: &Path) -> Option<OrbitBoard> {
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn workspace_child_board(workspace: &Path) -> Result<Option<PathBuf>> {
     Ok(workspace_child_boards(workspace)?.into_iter().next())
 }
@@ -1654,6 +1655,7 @@ pub(crate) fn workspace_local_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
 /// depth-first. Skips `.git`, `.orbit`, and `.board` directories and does not
 /// descend into nested repositories; for each child repository it reports the
 /// `.orbit` Board first, then the legacy common-dir `orbit/board`.
+#[allow(dead_code)]
 pub(crate) fn workspace_child_boards(workspace: &Path) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     if !workspace.exists() {

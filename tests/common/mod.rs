@@ -85,6 +85,50 @@ impl TestRepo {
         self.path().join(".git/orbit/board")
     }
 
+    /// Writes the minimal pre-ADR-0019 Board files (`config.toml`, `tasks/`,
+    /// `comments/`) into `path`. `.gitkeep` files keep the directories
+    /// tracked when the Board files are committed on a Git branch.
+    pub fn legacy_board_files(&self, path: &Path, prefix: &str) {
+        std::fs::create_dir_all(path.join("tasks")).unwrap();
+        std::fs::create_dir_all(path.join("comments")).unwrap();
+        std::fs::write(path.join("tasks").join(".gitkeep"), b"").unwrap();
+        std::fs::write(path.join("comments").join(".gitkeep"), b"").unwrap();
+        std::fs::write(
+            path.join("config.toml"),
+            format!("[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"{prefix}\"\n"),
+        )
+        .unwrap();
+    }
+
+    /// A pre-ADR-0019 worktree Board: a linked worktree of this repository on
+    /// branch `orbit` holding the Board files and `storage = "worktree"`.
+    pub fn legacy_worktree_board(&self, path: &Path) {
+        let output = self.git(&["worktree", "add", path.to_str().unwrap(), "-b", "orbit"]);
+        assert!(
+            output.status.success(),
+            "worktree add failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        self.legacy_board_files(path, "orb-");
+        let config = std::fs::read_to_string(path.join("config.toml")).unwrap();
+        std::fs::write(
+            path.join("config.toml"),
+            config.replace(
+                "branch = \"orbit\"",
+                "branch = \"orbit\"\nstorage = \"worktree\"",
+            ),
+        )
+        .unwrap();
+        for args in [&["add", "-A"][..], &["commit", "-q", "-m", "board"][..]] {
+            let output = self.git_in(path, args);
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
     pub fn set_lock_timeout(&self, millis: u64) {
         let path = self.board_path().join("config.toml");
         let config = std::fs::read_to_string(&path).unwrap();

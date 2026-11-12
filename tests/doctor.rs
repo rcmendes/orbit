@@ -44,48 +44,17 @@ fn write_absolute_board_config(path: &Path) {
     std::fs::write(path, value.to_string()).unwrap();
 }
 
-fn write_legacy_board_config(board: &Path, prefix: &str) {
-    std::fs::create_dir_all(board.join("tasks")).unwrap();
-    std::fs::create_dir_all(board.join("comments")).unwrap();
-    std::fs::write(
-        board.join("config.toml"),
-        format!("[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"{prefix}\"\n"),
-    )
-    .unwrap();
-}
-
 /// A pre-ADR-0019 hidden Board: `.orbit` itself holds the Board files — no
 /// `board/` subdirectory and no standalone `.git` of its own.
 fn legacy_orbit_board(repo: &TestRepo) -> PathBuf {
     let orbit = repo.orbit_path();
-    write_legacy_board_config(&orbit, "orb-");
+    repo.legacy_board_files(&orbit, "orb-");
     orbit
 }
 
-/// A pre-ADR-0019 worktree Board: a linked worktree of the code repository
-/// on branch `orbit` holding the Board files and `storage = "worktree"`.
+/// A pre-ADR-0019 worktree Board on branch `orbit` at `path`.
 fn legacy_worktree_board(repo: &TestRepo, path: &Path) {
-    let output = repo.git(&["worktree", "add", path.to_str().unwrap(), "-b", "orbit"]);
-    assert!(
-        output.status.success(),
-        "worktree add failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    write_legacy_board_config(path, "orb-");
-    let config = std::fs::read_to_string(path.join("config.toml")).unwrap();
-    std::fs::write(
-        path.join("config.toml"),
-        config.replace("branch = \"orbit\"", "branch = \"orbit\"\nstorage = \"worktree\""),
-    )
-    .unwrap();
-    for args in [&["add", "-A"][..], &["commit", "-q", "-m", "board"][..]] {
-        let output = repo.git_in(path, args);
-        assert!(
-            output.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+    repo.legacy_worktree_board(path);
 }
 
 #[test]
@@ -129,7 +98,7 @@ fn doctor_reports_a_legacy_board_layout() {
 fn doctor_reports_ambiguous_boards() {
     let repo = TestRepo::new();
     repo.init();
-    write_legacy_board_config(&repo.legacy_board_path(), "orb-");
+    repo.legacy_board_files(&repo.legacy_board_path(), "orb-");
 
     let value = doctor_json(&repo, &["doctor", "--json"]);
 

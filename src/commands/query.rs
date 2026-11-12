@@ -101,6 +101,7 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
 
     tasks.sort_by(|left, right| list_sort_key(&graph, left).cmp(&list_sort_key(&graph, right)));
 
+    let remote = crate::remote::details_visible(board, &graph);
     let summaries: Vec<Value> = tasks
         .iter()
         .map(|task| graph::task_summary(&graph, task))
@@ -109,9 +110,9 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
     let human = if tasks.is_empty() {
         "no tasks".to_string()
     } else if args.group {
-        format_grouped_table(&group_tasks(&graph, &tasks)?)
+        format_grouped_table(&group_tasks(&graph, &tasks)?, remote)
     } else {
-        format_table(&tasks)
+        format_table(&tasks, remote)
     };
 
     Ok(
@@ -207,9 +208,10 @@ pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::C
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.id)?;
     let comments = board.read_comments(&args.id)?;
+    let remote = crate::remote::details_visible(board, &graph);
     Ok(crate::output::CommandOutput::new(
         graph::task_detail_with_comments(&graph, task, &comments),
-        format_detail(&graph, task, &comments),
+        format_detail(&graph, task, &comments, remote),
     ))
 }
 

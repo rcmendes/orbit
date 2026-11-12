@@ -4,10 +4,13 @@
 //! core owns only the project list and the tracker-neutral auto-push flag;
 //! each tracker adapter keeps its own settings under `remote.<tracker>`.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use crate::board::Board;
 use crate::error::{OrbitError, Result};
+use crate::graph::{Graph, LoadMode};
 
 pub mod auto_push;
 pub mod catalog;
@@ -38,6 +41,53 @@ pub fn configured_projects(board: &Board) -> Vec<RemoteProject> {
         }
     }
     projects
+}
+
+/// Whether the Board has any Remote Tracker configuration at all: Remote
+/// Projects, adapter settings, or the Auto-push policy. Task links alone do
+/// not count — they are inert provenance on an unconfigured Board.
+pub fn configured(board: &Board) -> bool {
+    !configured_projects(board).is_empty()
+        || board.config.remote.auto_push
+        || board.config.github != crate::github::GitHubConfig::default()
+        || board
+            .config
+            .remote
+            .github
+            .as_ref()
+            .is_some_and(|github| *github != crate::github::GitHubConfig::default())
+}
+
+/// Whether human surfaces show Remote Tracker material for `board`: a Remote
+/// Project is configured (`[remote] projects` or legacy `[github]
+/// repositories`) or at least one Task carries a Remote link, active or
+/// detached. Local-only Boards hide the `ISSUE` column, the `show` remote
+/// line, and the `list` link filters from human output; `--json` is
+/// unaffected.
+pub fn details_visible(board: &Board, graph: &Graph) -> bool {
+    !configured_projects(board).is_empty()
+        || graph
+            .tasks
+            .values()
+            .any(|task| link::link_view(task).is_some())
+}
+
+/// Resolve the Board for `dir` (`None` walks from the current directory) and
+/// report whether Remote Tracker material is visible. Any resolution failure
+/// reads as "not visible" so help text and setup templates degrade to the
+/// local-only surface instead of guessing.
+pub fn details_visible_for(dir: Option<&Path>) -> bool {
+    let discovery = Board::discovery(dir);
+    let Some(root) = discovery.root else {
+        return false;
+    };
+    let Ok(board) = Board::at_root(root, discovery.warnings) else {
+        return false;
+    };
+    let Ok((graph, _)) = Graph::load(&board, LoadMode::Lenient) else {
+        return false;
+    };
+    details_visible(&board, &graph)
 }
 
 /// `[remote]` section of `config.toml`.

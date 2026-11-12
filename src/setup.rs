@@ -419,9 +419,9 @@ pub fn install(root: &Path, options: InstallOptions) -> Result<InstallOutcome> {
     Ok(InstallOutcome { files, output })
 }
 
-/// Install or remove only the Workspace-level agent instruction entry points.
-/// These files are guidance inherited by child repositories; the Workspace
-/// root does not need harness MCP configuration of its own.
+/// Install or remove only the anchor-level agent instruction entry points.
+/// These files are guidance inherited by member Repositories; the Board
+/// anchor does not need harness MCP configuration of its own.
 pub fn workspace_guidance(root: &Path, print: bool, remove: bool) -> Result<InstallOutcome> {
     let mut plan = BTreeMap::new();
     let remote_details = crate::remote::details_visible_for(Some(root));
@@ -489,7 +489,7 @@ pub fn refresh(root: &Path) -> Result<InstallOutcome> {
                 print: false,
                 remove: false,
                 // `root` is a member Repository, which has no Board of its
-                // own; the governing Workspace Board resolves from the
+                // own; the governing Board resolves from the
                 // directory the refresh was triggered in.
                 remote_details: crate::remote::details_visible_for(None),
             },
@@ -956,7 +956,7 @@ fn prompt_agents(
     prompt_agents_from(&all, detected, input, prompt)
 }
 
-/// Prompt for the agent harnesses supported by Workspace integration.
+/// Prompt for the agent harnesses supported by Board-anchor integration.
 pub fn prompt_workspace_harnesses(detected: &[SetupClient]) -> Result<Vec<SetupClient>> {
     let all = [
         SetupClient::Claude,

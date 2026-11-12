@@ -462,15 +462,15 @@ impl Graph {
     }
 
     pub fn counts(&self) -> Counts {
-        self.counts_matching(&[])
+        self.counts_where(|_| true)
     }
 
-    pub fn counts_matching(&self, labels: &[String]) -> Counts {
+    pub fn counts_where(&self, matches: impl Fn(&Task) -> bool) -> Counts {
         let now = Utc::now();
         let mut counts = Counts::default();
 
         for task in self.tasks.values() {
-            if !task.has_labels(labels) {
+            if !matches(task) {
                 continue;
             }
 

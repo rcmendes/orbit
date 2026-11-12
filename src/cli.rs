@@ -408,7 +408,7 @@ pub struct ListArgs {
     #[arg(long = "exclude-label", value_name = "LABEL", action = clap::ArgAction::Append)]
     pub exclude_label: Vec<String>,
 
-    /// Filter by repository label. Shorthand for --label repo:NAME.
+    /// Filter by repository label. Filter by Repository field or legacy repo:NAME label.
     #[arg(long, value_name = "NAME")]
     pub repo: Option<String>,
 
@@ -453,7 +453,7 @@ pub struct ReadyArgs {
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
-    /// Only Ready tasks with this repository label. Shorthand for --label repo:NAME.
+    /// Only Ready tasks with this repository label. Filter by Repository field or legacy repo:NAME label.
     #[arg(long, value_name = "NAME")]
     pub repo: Option<String>,
 
@@ -823,7 +823,7 @@ pub struct PrimeArgs {
     #[arg(long, value_name = "NAME")]
     pub by: Option<String>,
 
-    /// Only Ready tasks with this repository label. Shorthand for --label repo:NAME.
+    /// Only Ready tasks with this repository label. Filter by Repository field or legacy repo:NAME label.
     #[arg(long, value_name = "NAME")]
     pub repo: Option<String>,
 

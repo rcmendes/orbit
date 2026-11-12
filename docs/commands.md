@@ -516,7 +516,7 @@ orbit list --linked                               # only Tasks linked to a Remot
 orbit list --local                                # only Tasks without an active link
 orbit list --label needs-triage
 orbit list --label repo:api --label ready-for-agent   # every label must match
-orbit list --repo api                               # shorthand for repo:api
+orbit list --repo api                               # repo field api or legacy repo:api label
 orbit list --status in_progress --claimed-by claude
 orbit list --status done            # closed work, without --include-closed
 orbit list --unlabeled
@@ -553,7 +553,9 @@ exclusive. The `ISSUE` column and both flags appear in human output and
 are hidden but still accepted. `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
 any listed shape. `--label` is repeatable and every label must match;
 `--exclude-label` is repeatable and hides a task carrying any of the named labels.
-`--repo NAME` is shorthand for `--label repo:NAME`. Parent groups follow the
+`--repo NAME` matches the Task's `repo` field or its legacy `repo:NAME` label;
+explicit `--label` filters remain additional requirements. This applies to
+`list`, `ready` (including `--claim`), and `prime`. Parent groups follow the
 parent's priority; SubTasks inside a group follow their own priority. Tasks with
 no parent appear in the final `No parent` section. JSON always carries `kind`,
 `type`, `parent`, `subtasks`, and `open_subtasks` with the full title. A Parent

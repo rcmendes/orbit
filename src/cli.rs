@@ -174,10 +174,6 @@ pub struct InitArgs {
     #[arg(value_name = "DIR")]
     pub target: Option<PathBuf>,
 
-    /// Create or reuse the global Board at ~/.orbit.
-    #[arg(long, conflicts_with = "target")]
-    pub global: bool,
-
     /// Which harnesses to wire: auto, all, none, ask, or a comma-separated list.
     #[arg(long, value_name = "SELECTOR", conflicts_with = "no_agents")]
     pub agents: Option<String>,
@@ -216,8 +212,7 @@ pub struct InitArgs {
         long,
         value_name = "NAME",
         num_args = 0..=1,
-        require_equals = true,
-        conflicts_with = "global"
+        require_equals = true
     )]
     pub visible: Option<Option<String>>,
 

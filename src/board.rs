@@ -974,7 +974,7 @@ impl Board {
     /// caller anchors with an Orbit-folder pointer.
     pub fn init_dir(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
         let root = resolve_external(dir)?;
-        if let Some(existing) = Self::conflicting_board_for(&root, false)? {
+        if let Some(existing) = Self::conflicting_board_for(&root)? {
             return Err(already_initialized(&existing));
         }
         init_external(&root, slug)
@@ -987,8 +987,8 @@ impl Board {
 
     /// Returns the repository-local Board that would compete with `dir`.
     /// A global Board is exempt: it is only an opt-in discovery fallback.
-    pub fn conflicting_board_for(dir: &Path, global: bool) -> Result<Option<PathBuf>> {
-        if global || Self::is_board(dir) {
+    pub fn conflicting_board_for(dir: &Path) -> Result<Option<PathBuf>> {
+        if is_global_board(dir) || Self::is_board(dir) {
             return Ok(None);
         }
         let Some(repo_root) = git::toplevel_containing(dir) else {

@@ -23,28 +23,14 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
     let in_repo = crate::git::is_git_repo(&cwd);
 
-    if args.global && dir.is_some() {
-        return Err(OrbitError::invalid_argument(
-            "--global cannot be combined with --dir or ORBIT_DIR",
-        ));
-    }
-
-    let home = resolve_home_dir().ok();
-    if args.global && home.is_none() {
-        return Err(OrbitError::config(
-            "HOME or USERPROFILE must be set for `orbit init --global`",
-        ));
-    }
-    let global_dir = home.as_ref().map(|home| home.join(".orbit"));
+    let global_dir = resolve_home_dir().ok().map(|home| home.join(".orbit"));
     let visible_choice = VisibleChoice::from_args(&args.visible)?;
-    let (requested_root, explicit_global) = if args.global {
-        (global_dir.clone().expect("global home was checked"), true)
-    } else if let Some(target) = args.target.as_deref() {
-        (crate::board::resolve_external(target)?, false)
+    let requested_root = if let Some(target) = args.target.as_deref() {
+        crate::board::resolve_external(target)?
     } else if let Some(dir) = dir {
-        (crate::board::resolve_external(dir)?, false)
+        crate::board::resolve_external(dir)?
     } else {
-        (default_init_dir(&cwd)?, false)
+        default_init_dir(&cwd)?
     };
     // The implicit target is the repository's `.orbit` anchor; `--visible`
     // means "the enclosing root", so resolve it one level up. An explicit
@@ -72,13 +58,8 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     // ADR 0019: the Board folder is a standalone repository. Hidden Boards
     // live at `<anchor>/.orbit/board`; a visible folder is anchored by the
     // `.orbit/board` pointer file instead.
-    let (mut orbit_dir, mut board_root, mut visible_board) = init_layout(
-        &requested_root,
-        workspace_root,
-        explicit_global,
-        global_dir.as_deref(),
-        &visible_choice,
-    )?;
+    let (mut orbit_dir, mut board_root, mut visible_board) =
+        init_layout(&requested_root, workspace_root, &visible_choice)?;
     // The Orbit folder may already anchor a Board: a hidden `.orbit/board`
     // directory or a `board` pointer file naming a visible folder. Reuse
     // whichever it resolves to instead of assuming the computed layout.
@@ -88,10 +69,9 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     }
     // The global Board is an ordinary Board in the home directory; there is
     // no distinct global layout.
-    let global = explicit_global
-        || global_dir
-            .as_ref()
-            .is_some_and(|global| global.join("board") == board_root);
+    let global = global_dir
+        .as_ref()
+        .is_some_and(|global| global.join("board") == board_root);
 
     // Parent-folder init: child repositories under the anchor may anchor
     // their own Boards. Their histories merge into the new Board and the
@@ -117,13 +97,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         {
             let name = prompt_board_name(&mut input, &mut prompt)?;
             let choice = VisibleChoice::Named(Some(name));
-            let (orbit, root, visible) = init_layout(
-                &requested_root,
-                workspace_root,
-                explicit_global,
-                global_dir.as_deref(),
-                &choice,
-            )?;
+            let (orbit, root, visible) = init_layout(&requested_root, workspace_root, &choice)?;
             orbit_dir = orbit;
             board_root = root;
             visible_board = visible;
@@ -209,7 +183,6 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         }),
         args.slug.as_deref(),
         args.print,
-        global,
     )?;
 
     // `--host` / the host prompt: validate the host and, for a fresh or still
@@ -586,7 +559,6 @@ fn run_init(
     slug_root: Option<&Path>,
     slug_arg: Option<&str>,
     print: bool,
-    global: bool,
 ) -> Result<InitTarget> {
     if Board::is_board(board_root) {
         let board = Board::discover(Some(board_root))?;
@@ -601,7 +573,7 @@ fn run_init(
         });
     }
 
-    if print && let Some(existing) = Board::conflicting_board_for(board_root, global)? {
+    if print && let Some(existing) = Board::conflicting_board_for(board_root)? {
         return Err(crate::board::already_initialized(&existing));
     }
 
@@ -681,16 +653,8 @@ fn board_folder_name(name: &str) -> Result<String> {
 fn init_layout(
     requested: &Path,
     workspace_root: bool,
-    global: bool,
-    global_dir: Option<&Path>,
     visible: &VisibleChoice,
 ) -> Result<(PathBuf, PathBuf, bool)> {
-    if global {
-        let orbit = global_dir
-            .ok_or_else(|| OrbitError::config("HOME or USERPROFILE is not set"))?
-            .to_path_buf();
-        return Ok((orbit.clone(), orbit.join("board"), false));
-    }
     // An Orbit folder target anchors a hidden `.orbit/board` Board.
     if requested.file_name().and_then(|name| name.to_str()) == Some(".orbit") {
         if matches!(visible, VisibleChoice::Named(_)) {

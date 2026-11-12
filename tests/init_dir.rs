@@ -151,6 +151,7 @@ fn removed_init_surface_is_rejected() {
         &["workspace", "acme"][..],
         &["init", "--board", "acme"][..],
         &["init", "--local"][..],
+        &["init", "--global"][..],
     ] {
         let output = repo.orbit(args);
         assert!(

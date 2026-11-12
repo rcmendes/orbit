@@ -357,7 +357,7 @@ fn a_new_board_whose_path_ends_in_orbit_board_uses_its_own_lock() {
 }
 
 #[test]
-fn a_legacy_config_without_storage_still_loads_without_a_command_warning() {
+fn a_legacy_config_without_storage_is_gated_until_migrate() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let board = parent.path().join("old-board");
@@ -369,8 +369,23 @@ fn a_legacy_config_without_storage_still_loads_without_a_command_warning() {
     )
     .unwrap();
 
-    let value = repo.ok_json(&["--dir", board.to_str().unwrap(), "list", "--json"]);
+    // A Board folder without its own `.git` predates ADR 0019 and refuses
+    // commands until `orbit migrate` makes it a standalone repository.
+    let (status, value) = repo.json(&["--dir", board.to_str().unwrap(), "list", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "BOARD_NOT_MIGRATED");
 
+    let migrated = repo.ok_json(&[
+        "--dir",
+        board.to_str().unwrap(),
+        "migrate",
+        "--apply",
+        "--json",
+    ]);
+    assert_eq!(migrated["data"]["applied"], true);
+    assert!(board.join(".git").exists());
+
+    let value = repo.ok_json(&["--dir", board.to_str().unwrap(), "list", "--json"]);
     assert_eq!(value["data"]["count"], 0);
     assert!(value["meta"].get("warnings").is_none(), "{value}");
 }

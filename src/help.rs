@@ -1082,12 +1082,14 @@ Examples:
   orbit github sync orb-a7b2c9 --apply --direction pull";
 
 pub const TRIAGE_LONG: &str = "\
-Review GitHub-linked Tasks and apply approved metadata changes on the Orbit Board first.
+Review Tasks and apply approved metadata changes on the Orbit Board first.
 
 Triage only touches Orbit-owned `area`, task-level `verification`, and canonical triage/category
-labels. In GitHub basic mode, it supports labels only. It does not change Task title, body, status,
-or open/closed state, and it does not run verification commands. After approving a review or
-`triage apply --approve`, publish changes with `orbit github sync`.
+labels. It works on Local Tasks and Linked Tasks alike; for a Linked Task, only the Remote
+Project's Mapped fields can be proposed, since those are the only fields a later sync publishes.
+It does not change Task title, body, status, or open/closed state, and it does not run
+verification commands. After approving a review or `triage apply --approve` on a Linked Task,
+publish changes with the Remote Tracker sync (for GitHub, `orbit github sync`).
 
 Agents draft a proposal JSON file and run `triage review` to see a field-by-field preview. With a
 proposal file and both stdin and stdout connected to a terminal, review prompts for explicit
@@ -1098,8 +1100,8 @@ prints the preview and never waits for input. `--json` remains non-interactive, 
 `orbit triage` rejects a proposal whose resulting labels contain more than one state role or more
 than one category role, with `TRIAGE_INVALID_PROPOSAL`.
 
-Review and apply change the Orbit Board only. GitHub is unchanged until an explicit
-`orbit github sync` command. When evidence is insufficient, record `uncertainty` and leave
+Review and apply change the Orbit Board only. A Remote Tracker is unchanged until an explicit
+sync command. When evidence is insufficient, record `uncertainty` and leave
 metadata unchanged.";
 
 pub const TRIAGE_EXAMPLES: &str = "\

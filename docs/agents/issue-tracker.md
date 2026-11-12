@@ -188,8 +188,8 @@ Orbit is the tracker. Matt Pocock's engineering skills own the triage state
 machine: gathering context, verifying the claim, grilling, writing the agent
 brief, and maintaining `.out-of-scope/`.
 
-`orbit triage` is a deterministic metadata primitive for a GitHub-linked Task.
-It sets `area`, task-level `verification`, and the canonical labels in
+`orbit triage` is a deterministic metadata primitive for any Task, Local or
+Linked. It sets `area`, task-level `verification`, and the canonical labels in
 [`triage-labels.md`](./triage-labels.md). It does not verify a claim, grill,
 write a brief, or update `.out-of-scope/`. The commands are in
 [`triage-workflow.md`](./triage-workflow.md).
@@ -214,10 +214,11 @@ commands are in [Wayfinding operations](#wayfinding-operations).
 - **Comments:** `orbit comment add <ID> --by <agent> --body ...`; read with
   `orbit comment list <ID>` or `orbit show <ID> --json`.
 
-GitHub sync and Triage require Orbit 0.9.0 or newer. For GitHub-linked Tasks,
+Remote Tracker sync and Triage require Orbit 0.9.0 or newer. For Linked Tasks,
 use the structured workflow in
 [`triage-workflow.md`](./triage-workflow.md): `orbit triage context`, `review`, and
-`apply --approve`, then `orbit github sync --direction push --apply`.
+`apply --approve`, then the Remote Tracker sync (for GitHub,
+`orbit github sync --direction push --apply`).
 
 ## When a skill says "fetch the relevant ticket"
 

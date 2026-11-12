@@ -161,11 +161,18 @@ fn member_at(board: &Board, main: &Path) -> Result<Option<Repository>> {
     if !main.starts_with(&anchor) {
         return Ok(None);
     }
-    // Discovery never descends into a Repository, so a checkout nested inside
-    // another Repository is never a member.
+    // Discovery never descends into a Repository or into the Orbit folders,
+    // so a checkout nested under either is never a member.
     for ancestor in main.ancestors().skip(1) {
         if ancestor == anchor {
             break;
+        }
+        let name = ancestor.file_name();
+        if name == Some(std::ffi::OsStr::new(board::ORBIT_DIR))
+            || name == Some(std::ffi::OsStr::new(".git"))
+            || name == Some(std::ffi::OsStr::new(board::LEGACY_BOARD_DIR))
+        {
+            return Ok(None);
         }
         if ancestor.join(".git").exists() {
             return Ok(None);

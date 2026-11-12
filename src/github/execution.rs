@@ -443,7 +443,8 @@ pub(crate) fn repository_available(board: &Board, repository: &str) -> Result<bo
     if let Some(repositories) = crate::workspace::export_repositories(board)? {
         return Ok(repositories
             .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(repository)));
+            .any(|candidate| candidate.eq_ignore_ascii_case(repository))
+            || board.config.github.contains_repo(repository));
     }
     Ok(board.config.github.contains_repo(repository))
 }
@@ -452,23 +453,13 @@ pub(crate) fn require_repository_available(board: &Board, repository: &str) -> R
     if repository_available(board, repository)? {
         return Ok(());
     }
-    let message = if board.is_workspace_board() {
-        format!(
-            "repository `{repository}` is not included in this Workspace; run `orbit workspace refresh` or include it"
-        )
-    } else {
-        format!(
-            "repository `{repository}` is not linked to this Board; run `orbit github repo link {repository}`"
-        )
-    };
+    let message = format!(
+        "repository `{repository}` is not available to this Board; run `orbit github repo link {repository}`"
+    );
     Err(
         OrbitError::new(code::GITHUB_REPO_NOT_LINKED, message).with_details(json!({
             "repository": repository,
-            "remediation": if board.is_workspace_board() {
-                "run `orbit workspace refresh` or `orbit workspace include OWNER/REPO`"
-            } else {
-                "run `orbit github repo link OWNER/REPO`"
-            },
+            "remediation": format!("run `orbit github repo link {repository}`"),
         })),
     )
 }

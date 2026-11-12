@@ -33,18 +33,6 @@ pub fn run(dir: Option<&Path>, args: DoctorArgs) -> Result<crate::output::Comman
     diagnose(dir, &args, fixed)
 }
 
-fn workspace_root(dir: Option<&Path>, board: Option<&Board>) -> Option<PathBuf> {
-    if let Some(board) = board
-        && let Some(root) = crate::workspace::workspace_root_if_board(board)
-    {
-        return Some(root);
-    }
-    let start = dir
-        .map(Path::to_path_buf)
-        .or_else(|| std::env::current_dir().ok())?;
-    crate::workspace::candidate_workspace_root(&start)
-}
-
 fn fix(dir: Option<&Path>) -> Result<Vec<String>> {
     let mut fixed = Vec::new();
     let discovery = Board::discovery(dir);
@@ -168,15 +156,6 @@ fn diagnose(
 
     layout_issues(&discovery, board.as_ref(), &mut issues);
 
-    let workspace_root = workspace_root(dir, board.as_ref());
-    let workspace_diagnosis = workspace_root
-        .as_deref()
-        .map(|workspace| crate::workspace_doctor::diagnose(workspace, board.as_ref()));
-    if let Some(diagnosis) = &workspace_diagnosis {
-        issues.extend(diagnosis.issues.iter().cloned());
-        warnings.extend(diagnosis.warnings.iter().cloned());
-    }
-
     let on_path = orbit_on_path();
     if !on_path {
         let repo_root =
@@ -202,11 +181,6 @@ fn diagnose(
 
     let healthy = issues.is_empty();
     let discovery_json = discovery_json(&discovery);
-    let workspace_json = workspace_diagnosis
-        .as_ref()
-        .map(crate::workspace_doctor::WorkspaceDiagnosis::json)
-        .unwrap_or(Value::Null);
-
     let mut human = String::new();
     if healthy {
         human.push_str("orbit doctor: healthy\n");
@@ -239,15 +213,6 @@ fn diagnose(
         }
     }
     human.push_str(&format!("tasks: {task_count}\n"));
-    if let Some(workspace) = workspace_root.as_ref() {
-        human.push_str(&format!("workspace: {}\n", workspace.display()));
-        if let Some(diagnosis) = &workspace_diagnosis {
-            human.push_str(&format!(
-                "workspace repositories: {} discovered, {} included\n",
-                diagnosis.repositories, diagnosis.included_repositories
-            ));
-        }
-    }
     human.push_str(&render_discovery(&discovery));
     for warning in &warnings {
         human.push_str(&format!("warning: {warning}\n"));
@@ -265,7 +230,6 @@ fn diagnose(
             "path_on_path": on_path,
             "fixed": fixed,
             "discovery": discovery_json,
-            "workspace": workspace_json,
         }),
         human,
     )

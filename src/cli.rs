@@ -37,13 +37,9 @@ pub enum Command {
     #[command(long_about = help::INIT_LONG, after_long_help = help::INIT_EXAMPLES)]
     Init(InitArgs),
 
-    /// Point this repository at a shared Board.
-    #[command(long_about = help::LINK_LONG, after_long_help = help::LINK_EXAMPLES)]
-    Link(LinkArgs),
-
-    /// Return this repository to its own Board.
-    #[command(long_about = help::UNLINK_LONG, after_long_help = help::UNLINK_EXAMPLES)]
-    Unlink,
+    /// Manage the Board's member Repositories.
+    #[command(long_about = help::REPO_LONG, after_long_help = help::REPO_EXAMPLES)]
+    Repo(RepoArgs),
 
     /// Show or migrate the Board's Task-ID slug.
     #[command(long_about = help::SLUG_LONG, after_long_help = help::SLUG_EXAMPLES)]
@@ -163,10 +159,6 @@ pub enum Command {
     #[command(name = "github", long_about = help::GITHUB_LONG, after_long_help = help::GITHUB_EXAMPLES)]
     GitHub(GitHubArgs),
 
-    /// Discover and manage repositories in a Workspace.
-    #[command(long_about = help::WORKSPACE_LONG, after_long_help = help::WORKSPACE_EXAMPLES)]
-    Workspace(WorkspaceArgs),
-
     /// Review and apply agent triage proposals for GitHub-linked Tasks.
     #[command(long_about = help::TRIAGE_LONG, after_long_help = help::TRIAGE_EXAMPLES)]
     Triage(TriageArgs),
@@ -243,29 +235,44 @@ pub struct InitArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct LinkArgs {
-    /// Orbit folder (DIR), or a legacy Board or workspace directory.
-    #[arg(value_name = "PATH")]
-    pub path: PathBuf,
+pub struct RepoArgs {
+    #[command(subcommand)]
+    pub command: RepoCommand,
+}
 
-    /// Do not refresh existing agent configuration.
-    #[arg(long = "no-refresh")]
-    pub no_refresh: bool,
+#[derive(Debug, Subcommand)]
+pub enum RepoCommand {
+    /// Add a Repository as an explicit member of this Board.
+    #[command(after_long_help = help::REPO_EXAMPLES)]
+    Add(RepoAddArgs),
+    /// Remove an explicitly added member Repository.
+    #[command(after_long_help = help::REPO_EXAMPLES)]
+    Remove(RepoRemoveArgs),
+    /// List the Board's member Repositories.
+    #[command(after_long_help = help::REPO_EXAMPLES)]
+    List,
+    /// Rescan child Repositories and rebuild the Repository inventory.
+    #[command(after_long_help = help::REPO_EXAMPLES)]
+    Refresh,
 }
 
 #[derive(Debug, Args)]
-pub struct WorkspaceMigrateArgs {
-    /// Workspace root. Defaults to the current directory.
-    #[arg(value_name = "WORKSPACE")]
-    pub workspace: Option<PathBuf>,
+pub struct RepoAddArgs {
+    /// Repository path or its main checkout. Defaults to the current directory.
+    #[arg(value_name = "PATH")]
+    pub path: Option<PathBuf>,
 
-    /// Preview the migration without changing the Workspace Board or sources.
-    #[arg(long, conflicts_with = "resume")]
-    pub dry_run: bool,
+    /// Member name Tasks record in their `repo` field. Defaults to the
+    /// repository directory name.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+}
 
-    /// Resume an interrupted migration from its saved plan.
-    #[arg(long)]
-    pub resume: bool,
+#[derive(Debug, Args)]
+pub struct RepoRemoveArgs {
+    /// Member name or repository path recorded by `orbit repo add`.
+    #[arg(value_name = "REPOSITORY")]
+    pub repository: String,
 }
 
 #[derive(Debug, Args)]
@@ -914,12 +921,8 @@ pub struct GitHubArgs {
     pub command: GitHubCommand,
 }
 
-#[derive(Debug, Args)]
-pub struct WorkspaceArgs {
-    #[command(subcommand)]
-    pub command: WorkspaceCommand,
-}
-
+// Dormant argument types kept for `issue_catalog`, which the Remote Tracker
+// port (`orbit remote`) will re-home. There is no `orbit workspace` command.
 #[derive(Debug, Args)]
 pub struct WorkspaceIssuesArgs {
     #[command(subcommand)]
@@ -1007,83 +1010,6 @@ pub struct WorkspaceIssueMutationArgs {
     /// Apply the reviewed operation. Without this flag, nothing is written.
     #[arg(long)]
     pub apply: bool,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum WorkspaceCommand {
-    /// Combine existing Workspace and child-repository Boards.
-    #[command(long_about = help::WORKSPACE_MIGRATE_LONG, after_long_help = help::WORKSPACE_MIGRATE_EXAMPLES)]
-    Migrate(WorkspaceMigrateArgs),
-    /// Show the last explicitly refreshed repository catalog.
-    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
-    Status,
-    /// Discover direct child repositories and check GitHub access.
-    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
-    Refresh,
-    /// Include an organization-owned repository in the Workspace.
-    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
-    Include(WorkspaceRepositoryArgs),
-    /// Exclude an organization-owned repository from the Workspace.
-    #[command(after_long_help = help::WORKSPACE_EXAMPLES)]
-    Exclude(WorkspaceRepositoryArgs),
-    /// Preview or explicitly detach a repository and its Linked Tasks.
-    #[command(
-        long_about = help::WORKSPACE_DETACH_LONG,
-        after_long_help = help::WORKSPACE_EXAMPLES
-    )]
-    Detach(WorkspaceRepositoryMutationArgs),
-    /// Preview or explicitly reattach a repository by exact GitHub identity.
-    #[command(
-        long_about = help::WORKSPACE_REATTACH_LONG,
-        after_long_help = help::WORKSPACE_EXAMPLES
-    )]
-    Reattach(WorkspaceRepositoryMutationArgs),
-    /// Preview, install, or remove managed agent integrations in child repositories.
-    #[command(
-        long_about = help::WORKSPACE_SETUP_LONG,
-        after_long_help = help::WORKSPACE_EXAMPLES
-    )]
-    Setup(WorkspaceSetupArgs),
-    /// Browse the local Remote Issue catalog; refresh is explicit.
-    #[command(long_about = help::WORKSPACE_ISSUES_LONG, after_long_help = help::WORKSPACE_ISSUES_EXAMPLES)]
-    Issues(WorkspaceIssuesArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct WorkspaceSetupArgs {
-    /// Harnesses to configure: auto, all, none, ask, or a comma-separated list.
-    #[arg(long, value_name = "SELECTOR", conflicts_with = "remove")]
-    pub agents: Option<String>,
-
-    /// Install the SessionStart hook for Claude and Devin in selected repositories.
-    #[arg(long)]
-    pub hooks: bool,
-
-    /// Skip MCP configuration and install instructions only.
-    #[arg(long, conflicts_with_all = ["portable_mcp", "mcp_bin"])]
-    pub no_mcp: bool,
-
-    /// Write MCP configs with the portable `orbit` command instead of an absolute path.
-    #[arg(long, conflicts_with = "mcp_bin")]
-    pub portable_mcp: bool,
-
-    /// Orbit executable to record in MCP configs.
-    #[arg(long = "mcp-bin", value_name = "PATH")]
-    pub mcp_bin: Option<PathBuf>,
-
-    /// Preview all changes without writing files or saving the selection.
-    #[arg(long, conflicts_with = "remove")]
-    pub print: bool,
-
-    /// Remove only Orbit-managed Workspace and child-repository integrations.
-    #[arg(long, conflicts_with = "print")]
-    pub remove: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct WorkspaceRepositoryArgs {
-    #[arg(value_name = "OWNER/REPO")]
-    pub repository: String,
 }
 
 #[derive(Debug, Args)]

@@ -226,16 +226,26 @@ fn init_warns_when_no_selected_harness_uses_mcp() {
 }
 
 #[test]
-fn link_preserves_a_portable_mcp_configuration() {
+fn repo_add_preserves_a_portable_mcp_configuration() {
     let repo = TestRepo::new();
     repo.ok_json(&["init", "--agents", "opencode", "--portable-mcp", "--json"]);
 
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    let other = TestRepo::new();
-    other.init_at(&board);
+    let owner = TestRepo::new();
+    owner.init_at(&board);
+    let board_arg = board.to_str().unwrap();
 
-    repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
+    owner.ok_json(&[
+        "--dir",
+        board_arg,
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
 
     let opencode = repo.read_json("opencode.json");
     assert_eq!(
@@ -245,17 +255,27 @@ fn link_preserves_a_portable_mcp_configuration() {
 }
 
 #[test]
-fn link_refresh_preserves_each_clients_mcp_mode() {
+fn repo_add_refresh_preserves_each_clients_mcp_mode() {
     let repo = TestRepo::new();
     repo.ok_json(&["setup", "claude", "--portable-mcp", "--json"]);
     repo.ok_json(&["setup", "codex", "--json"]);
 
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    let other = TestRepo::new();
-    other.init_at(&board);
+    let owner = TestRepo::new();
+    owner.init_at(&board);
+    let board_arg = board.to_str().unwrap();
 
-    repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
+    owner.ok_json(&[
+        "--dir",
+        board_arg,
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
 
     let claude = repo.read_json(".mcp.json");
     assert_eq!(claude["mcpServers"]["orbit"]["command"], "orbit");
@@ -372,7 +392,6 @@ fn init_outside_a_git_repository_creates_a_workspace_board() {
 
     assert_eq!(status, 0, "{value}");
     assert_eq!(value["data"]["storage"], "repository");
-    assert_eq!(value["data"]["global"], false);
     assert!(outside.path().join(".orbit/board/config.toml").is_file());
     assert!(outside.path().join(".orbit/cache").is_dir());
 }
@@ -418,18 +437,28 @@ fn init_ask_rejects_an_unknown_answer_then_accepts() {
 }
 
 #[test]
-fn link_shares_one_board_between_repositories() {
-    let first = TestRepo::new();
+fn repo_add_shares_one_board_between_repositories() {
+    let owner = TestRepo::new();
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
     let board_arg = board.to_str().unwrap();
+    owner.init_at(&board);
 
-    first.init_at(&board);
-    first.link_at(&board);
-    let id = first.add("Cross-repo task", &[]);
-
+    let first = TestRepo::new();
     let second = TestRepo::new();
-    second.ok_json(&["link", board_arg, "--json"]);
+    for (member, name) in [(&first, "first"), (&second, "second")] {
+        owner.ok_json(&[
+            "--dir",
+            board_arg,
+            "repo",
+            "add",
+            member.path().to_str().unwrap(),
+            "--name",
+            name,
+            "--json",
+        ]);
+    }
+    let id = first.add("Cross-repo task", &[]);
 
     let listed = second.ok_json(&["list", "--all", "--json"]);
     assert_eq!(listed["data"]["tasks"][0]["id"], id);
@@ -440,12 +469,22 @@ fn link_shares_one_board_between_repositories() {
 }
 
 #[test]
-fn dir_overrides_a_link_for_one_command() {
-    let linked = TestRepo::new();
+fn dir_overrides_a_member_link_for_one_command() {
+    let member = TestRepo::new();
     let shared = tempfile::tempdir().unwrap();
     let shared_board = shared.path().join("board");
-    linked.init_at(&shared_board);
-    linked.link_at(&shared_board);
+    let owner = TestRepo::new();
+    owner.init_at(&shared_board);
+    owner.ok_json(&[
+        "--dir",
+        shared_board.to_str().unwrap(),
+        "repo",
+        "add",
+        member.path().to_str().unwrap(),
+        "--name",
+        "member",
+        "--json",
+    ]);
 
     let other = TestRepo::new();
     other.init();
@@ -453,24 +492,34 @@ fn dir_overrides_a_link_for_one_command() {
     let other_id = other.add("Other board task", &[]);
     let other_board_arg = other_board.to_str().unwrap();
 
-    let listed = linked.ok_json(&["--dir", other_board_arg, "list", "--all", "--json"]);
+    let listed = member.ok_json(&["--dir", other_board_arg, "list", "--all", "--json"]);
     assert_eq!(listed["data"]["tasks"][0]["id"], other_id);
 }
 
 #[test]
-fn orbit_dir_overrides_a_link() {
-    let linked = TestRepo::new();
+fn orbit_dir_overrides_a_member_link() {
+    let member = TestRepo::new();
     let shared = tempfile::tempdir().unwrap();
     let shared_board = shared.path().join("board");
-    linked.init_at(&shared_board);
-    linked.link_at(&shared_board);
+    let owner = TestRepo::new();
+    owner.init_at(&shared_board);
+    owner.ok_json(&[
+        "--dir",
+        shared_board.to_str().unwrap(),
+        "repo",
+        "add",
+        member.path().to_str().unwrap(),
+        "--name",
+        "member",
+        "--json",
+    ]);
 
     let other = TestRepo::new();
     other.init();
     let other_id = other.add("Other board task", &[]);
     let other_board = other.board_path();
 
-    let (status, value) = linked.json_with_env(
+    let (status, value) = member.json_with_env(
         &["list", "--all", "--json"],
         &[("ORBIT_DIR", other_board.to_str().unwrap())],
     );
@@ -479,12 +528,22 @@ fn orbit_dir_overrides_a_link() {
 }
 
 #[test]
-fn a_linked_worktree_resolves_the_shared_board() {
+fn a_member_worktree_resolves_the_shared_board() {
     let repo = TestRepo::new();
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    repo.init_at(&board);
-    repo.link_at(&board);
+    let owner = TestRepo::new();
+    owner.init_at(&board);
+    owner.ok_json(&[
+        "--dir",
+        board.to_str().unwrap(),
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
 
     let worktree_dir = tempfile::tempdir().unwrap();
     let worktree = worktree_dir.path().join("wt");
@@ -507,19 +566,30 @@ fn a_linked_worktree_resolves_the_shared_board() {
 }
 
 #[test]
-fn unlink_restores_the_local_board() {
+fn repo_remove_restores_the_local_board() {
     let repo = TestRepo::new();
     repo.init();
     let local_id = repo.add("Local task", &[]);
 
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    repo.init_at(&board);
-    repo.link_at(&board);
+    let board_arg = board.to_str().unwrap();
+    let owner = TestRepo::new();
+    owner.init_at(&board);
+    owner.ok_json(&[
+        "--dir",
+        board_arg,
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
     let shared_id = repo.add("Shared task", &[]);
     assert_ne!(local_id, shared_id);
 
-    repo.ok_json(&["unlink", "--json"]);
+    owner.ok_json(&["--dir", board_arg, "repo", "remove", "repo", "--json"]);
 
     let listed = repo.ok_json(&["list", "--all", "--json"]);
     let ids: Vec<&str> = listed["data"]["tasks"]
@@ -532,34 +602,44 @@ fn unlink_restores_the_local_board() {
 }
 
 #[test]
-fn link_rejects_a_directory_that_is_not_a_board() {
+fn repo_add_rejects_a_directory_that_is_not_a_repository() {
     let repo = TestRepo::new();
+    repo.init();
     let empty = tempfile::tempdir().unwrap();
 
-    let (status, value) = repo.json(&["link", empty.path().to_str().unwrap(), "--json"]);
+    let (status, value) = repo.json(&["repo", "add", empty.path().to_str().unwrap(), "--json"]);
 
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "LINK_NOT_FOUND");
+    assert_eq!(value["error"]["code"], "NOT_A_REPOSITORY");
 }
 
 #[test]
-fn link_warns_when_it_shadows_a_local_board() {
+fn repo_add_warns_when_it_shadows_a_local_board() {
     let repo = TestRepo::new();
     repo.init();
     let local_id = repo.add("Local task", &[]);
 
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    let other = TestRepo::new();
-    other.init_at(&board);
+    let owner = TestRepo::new();
+    owner.init_at(&board);
 
-    let value = repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
-    assert_eq!(value["data"]["shadowed"], true);
+    let value = owner.ok_json(&[
+        "--dir",
+        board.to_str().unwrap(),
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
     let warnings = value["meta"]["warnings"].as_array().unwrap();
     assert!(
         warnings
             .iter()
-            .any(|warning| warning.as_str().unwrap().contains("shadowed"))
+            .any(|warning| warning.as_str().unwrap().contains("own Board")),
+        "{value}"
     );
 
     // The local Board is untouched.
@@ -574,21 +654,29 @@ fn link_warns_when_it_shadows_a_local_board() {
 }
 
 #[test]
-fn init_in_a_linked_repository_requires_unlink() {
+fn init_in_a_member_repository_reuses_the_shared_board() {
     let repo = TestRepo::new();
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    let other = TestRepo::new();
-    other.init_at(&board);
-    repo.link_at(&board);
+    let owner = TestRepo::new();
+    owner.init_at(&board);
+    owner.ok_json(&[
+        "--dir",
+        board.to_str().unwrap(),
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
 
+    // `init` inside a member repository resolves the shared Board and refuses
+    // to shadow it with a local one.
     let (status, value) = repo.json(&["init", "--agents", "none", "--json"]);
-    assert_eq!(status, 1);
+    assert_eq!(status, 1, "{value}");
     assert_eq!(value["error"]["code"], "ALREADY_INITIALIZED");
-
-    repo.ok_json(&["unlink", "--json"]);
-    repo.ok_json(&["init", "--agents", "none", "--json"]);
-    assert!(repo.board_path().join("config.toml").exists());
+    assert!(!repo.board_path().exists());
 }
 
 #[test]
@@ -606,7 +694,7 @@ fn init_dir_is_idempotent() {
 }
 
 #[test]
-fn link_refreshes_an_absolute_board_path_out_of_existing_configs() {
+fn repo_add_refreshes_an_absolute_board_path_out_of_existing_configs() {
     let repo = TestRepo::new();
     repo.ok_json(&["init", "--agents", "claude", "--json"]);
     std::fs::write(
@@ -617,10 +705,19 @@ fn link_refreshes_an_absolute_board_path_out_of_existing_configs() {
 
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    let other = TestRepo::new();
-    other.init_at(&board);
+    let owner = TestRepo::new();
+    owner.init_at(&board);
 
-    repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
+    owner.ok_json(&[
+        "--dir",
+        board.to_str().unwrap(),
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
 
     let after = repo.read_json(".mcp.json");
     let args = after["mcpServers"]["orbit"]["args"].as_array().unwrap();
@@ -651,28 +748,29 @@ fn init_does_not_touch_a_custom_mattpocock_tracker_doc() {
 }
 
 #[test]
-fn link_recognizes_and_preserves_a_custom_mattpocock_tracker_doc() {
+fn repo_add_recognizes_and_preserves_a_custom_mattpocock_tracker_doc() {
     let repo = TestRepo::new();
-    repo.ok_json(&["init", "--agents", "none", "--json"]);
+    repo.ok_json(&["init", "--agents", "claude", "--json"]);
     let custom = "# Issue tracker: Orbit\n\nHand-written guidance.\n";
     std::fs::create_dir_all(repo.path().join("docs/agents")).unwrap();
     std::fs::write(repo.path().join("docs/agents/issue-tracker.md"), custom).unwrap();
 
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    let other = TestRepo::new();
-    other.init_at(&board);
+    let owner = TestRepo::new();
+    owner.init_at(&board);
 
-    let value = repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
+    owner.ok_json(&[
+        "--dir",
+        board.to_str().unwrap(),
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
     assert_eq!(repo.read("docs/agents/issue-tracker.md"), custom);
-    assert!(
-        value["meta"]["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|warning| warning.as_str().unwrap().contains("not managed")),
-        "{value}"
-    );
 }
 
 #[test]
@@ -862,21 +960,29 @@ fn init_dir_works_outside_a_git_repository() {
     );
 
     assert_eq!(value["data"]["storage"], "repository");
-    assert_eq!(value["data"]["global"], false);
     assert!(board.join("config.toml").is_file());
 }
 
 #[test]
-fn unlink_refreshes_agent_configuration_back_to_the_local_board() {
+fn repo_remove_refreshes_agent_configuration_back_to_the_local_board() {
     let repo = TestRepo::new();
     repo.ok_json(&["init", "--agents", "claude", "--json"]);
 
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    let other = TestRepo::new();
-    other.init_at(&board);
-
-    repo.ok_json(&["link", board.to_str().unwrap(), "--json"]);
+    let board_arg = board.to_str().unwrap();
+    let owner = TestRepo::new();
+    owner.init_at(&board);
+    owner.ok_json(&[
+        "--dir",
+        board_arg,
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
     let linked = repo.read_json(".mcp.json");
     assert_eq!(
         linked["mcpServers"]["orbit"]["args"],
@@ -889,7 +995,7 @@ fn unlink_refreshes_agent_configuration_back_to_the_local_board() {
     )
     .unwrap();
 
-    repo.ok_json(&["unlink", "--json"]);
+    owner.ok_json(&["--dir", board_arg, "repo", "remove", "repo", "--json"]);
     let local = repo.read_json(".mcp.json");
     assert_eq!(
         local["mcpServers"]["orbit"]["args"],
@@ -929,13 +1035,23 @@ fn setup_refuses_a_temporary_binary() {
 }
 
 #[test]
-fn link_reports_a_vanished_board() {
+fn a_member_link_reports_a_vanished_board() {
     let repo = TestRepo::new();
     repo.init();
     let shared = tempfile::tempdir().unwrap();
     let board = shared.path().join("board");
-    repo.init_at(&board);
-    repo.link_at(&board);
+    let owner = TestRepo::new();
+    owner.init_at(&board);
+    owner.ok_json(&[
+        "--dir",
+        board.to_str().unwrap(),
+        "repo",
+        "add",
+        repo.path().to_str().unwrap(),
+        "--name",
+        "repo",
+        "--json",
+    ]);
 
     std::fs::remove_dir_all(&board).unwrap();
 
@@ -946,7 +1062,7 @@ fn link_reports_a_vanished_board() {
         value["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("re-link")
+            .contains("repo add")
     );
 }
 

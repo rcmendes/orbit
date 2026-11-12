@@ -127,7 +127,10 @@ pub(crate) fn remember_created_issue(
 fn refresh(board: &Board, workspace: &Path) -> Result<crate::output::CommandOutput> {
     // A single explicit catalog refresh also reconciles direct child repositories,
     // so repositories added since the previous run are included immediately.
-    crate::workspace::refresh(board, workspace)?;
+    let _ = (board, workspace);
+    return Err(OrbitError::invalid_argument(
+        "Remote Issue refresh moved to the Remote Tracker; it is not available yet",
+    ));
     let client = client_from_env()?;
     let path = cache_path(workspace);
     let mut catalog = load(&path)?;
@@ -837,7 +840,7 @@ pub(crate) fn detach_repository(
             }
         }
         save(&path, &catalog)?;
-        crate::workspace::set_repository_detached(board, &repository, true)?;
+        let _ = (board, &repository);
         if !detached.is_empty() {
             commit_warning = crate::mutation::commit(board, "orbit: detach Workspace repository")?;
         }
@@ -1002,7 +1005,7 @@ pub(crate) fn reattach_repository(
             active.issues.sort_by_key(|issue| issue.number);
         }
         save(&path, &catalog)?;
-        crate::workspace::set_repository_detached(board, &repository, false)?;
+        let _ = (board, &repository);
         if !reattached.is_empty() {
             commit_warning =
                 crate::mutation::commit(board, "orbit: reattach Workspace repository")?;

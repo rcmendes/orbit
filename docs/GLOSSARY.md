@@ -224,8 +224,8 @@ _Avoid_: Active link, inactive GitHub provenance
 **Legacy layout**:
 A Board stored anywhere other than a Board folder under an Orbit folder: a Board
 directly in `.orbit/` (including the former `~/.orbit` Global Board), the hidden
-worktree at `<git-common-dir>/orbit/board`, `<workspace>/board`, or
-`<workspace>/.board`. Discovery does not resolve a Legacy layout; a one-time
+worktree at `<git-common-dir>/orbit/board`, `<anchor>/board`, or
+`<anchor>/.board`. Discovery does not resolve a Legacy layout; a one-time
 migration converts it to the current layout.
 _Avoid_: Old mode, compatibility board
 

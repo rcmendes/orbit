@@ -184,7 +184,7 @@ fn init_dir_prints_a_next_step() {
     assert!(stdout.contains("Orbit setup complete."), "{stdout}");
     assert!(stdout.contains("1. Board (created)"), "{stdout}");
     assert!(
-        stdout.contains("Workspace Board at <workspace>/.orbit/board"),
+        stdout.contains("Board at <anchor>/.orbit/board"),
         "{stdout}"
     );
     assert!(!stdout.contains("orbit link"), "{stdout}");
@@ -401,27 +401,6 @@ fn init_refreshes_a_missing_exclusion() {
 }
 
 #[test]
-fn init_ignores_the_global_fallback_as_a_conflict() {
-    let repo = TestRepo::new();
-    let home = repo.path().to_str().unwrap();
-    let env = [("HOME", home), ("USERPROFILE", home)];
-
-    let global = repo.orbit_with_env(&["init", "--global", "--agents", "none", "--json"], &env);
-    assert!(
-        global.status.success(),
-        "{}",
-        String::from_utf8_lossy(&global.stderr)
-    );
-
-    let (status, value) =
-        repo.json_with_env(&["init", "sub/.orbit", "--agents", "none", "--json"], &env);
-
-    assert_eq!(status, 0, "{value}");
-    assert_eq!(value["data"]["storage"], "repository");
-    assert!(repo.path().join("sub/.orbit/board/config.toml").is_file());
-}
-
-#[test]
 fn init_reuses_the_repository_board() {
     let repo = TestRepo::new();
     let sub = repo.path().join("sub");
@@ -441,39 +420,6 @@ fn init_reuses_the_repository_board() {
     // The Board lives under `.orbit/board`; `.orbit` itself stays a plain
     // Orbit folder, never a Board root.
     assert!(!repo.path().join(".orbit/config.toml").exists());
-}
-
-#[test]
-fn init_global_conflicts_with_dir() {
-    let repo = TestRepo::new();
-    let target = repo.path().join("elsewhere");
-
-    let (status, value) = repo.json(&[
-        "--dir",
-        target.to_str().unwrap(),
-        "init",
-        "--global",
-        "--agents",
-        "none",
-        "--json",
-    ]);
-
-    assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
-    assert!(!target.exists());
-}
-
-#[test]
-fn init_global_conflicts_with_orbit_dir_env() {
-    let repo = TestRepo::new();
-
-    let (status, value) = repo.json_with_env(
-        &["init", "--global", "--agents", "none", "--json"],
-        &[("ORBIT_DIR", repo.path().to_str().unwrap())],
-    );
-
-    assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
 }
 
 #[test]
@@ -502,30 +448,7 @@ fn init_positional_dir_wins_over_dir_override() {
 }
 
 #[test]
-fn link_warns_for_a_legacy_board_without_storage() {
-    let repo = TestRepo::new();
-    let parent = tempfile::tempdir().unwrap();
-    let board = parent.path().join("old-board");
-    std::fs::create_dir_all(board.join("tasks")).unwrap();
-    std::fs::create_dir_all(board.join("comments")).unwrap();
-    std::fs::write(
-        board.join("config.toml"),
-        "[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"orb-\"\n",
-    )
-    .unwrap();
-
-    let linked = repo.link_at(&board);
-
-    let warnings = linked["meta"]["warnings"].as_array().unwrap();
-    assert!(
-        warnings
-            .iter()
-            .any(|warning| warning.as_str().unwrap().contains("LEGACY_LAYOUT"))
-    );
-}
-
-#[test]
-fn link_accepts_a_legacy_workspace_root() {
+fn a_member_link_resolves_a_legacy_workspace_root_board() {
     let creator = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();
     let workspace = parent.path().join("acme");
@@ -534,16 +457,14 @@ fn link_accepts_a_legacy_workspace_root() {
     creator.legacy_board_files(&workspace.join("board"), "orb-");
 
     let joiner = TestRepo::new();
-    let linked = joiner.link_at(&workspace);
+    // A link pointer written before the revamp may target the Workspace root;
+    // discovery still resolves the nested legacy Board and gates commands
+    // until `orbit migrate` converts it.
+    let link = joiner.path().join(".git/orbit/link");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::fs::write(&link, format!("{}\n", workspace.display())).unwrap();
 
-    assert_eq!(
-        linked["data"]["board"].as_str().unwrap(),
-        canonical(&workspace.join("board"))
-    );
-    let warnings = linked["meta"]["warnings"].as_array().unwrap();
-    assert!(
-        warnings
-            .iter()
-            .any(|warning| warning.as_str().unwrap().contains("LEGACY_LAYOUT"))
-    );
+    let (status, value) = joiner.json(&["list", "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "BOARD_NOT_MIGRATED");
 }

@@ -159,7 +159,7 @@ pub enum Command {
     #[command(name = "github", long_about = help::GITHUB_LONG, after_long_help = help::GITHUB_EXAMPLES)]
     GitHub(GitHubArgs),
 
-    /// Review and apply agent triage proposals for GitHub-linked Tasks.
+    /// Review and apply agent triage proposals for Tasks.
     #[command(long_about = help::TRIAGE_LONG, after_long_help = help::TRIAGE_EXAMPLES)]
     Triage(TriageArgs),
 }
@@ -901,10 +901,10 @@ pub enum TriageCommand {
         #[arg(value_name = "TASK")]
         task: String,
     },
-    /// Validate and review a proposal JSON file or stdin without writing to GitHub.
+    /// Validate and review a proposal JSON file or stdin without publishing.
     #[command(after_long_help = help::TRIAGE_REVIEW_EXAMPLES)]
     Review(TriageReviewArgs),
-    /// Apply an approved proposal to Orbit (not GitHub).
+    /// Apply an approved proposal to Orbit only.
     #[command(after_long_help = help::TRIAGE_APPLY_EXAMPLES)]
     Apply(TriageApplyArgs),
 }

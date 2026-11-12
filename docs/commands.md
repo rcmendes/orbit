@@ -64,7 +64,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Recover or maintain the board | `orbit doctor`, `orbit sync` |
 | Host and synchronize the Board | `orbit board host`, `orbit board sync` |
 | Link GitHub Issues (optional) | `orbit github` — see [github-sync.md](./github-sync.md) |
-| Triage linked Tasks | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
+| Triage Tasks | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
 
 ## Set up a Board
 
@@ -977,13 +977,16 @@ permissions, and remediation.
 
 ### `orbit triage` — agent review and apply
 
-Reviews GitHub-linked Tasks only. Review displays field-by-field changes and, when a
+Works on Local and Linked Tasks. For a Linked Task, only the Remote Project's
+Mapped fields can be proposed, since those are the only fields a later sync
+publishes. Review displays field-by-field changes and, when a
 proposal file is used with stdin and stdout connected to terminals, prompts for
 explicit approval or cancellation. Non-TTY and `--json` reviews only preview; they
 never prompt or apply. `--proposal-file -` reads a proposal from stdin. Applying
-changes Orbit; with `[github] auto_push = true`, the changed labels, `area`, and
-`verification` are pushed immediately. Otherwise, publish approved linked Task
-changes with an explicit `orbit github sync`. See
+changes Orbit; with Remote Tracker auto-push enabled, the changed mapped fields
+are pushed immediately. Otherwise, publish approved Linked Task
+changes with an explicit Remote Tracker sync (`orbit github sync` for GitHub).
+Local Tasks report `sync_required: false`. See
 [agents/triage-workflow.md](./agents/triage-workflow.md).
 
 Apply preserves metadata on disk if the automatic Git commit fails and reports

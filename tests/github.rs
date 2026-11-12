@@ -2717,7 +2717,7 @@ fn auto_push_warns_and_preserves_a_remote_conflict() {
         warnings.iter().any(|warning| warning
             .as_str()
             .unwrap()
-            .contains("GITHUB_AUTO_PUSH_CONFLICT")),
+            .contains("REMOTE_AUTO_PUSH_CONFLICT")),
         "{warnings:?}"
     );
     assert_eq!(fixture_issue(&fixture, 1)["title"], "Remote edit");
@@ -2818,7 +2818,7 @@ fn auto_push_basic_mode_keeps_area_and_verification_local() {
     assert!(
         warnings
             .iter()
-            .any(|warning| warning.as_str().unwrap().contains("basic mode cannot sync")),
+            .any(|warning| warning.as_str().unwrap().contains("cannot sync task")),
         "{warnings:?}"
     );
     let fixture_json: serde_json::Value =

@@ -1,39 +1,7 @@
-use crate::error::{OrbitError, Result};
-use crate::task::TaskArea;
+//! Orbit field validators. The implementations are provider-neutral and
+//! live in [`crate::task`]; re-exported here for GitHub-side callers.
 
-pub fn parse_area(value: &str) -> Result<TaskArea> {
-    let normalized = value.trim();
-    TaskArea::all()
-        .iter()
-        .copied()
-        .find(|area| area.as_str() == normalized)
-        .ok_or_else(|| {
-            OrbitError::invalid_argument(format!(
-                "area must be one of: {}",
-                TaskArea::all()
-                    .iter()
-                    .map(|area| area.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        })
-}
-
-pub fn validate_verification(value: &str) -> Result<()> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(OrbitError::invalid_argument(
-            "verification must be non-empty when set",
-        ));
-    }
-    if trimmed.len() > crate::task::MAX_VERIFICATION_LENGTH {
-        return Err(OrbitError::invalid_argument(format!(
-            "verification must be at most {} characters",
-            crate::task::MAX_VERIFICATION_LENGTH
-        )));
-    }
-    Ok(())
-}
+pub use crate::task::{parse_area, validate_verification};
 
 #[cfg(test)]
 mod tests {
@@ -41,7 +9,7 @@ mod tests {
 
     #[test]
     fn accepts_controlled_area_values() {
-        assert_eq!(parse_area("cli").unwrap(), TaskArea::Cli);
+        assert_eq!(parse_area("cli").unwrap(), crate::task::TaskArea::Cli);
     }
 
     #[test]

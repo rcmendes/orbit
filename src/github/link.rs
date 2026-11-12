@@ -67,6 +67,26 @@ impl GitHubLink {
         format!("{}/#{}", self.repo, self.number)
     }
 
+    /// Provider-neutral form of this link (`remote:` frontmatter, ADR 0018).
+    pub fn to_remote_link(&self) -> crate::task::RemoteLink {
+        crate::task::RemoteLink {
+            tracker: "github".to_string(),
+            project: self.repo.clone(),
+            id: self.number.to_string(),
+            url: Some(format!(
+                "https://github.com/{}/issues/{}",
+                self.repo, self.number
+            )),
+            active: self.active,
+            baseline: self.last_sync.as_ref().map(|_| {
+                // The baseline is re-encoded from the decoded view wherever a
+                // RemoteLinkView is available; keep the raw GitHub baseline
+                // until then so nothing is lost.
+                serde_yaml_ng::to_value(self.last_sync.clone().unwrap()).unwrap_or_default()
+            }),
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         crate::github::config::GitHubConfig::normalize_repo(&self.repo)?;
         if self.number == 0 {
@@ -75,5 +95,45 @@ impl GitHubLink {
             ));
         }
         Ok(())
+    }
+}
+
+impl GitHubSyncBaseline {
+    /// Provider-neutral baseline view used by the sync engine.
+    pub fn to_sync_baseline(&self) -> crate::remote::model::SyncBaseline {
+        crate::remote::model::SyncBaseline {
+            at: self.at,
+            remote_updated_at: self.issue_updated_at,
+            orbit_updated_at: self.orbit_updated_at,
+            title: self.title.clone(),
+            body: self.body.clone(),
+            labels: self.labels.clone(),
+            area: self.area.clone(),
+            verification: self.verification.clone(),
+            status: self.status,
+            remote_status: self.issue_state.map(|state| {
+                crate::github::status::status_from_issue(
+                    state,
+                    self.issue_state_reason,
+                    &self.labels,
+                )
+            }),
+            subtasks: self
+                .sub_issues
+                .iter()
+                .map(|issue| crate::remote::model::RemoteIssueRef {
+                    project: issue.repo.clone(),
+                    id: issue.number.to_string(),
+                })
+                .collect(),
+            blocked_by: self
+                .blocked_by
+                .iter()
+                .map(|issue| crate::remote::model::RemoteIssueRef {
+                    project: issue.repo.clone(),
+                    id: issue.number.to_string(),
+                })
+                .collect(),
+        }
     }
 }

@@ -99,6 +99,7 @@ fn cmd_add(board: &Board, args: RepoAddArgs) -> Result<CommandOutput> {
             config.repositories.push(RepositoryConfig {
                 name: name.clone(),
                 path: main.clone(),
+                remote_project: None,
             });
             Ok(())
         })?;

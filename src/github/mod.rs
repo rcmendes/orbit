@@ -1,3 +1,4 @@
+pub mod adapter;
 pub mod auto_push;
 pub mod client;
 pub mod commands;

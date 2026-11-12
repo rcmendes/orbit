@@ -14,6 +14,42 @@ pub const MAX_LABEL_LENGTH: usize = 32;
 pub const MAX_VERIFICATION_LENGTH: usize = 2000;
 pub const MAX_REPO_LENGTH: usize = 128;
 
+/// Parse an Orbit `area` value into its controlled vocabulary.
+pub fn parse_area(value: &str) -> Result<TaskArea> {
+    let normalized = value.trim();
+    TaskArea::all()
+        .iter()
+        .copied()
+        .find(|area| area.as_str() == normalized)
+        .ok_or_else(|| {
+            OrbitError::invalid_argument(format!(
+                "area must be one of: {}",
+                TaskArea::all()
+                    .iter()
+                    .map(|area| area.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })
+}
+
+/// Validate an Orbit `verification` value.
+pub fn validate_verification(value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(OrbitError::invalid_argument(
+            "verification must be non-empty when set",
+        ));
+    }
+    if trimmed.len() > MAX_VERIFICATION_LENGTH {
+        return Err(OrbitError::invalid_argument(format!(
+            "verification must be at most {} characters",
+            MAX_VERIFICATION_LENGTH
+        )));
+    }
+    Ok(())
+}
+
 /// Stable classification of where work primarily lands in the repository.
 /// Shared metadata for agents and filters; not personal or session-local state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
@@ -385,6 +421,13 @@ impl Task {
 
     pub fn github_link(&self) -> Option<&GitHubLink> {
         self.front.github.as_ref().filter(|link| link.active)
+    }
+
+    /// The Task's active provider-neutral Remote Issue link (`remote:`
+    /// frontmatter). Legacy `github:` links are read through
+    /// [`crate::remote::link::active_link`] instead.
+    pub fn remote_link(&self) -> Option<&RemoteLink> {
+        self.front.remote.as_ref().filter(|link| link.active)
     }
 
     pub fn has_labels(&self, labels: &[String]) -> bool {

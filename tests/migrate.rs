@@ -184,10 +184,19 @@ fn migrate_apply_moves_a_legacy_workspace_board() {
     assert!(workspace.join(".orbit/cache").is_dir());
     assert!(migrated.join("tasks").join("orb-c9d4e1.md").is_file());
 
-    // A Repository linked at the Workspace root keeps resolving the moved
-    // Board through the Orbit folder.
+    // A Repository added as a member keeps resolving the Board through its
+    // link pointer.
     let joiner = TestRepo::new();
-    joiner.ok_json(&["link", workspace.to_str().unwrap(), "--json"]);
+    creator.ok_json(&[
+        "--dir",
+        workspace.to_str().unwrap(),
+        "repo",
+        "add",
+        joiner.path().to_str().unwrap(),
+        "--name",
+        "joiner",
+        "--json",
+    ]);
     let listed = joiner.ok_json(&["list", "--all", "--json"]);
     assert_eq!(listed["data"]["tasks"][0]["id"], "orb-c9d4e1");
 }

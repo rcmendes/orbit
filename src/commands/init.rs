@@ -366,7 +366,7 @@ fn render_init_human(report: &InitReport<'_>) -> String {
     } else {
         "3. Verify\n"
     });
-    human.push_str("   orbit doctor   # check the Board, worktree link, and PATH\n\n");
+    human.push_str("   orbit doctor   # check the Board and agent setup\n\n");
 
     if preview {
         human.push_str("Re-run the same command without --print to apply these changes.\n");

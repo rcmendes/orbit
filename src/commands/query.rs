@@ -311,6 +311,9 @@ Use the CLI; never edit task files directly.\n\
     if !label_filters.is_empty() {
         human.push_str(&format!("scope: {}\n", label_filters.join(", ")));
     }
+    if let Some(repo) = &repo_filter {
+        human.push_str(&format!("repository: {repo}\n"));
+    }
     human.push_str(&format!(
         "counts: total={} ready={} stale={} in_progress={} waiting={} blocked={}\n",
         counts.total,
@@ -351,6 +354,7 @@ Use the CLI; never edit task files directly.\n\
             "agent": agent,
             "instructions": instructions,
             "labels": label_filters,
+            "repo": repo_filter,
             "counts": counts,
             "ready": ready,
             "close_candidates": close_candidates,

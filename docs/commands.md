@@ -555,7 +555,9 @@ any listed shape. `--label` is repeatable and every label must match;
 `--exclude-label` is repeatable and hides a task carrying any of the named labels.
 `--repo NAME` matches the Task's `repo` field or its legacy `repo:NAME` label;
 explicit `--label` filters remain additional requirements. This applies to
-`list`, `ready` (including `--claim`), and `prime`. Parent groups follow the
+`list`, `ready` (including `--claim`), and `prime`. Prime reports the Repository
+filter separately as `repo` in JSON and `repository:` in human output; its
+`labels` contains only explicit label filters. Parent groups follow the
 parent's priority; SubTasks inside a group follow their own priority. Tasks with
 no parent appear in the final `No parent` section. JSON always carries `kind`,
 `type`, `parent`, `subtasks`, and `open_subtasks` with the full title. A Parent

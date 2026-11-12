@@ -378,8 +378,16 @@ fn ensure_board_repo(root: &Path, branch: &str) -> Result<()> {
     if root.join(".git").exists() {
         return Ok(());
     }
-    // A nested repository over files an enclosing repository tracks would
-    // split their history; leave that to the user.
+    refuse_tracked(root)?;
+    crate::git::init_repo(root)?;
+    crate::git::set_head(root, branch)?;
+    Ok(())
+}
+
+/// A Board folder whose files an enclosing repository tracks cannot become
+/// its own repository or move away without splitting that history; leave
+/// that to the user.
+fn refuse_tracked(root: &Path) -> Result<()> {
     let canonical = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     if let Some(top) = crate::git::toplevel_containing(&canonical)
         && let Ok(top) = dunce::canonicalize(&top)
@@ -393,8 +401,6 @@ fn ensure_board_repo(root: &Path, branch: &str) -> Result<()> {
             top.display()
         )));
     }
-    crate::git::init_repo(root)?;
-    crate::git::set_head(root, branch)?;
     Ok(())
 }
 
@@ -456,7 +462,10 @@ fn migrate_to_orbit_board(
     }
 
     // Standalone repository: move the folder, ensure it is a repository,
-    // then convert content in place.
+    // then convert content in place. Check tracking before the move.
+    if !source.join(".git").exists() {
+        refuse_tracked(&source)?;
+    }
     move_board_folder(&source, target)?;
     ensure_board_repo(target, &board.config.board.branch)?;
     if content_needed {
@@ -495,13 +504,14 @@ fn move_board_folder(source: &Path, target: &Path) -> Result<()> {
 
     // `<orbit>` → `<orbit>/board`: keep the Orbit folder, move the Board
     // repository into it.
+    // A fixed name, so a folder left by an interrupted run is found; the
+    // Board lock keeps two migrations from sharing it.
     let temp = source.with_file_name(format!(
-        "{}.migrate-{}",
+        "{}.migrate",
         source
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| ".orbit".to_string()),
-        std::process::id()
     ));
     refuse_stale(&temp)?;
     std::fs::rename(source, &temp).map_err(|e| {
@@ -567,8 +577,9 @@ fn migrate_worktree(
     })?;
     let branch = board.config.board.branch.clone();
 
-    // Validate before anything destructive: the target must be free.
-    if target.exists() {
+    // Validate before anything destructive: the target must be free, unless
+    // the worktree already sits there (it is removed before the move).
+    if target.exists() && target != source {
         return Err(OrbitError::config(format!(
             "migration target {} already exists",
             target.display()
@@ -576,15 +587,29 @@ fn migrate_worktree(
     }
     // The stage only captures committed history and the worktree is removed
     // with `--force`: commit pending Board edits first so none are lost.
+    // `--no-verify`: the code repository's hooks must not block this
+    // internal commit.
     if git_has_changes(&source)? {
-        crate::git::commit(&source, "orbit: save pending changes before migrate")?;
+        git_out(&source, &["add", "-A"])?;
+        git_out(
+            &source,
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--no-verify",
+                "-q",
+                "-m",
+                "orbit: save pending changes before migrate",
+            ],
+        )?;
     }
 
     // Stage a standalone clone of the Board branch next to the Orbit folder.
     let stage = orbit
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join(format!(".orbit-migrate-{}", std::process::id()));
+        .join(".orbit-migrate");
     refuse_stale(&stage)?;
     std::fs::create_dir_all(&stage)
         .map_err(|e| OrbitError::io(format!("create {}", stage.display()), e))?;

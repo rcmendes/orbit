@@ -90,10 +90,12 @@ pub(crate) fn is_direct_git_repository(path: &Path) -> bool {
 }
 
 pub(crate) fn is_git_tracked(root: &Path, relative: &str) -> bool {
+    // `:(literal)` so glob characters in a path never match other files.
+    let pathspec = format!(":(literal){relative}");
     Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["ls-files", "--error-unmatch", "--", relative])
+        .args(["ls-files", "--error-unmatch", "--", &pathspec])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -756,11 +758,11 @@ pub fn commit_tree_parents(
     Ok(commit)
 }
 
-/// Runs a git command that talks to a remote. It never prompts for
-/// credentials and aborts an HTTP transfer that stalls, so a dead host fails
-/// fast instead of hanging an agent. User-set values win.
-// shortcut: SSH hosts keep the user's ssh config (no connect timeout forced),
-// add a process timeout if hung SSH hosts show up in practice.
+/// Runs a git command that talks to a remote. It never prompts — no
+/// credential, passphrase, or host-key questions — and aborts a stalled HTTP
+/// transfer or an SSH connect that hangs, so a dead host fails fast instead
+/// of hanging an agent. User-set values (environment or `core.sshCommand`)
+/// win.
 fn run_git_network(repo: &Path, args: &[&str]) -> Result<Output> {
     let mut command = Command::new("git");
     command.arg("-C").arg(repo).args(args);
@@ -772,6 +774,17 @@ fn run_git_network(repo: &Path, args: &[&str]) -> Result<Output> {
         if std::env::var_os(key).is_none() {
             command.env(key, value);
         }
+    }
+    // `GIT_SSH_COMMAND` outranks `core.sshCommand`, so only set it when the
+    // user configured neither (nor the older `GIT_SSH`).
+    if std::env::var_os("GIT_SSH_COMMAND").is_none()
+        && std::env::var_os("GIT_SSH").is_none()
+        && matches!(config_get(repo, "core.sshCommand"), Ok(None))
+    {
+        command.env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o ConnectTimeout=15",
+        );
     }
     command
         .stdin(Stdio::null())

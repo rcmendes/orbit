@@ -907,7 +907,8 @@ repository path or URL, and clears it with `--none` — clearing never deletes
 the remote `orbit` branch. `orbit board sync` commits pending changes,
 fetches the host, merges Orbit-aware, and pushes: different Tasks merge,
 different fields of the same Task merge, Comments union, the earlier Claim
-wins and the loser is told on the Task, and history is merged — never
+wins and the loser is told on the Task, a Task merged to `done` or
+`cancelled` keeps no Claim, and history is merged — never
 rebased or force-pushed. A same-field conflict stops the sync with
 `BOARD_SYNC_CONFLICT`; rerun with repeatable `--resolve FIELD=local|host`
 to pick a side (`config` resolves `config.toml`, `<task-id>` a whole Task
@@ -919,8 +920,11 @@ warnings, never errors, and `--no-sync` suppresses them.
 
 Sync holds the Board lock only for the local commit and merge, never during
 the fetch or push, so a slow host does not block other agents. Host git
-commands never prompt for credentials, and an HTTP transfer that stalls
-for 30 seconds is aborted. Set `GIT_HTTP_LOW_SPEED_TIME` to change that.
+commands never prompt: SSH runs in batch mode with a 15-second connect
+timeout, unless `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand` is set, and
+an HTTP transfer that stalls for 30 seconds is aborted (set
+`GIT_HTTP_LOW_SPEED_TIME` to change that). When a concurrent sync wins the
+race to the host, sync retries once with a fresh fetch.
 
 **Good fit:** keeping one Board's history on a shared repository so several
 machines or clones work from the same Tasks.

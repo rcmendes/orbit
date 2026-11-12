@@ -704,3 +704,50 @@ fn sync_refuses_a_host_branch_replaced_by_another_board() {
     let (_, error) = repo.err_json(&["board", "sync", "--json"]);
     assert_eq!(error["error"]["code"], "BOARD_HOST_CONFLICT", "{error}");
 }
+
+#[test]
+fn sync_drops_a_host_claim_on_a_task_finished_locally() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Finished task", &[]);
+    let host = bare_host(&repo, "host.git");
+    repo.ok_json(&["board", "host", &host_arg(&host), "--json"]);
+    repo.ok_json(&["claim", &id, "--by", "agent-local", "--json"]);
+    repo.ok_json(&["board", "sync", "--json"]);
+    let peer = peer_clone(&repo, &host);
+
+    // On the host, another agent takes the claim over.
+    let task_relative = format!("tasks/{id}.md");
+    let remote_task: String = peer_read(&peer, &task_relative)
+        .lines()
+        .map(|line| {
+            if line.starts_with("claimed_by:") {
+                "claimed_by: agent-peer".to_string()
+            } else if line.starts_with("claimed_at:") {
+                "claimed_at: 2030-01-01T00:00:00Z".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    peer_write(&peer, &task_relative, &format!("{remote_task}\n"));
+    peer_commit(&repo, &peer, "host takeover");
+
+    // Locally the original holder finishes the Task.
+    repo.ok_json(&[
+        "done",
+        &id,
+        "--by",
+        "agent-local",
+        "--comment",
+        "shipped",
+        "--json",
+    ]);
+
+    let merged = repo.ok_json(&["board", "sync", "--json"]);
+    assert_eq!(merged["data"]["state"], "merged", "{merged}");
+    let task = repo.read_task(&id);
+    assert!(task.contains("status: done"), "{task}");
+    assert!(!task.contains("claimed_by:"), "{task}");
+}

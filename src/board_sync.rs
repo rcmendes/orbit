@@ -17,7 +17,7 @@ use crate::board_host;
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
-use crate::task::{self, Claim, StrayClaimTimes, Task, TaskFrontmatter};
+use crate::task::{self, Claim, Status, StrayClaimTimes, Task, TaskFrontmatter};
 
 static SUPPRESSED: AtomicBool = AtomicBool::new(false);
 
@@ -154,6 +154,15 @@ struct MergeOutcome {
 /// local commit, merge and reset, never across the network fetch or push, so
 /// a slow host never blocks other agents on the Board.
 pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
+    match sync_once(board, resolution_args) {
+        // Another process synced between our fetch and push (rejected push,
+        // locked ref or config): one fresh attempt picks up its result.
+        Err(error) if error.code == code::GIT_ERROR => sync_once(board, resolution_args),
+        result => result,
+    }
+}
+
+fn sync_once(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
     // Load fresh: `orbit board host` may have changed the config mid-command.
     let config = Config::load(&board.root)?;
     let spec = config.board.host.clone().ok_or_else(|| {
@@ -589,14 +598,22 @@ fn claim_notice(task: &str, winner: &Claim, loser: Option<&Claim>) -> ClaimNotic
 }
 
 /// Claim merge: the earlier Claim wins and the loser is told; a Claim always
-/// beats a release when both sides changed it differently.
+/// beats a release when both sides changed it differently. A Task whose
+/// merged status is terminal keeps no Claim.
 fn merge_claim(
     id: &str,
+    status: Status,
     base: &ClaimSide,
     local: &ClaimSide,
     remote: &ClaimSide,
     outcome: &mut MergeOutcome,
 ) -> ClaimSide {
+    if status.is_terminal() {
+        return ClaimSide {
+            claim: None,
+            stray: later_stray(&local.stray, &remote.stray),
+        };
+    }
     // The same claim on both sides keeps the freshest lease.
     if let (Some(local_claim), Some(remote_claim)) = (&local.claim, &remote.claim)
         && claim_identity(local_claim) == claim_identity(remote_claim)
@@ -780,6 +797,7 @@ fn merge_task(
 
     let claim = merge_claim(
         id,
+        status,
         &ClaimSide::of(base_front),
         &ClaimSide::of(Some(&local.front)),
         &ClaimSide::of(Some(&remote.front)),

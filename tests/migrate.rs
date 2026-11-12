@@ -161,6 +161,25 @@ fn migrate_apply_converts_a_worktree_backed_board() {
 }
 
 #[test]
+fn migrate_apply_converts_a_worktree_board_already_at_its_final_folder() {
+    let repo = TestRepo::new();
+    let board = repo.board_path();
+    std::fs::create_dir_all(board.parent().unwrap()).unwrap();
+    repo.legacy_worktree_board(&board);
+    write_task(&board, "orb-f2a7b4", &task_content("Anchored task", ""));
+    commit_all(&repo, &board, "task");
+
+    let value = repo.ok_json(&["migrate", "--apply", "--json"]);
+
+    assert_eq!(value["data"]["applied"], true, "{value}");
+    // Now a standalone repository, not a worktree.
+    assert!(board.join(".git").is_dir());
+    assert!(board.join("tasks").join("orb-f2a7b4.md").is_file());
+    let listed = repo.ok_json(&["list", "--all", "--json"]);
+    assert_eq!(listed["data"]["tasks"][0]["id"], "orb-f2a7b4");
+}
+
+#[test]
 fn migrate_apply_keeps_uncommitted_worktree_board_edits() {
     let repo = TestRepo::new();
     let board = repo.orbit_path();

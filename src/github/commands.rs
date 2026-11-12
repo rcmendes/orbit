@@ -1258,7 +1258,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                 "title": task.front.title,
                 "body": task.body,
                 "labels": task.front.labels,
-                "area": task.front.area.map(|area| area.as_str()),
+                "area": task.front.area.as_deref(),
                 "verification": task.front.verification,
                 "status": task.front.status,
                 "issue_state": issue_state,
@@ -1278,7 +1278,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             "title": task.front.title,
             "body": task.body,
             "labels": task.front.labels,
-            "area": task.front.area.map(|area| area.as_str()),
+            "area": task.front.area.as_deref(),
             "verification": task.front.verification,
             "status": task.front.status,
             "issue_state": issue_state,
@@ -1308,7 +1308,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
                     "title": task.front.title,
                     "body": task.body,
                     "labels": task.front.labels,
-                    "area": task.front.area.map(|area| area.as_str()),
+                    "area": task.front.area.as_deref(),
                     "verification": task.front.verification,
                     "status": task.front.status,
                     "issue_state": issue_state,
@@ -1395,7 +1395,7 @@ fn cmd_create(board: &Board, args: GitHubCreateArgs) -> Result<crate::output::Co
             "title": task.front.title,
             "body": task.body,
             "labels": task.front.labels,
-            "area": task.front.area.map(|area| area.as_str()),
+            "area": task.front.area.as_deref(),
             "verification": task.front.verification,
             "status": task.front.status,
             "issue_state": issue_state,
@@ -1463,10 +1463,7 @@ fn format_create_preview(task: &Task, repository: &str, issue_state: &str) -> St
         } else {
             task.front.labels.join(", ")
         },
-        task.front
-            .area
-            .map(|area| area.as_str())
-            .unwrap_or("(none)"),
+        task.front.area.as_deref().unwrap_or("(none)"),
         task.front.verification.as_deref().unwrap_or("(none)"),
         task.front.status.as_str(),
         issue_state,

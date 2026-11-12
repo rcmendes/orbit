@@ -209,7 +209,7 @@ fn create_claim_heartbeat_and_finish_round_trip() {
         "Finished over MCP."
     );
 
-    let list = client.call(16, "list", json!({ "all": true }));
+    let list = client.call(16, "list", json!({ "include_closed": true }));
     let list = tool_envelope(&list);
     assert_eq!(list["data"]["count"], 1);
     assert_eq!(list["data"]["tasks"][0]["status"], "done");

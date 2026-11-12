@@ -283,3 +283,132 @@ fn orbit_add_records_the_member_repository_on_the_task() {
     let content = repo.read_task(&root_task);
     assert!(!content.contains("repo:"), "{content}");
 }
+
+fn task_ids(listed: &serde_json::Value) -> Vec<String> {
+    listed["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn list_inside_a_member_repository_shows_its_tasks_and_board_wide_ones() {
+    let repo = TestRepo::new();
+    repo.init();
+    let api = git_repo(&repo, &repo.path().join("api"));
+    let billing = git_repo(&repo, &repo.path().join("billing"));
+    repo_add(&repo, &repo.orbit_path(), &api, "api");
+    repo_add(&repo, &repo.orbit_path(), &billing, "billing");
+
+    let api_task = repo.ok_json_in(&api, &["add", "API work", "--json"])["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let billing_task = repo.ok_json_in(&billing, &["add", "Billing work", "--json"])["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let board_task = repo.add("Board work", &[]);
+
+    // Inside `api`: its own Tasks plus Board-wide Tasks; `billing` stays out.
+    let listed = repo.ok_json_in(&api, &["list", "--json"]);
+    let mut ids = task_ids(&listed);
+    ids.sort();
+    let mut expected = vec![api_task.clone(), board_task.clone()];
+    expected.sort();
+    assert_eq!(ids, expected, "{listed}");
+
+    // A worktree of the same Repository scopes identically.
+    let worktree_dir = tempfile::tempdir().unwrap();
+    let worktree = worktree_dir.path().join("api-wt");
+    let output = repo.git_in(
+        &api,
+        &[
+            "worktree",
+            "add",
+            worktree.to_str().unwrap(),
+            "-b",
+            "api-feature",
+        ],
+    );
+    assert!(output.status.success());
+    let listed = repo.ok_json_in(&worktree, &["list", "--json"]);
+    let mut ids = task_ids(&listed);
+    ids.sort();
+    assert_eq!(ids, expected, "{listed}");
+
+    // --all widens the list to the whole Board.
+    let listed = repo.ok_json_in(&api, &["list", "--all", "--json"]);
+    let mut ids = task_ids(&listed);
+    ids.sort();
+    let mut expected = vec![api_task, billing_task, board_task];
+    expected.sort();
+    assert_eq!(ids, expected, "{listed}");
+
+    // At the Board's root there is no scoping.
+    let listed = repo.ok_json(&["list", "--json"]);
+    let mut ids = task_ids(&listed);
+    ids.sort();
+    assert_eq!(ids, expected, "{listed}");
+}
+
+#[test]
+fn ready_scopes_to_the_current_member_repository() {
+    let repo = TestRepo::new();
+    repo.init();
+    let api = git_repo(&repo, &repo.path().join("api"));
+    let billing = git_repo(&repo, &repo.path().join("billing"));
+    repo_add(&repo, &repo.orbit_path(), &api, "api");
+    repo_add(&repo, &repo.orbit_path(), &billing, "billing");
+
+    // The api Task plus the Board-wide Task are in scope; the higher-priority
+    // Billing Task in the other Repository must not leak into the queue.
+    let api_task = repo.ok_json_in(&api, &["add", "API work", "-p", "2", "--json"])["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    repo.ok_json_in(&billing, &["add", "Billing work", "-p", "0", "--json"]);
+    let board_task = repo.add("Board work", &["-p", "0"]);
+
+    let ready = repo.ok_json_in(&api, &["ready", "--json"]);
+    assert_eq!(ready["data"]["count"], 2, "{ready}");
+    let mut ids = task_ids(&ready);
+    ids.sort();
+    let mut expected = vec![api_task.clone(), board_task.clone()];
+    expected.sort();
+    assert_eq!(ids, expected, "{ready}");
+
+    // --all sees the whole Board queue, Board-wide and other Repositories.
+    let ready = repo.ok_json_in(&api, &["ready", "--all", "--json"]);
+    assert_eq!(ready["data"]["count"], 3, "{ready}");
+
+    // --claim takes the scoped winner: the P0 Board-wide Task, never the
+    // P0 Billing Task from the other Repository.
+    let claimed = repo.ok_json_in(&api, &["ready", "--claim", "--by", "devin", "--json"]);
+    assert_eq!(claimed["data"]["id"], board_task.as_str(), "{claimed}");
+    assert_eq!(claimed["data"]["status"], "in_progress");
+}
+
+#[test]
+fn list_include_closed_lists_terminal_tasks_while_all_scopes_repositories() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Done work", &[]);
+    repo.ok_json(&["claim", id.as_str(), "--by", "devin", "--json"]);
+    repo.ok_json(&["done", id.as_str(), "--by", "devin", "--json"]);
+
+    // Terminal work stays hidden by default.
+    assert_eq!(repo.ok_json(&["list", "--json"])["data"]["count"], 0);
+    // --include-closed is the terminal-status escape hatch.
+    assert_eq!(
+        repo.ok_json(&["list", "--include-closed", "--json"])["data"]["count"],
+        1
+    );
+    // --all widens Repository scope; it does not include terminal work.
+    assert_eq!(
+        repo.ok_json(&["list", "--all", "--json"])["data"]["count"],
+        0
+    );
+}

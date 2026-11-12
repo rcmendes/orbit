@@ -275,9 +275,13 @@ Examples:
 
 pub const LIST_LONG: &str = "\
 Lists tasks from a consistent snapshot of the Board. Done and cancelled tasks are
-hidden by default; pass --all to include them, or name a terminal status with
---status. Filters combine, so --status in_progress --claimed-by claude shows
-everything one agent is holding.
+hidden by default; pass --include-closed to include them, or name a terminal
+status with --status. Filters combine, so --status in_progress --claimed-by
+claude shows everything one agent is holding.
+
+Inside a member Repository or one of its worktrees the list is scoped to that
+Repository's Tasks plus Board-wide Tasks (tasks with no repo); --all widens it
+to the whole Board. At the Board's root there is no scoping.
 
 Human output is an aligned table with ID, STATUS, P, TYPE, ISSUE, TITLE, LABELS,
 and CLAIMED BY columns. ISSUE is `-` for a Local Task, `#N` for a Linked Task,
@@ -309,7 +313,7 @@ Examples:
   orbit list --status in_progress --claimed-by claude
 
   # Full history, including closed work
-  orbit list --all --json
+  orbit list --include-closed --json
 
   # The pieces of one feature
   orbit list --parent orb-a7b2c9
@@ -347,7 +351,11 @@ repeatable --type keeps only listed work shapes, and --exclude-type hides them,
 which is how an agent skips epics, specs, or other containers. --exclude-label
 remains for legacy label-only boards. Filters combine with --parent using AND.
 Use them to scope an agent to one feature or one repository instead of the whole
-Board.";
+Board.
+
+Inside a member Repository or one of its worktrees the queue is scoped to that
+Repository's Tasks plus Board-wide Tasks; --all widens it to the whole Board,
+and --claim only ever takes a Task inside the scope.";
 
 pub const READY_EXAMPLES: &str = "\
 Examples:

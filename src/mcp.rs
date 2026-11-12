@@ -147,14 +147,15 @@ fn tool_definitions() -> Vec<Value> {
                 "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
                 "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
                 "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
-                "areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Only tasks with any of these work areas." },
-                "exclude_areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Exclude tasks with any of these work areas." }
+                "areas": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these work-area slugs; restricted to the Board's configured areas when set." },
+                "exclude_areas": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these work-area slugs." },
+                "all": { "type": "boolean", "description": "Include Ready tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." }
             }),
             &[],
         ),
         tool(
             "list",
-            "List tasks with filters. Terminal tasks are hidden unless all=true.",
+            "List tasks with filters. Terminal tasks are hidden unless include_closed=true; all=true widens Repository scope.",
             json!({
                 "status": { "type": "string", "enum": ["todo", "in_progress", "done", "cancelled"] },
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
@@ -168,9 +169,10 @@ fn tool_definitions() -> Vec<Value> {
                 "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
                 "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
                 "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
-                "areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Only tasks with any of these work areas." },
-                "exclude_areas": { "type": "array", "items": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] }, "description": "Exclude tasks with any of these work areas." },
-                "all": { "type": "boolean", "description": "Include done and cancelled tasks." },
+                "areas": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these work-area slugs; restricted to the Board's configured areas when set." },
+                "exclude_areas": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these work-area slugs." },
+                "all": { "type": "boolean", "description": "Include tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." },
+                "include_closed": { "type": "boolean", "description": "Include done and cancelled tasks." },
                 "linked": { "type": "boolean", "description": "Only Tasks with an active GitHub Issue link." },
                 "local": { "type": "boolean", "description": "Only Tasks without an active GitHub Issue link; includes detached provenance." }
             }),
@@ -193,7 +195,7 @@ fn tool_definitions() -> Vec<Value> {
                 "depends_on": { "type": "array", "items": { "type": "string" } },
                 "parent": { "type": "string", "description": "Create a SubTask under this Parent Task." },
                 "waiting_on": { "type": "string", "description": "External blocker." },
-                "area": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"], "description": "Stable work area classification." },
+                "area": { "type": "string", "description": "Optional work-area slug; restricted to the Board's configured areas when set." },
                 "verification": { "type": "string", "description": "Concise checks or commands for agents." },
                 "body": { "type": "string", "description": "Markdown body and acceptance criteria." }
             }),
@@ -210,7 +212,7 @@ fn tool_definitions() -> Vec<Value> {
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
                 "waiting_on": { "type": "string" },
                 "clear_waiting": { "type": "boolean" },
-                "area": { "type": "string", "enum": ["board", "cli", "mcp", "setup", "docs", "release"] },
+                "area": { "type": "string", "description": "New work-area slug; restricted to the Board's configured areas when set." },
                 "clear_area": { "type": "boolean" },
                 "verification": { "type": "string" },
                 "clear_verification": { "type": "boolean" }
@@ -549,6 +551,9 @@ fn dispatch_tool(
                     args.push(area.to_string());
                 }
             }
+            if bool_arg(arguments, "all") {
+                args.push("--all".to_string());
+            }
         }
         "list" => {
             args.push("list".to_string());
@@ -644,6 +649,9 @@ fn dispatch_tool(
             }
             if bool_arg(arguments, "all") {
                 args.push("--all".to_string());
+            }
+            if bool_arg(arguments, "include_closed") {
+                args.push("--include-closed".to_string());
             }
         }
         "get" => {
@@ -970,7 +978,13 @@ fn dispatch_tool(
 }
 
 fn resources_list(executable: &Path, dir: Option<&Path>) -> Value {
-    let args = vec!["list".to_string(), "--all".to_string()];
+    // `--all` keeps every Repository in scope and `--include-closed` keeps
+    // terminal Tasks, matching the resources list's previous coverage.
+    let args = vec![
+        "list".to_string(),
+        "--all".to_string(),
+        "--include-closed".to_string(),
+    ];
     let mut resources = Vec::new();
 
     if let Ok(run) = run_orbit(executable, dir, &args, true)

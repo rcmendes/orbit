@@ -20,7 +20,7 @@ use crate::remote::link::{active_link, github_compat_json, link_json, link_view}
 use crate::remote::model::{
     RemoteIssue, RemoteIssueRef, RemoteIssueSummary, SyncDirection, SyncPlan,
 };
-use crate::remote::port::{RemoteAdapter, RemoteResolver, board_resolver};
+use crate::remote::port::{BoardResolver, RemoteAdapter, RemoteResolver};
 use crate::remote::{RemoteProject, configured_projects, relationships, sync};
 use crate::task::{self, Status, Task};
 
@@ -204,7 +204,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let mut unsupported = Vec::new();
     let github_link = |task: &Task| active_link(task).filter(|link| link.tracker == "github");
     let adapter = GitHubAdapter::from_board(board)?;
-    let resolver = board_resolver(board);
+    let resolver = BoardResolver::new(board);
     for task in graph.iter().filter(|task| github_link(task).is_some()) {
         let link = github_link(task).expect("filtered linked task");
         let project = link.remote_project();
@@ -1418,7 +1418,7 @@ fn disconnect_remote_project(board: &Board, tracker: &str, project: &str) -> Res
 /// for a Local Task (the successor of `orbit github adopt`).
 fn cmd_link(board: &Board, args: RemoteLinkArgs) -> Result<crate::output::CommandOutput> {
     let (project, id) = parse_issue_ref(&args.issue)?;
-    let resolver = board_resolver(board);
+    let resolver = BoardResolver::new(board);
     crate::remote::execution::require_project_available(board, &resolver, &project)?;
     let adapter = resolver.adapter(&project.tracker)?;
     let issue = adapter.fetch_issue(&project, &id)?;
@@ -1489,7 +1489,7 @@ fn cmd_link(board: &Board, args: RemoteLinkArgs) -> Result<crate::output::Comman
 
 fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::CommandOutput> {
     let graph = Graph::load(board, LoadMode::Strict)?.0;
-    let resolver = board_resolver(board);
+    let resolver = BoardResolver::new(board);
     let candidates = create_project_candidates(board, &resolver)?;
     let create_project = select_create_project(&candidates, args.project.as_deref())?;
     let project_label = format!("{}:{}", create_project.tracker, create_project.project);
@@ -1939,7 +1939,7 @@ fn cmd_sync(board: &Board, args: RemoteSyncArgs) -> Result<crate::output::Comman
         RemoteSyncDirection::Push => SyncDirection::Push,
     };
     client_from_env()?;
-    let resolver = board_resolver(board);
+    let resolver = BoardResolver::new(board);
     let report = execution::synchronize(
         board,
         &resolver,
@@ -2090,7 +2090,7 @@ fn issues_refresh(board: &Board) -> Result<crate::output::CommandOutput> {
     let root = catalog::root_for_board(board)?;
     let path = catalog::cache_path(&root);
     let mut catalog = catalog::load(&path)?;
-    let resolver = board_resolver(board);
+    let resolver = BoardResolver::new(board);
     let projects = configured_projects(board);
     let mut errors = Vec::new();
     let mut refreshed_count = 0;
@@ -2260,7 +2260,7 @@ fn issues_list(
 /// tracker, with catalog staleness and link state.
 fn issues_show(board: &Board, args: &RemoteIssueRefArgs) -> Result<crate::output::CommandOutput> {
     let (project, id) = parse_issue_ref(&args.issue)?;
-    let resolver = board_resolver(board);
+    let resolver = BoardResolver::new(board);
     let adapter = resolver.adapter(&project.tracker)?;
     let issue = adapter.fetch_issue(&project, &id)?;
     let root = catalog::root_for_board(board)?;
@@ -2394,7 +2394,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
     let catalog = catalog::load(&catalog::cache_path(&root))?;
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let mappings = parse_link_mappings(&args.link, &args.issues)?;
-    let resolver = board_resolver(board);
+    let resolver = BoardResolver::new(board);
 
     let mut linked_issues = std::collections::BTreeMap::new();
     for task in graph.iter() {
@@ -2957,7 +2957,7 @@ fn cmd_reattach(board: &Board, args: RemoteMutationArgs) -> Result<crate::output
         project: link.project.clone(),
     };
     let identity = format!("{}:{}#{}", link.tracker, link.project, link.id);
-    let resolver = board_resolver(board);
+    let resolver = BoardResolver::new(board);
     if !crate::remote::execution::project_available(board, &resolver, &project)? {
         return Err(OrbitError::invalid_argument(format!(
             "Remote Project `{}:{}` is not connected to this Board; connect it before reattaching",

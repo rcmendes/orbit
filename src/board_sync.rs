@@ -91,15 +91,47 @@ pub struct FieldConflict {
     pub host: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncState {
+    UpToDate,
+    Published,
+    FastForwarded,
+    Merged,
+}
+
+impl std::fmt::Display for SyncState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::UpToDate => "up_to_date",
+            Self::Published => "published",
+            Self::FastForwarded => "fast_forwarded",
+            Self::Merged => "merged",
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct SyncReport {
-    /// `up_to_date`, `published`, `fast_forwarded`, or `merged`.
-    pub state: &'static str,
+    pub state: SyncState,
     pub remote_tip: Option<String>,
     pub merged_files: usize,
     pub conflicts_resolved: Vec<String>,
     pub notices: Vec<String>,
     pub unused_resolutions: Vec<String>,
+}
+
+impl SyncReport {
+    fn terminal(state: SyncState, remote_tip: Option<String>) -> Self {
+        Self {
+            state,
+            remote_tip,
+            merged_files: 0,
+            conflicts_resolved: Vec::new(),
+            notices: Vec::new(),
+            unused_resolutions: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -145,50 +177,25 @@ pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
     let push_refspec = || format!("HEAD:refs/heads/{branch}");
     let Some(remote_tip) = remote_tip else {
         git::push(&board.root, board_host::HOST_REMOTE, &push_refspec())?;
-        return Ok(SyncReport {
-            state: "published",
-            remote_tip: None,
-            merged_files: 0,
-            conflicts_resolved: Vec::new(),
-            notices: Vec::new(),
-            unused_resolutions: Vec::new(),
-        });
+        return Ok(SyncReport::terminal(SyncState::Published, None));
     };
     if remote_tip == local_head {
-        return Ok(SyncReport {
-            state: "up_to_date",
-            remote_tip: Some(remote_tip),
-            merged_files: 0,
-            conflicts_resolved: Vec::new(),
-            notices: Vec::new(),
-            unused_resolutions: Vec::new(),
-        });
+        return Ok(SyncReport::terminal(SyncState::UpToDate, Some(remote_tip)));
     }
 
     let base = git::merge_base(&board.root, &local_head, &remote_tip)?;
     if base.as_deref() == Some(remote_tip.as_str()) {
         // The host is strictly behind: publish local history.
         git::push(&board.root, board_host::HOST_REMOTE, &push_refspec())?;
-        return Ok(SyncReport {
-            state: "published",
-            remote_tip: Some(remote_tip),
-            merged_files: 0,
-            conflicts_resolved: Vec::new(),
-            notices: Vec::new(),
-            unused_resolutions: Vec::new(),
-        });
+        return Ok(SyncReport::terminal(SyncState::Published, Some(remote_tip)));
     }
     if base.as_deref() == Some(local_head.as_str()) {
         // The local Board is strictly behind: fast-forward, never rebase.
         git::reset_hard(&board.root, &remote_tip)?;
-        return Ok(SyncReport {
-            state: "fast_forwarded",
-            remote_tip: Some(remote_tip),
-            merged_files: 0,
-            conflicts_resolved: Vec::new(),
-            notices: Vec::new(),
-            unused_resolutions: Vec::new(),
-        });
+        return Ok(SyncReport::terminal(
+            SyncState::FastForwarded,
+            Some(remote_tip),
+        ));
     }
 
     let outcome = merge_trees(
@@ -239,7 +246,7 @@ pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
         .collect();
 
     Ok(SyncReport {
-        state: "merged",
+        state: SyncState::Merged,
         remote_tip: Some(remote_tip),
         merged_files,
         conflicts_resolved,
@@ -263,7 +270,7 @@ pub fn auto_after(board: &Board) -> Vec<String> {
     match sync(board, &[]) {
         Ok(report) => {
             let mut warnings = report.notices;
-            if report.state == "merged" {
+            if report.state == SyncState::Merged {
                 warnings.push(format!(
                     "board host: merged divergent history and pushed ({} files)",
                     report.merged_files

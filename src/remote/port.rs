@@ -129,7 +129,9 @@ impl RemoteResolver for BoardResolver<'_> {
     }
 }
 
-/// The resolver the engine uses when the caller does not inject one.
-pub fn board_resolver(board: &Board) -> BoardResolver<'_> {
-    BoardResolver { board }
+impl<'a> BoardResolver<'a> {
+    /// The resolver the engine uses when the caller does not inject one.
+    pub fn new(board: &'a Board) -> Self {
+        Self { board }
+    }
 }

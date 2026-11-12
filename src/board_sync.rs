@@ -191,7 +191,7 @@ pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
         });
     }
 
-    let mut outcome = merge_trees(
+    let outcome = merge_trees(
         &board.root,
         base.as_deref(),
         &local_head,

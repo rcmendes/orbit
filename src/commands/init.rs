@@ -100,24 +100,25 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         let stdin = std::io::stdin();
         let mut input = stdin.lock();
         let mut prompt = std::io::stderr();
-        if !visible_board && matches!(visible_choice, VisibleChoice::Default) {
-            if prompt_board_layout(&mut input, &mut prompt)? {
-                let name = prompt_board_name(&mut input, &mut prompt)?;
-                let choice = VisibleChoice::Named(Some(name));
-                let (orbit, root, visible) = init_layout(
-                    &requested_root,
-                    workspace_root,
-                    explicit_global,
-                    global_dir.as_deref(),
-                    &choice,
-                )?;
-                orbit_dir = orbit;
-                board_root = root;
-                visible_board = visible;
-                if let Some(resolved) = crate::board::resolve_orbit_dir(&orbit_dir) {
-                    board_root = resolved.root().to_path_buf();
-                    visible_board = matches!(resolved, crate::board::OrbitBoard::Visible { .. });
-                }
+        if !visible_board
+            && matches!(visible_choice, VisibleChoice::Default)
+            && prompt_board_layout(&mut input, &mut prompt)?
+        {
+            let name = prompt_board_name(&mut input, &mut prompt)?;
+            let choice = VisibleChoice::Named(Some(name));
+            let (orbit, root, visible) = init_layout(
+                &requested_root,
+                workspace_root,
+                explicit_global,
+                global_dir.as_deref(),
+                &choice,
+            )?;
+            orbit_dir = orbit;
+            board_root = root;
+            visible_board = visible;
+            if let Some(resolved) = crate::board::resolve_orbit_dir(&orbit_dir) {
+                board_root = resolved.root().to_path_buf();
+                visible_board = matches!(resolved, crate::board::OrbitBoard::Visible { .. });
             }
         }
         if args.host.is_none() {

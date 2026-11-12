@@ -71,7 +71,11 @@ including `.`, means \"initialize here\" and uses that checkout's ./.orbit/board
 (or the main checkout's from a linked worktree). Any other directory inside a
 repository becomes a visible Board folder anchored by the repository's
 .orbit/board pointer file; outside Git it is anchored by a sibling .orbit
-folder. A non-empty Board directory is refused with CONFIG_ERROR.
+folder. Pass --visible[=NAME] to choose a visible folder (default name
+`board`) instead of the hidden layout, and --host[=REPO|URL] to set the
+Board's host — a member Repository name/path or git URL whose remote stores
+the Board's `orbit` branch; an existing host branch with a different Slug is
+refused. A non-empty Board directory is refused with CONFIG_ERROR.
 
 Inside a Workspace, child repositories find the Workspace Board across their Git
 boundary and need no `orbit link`. Repositories outside it can link the Workspace

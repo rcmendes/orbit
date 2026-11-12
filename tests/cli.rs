@@ -366,7 +366,7 @@ fn list_filters_are_applied() {
     assert_eq!(active["data"]["count"], 2);
     let done = repo.ok_json(&["list", "--status", "done", "--json"]);
     assert_eq!(done["data"]["count"], 1);
-    let all = repo.ok_json(&["list", "--all", "--json"]);
+    let all = repo.ok_json(&["list", "--all", "--include-closed", "--json"]);
     assert_eq!(all["data"]["count"], 3);
 }
 

@@ -14,7 +14,7 @@ use crate::error::{OrbitError, Result};
 use crate::github::client::{IssueCatalogItem, client_from_env};
 use crate::github::model::{IssueSnapshot, IssueState};
 use crate::graph::{Graph, LoadMode};
-use crate::task::{self, Status, Task, TaskArea, TaskFrontmatter, TaskType};
+use crate::task::{self, Status, Task, TaskFrontmatter, TaskType};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct IssueCatalog {
@@ -342,7 +342,7 @@ fn inspect(
 struct PreparedIssue {
     issue: crate::github::model::IssueSnapshot,
     labels: Vec<String>,
-    area: Option<TaskArea>,
+    area: Option<String>,
     verification: Option<String>,
     status: Status,
 }
@@ -691,7 +691,7 @@ fn prepare_issue(issue: crate::github::model::IssueSnapshot) -> Result<PreparedI
 
 fn task_issue_differences(task: &Task, prepared: &PreparedIssue) -> Vec<serde_json::Value> {
     let issue = &prepared.issue;
-    let local_area = task.front.area.map(|area| area.as_str().to_string());
+    let local_area = task.front.area.clone();
     let fields = [
         ("title", json!(task.front.title), json!(issue.title)),
         ("body", json!(task.body), json!(issue.body)),
@@ -735,7 +735,7 @@ fn create_linked_task(
             parent: None,
             waiting_on: None,
             checkpoint: None,
-            area: prepared.area,
+            area: prepared.area.clone(),
             verification: prepared.verification.clone(),
             github: Some(crate::github::GitHubLink::new(
                 prepared.issue.repo.to_ascii_lowercase(),

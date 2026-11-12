@@ -12,6 +12,21 @@ use crate::github::relationships::{RelationshipChange, SupportedRelationship};
 
 const AREA_FIELD_OPTIONS: [&str; 6] = ["board", "cli", "mcp", "setup", "docs", "release"];
 
+/// The option list for a newly created Area Issue Field: the Board's
+/// configured `board.areas`, or the canonical six when the Board defines no
+/// Areas. GitHub single-select fields need a fixed option list, so an
+/// unrestricted Board still gets the canonical defaults.
+pub(crate) fn area_field_options(board_areas: &[String]) -> Vec<String> {
+    if board_areas.is_empty() {
+        AREA_FIELD_OPTIONS
+            .iter()
+            .map(|area| area.to_string())
+            .collect()
+    } else {
+        board_areas.to_vec()
+    }
+}
+
 pub struct FieldSetup {
     pub area_id: String,
     pub verification_id: String,
@@ -101,7 +116,12 @@ pub trait GitHubClient: Send + Sync {
 
     fn validate_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup>;
 
-    fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup>;
+    fn create_org_fields(
+        &self,
+        org: &str,
+        fields: &IssueFieldConfig,
+        area_options: &[String],
+    ) -> Result<FieldSetup>;
 
     fn get_issue(
         &self,
@@ -301,7 +321,12 @@ impl GitHubClient for GhCliClient {
         })
     }
 
-    fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
+    fn create_org_fields(
+        &self,
+        org: &str,
+        fields: &IssueFieldConfig,
+        area_options: &[String],
+    ) -> Result<FieldSetup> {
         validate_org_admin(org)?;
         let query = "query($org: String!) { organization(login: $org) { id issueFields(first: 100) { nodes { ... on IssueFieldDate { id name } ... on IssueFieldMultiSelect { id name } ... on IssueFieldNumber { id name } ... on IssueFieldSingleSelect { id name } ... on IssueFieldText { id name } } } } }";
         let output = gh_api(&[
@@ -329,11 +354,12 @@ impl GitHubClient for GhCliClient {
             find_field_id(&organization.issue_fields.nodes, &fields.verification_name);
         let mut created_fields = Vec::new();
         if area_id.is_none() {
+            let options: Vec<&str> = area_options.iter().map(String::as_str).collect();
             area_id = Some(create_issue_field(
                 &organization.id,
                 &fields.area_name,
                 "SINGLE_SELECT",
-                Some(&AREA_FIELD_OPTIONS),
+                Some(options.as_slice()),
             )?);
             created_fields.push(fields.area_name.clone());
         }
@@ -1409,7 +1435,12 @@ impl GitHubClient for FixtureClient {
         })
     }
 
-    fn create_org_fields(&self, org: &str, fields: &IssueFieldConfig) -> Result<FieldSetup> {
+    fn create_org_fields(
+        &self,
+        org: &str,
+        fields: &IssueFieldConfig,
+        area_options: &[String],
+    ) -> Result<FieldSetup> {
         let mut store = self.store.lock().expect("fixture lock");
         if !store.organization_admin {
             return Err(missing_org_admin_permission(org));
@@ -1424,7 +1455,7 @@ impl GitHubClient for FixtureClient {
             store.created_fields.push(serde_json::json!({
                 "name": fields.area_name,
                 "data_type": "SINGLE_SELECT",
-                "options": AREA_FIELD_OPTIONS,
+                "options": area_options,
             }));
             created_fields.push(fields.area_name.clone());
             id

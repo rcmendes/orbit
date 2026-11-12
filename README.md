@@ -782,7 +782,7 @@ Every board command prints human-readable text by default. Add `--json` and stdo
 ```bash
 orbit ready --claim --by claude --json
 orbit show orb-a7b2c9 --json
-orbit list --all --json
+orbit list --include-closed --json
 ```
 
 ```json
@@ -827,7 +827,7 @@ orbit mcp
 orbit --dir ~/src/acme/.orbit mcp    # serve a specific Board
 ```
 
-MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent`, `repo`, and `type`; `update` accepts `type`; `checkpoint` records the active handoff state on a claimed task; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, `exclude_types`, and work `areas`.
+MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent`, `repo`, and `type`; `update` accepts `type`; `checkpoint` records the active handoff state on a claimed task; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, `exclude_types`, work `areas`, and `all`; `list` also accepts `include_closed`. Inside a member Repository both scope to it plus Board-wide Tasks unless `all` is set.
 
 Editors launch the server from their MCP configuration. `orbit setup` writes project-level configs for Claude, Cursor, Codex, OpenCode, and Devin by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. `--scope user` writes the harness's user-level locations instead. Generated configs record no Board path; discovery starts from the project directory, and `--dir`/`ORBIT_DIR` covers an editor that launches elsewhere. Use `--no-mcp` for instructions only, or `--portable-mcp` to write the bare `orbit` command instead; the editor or agent that launches the MCP server must then find Orbit on its `PATH`. A repair without `--portable-mcp` returns MCP entries to the absolute-path default.
 

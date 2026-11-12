@@ -61,7 +61,7 @@ pub fn plan_sync(
     let orbit_title = view.task.front.title.clone();
     let orbit_body = view.task.body.clone();
     let orbit_labels = view.task.front.labels.clone();
-    let orbit_area = view.task.front.area.map(|area| area.as_str().to_string());
+    let orbit_area = view.task.front.area.clone();
     let orbit_verification = view.task.front.verification.clone();
     let orbit_status = view.task.front.status;
 
@@ -137,7 +137,7 @@ pub fn baseline_from(task: &Task, issue: &RemoteIssue) -> SyncBaseline {
         title: issue.title.clone(),
         body: issue.body.clone(),
         labels: issue.labels.clone(),
-        area: task.front.area.map(|area| area.as_str().to_string()),
+        area: task.front.area.clone(),
         verification: task.front.verification.clone(),
         status: Some(task.front.status),
         remote_status: Some(issue.status),
@@ -323,7 +323,7 @@ pub fn reject_unmapped_metadata(
 /// Validate Orbit-side metadata before it is planned or pushed.
 pub fn validate_orbit_metadata(task: &Task) -> Result<()> {
     if let Some(verification) = task.front.verification.as_deref() {
-        task::validate_verification(verification)?;
+        task::normalize_verification(Some(verification.to_string()))?;
     }
     Ok(())
 }
@@ -335,7 +335,7 @@ mod tests {
         DesiredRelation, MappedFields, RelationChange, RemoteIssueFields, RemoteIssueSummary,
         RemoteIssueUpdate, RemoteRelations,
     };
-    use crate::task::{TaskArea, TaskFrontmatter, TaskType, default_priority};
+    use crate::task::{TaskFrontmatter, TaskType, default_priority};
     use chrono::TimeZone;
     use std::collections::BTreeMap;
 
@@ -402,7 +402,7 @@ mod tests {
                 stray_claim_times: None,
                 created_at: now,
                 updated_at: now,
-                area: Some(TaskArea::Cli),
+                area: Some("cli".into()),
                 verification: Some("cargo test".into()),
                 github: None,
                 remote: Some(crate::task::RemoteLink {

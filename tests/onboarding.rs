@@ -464,7 +464,7 @@ fn repo_add_shares_one_board_between_repositories() {
     assert_eq!(listed["data"]["tasks"][0]["id"], id);
 
     second.ok_json(&["done", &id, "--by", "test", "--json"]);
-    let listed = first.ok_json(&["list", "--all", "--json"]);
+    let listed = first.ok_json(&["list", "--all", "--include-closed", "--json"]);
     assert_eq!(listed["data"]["tasks"][0]["status"], "done");
 }
 

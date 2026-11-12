@@ -2384,7 +2384,7 @@ From any member Repository, these commands resolve the shared Board across the G
 - Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
-- In a multi-Repository Board, add `--repo <name>` to `orbit ready` or `orbit list`.
+- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Tasks; `--all` widens to the whole Board.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.
@@ -2454,7 +2454,7 @@ We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdo
 - Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
-- In a multi-Repository Board, add `--repo <NAME>` to `orbit ready` or `orbit list`.
+- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Tasks; `--all` widens to the whole Board.
 - To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`.
 - To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.
 - The hold labels `needs-triage`, `needs-info`, and `ready-for-human` keep tasks out of the ready queue and prevent claims until removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.

@@ -14,79 +14,6 @@ pub const MAX_LABEL_LENGTH: usize = 32;
 pub const MAX_VERIFICATION_LENGTH: usize = 2000;
 pub const MAX_REPO_LENGTH: usize = 128;
 
-/// Parse an Orbit `area` value into its controlled vocabulary.
-pub fn parse_area(value: &str) -> Result<TaskArea> {
-    let normalized = value.trim();
-    TaskArea::all()
-        .iter()
-        .copied()
-        .find(|area| area.as_str() == normalized)
-        .ok_or_else(|| {
-            OrbitError::invalid_argument(format!(
-                "area must be one of: {}",
-                TaskArea::all()
-                    .iter()
-                    .map(|area| area.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        })
-}
-
-/// Validate an Orbit `verification` value.
-pub fn validate_verification(value: &str) -> Result<()> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(OrbitError::invalid_argument(
-            "verification must be non-empty when set",
-        ));
-    }
-    if trimmed.len() > MAX_VERIFICATION_LENGTH {
-        return Err(OrbitError::invalid_argument(format!(
-            "verification must be at most {} characters",
-            MAX_VERIFICATION_LENGTH
-        )));
-    }
-    Ok(())
-}
-
-/// Stable classification of where work primarily lands in the repository.
-/// Shared metadata for agents and filters; not personal or session-local state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskArea {
-    Board,
-    Cli,
-    Mcp,
-    Setup,
-    Docs,
-    Release,
-}
-
-impl TaskArea {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TaskArea::Board => "board",
-            TaskArea::Cli => "cli",
-            TaskArea::Mcp => "mcp",
-            TaskArea::Setup => "setup",
-            TaskArea::Docs => "docs",
-            TaskArea::Release => "release",
-        }
-    }
-
-    pub fn all() -> &'static [TaskArea] {
-        &[
-            TaskArea::Board,
-            TaskArea::Cli,
-            TaskArea::Mcp,
-            TaskArea::Setup,
-            TaskArea::Docs,
-            TaskArea::Release,
-        ]
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -277,7 +204,7 @@ struct RawFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     checkpoint: Option<Checkpoint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    area: Option<TaskArea>,
+    area: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     verification: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -380,7 +307,8 @@ pub struct TaskFrontmatter {
     pub parent: Option<String>,
     pub waiting_on: Option<String>,
     pub checkpoint: Option<Checkpoint>,
-    pub area: Option<TaskArea>,
+    /// Optional work-area slug; each Board restricts it through `board.areas`.
+    pub area: Option<String>,
     pub verification: Option<String>,
     /// Legacy GitHub Issue link; `orbit migrate` rewrites it to `remote`.
     pub github: Option<GitHubLink>,
@@ -578,6 +506,13 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             "task {id} has an invalid repo `{repo}`"
         )));
     }
+    if let Some(area) = &front.area
+        && !is_valid_area(area)
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an invalid area `{area}`"
+        )));
+    }
 
     let mut labels = Vec::with_capacity(front.labels.len());
     for label in &front.labels {
@@ -712,6 +647,31 @@ pub fn is_valid_area(area: &str) -> bool {
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphanumeric())
+}
+
+/// Normalizes an Area value to its lowercase slug and validates it against
+/// the Board's `board.areas` list. An empty `allowed` list means the Board
+/// defines no Areas, so any short lowercase slug is accepted.
+pub fn normalize_area(input: &str, allowed: &[String]) -> Result<String> {
+    let area = input.trim().to_ascii_lowercase();
+    if !is_valid_area(&area) {
+        return Err(OrbitError::new(
+            crate::error::code::INVALID_AREA,
+            format!(
+                "invalid area `{input}`; use a short lowercase slug of letters, digits, and `-`"
+            ),
+        ));
+    }
+    if !allowed.is_empty() && !allowed.iter().any(|candidate| candidate == &area) {
+        return Err(OrbitError::new(
+            crate::error::code::INVALID_AREA,
+            format!(
+                "unknown area `{area}`; expected one of: {}",
+                allowed.join(", ")
+            ),
+        ));
+    }
+    Ok(area)
 }
 
 /// A Task's member Repository: a short name or `owner/name` identity. Kept

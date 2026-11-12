@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
-use crate::task::{Status, TaskArea, TaskType};
+use crate::task::{Status, TaskType};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -59,7 +59,7 @@ pub enum Command {
     #[command(long_about = help::ADD_LONG, after_long_help = help::ADD_EXAMPLES)]
     Add(AddArgs),
 
-    /// List tasks with filters. Closed work is hidden unless --all.
+    /// List tasks with filters. Closed work is hidden unless --include-closed.
     #[command(long_about = help::LIST_LONG, after_long_help = help::LIST_EXAMPLES)]
     List(ListArgs),
 
@@ -352,7 +352,8 @@ pub struct AddArgs {
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
 
-    /// Stable work area: board, cli, mcp, setup, docs, or release.
+    /// Optional work-area slug. Restricted to the Board's `board.areas` when
+    /// the Board configures them; any lowercase slug otherwise.
     #[arg(long, value_name = "AREA")]
     pub area: Option<String>,
 
@@ -395,13 +396,13 @@ pub struct ListArgs {
     #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
     pub exclude_type: Vec<TaskType>,
 
-    /// Filter by work area. Repeatable; matches any listed area.
-    #[arg(long, value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
-    pub area: Vec<TaskArea>,
+    /// Filter by work area slug. Repeatable; matches any listed area.
+    #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
+    pub area: Vec<String>,
 
     /// Exclude tasks with any listed area.
-    #[arg(long = "exclude-area", value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
-    pub exclude_area: Vec<TaskArea>,
+    #[arg(long = "exclude-area", value_name = "AREA", action = clap::ArgAction::Append)]
+    pub exclude_area: Vec<String>,
 
     /// Filter by label. Repeatable; every label must match.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -435,9 +436,15 @@ pub struct ListArgs {
     #[arg(long)]
     pub group: bool,
 
-    /// Include done and cancelled tasks.
+    /// Include Tasks from every Repository. Inside a member Repository or its
+    /// worktree the list is scoped to that Repository plus Board-wide Tasks
+    /// by default; --all widens it to the whole Board.
     #[arg(long)]
     pub all: bool,
+
+    /// Include done and cancelled tasks.
+    #[arg(long)]
+    pub include_closed: bool,
 }
 
 #[derive(Debug, Args)]
@@ -454,6 +461,12 @@ pub struct ReadyArgs {
     #[arg(long, value_name = "NAME")]
     pub repo: Option<String>,
 
+    /// Include Ready tasks from every Repository. Inside a member Repository
+    /// or its worktree the queue is scoped to that Repository plus Board-wide
+    /// Tasks by default; --all widens it to the whole Board.
+    #[arg(long)]
+    pub all: bool,
+
     /// Only Ready tasks with one of these work shapes. Repeatable.
     #[arg(long = "type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
     pub task_type: Vec<TaskType>,
@@ -463,12 +476,12 @@ pub struct ReadyArgs {
     pub exclude_type: Vec<TaskType>,
 
     /// Only Ready tasks with any listed work area. Repeatable.
-    #[arg(long, value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
-    pub area: Vec<TaskArea>,
+    #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
+    pub area: Vec<String>,
 
     /// Exclude Ready tasks with any listed work area. Repeatable.
-    #[arg(long = "exclude-area", value_name = "AREA", value_enum, action = clap::ArgAction::Append)]
-    pub exclude_area: Vec<TaskArea>,
+    #[arg(long = "exclude-area", value_name = "AREA", action = clap::ArgAction::Append)]
+    pub exclude_area: Vec<String>,
 
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -658,7 +671,8 @@ pub struct UpdateArgs {
     #[arg(long = "clear-waiting")]
     pub clear_waiting: bool,
 
-    /// New work area: board, cli, mcp, setup, docs, or release.
+    /// New work area slug. Restricted to the Board's `board.areas` when the
+    /// Board configures them; any lowercase slug otherwise.
     #[arg(long, value_name = "AREA", conflicts_with = "clear_area")]
     pub area: Option<String>,
 

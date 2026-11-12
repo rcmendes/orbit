@@ -11,7 +11,8 @@ only when you sync explicitly.
 
 A proposal may change:
 
-- `area` (controlled values from [`project-guidance.md`](./project-guidance.md))
+- `area` (Board-configured values from `board.areas`, or any lowercase slug when
+  the Board defines none — see [`project-guidance.md`](./project-guidance.md))
 - Task-level `verification` (stored text; the command does not run it)
 - Canonical triage/category labels: `needs-triage`, `needs-info`, `ready-for-agent`,
   `ready-for-human`, `wontfix`, `bug`, `enhancement`
@@ -124,7 +125,7 @@ commands.
 | --- | --- |
 | `rationale` | Optional human/agent note (not written to the task) |
 | `uncertainty` | When set alone, preview shows no changes and apply is rejected |
-| `area` | Set controlled `area` |
+| `area` | Set `area` to a Board-allowed slug |
 | `clear_area` | Remove `area` |
 | `verification` | Set task-level verification text |
 | `clear_verification` | Remove verification |

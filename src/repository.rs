@@ -119,32 +119,91 @@ pub fn main_checkout_of(path: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(canonical_lenient(&main)))
 }
 
-/// The Repository name for `main` when it is a member of `board` and its name
-/// is a valid Task `repo` value.
-pub fn member_name(board: &Board, main: &Path) -> Option<String> {
-    let main = canonical_lenient(main);
-    members(board)
-        .ok()?
-        .into_iter()
-        .find(|member| member.path == main)
-        .map(|member| member.name)
-        .filter(|name| task::is_valid_repo(name))
-}
-
 /// The member Repository name for the current working directory, when the
 /// cwd sits inside a member Repository. `orbit add` records it as the Task's
 /// `repo` field.
 pub fn current_member_name(board: &Board) -> Result<Option<String>> {
+    Ok(current_member(board)?
+        .map(|member| member.name)
+        .filter(|name| task::is_valid_repo(name)))
+}
+
+/// The member Repository containing the current working directory, when the
+/// cwd sits inside one. `list`/`ready` use it for Repository scoping. It is
+/// cheaper than `members()`: it resolves only the checkout's own ancestry
+/// instead of scanning the Board's anchor tree, so queries stay fast on
+/// large Boards.
+pub fn current_member(board: &Board) -> Result<Option<Repository>> {
     let cwd = std::env::current_dir()
         .map_err(|error| OrbitError::io("resolve current directory", error))?;
     let Some(main) = main_checkout_of(&cwd)? else {
         return Ok(None);
     };
-    // The Board's own repository is not a member Repository.
-    if main == canonical_lenient(&board.root) {
+    member_at(board, &main)
+}
+
+/// The Repository scope for task queries: the member Repository name when the
+/// command runs inside one (worktrees resolve to the main checkout), or
+/// `None` at the Board's root and outside every member. Names that cannot be
+/// a Task `repo` value do not scope, matching `current_member_name`.
+pub fn current_scope(board: &Board) -> Result<Option<String>> {
+    Ok(current_member(board)?
+        .map(|member| member.name)
+        .filter(|name| task::is_valid_repo(name)))
+}
+
+/// Resolves a canonical main-checkout path to its member Repository, applying
+/// the same membership rules as `members()` without scanning the anchor
+/// tree: explicit entries match by path, and a discovered child must sit
+/// below the anchor with no Repository in between.
+fn member_at(board: &Board, main: &Path) -> Result<Option<Repository>> {
+    let main = canonical_lenient(main);
+    for entry in &board.config.repositories {
+        if canonical_lenient(&entry.path) == main {
+            return Ok(Some(Repository {
+                name: entry.name.clone(),
+                path: main,
+                kind: RepositoryKind::Explicit,
+            }));
+        }
+    }
+    let Some(anchor) = board.anchor_dir() else {
+        return Ok(None);
+    };
+    // Discovery stops at the anchor itself when it is a Repository — the
+    // Board's own checkout — so no child Repositories exist below it.
+    if anchor.join(".git").exists() {
         return Ok(None);
     }
-    Ok(member_name(board, &main))
+    // Only checkouts below the anchor can be discovered children.
+    if !main.starts_with(&anchor) {
+        return Ok(None);
+    }
+    // Discovery never descends into a Repository or into the Orbit folders,
+    // so a checkout nested under either is never a member.
+    for ancestor in main.ancestors().skip(1) {
+        if ancestor == anchor {
+            break;
+        }
+        let name = ancestor.file_name();
+        if name == Some(std::ffi::OsStr::new(board::ORBIT_DIR))
+            || name == Some(std::ffi::OsStr::new(".git"))
+            || name == Some(std::ffi::OsStr::new(board::LEGACY_BOARD_DIR))
+        {
+            return Ok(None);
+        }
+        if ancestor.join(".git").exists() {
+            return Ok(None);
+        }
+    }
+    if Board::is_board(&main) || !is_member(&main, &main, board)? {
+        return Ok(None);
+    }
+    Ok(Some(Repository {
+        name: repository_name(&main),
+        path: main,
+        kind: RepositoryKind::Child,
+    }))
 }
 
 /// All member Repositories of the Board: discovered children merged with the

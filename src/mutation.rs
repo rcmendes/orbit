@@ -3,11 +3,10 @@
 use crate::{
     board::Board,
     comment::{self, Comment},
-    error::{OrbitError, Result, code},
+    error::{OrbitError, Result},
     git::CommitOutcome,
     graph::{Graph, LoadMode},
-    task::{self, Status, Task},
-    transition::{Outcome, TransitionError},
+    task::{self, Task},
 };
 use chrono::{DateTime, Utc};
 
@@ -119,33 +118,13 @@ pub fn finish(
         comment::validate_body(body)?;
     }
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let open = graph.open_children(id);
-    if !open.is_empty() && !force {
-        return Err(OrbitError::new(
-            code::SUBTASKS_OPEN,
-            format!("{id} has open SubTasks: {}", open.join(", ")),
-        )
-        .with_details(serde_json::json!({"task": id, "subtasks": open})));
-    }
-    let blocking = graph.blocking_ids(graph.get(id)?);
-    if matches!(kind, TerminalKind::Done) && !blocking.is_empty() {
-        return Err(TransitionError::DependencyBlocked {
-            id: id.into(),
-            blocking,
-        }
-        .into());
-    }
+    let outcome = crate::ops::finish(&mut graph, id, caller, force, kind, now)?;
+    let open = outcome.cancelled_subtasks;
     for child in &open {
-        let task = graph.get_mut(child)?;
-        task.cancel(caller, true, now)?;
-        write_task(board, task)?;
+        write_task(board, graph.get(child)?)?;
     }
     let task = graph.get_mut(id)?;
-    let outcome = match kind {
-        TerminalKind::Done => task.complete(caller, force, &blocking, &[], now)?,
-        TerminalKind::Cancelled => task.cancel(caller, force, now)?,
-    };
-    let changed = outcome == Outcome::Changed;
+    let changed = outcome.changed;
     let mut warnings = Vec::new();
     let mut comments = None;
     let mut comment_failed = false;
@@ -230,27 +209,22 @@ pub fn execute_in(
     operation: Lifecycle<'_>,
     now: DateTime<Utc>,
 ) -> Result<MutationResult> {
-    let lease = chrono::Duration::minutes(board.config.board.lease_minutes);
     let (verb, changed, heartbeat) = match operation {
-        Lifecycle::Claim { agent, steal } => {
-            let task = graph.get(id)?;
-            let gate = crate::transition::ClaimGate {
-                hold_labels: graph.hold_labels(task),
-                blocking: graph.blocking_ids(task),
-                open_subtasks: graph.open_children(id),
-            };
-            graph.get_mut(id)?.claim(agent, steal, lease, &gate, now)?;
-            ("claim", true, false)
-        }
-        Lifecycle::Release { caller, force } => (
-            "release",
-            graph.get_mut(id)?.release(caller, force, now)? == Outcome::Changed,
+        Lifecycle::Claim { agent, steal } => (
+            "claim",
+            crate::ops::claim(&mut graph, board, id, agent, steal, now)?,
             false,
         ),
-        Lifecycle::Heartbeat { agent } => {
-            graph.get_mut(id)?.heartbeat(agent, lease, now)?;
-            ("heartbeat", true, true)
-        }
+        Lifecycle::Release { caller, force } => (
+            "release",
+            crate::ops::release(&mut graph, id, caller, force, now)?,
+            false,
+        ),
+        Lifecycle::Heartbeat { agent } => (
+            "heartbeat",
+            crate::ops::heartbeat(&mut graph, board, id, agent, now)?,
+            true,
+        ),
         Lifecycle::Checkpoint { agent, update } => {
             graph.get_mut(id)?.record_checkpoint(agent, update, now)?;
             ("checkpoint", true, false)
@@ -277,55 +251,15 @@ pub fn execute_in(
     })
 }
 
-fn done_dependents(graph: &Graph, id: &str) -> Vec<String> {
-    graph
-        .dependents(id)
-        .iter()
-        .filter(|dependent| dependent.front.status == Status::Done)
-        .map(|dependent| dependent.id.clone())
-        .collect()
-}
-
 /// Reopens a Task and, when needed, its completed Parent Task in one scope.
 pub fn reopen(board: &Board, id: &str, force: bool, now: DateTime<Utc>) -> Result<MutationResult> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
 
-    let task = graph.get(id)?.clone();
-    let child_dependents = done_dependents(&graph, id);
-    let mut probe = task.clone();
-    probe.reopen(force, &child_dependents, now)?;
-
-    let mut reopened_parent = None;
-    if let Some(parent_id) = task.front.parent.clone() {
-        let parent_status = graph.get(&parent_id)?.front.status;
-        match parent_status {
-            Status::Done => {
-                let parent_dependents = done_dependents(&graph, &parent_id);
-                graph
-                    .get_mut(&parent_id)?
-                    .reopen(force, &parent_dependents, now)?;
-                let parent = graph.get(&parent_id)?.clone();
-                write_task(board, &parent)?;
-                reopened_parent = Some(parent_id);
-            }
-            Status::Cancelled => {
-                return Err(OrbitError::new(
-                    code::INVALID_TRANSITION,
-                    format!(
-                        "{} is a SubTask of cancelled {parent_id}; reopen the parent first",
-                        id
-                    ),
-                ));
-            }
-            _ => {}
-        }
+    let reopened_parent = crate::ops::reopen(&mut graph, id, force, now)?;
+    if let Some(parent_id) = &reopened_parent {
+        write_task(board, graph.get(parent_id)?)?;
     }
-
-    let task = {
-        let task = graph.get_mut(id)?;
-        task.reopen(force, &child_dependents, now)?;
-        task.clone()
-    };
+    let task = graph.get(id)?.clone();
     write_task(board, &task)?;
 
     let mut warnings = Vec::new();

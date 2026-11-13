@@ -26,17 +26,10 @@ fn mutate_labels(
 ) -> Result<crate::output::CommandOutput> {
     let labels = normalize_labels(&args.labels)?;
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let now = Utc::now();
-
-    let (task, changed) = {
-        let task = graph.get_mut(&args.id)?;
-        let changed = if add {
-            task.add_labels(&labels, now)
-        } else {
-            task.remove_labels(&labels, now)
-        };
-        (task.clone(), changed)
-    };
+    let (to_add, to_remove): (&[String], &[String]) =
+        if add { (&labels, &[]) } else { (&[], &labels) };
+    let changed = crate::ops::label(&mut graph, &args.id, to_add, to_remove, Utc::now())?;
+    let task = graph.get(&args.id)?.clone();
 
     if !changed {
         return Ok(crate::output::CommandOutput::new(
@@ -170,37 +163,7 @@ fn format_comment(comment: &Comment) -> String {
 
 pub(super) fn cmd_depend(board: &Board, args: DependArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-
-    {
-        let task = graph.get(&args.id)?;
-        let dep = graph.get(&args.dep_id)?;
-        if task.front.parent.as_deref() == Some(args.dep_id.as_str())
-            || dep.front.parent.as_deref() == Some(args.id.as_str())
-        {
-            return Err(OrbitError::invalid_argument(
-                "parentage is not a dependency; use `orbit add --parent` to create a SubTask",
-            ));
-        }
-        if task.front.status.is_terminal() {
-            return Err(invalid_transition(format!(
-                "{} is {}; cannot add a dependency to a terminal task",
-                args.id,
-                task.front.status.as_str()
-            )));
-        }
-    }
-
-    if args.id == args.dep_id {
-        return Err(cycle_error(&[args.id.clone(), args.dep_id.clone()]));
-    }
-
-    if graph
-        .get(&args.id)?
-        .front
-        .depends_on
-        .iter()
-        .any(|dep| dep == &args.dep_id)
-    {
+    if !crate::ops::depend(&mut graph, &args.id, &args.dep_id, Utc::now())? {
         let task = graph.get(&args.id)?;
         return Ok(crate::output::CommandOutput::new(
             graph::task_detail(&graph, task),
@@ -208,16 +171,7 @@ pub(super) fn cmd_depend(board: &Board, args: DependArgs) -> Result<crate::outpu
         )
         .with_meta(json!({ "changed": false })));
     }
-
-    if let Some(cycle) = graph.would_create_cycle(&args.id, &args.dep_id) {
-        return Err(cycle_error(&cycle));
-    }
-
-    let task = {
-        let task = graph.get_mut(&args.id)?;
-        task.add_dependency(&args.dep_id, Utc::now());
-        task.clone()
-    };
+    let task = graph.get(&args.id)?.clone();
     let warning = crate::mutation::save(board, &task, &format!("orbit: depend {}", args.id))?;
     Ok(task_output(
         &graph,
@@ -232,12 +186,7 @@ pub(super) fn cmd_undepend(
     args: UndependArgs,
 ) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Lenient)?;
-
-    let changed = {
-        let task = graph.get(&args.id)?;
-        task.front.depends_on.iter().any(|dep| dep == &args.dep_id)
-    };
-    if !changed {
+    if !crate::ops::undepend(&mut graph, &args.id, &args.dep_id, Utc::now())? {
         let task = graph.get(&args.id)?;
         return Ok(crate::output::CommandOutput::new(
             graph::task_detail(&graph, task),
@@ -245,12 +194,7 @@ pub(super) fn cmd_undepend(
         )
         .with_meta(json!({ "changed": false })));
     }
-
-    let task = {
-        let task = graph.get_mut(&args.id)?;
-        task.remove_dependency(&args.dep_id, Utc::now());
-        task.clone()
-    };
+    let task = graph.get(&args.id)?.clone();
     let warning = crate::mutation::save(board, &task, &format!("orbit: undepend {}", args.id))?;
     Ok(task_output(
         &graph,
@@ -258,16 +202,4 @@ pub(super) fn cmd_undepend(
         format!("{} no longer depends on {}", args.id, args.dep_id),
         warning,
     ))
-}
-
-fn invalid_transition(message: impl Into<String>) -> OrbitError {
-    OrbitError::new(code::INVALID_TRANSITION, message)
-}
-
-fn cycle_error(path: &[String]) -> OrbitError {
-    OrbitError::new(
-        code::CYCLE_DETECTED,
-        format!("dependency cycle: {}", path.join(" -> ")),
-    )
-    .with_details(json!({ "cycle": path }))
 }

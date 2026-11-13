@@ -58,6 +58,8 @@ Git and at `./.orbit/board` inside a repository. See
 | Finish or abandon work | `orbit done`, `orbit cancel` |
 | Undo a close or remove a mistake | `orbit reopen`, `orbit delete` |
 | Add context to a ticket | `orbit comment add`, `orbit update` |
+| Attach a tool's own data to a Task | `orbit annotation set/remove` |
+| Apply many changes at once, all or none | `orbit batch` |
 | Read the board | `orbit list`, `orbit show`, `orbit tree`, `orbit prime` |
 | Collect or archive the board | `orbit export` |
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
@@ -386,6 +388,10 @@ orbit add "Design the schema" -p 0 --label ready-for-agent
 orbit add "Ship the API" -p 1 --depends-on orb-f14c02 --label ready-for-agent
 # created orb-a7b2c9  P1  Ship the API
 
+# Make a scripted add safe to retry: a second add with the same Source Key
+# returns the first Task (meta.matched: true) instead of creating another
+orbit add "Step 3" --source-key planner:plan-7:step-3
+
 # Break a feature into a SubTask
 orbit add "API: add the endpoint" --parent orb-a7b2c9 --label repo:api
 # created orb-a7b2c9.b3c4d5  P2  API: add the endpoint  (subtask of orb-a7b2c9)
@@ -483,6 +489,57 @@ decision was made. Put durable requirements in the body instead.
 orbit comment add orb-a7b2c9 --by claude --body "Reproduced on macOS."
 cargo test 2>&1 | orbit comment add orb-a7b2c9 --by claude --body-file -
 orbit comment list orb-a7b2c9
+```
+
+### `orbit annotation` — attach tool-owned data
+
+An Annotation is a JSON object that one tool keeps on a Task under its own name,
+the owner (a lowercase slug such as `ci`). Orbit stores and shows it but never
+reads it: Annotations do not affect readiness, claims, or status, and they are
+never synchronized with a Remote Tracker. `set` replaces the owner's whole
+object (at most 8192 bytes); `remove` deletes it. Other owners are untouched.
+
+**Good fit:** a CI result, another tool's bookkeeping, or a link that no Remote
+Tracker covers. Put prose for people in comments or the body instead.
+
+```bash
+orbit annotation set orb-a7b2c9 ci --value '{"passed":true,"run":412}'
+orbit show orb-a7b2c9 --json | jq '.data.annotations'
+orbit annotation remove orb-a7b2c9 ci
+```
+
+The MCP tool `annotate` takes `id`, `owner`, and `value` (an object, or null to
+remove).
+
+### `orbit batch` — apply many changes at once
+
+A Batch is a JSON list of operations applied under one lock and published as one
+commit. Either every operation applies or none does: a failure writes nothing
+and names the failing operation's `index` and `op` in `error.details`.
+Operations are `add`, `update`, `label`, `depend`, `undepend`, `claim`,
+`heartbeat`, `release`, `done`, `cancel`, `reopen`, `comment`, and `annotate`,
+each with its command's fields (see [SPEC.md](./SPEC.md#batch)). A reference is a
+Task ID or `key:` plus a Source Key, so later operations can point at Tasks the
+same Batch creates.
+
+**Good fit:** filing a whole plan (an epic, its SubTasks, and their
+dependencies) in one commit; reserving a held task for one agent by removing the
+hold and claiming in one step; any script that must not leave half its changes
+behind. Re-running the same Batch after a crash finishes it, except that
+`comment` operations append again and an operation a later one invalidated
+(such as `claim` before `done` of the same Task) fails; see SPEC.md.
+
+```bash
+cat > plan.json <<'JSON'
+{"operations": [
+  {"op": "add", "key": "planner:plan-7:epic", "title": "Plan 7", "type": "epic"},
+  {"op": "add", "key": "planner:plan-7:step-1", "title": "Step 1", "parent": "key:planner:plan-7:epic"},
+  {"op": "add", "key": "planner:plan-7:step-2", "title": "Step 2", "parent": "key:planner:plan-7:epic",
+   "depends_on": ["key:planner:plan-7:step-1"]}
+]}
+JSON
+orbit batch --file plan.json --dry-run
+orbit batch --file plan.json --json | jq '.data.keys'
 ```
 
 ## Find work
@@ -687,7 +744,8 @@ Claims one task by ID instead of taking the top of the ready queue. The task mus
 be active and unclaimed (a stale claim needs `--steal`), not waiting on an
 external blocker or an unfinished dependency, free of hold labels, and, if it is
 a Parent Task, have no open SubTasks. The claim result includes any checkpoint
-left by the previous holder.
+left by the previous holder. A claim by the current holder renews its own lease,
+live or stale, so repeating a claim is safe.
 
 **Good fit:** a human assigns a ticket, an agent resumes known work, or another
 agent's lease expired and the task must be recovered.

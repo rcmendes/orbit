@@ -2749,6 +2749,7 @@ fn create_imported_task(
             repo: None,
             claim: None,
             stray_claim_times: None,
+            source_key: None,
             annotations: std::collections::BTreeMap::new(),
             created_at: now,
             updated_at: now,

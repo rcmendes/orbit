@@ -833,6 +833,13 @@ fn merge_task(
         }
     }
 
+    let source_key = pick(
+        base_front.map(|f| f.source_key.clone()),
+        local.front.source_key.clone(),
+        remote.front.source_key.clone(),
+        &key("source_key"),
+        outcome,
+    );
     // Annotations merge per owner, like unknown keys.
     let mut owners: BTreeSet<String> = BTreeSet::new();
     for source in [
@@ -880,6 +887,7 @@ fn merge_task(
             repo,
             claim: claim.claim,
             stray_claim_times: claim.stray,
+            source_key,
             annotations,
             created_at,
             updated_at,
@@ -1120,5 +1128,19 @@ mod tests {
             serde_json::json!({"ci": {"passed": true}, "planner": {"order": 1}})
         );
         assert!(outcome.conflicts.is_empty());
+    }
+
+    #[test]
+    fn merge_keeps_a_source_key_set_on_one_side() {
+        let base = task_with("");
+        let local = task_with("source_key: planner:plan-7:step-1\n");
+        let remote = task_with("");
+        let mut outcome = outcome();
+        let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
+        let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
+        assert_eq!(
+            parsed.front.source_key.as_deref(),
+            Some("planner:plan-7:step-1")
+        );
     }
 }

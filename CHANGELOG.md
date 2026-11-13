@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `orbit batch --file PATH|-` applies many task operations under one lock in one commit, all or none, with `--dry-run`; references may use `key:<source key>`. The MCP tool `batch` does the same. See ADR 0020.
+- `orbit claim` by the current holder renews that holder's lease (live or stale) instead of failing with `ALREADY_CLAIMED`.
+- `orbit add --source-key KEY` records a caller-chosen Source Key; adding again with the same key returns the existing Task (`meta.matched: true`). `show`, `list`, and `export` return `source_key`; `doctor` reports duplicates as `DUPLICATE_SOURCE_KEY`.
+- `orbit annotation set <id> <owner> --value <json>` and `orbit annotation remove <id> <owner>` write Annotations; the MCP tool `annotate` does the same.
 - Tasks carry Annotations: tool-owned JSON objects keyed by owner slug, returned by `show`, `list`, and `export` and shown by human `show`. `orbit export` `schema_version` is now `3`. `doctor` reports malformed Annotations as `INVALID_ANNOTATION`.
 - `orbit remote disconnect` of the last GitHub project now removes `[remote.github]`, so `orbit doctor` no longer reports `GITHUB_REPO_NOT_LINKED`; default `[github]`/`[github.issue_fields]` tables are no longer written to `config.toml`, so `orbit migrate` leaves no legacy `[github]` section behind.
 - `orbit init` inside a code repository uses that repository's local `user.name`/`user.email` for the new Board repository when no global identity is set.

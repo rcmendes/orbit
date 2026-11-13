@@ -397,6 +397,23 @@ fn diagnose_tasks(
         issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message));
     }
 
+    let mut keys: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for task in graph.tasks.values() {
+        if let Some(key) = task.front.source_key.as_deref() {
+            keys.entry(key).or_default().push(task.id.as_str());
+        }
+    }
+    for (key, ids) in keys.into_iter().filter(|(_, ids)| ids.len() > 1) {
+        issues.push(Issue::new(
+            code::DUPLICATE_SOURCE_KEY,
+            ids.first().copied(),
+            format!(
+                "source key {key} is on more than one task: {}",
+                ids.join(", ")
+            ),
+        ));
+    }
+
     for task in graph.tasks.values() {
         for (owner, value) in &task.front.annotations {
             if let Err(error) = crate::task::validate_annotation(owner, value) {

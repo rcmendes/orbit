@@ -29,6 +29,9 @@ pub mod code {
     pub const INVALID_AREA: &str = "INVALID_AREA";
     pub const INVALID_LABEL: &str = "INVALID_LABEL";
     pub const INVALID_ANNOTATION: &str = "INVALID_ANNOTATION";
+    pub const INVALID_BATCH: &str = "INVALID_BATCH";
+    pub const INVALID_SOURCE_KEY: &str = "INVALID_SOURCE_KEY";
+    pub const DUPLICATE_SOURCE_KEY: &str = "DUPLICATE_SOURCE_KEY";
     pub const LABEL_BLOCKED: &str = "LABEL_BLOCKED";
     pub const CORRUPT_COMMENT: &str = "CORRUPT_COMMENT";
     pub const ORPHAN_COMMENT: &str = "ORPHAN_COMMENT";

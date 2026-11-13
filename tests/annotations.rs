@@ -118,3 +118,138 @@ fn unknown_frontmatter_round_trip_keeps_annotations() {
     let show = repo.ok_json(&["show", &id, "--json"]);
     assert_eq!(show["data"]["annotations"], json!({"ci": {"passed": true}}));
 }
+
+fn board_commits(repo: &TestRepo) -> usize {
+    let output = repo.git_in(&repo.board_path(), &["rev-list", "--count", "HEAD"]);
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+fn last_board_message(repo: &TestRepo) -> String {
+    let output = repo.git_in(&repo.board_path(), &["log", "-1", "--format=%s"]);
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+#[test]
+fn annotation_set_replaces_the_owner_value() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    repo.ok_json(&[
+        "annotation",
+        "set",
+        &id,
+        "ci",
+        "--value",
+        r#"{"a":1}"#,
+        "--json",
+    ]);
+    let value = repo.ok_json(&[
+        "annotation",
+        "set",
+        &id,
+        "ci",
+        "--value",
+        r#"{"b":2}"#,
+        "--json",
+    ]);
+    assert_eq!(value["data"]["annotation"], json!({"b": 2}));
+    assert_eq!(value["data"]["changed"], true);
+    let show = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(show["data"]["annotations"], json!({"ci": {"b": 2}}));
+}
+
+#[test]
+fn annotation_set_keeps_other_owners() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    repo.ok_json(&[
+        "annotation",
+        "set",
+        &id,
+        "ci",
+        "--value",
+        r#"{"a":1}"#,
+        "--json",
+    ]);
+    repo.ok_json(&[
+        "annotation",
+        "set",
+        &id,
+        "planner",
+        "--value",
+        r#"{"p":true}"#,
+        "--json",
+    ]);
+    let show = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(
+        show["data"]["annotations"],
+        json!({"ci": {"a": 1}, "planner": {"p": true}})
+    );
+}
+
+#[test]
+fn annotation_remove_deletes_the_owner() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    repo.ok_json(&[
+        "annotation",
+        "set",
+        &id,
+        "ci",
+        "--value",
+        r#"{"a":1}"#,
+        "--json",
+    ]);
+    let removed = repo.ok_json(&["annotation", "remove", &id, "ci", "--json"]);
+    assert_eq!(removed["data"]["changed"], true);
+    assert_eq!(removed["data"]["annotation"], json!(null));
+    let show = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(show["data"]["annotations"], json!({}));
+    let again = repo.ok_json(&["annotation", "remove", &id, "ci", "--json"]);
+    assert_eq!(again["data"]["changed"], false);
+}
+
+#[test]
+fn annotation_set_rejects_bad_input() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    let before = repo.read_task(&id);
+    let big = format!(r#"{{"x":"{}"}}"#, "a".repeat(9000));
+    for (owner, value) in [("CI", r#"{"a":1}"#), ("ci", "[1]"), ("ci", big.as_str())] {
+        let (_, error) =
+            repo.err_json(&["annotation", "set", &id, owner, "--value", value, "--json"]);
+        assert_eq!(
+            error["error"]["code"], "INVALID_ANNOTATION",
+            "{owner}: {error}"
+        );
+    }
+    assert_eq!(repo.read_task(&id), before);
+}
+
+#[test]
+fn annotation_set_makes_one_commit() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    let before = board_commits(&repo);
+    repo.ok_json(&[
+        "annotation",
+        "set",
+        &id,
+        "ci",
+        "--value",
+        r#"{"a":1}"#,
+        "--json",
+    ]);
+    assert_eq!(board_commits(&repo), before + 1);
+    assert_eq!(
+        last_board_message(&repo),
+        format!("orbit: annotate {id} ci")
+    );
+}

@@ -189,8 +189,13 @@ fn repo_context_for_legacy(root: &Path) -> Result<Option<crate::board::RepoConte
     Ok(None)
 }
 
-/// Decides the post-migration Board folder location.
+/// Decides the post-migration Board folder location. The discovery verdict
+/// already decided WHETHER the layout converts; the classification below only
+/// chooses the migration TARGET shape and can never contradict the verdict.
 fn plan_layout(board: &Board, discovery: &Discovery) -> Result<Layout> {
+    if !discovery.needs_migration {
+        return Ok(Layout::InPlace);
+    }
     let root = &board.root;
     let orbit_dir = orbit_dir_of(board, discovery);
     let worktree = root.join(".git").is_file();

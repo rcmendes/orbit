@@ -271,8 +271,23 @@ fn render_discovery(discovery: &Discovery) -> String {
 }
 
 fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<Issue>) {
-    if let Some(message) = &discovery.legacy {
-        issues.push(Issue::new(LEGACY_LAYOUT, None, message.clone()));
+    // One LEGACY_LAYOUT issue from the authoritative verdict; the discovery
+    // finding, when present, explains which legacy shape produced it.
+    if discovery.needs_migration {
+        let message = match &discovery.legacy {
+            Some(detail) => {
+                format!("{detail}; run `orbit migrate` to convert it to a standalone Board folder")
+            }
+            None => format!(
+                "Board at {} uses a pre-ADR-0019 layout; run `orbit migrate` to convert it to a standalone Board folder",
+                discovery
+                    .root
+                    .as_ref()
+                    .map(|root| root.display().to_string())
+                    .unwrap_or_default()
+            ),
+        };
+        issues.push(Issue::new(LEGACY_LAYOUT, None, message));
     }
     if let Some((new, legacy)) = &discovery.ambiguous {
         issues.push(Issue::new(
@@ -292,16 +307,6 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
     }
 
     if let Some(board) = board {
-        if discovery.needs_migration && discovery.legacy.is_none() {
-            issues.push(Issue::new(
-                LEGACY_LAYOUT,
-                None,
-                format!(
-                    "Board at {} uses a pre-ADR-0019 layout; run `orbit migrate` to convert it to a standalone Board folder",
-                    board.root.display()
-                ),
-            ));
-        }
         if let Some(configured) = board.config.board.storage {
             let actual = StorageMode::detect(&board.root);
             if configured != actual {

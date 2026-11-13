@@ -469,6 +469,12 @@ pub struct Board {
     /// pointer file for a visible Board folder. `None` for legacy, explicit,
     /// or otherwise unanchored Boards.
     pub orbit_dir: Option<PathBuf>,
+    /// The authoritative Legacy layout verdict stored at construction:
+    /// `true` when this Board uses a pre-ADR-0019 layout `orbit migrate`
+    /// must convert. `from_discovery` carries the verdict discovery computed;
+    /// `at_root` derives it with the same classifier and the same legacy
+    /// signal an explicit `--dir` discovery pass on the root produces.
+    pub(crate) needs_migration: bool,
     /// Set when a non-forced commit failed during this process.
     pub(crate) commit_failed: std::cell::Cell<bool>,
 }
@@ -535,9 +541,11 @@ impl Board {
         };
         let linked = matches!(discovery.source, DiscoverySource::Link);
         let orbit_dir = discovery.orbit_dir.clone();
-        let mut board = Self::at_root(root, std::mem::take(&mut discovery.warnings))?;
+        let verdict = discovery.needs_migration;
+        let mut board =
+            Self::at_root_verdict(root, std::mem::take(&mut discovery.warnings), verdict)?;
         board.orbit_dir = orbit_dir.or_else(|| discovery_orbit_dir(&board.root));
-        if linked && discovery.needs_migration {
+        if linked && verdict {
             push_warning(
                 &mut board.warnings,
                 format!(
@@ -550,9 +558,31 @@ impl Board {
     }
 
     /// Loads a Board whose root is already known. The caller decides how the
-    /// path was found; discovery warnings are carried through unchanged.
+    /// path was found; discovery warnings are carried through unchanged. The
+    /// Legacy verdict is derived with the same classifier and the same legacy
+    /// signal an explicit `--dir` discovery pass on `root` produces.
     pub fn at_root(root: PathBuf, warnings: Vec<String>) -> Result<Self> {
         let config = Config::load(&root)?;
+        // `resolve_explicit` flags a directly-named Board legacy only when it
+        // is the retired `<git-common-dir>/orbit/board` store; every other
+        // flag source names an anchor folder, not the Board root itself.
+        let needs_migration = layout_needs_migration(&root, None, config.board.storage, false)
+            || legacy_local_board_for(&root).is_some_and(|legacy| legacy == root);
+        Self::at_root_loaded(root, config, warnings, needs_migration)
+    }
+
+    /// Loads a Board carrying the verdict its discovery pass computed.
+    fn at_root_verdict(root: PathBuf, warnings: Vec<String>, verdict: bool) -> Result<Self> {
+        let config = Config::load(&root)?;
+        Self::at_root_loaded(root, config, warnings, verdict)
+    }
+
+    fn at_root_loaded(
+        root: PathBuf,
+        config: Config,
+        warnings: Vec<String>,
+        needs_migration: bool,
+    ) -> Result<Self> {
         let lock_path = if config.board.storage.is_none() {
             legacy_local_lock_for(&root).unwrap_or_else(|| root.join(".lock"))
         } else {
@@ -564,6 +594,7 @@ impl Board {
             config,
             warnings,
             orbit_dir: None,
+            needs_migration,
             commit_failed: Default::default(),
         })
     }
@@ -692,16 +723,11 @@ impl Board {
     }
 
     /// Whether the Board still uses a pre-ADR-0019 layout or configuration
-    /// that `orbit migrate` must convert before Board commands may run. The
-    /// same classifier produces `Discovery::needs_migration`; this entry
-    /// exists for callers that hold only the Board.
+    /// that `orbit migrate` must convert before Board commands may run.
+    /// Returns the verdict stored at construction — the same verdict
+    /// `Discovery::needs_migration` carries — so every consumer agrees.
     pub fn needs_migration(&self) -> bool {
-        layout_needs_migration(
-            &self.root,
-            self.orbit_dir.as_deref(),
-            self.config.board.storage,
-            false,
-        )
+        self.needs_migration
     }
 
     pub fn storage_mode(&self) -> StorageMode {
@@ -1185,15 +1211,14 @@ fn layout_needs_migration(
     if !root.join(".git").exists() {
         return true;
     }
+    let root_name = root.file_name().and_then(|name| name.to_str());
+    let parent_name = root
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str());
     // A Board folder sitting directly in an Orbit folder, or in the
     // retired `.board` folder: both predate `.orbit/board`.
-    if root.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR)
-        || root
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            == Some(LEGACY_BOARD_DIR)
-    {
+    if root_name == Some(ORBIT_DIR) || parent_name == Some(LEGACY_BOARD_DIR) {
         return true;
     }
     // A legacy `<workspace>/board` folder: named `board`, outside any Git
@@ -1205,12 +1230,8 @@ fn layout_needs_migration(
             .parent()
             .is_some_and(|parent| parent.join(ORBIT_DIR).exists());
     if !anchored
-        && root.file_name().and_then(|name| name.to_str()) == Some(BOARD_DIR)
-        && root
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            != Some(ORBIT_DIR)
+        && root_name == Some(BOARD_DIR)
+        && parent_name != Some(ORBIT_DIR)
         && root
             .parent()
             .is_some_and(|parent| !crate::git::is_git_repo(parent))
@@ -2064,6 +2085,58 @@ mod tests {
     }
 
     #[test]
+    fn discovered_board_carries_the_discovery_verdict() {
+        // A linked Board nested at `<repo>/board` inside a Git working tree is
+        // legacy only through discovery's flag: its shape alone (a standalone
+        // `board` folder inside a repository) does not mark it. The Board must
+        // still report the verdict discovery computed.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git::init_repo(&repo).unwrap();
+        let host = dir.path().join("host");
+        git::init_repo(&host).unwrap();
+        standalone_board(&host.join("board"));
+        Board::write_link_at(&repo.join(".git"), &host).unwrap();
+
+        let mut discovery = Board::discovery_at(&repo, None);
+        assert!(discovery.needs_migration);
+        assert!(discovery.legacy.is_some());
+
+        let board = Board::from_discovery(&mut discovery).unwrap();
+        assert!(board.needs_migration());
+    }
+
+    #[test]
+    fn at_root_reports_the_same_verdict_discovery_computed() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git::init_repo(&repo).unwrap();
+        board_files(&repo.join(".git/orbit/board"));
+
+        let discovery = Board::discovery_at(&repo, None);
+        assert!(discovery.needs_migration);
+
+        let board = Board::at_root(discovery.root.clone().unwrap(), Vec::new()).unwrap();
+        assert_eq!(board.needs_migration(), discovery.needs_migration);
+    }
+
+    #[test]
+    fn at_root_reports_a_standalone_board_as_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("standalone");
+        standalone_board(&root);
+        let root = dunce::canonicalize(&root).unwrap();
+
+        let discovery = Board::discovery_at(dir.path(), Some(&root));
+        assert!(!discovery.needs_migration);
+
+        let board = Board::at_root(root, Vec::new()).unwrap();
+        assert!(!board.needs_migration());
+    }
+
+    #[test]
     fn workspace_local_boards_finds_legacy_and_nested_child_boards() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path();
@@ -2102,6 +2175,7 @@ mod tests {
             config: Config::default(),
             warnings: Vec::new(),
             orbit_dir: None,
+            needs_migration: false,
             commit_failed: Default::default(),
         };
         assert!(!board.commit_failed());

@@ -400,6 +400,7 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
         config,
         warnings: Vec::new(),
         orbit_dir: None,
+        needs_migration: false,
         commit_failed: Default::default(),
     };
     let (migrated_graph, _) = Graph::load(&temp_board, LoadMode::Strict)?;

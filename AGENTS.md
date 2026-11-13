@@ -6,6 +6,7 @@ Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task
 From any member Repository, these commands resolve the shared Board across the Git boundary. Tasks, dependencies, and claims are shared across its Repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
+- `orbit claim <id> --by <agent> --worktree` claims one task and creates `.worktrees/<id>` on `ticket/<id>` in the Task's Repository.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 - `orbit checkpoint <id> --by <agent> --progress "..." [--next "..."] [--blocker "..."]` records a handoff that survives release and takeover.
 - `orbit done <id> --by <agent> --comment "..."` completes it and records the note with the status change; `orbit cancel <id> --by <agent>` abandons it.
@@ -30,13 +31,14 @@ Parse the JSON envelope: `ok`, `data`, `error.code`, and `error.retryable`. If a
 Implement every Orbit task in a dedicated git worktree — never in the main
 checkout, so parallel agent sessions and reviews stay undisturbed.
 
-1. Claim the task, then create the worktree and branch:
+1. Claim the task and create its worktree in one step:
 
    ```bash
-   git worktree add .worktrees/<task-id> -b ticket/<task-id> <base>
+   orbit claim <task-id> --by <agent> --worktree
    ```
 
-   `<base>` is the repo's default branch, or the base branch the task specifies.
+   This creates `.worktrees/<task-id>` on branch `ticket/<task-id>` in the
+   Task's Repository, based on the repository's default branch.
    `.worktrees/` is gitignored.
 2. Do all work — edits, builds, tests, commits — inside `.worktrees/<task-id>`.
    `orbit` commands resolve the shared board from inside the worktree.

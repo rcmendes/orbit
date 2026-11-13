@@ -753,10 +753,20 @@ agent's lease expired and the task must be recovered.
 ```bash
 orbit claim orb-a7b2c9 --by claude
 orbit claim orb-a7b2c9 --by claude --steal   # take over a live or stale claim
+orbit claim orb-a7b2c9 --by claude --worktree # claim and create the task worktree
 ```
 
 `--steal` overrides the holder's lease, not the readiness rules: hold labels and
 unfinished dependencies still block the claim.
+
+`--worktree` claims and creates the Task's worktree in one step:
+`.worktrees/<id>` on branch `ticket/<id>` inside the Task's Repository (its
+`repo` field), falling back to the member Repository containing the current
+directory when the Task names none. A new branch starts from the Repository's
+default branch; an existing `ticket/<id>` branch is checked out, and an existing
+worktree is reused, so repeating the claim is safe. `.worktrees/` is hidden
+through the Repository's `.git/info/exclude`. The JSON result carries
+`data.worktree` with `repository`, `path`, `branch`, and `created`.
 
 ### `orbit heartbeat` — keep a claim alive
 

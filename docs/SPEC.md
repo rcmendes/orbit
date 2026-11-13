@@ -523,7 +523,7 @@ orbit list [--status S] [--priority N] [--claimed-by NAME] [--waiting] [--type T
 orbit ready [--limit N] [--parent ID] [--repo NAME] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--all] [--claim] [--by NAME]
 orbit show <id>
 orbit tree <id>
-orbit claim <id> [--by NAME] [--steal]
+orbit claim <id> [--by NAME] [--steal] [--worktree]
 orbit release <id> [--by NAME] [--force]
 orbit heartbeat <id> [--by NAME]
 orbit checkpoint <id> [--progress TEXT] [--next TEXT|--clear-next] [--blocker TEXT|--clear-blocker] [--by NAME]

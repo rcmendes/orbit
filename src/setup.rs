@@ -2408,6 +2408,7 @@ Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task
 From any member Repository, these commands resolve the shared Board across the Git boundary. Tasks, dependencies, and claims are shared across its Repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
+- `orbit claim <id> --by <agent> --worktree` claims one task and creates `.worktrees/<id>` on `ticket/<id>` in the Task's Repository.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 - `orbit checkpoint <id> --by <agent> --progress \"...\" [--next \"...\"] [--blocker \"...\"]` records a handoff that survives release and takeover.
 {COMPLETION_LINE}

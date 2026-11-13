@@ -184,6 +184,60 @@ impl RemoteLink {
     }
 }
 
+/// Largest serialized size of one owner's Annotation, in bytes.
+pub const ANNOTATION_MAX_BYTES: usize = 8192;
+const ANNOTATION_OWNER_MAX: usize = 40;
+
+/// Checks one Annotation: a lowercase-slug owner and a JSON object of bounded size.
+pub fn validate_annotation(owner: &str, value: &serde_json::Value) -> Result<()> {
+    let invalid =
+        |message: String| OrbitError::new(crate::error::code::INVALID_ANNOTATION, message);
+    let slug = !owner.is_empty()
+        && owner.len() <= ANNOTATION_OWNER_MAX
+        && owner
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && owner
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if !slug {
+        return Err(invalid(format!(
+            "annotation owner '{owner}' must be a lowercase slug of at most {ANNOTATION_OWNER_MAX} characters"
+        )));
+    }
+    if !value.is_object() {
+        return Err(invalid(format!(
+            "annotation '{owner}' must be a JSON object"
+        )));
+    }
+    let size = serde_json::to_string(value)
+        .map(|text| text.len())
+        .unwrap_or(usize::MAX);
+    if size > ANNOTATION_MAX_BYTES {
+        return Err(invalid(format!(
+            "annotation '{owner}' is {size} bytes; the limit is {ANNOTATION_MAX_BYTES}"
+        )));
+    }
+    Ok(())
+}
+
+/// Longest Source Key, in characters.
+pub const SOURCE_KEY_MAX: usize = 200;
+
+/// Checks a Source Key: 1 to 200 printable, non-whitespace ASCII characters.
+pub fn validate_source_key(key: &str) -> Result<()> {
+    if key.is_empty() || key.len() > SOURCE_KEY_MAX || !key.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(OrbitError::new(
+            crate::error::code::INVALID_SOURCE_KEY,
+            format!(
+                "source key must be 1 to {SOURCE_KEY_MAX} printable ASCII characters without spaces"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// On-disk shape: the Claim is stored as three flat keys (see docs/SPEC.md).
 #[derive(Serialize, Deserialize)]
 struct RawFrontmatter {
@@ -219,6 +273,10 @@ struct RawFrontmatter {
     claimed_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lease_until: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_key: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    annotations: BTreeMap<String, serde_json::Value>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     #[serde(flatten)]
@@ -256,6 +314,8 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             repo: raw.repo,
             claim,
             stray_claim_times,
+            source_key: raw.source_key,
+            annotations: raw.annotations,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
             extra: raw.extra,
@@ -288,6 +348,8 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             claimed_by,
             claimed_at,
             lease_until,
+            source_key: front.source_key,
+            annotations: front.annotations,
             created_at: front.created_at,
             updated_at: front.updated_at,
             extra: front.extra,
@@ -318,6 +380,10 @@ pub struct TaskFrontmatter {
     pub repo: Option<String>,
     pub claim: Option<Claim>,
     pub stray_claim_times: Option<StrayClaimTimes>,
+    /// Caller-chosen identity that makes `add` retry-safe; unique per Board.
+    pub source_key: Option<String>,
+    /// Tool-owned data keyed by owner slug; Orbit stores it but never interprets it.
+    pub annotations: BTreeMap<String, serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub extra: BTreeMap<String, serde_yaml_ng::Value>,
@@ -765,6 +831,8 @@ mod tests {
                 stray_claim_times: None,
                 created_at: now(),
                 updated_at: now(),
+                source_key: None,
+                annotations: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: "Body line.\n\n---\n\nA horizontal rule is not a delimiter.".to_string(),

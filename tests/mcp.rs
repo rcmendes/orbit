@@ -122,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 14);
+    assert_eq!(names.len(), 16);
     for expected in [
         "ready",
         "list",
@@ -583,4 +583,77 @@ fn invalid_inputs_are_tool_errors_not_protocol_errors() {
     assert_eq!(bad_status["result"]["isError"], true);
     let bad_status = tool_envelope(&bad_status);
     assert_eq!(bad_status["error"]["code"], "INVALID_ARGUMENT");
+}
+
+#[test]
+fn annotate_tool_sets_and_removes_an_annotation() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let set = client.call(
+        3,
+        "annotate",
+        json!({ "id": id, "owner": "ci", "value": { "passed": true } }),
+    );
+    assert_eq!(
+        tool_envelope(&set)["data"]["annotation"],
+        json!({"passed": true})
+    );
+
+    let removed = client.call(
+        4,
+        "annotate",
+        json!({ "id": id, "owner": "ci", "value": null }),
+    );
+    assert_eq!(tool_envelope(&removed)["data"]["changed"], true);
+    let show = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(show["data"]["annotations"], json!({}));
+}
+
+#[test]
+fn batch_tool_applies_operations_in_one_call() {
+    let repo = TestRepo::new();
+    repo.init();
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let response = client.call(
+        3,
+        "batch",
+        json!({ "operations": [
+            { "op": "add", "key": "planner:p:1", "title": "One" },
+            { "op": "add", "key": "planner:p:2", "title": "Two", "depends_on": ["key:planner:p:1"] }
+        ]}),
+    );
+    let envelope = tool_envelope(&response);
+    assert_eq!(envelope["ok"], true, "{envelope}");
+    let one = envelope["data"]["keys"]["planner:p:1"].as_str().unwrap();
+    let two = envelope["data"]["keys"]["planner:p:2"].as_str().unwrap();
+    let show = repo.ok_json(&["show", two, "--json"]);
+    assert_eq!(show["data"]["depends_on"], json!([one]));
+}
+
+#[test]
+fn annotate_tool_requires_a_value_key() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    repo.ok_json(&[
+        "annotation",
+        "set",
+        &id,
+        "ci",
+        "--value",
+        r#"{"a":1}"#,
+        "--json",
+    ]);
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+    let response = client.call(3, "annotate", json!({ "id": id, "owner": "ci" }));
+    assert_eq!(tool_envelope(&response)["ok"], false);
+    let show = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(show["data"]["annotations"], json!({"ci": {"a": 1}}));
 }

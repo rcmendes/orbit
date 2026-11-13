@@ -49,7 +49,7 @@ fn export_is_deterministic_and_includes_edges_comments_and_terminal_work() {
     let second = repo.ok_json(&["export", "--json"]);
 
     assert_eq!(first["data"], second["data"]);
-    assert_eq!(first["data"]["schema_version"], 2);
+    assert_eq!(first["data"]["schema_version"], 3);
     assert_eq!(first["data"]["board"]["branch"], "orbit");
     assert_eq!(first["data"]["board"]["task_count"], 4);
     assert_eq!(first["data"]["board"]["comment_count"], 1);
@@ -169,7 +169,7 @@ fn export_of_an_empty_board_has_the_schema_envelope() {
 
     let value = repo.ok_json(&["export", "--json"]);
 
-    assert_eq!(value["data"]["schema_version"], 2);
+    assert_eq!(value["data"]["schema_version"], 3);
     assert_eq!(value["data"]["board"]["branch"], "orbit");
     assert_eq!(value["data"]["board"]["task_count"], 0);
     assert_eq!(value["data"]["board"]["comment_count"], 0);

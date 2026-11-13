@@ -847,7 +847,7 @@ orbit export --json > board.json
 orbit export --json | jq '.data.tasks[] | select(.kind == "subtask")'
 ```
 
-The snapshot is ordered by task ID, carries `schema_version` (currently `2`), and contains no timestamp or machine-local paths. The same board state produces the same data, which makes export suitable for a knowledge base, an archive, or a diff between two points in time. Pin `schema_version` in the collector.
+The snapshot is ordered by task ID, carries `schema_version` (currently `3`), and contains no timestamp or machine-local paths. The same board state produces the same data, which makes export suitable for a knowledge base, an archive, or a diff between two points in time. Pin `schema_version` in the collector.
 
 ## Agent setup
 

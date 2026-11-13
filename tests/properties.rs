@@ -27,6 +27,8 @@ fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
             stray_claim_times: None,
             created_at: now,
             updated_at: now,
+            source_key: None,
+            annotations: BTreeMap::new(),
             extra: BTreeMap::new(),
         },
         body: String::new(),

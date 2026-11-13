@@ -833,6 +833,41 @@ fn merge_task(
         }
     }
 
+    let source_key = pick(
+        base_front.map(|f| f.source_key.clone()),
+        local.front.source_key.clone(),
+        remote.front.source_key.clone(),
+        &key("source_key"),
+        outcome,
+    );
+    // Annotations merge per owner, like unknown keys.
+    let mut owners: BTreeSet<String> = BTreeSet::new();
+    for source in [
+        base_front.map(|f| f.annotations.keys()),
+        Some(local.front.annotations.keys()),
+        Some(remote.front.annotations.keys()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        owners.extend(source.cloned());
+    }
+    let mut annotations = BTreeMap::new();
+    for owner in owners {
+        let base_value = base_front.map(|f| f.annotations.get(&owner).cloned());
+        let local_value = local.front.annotations.get(&owner).cloned();
+        let remote_value = remote.front.annotations.get(&owner).cloned();
+        if let Some(value) = pick(
+            base_value,
+            local_value,
+            remote_value,
+            &key(&format!("annotations.{owner}")),
+            outcome,
+        ) {
+            annotations.insert(owner, value);
+        }
+    }
+
     let merged = Task {
         id: id.to_string(),
         front: task::TaskFrontmatter {
@@ -852,6 +887,8 @@ fn merge_task(
             repo,
             claim: claim.claim,
             stray_claim_times: claim.stray,
+            source_key,
+            annotations,
             created_at,
             updated_at,
             extra,
@@ -1055,4 +1092,55 @@ fn merge_comments(
         (a.created_at, &a.author, &a.body).cmp(&(b.created_at, &b.author, &b.body))
     });
     Ok(comment::render_comments_file(task_id, &comments))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task_with(annotations: &str) -> Task {
+        let content = format!(
+            "---\ntitle: T\nstatus: todo\n{annotations}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\nbody\n"
+        );
+        task::parse_task("orb-aaaaaa".to_string(), &content).unwrap()
+    }
+
+    fn outcome() -> MergeOutcome {
+        MergeOutcome {
+            files: BTreeMap::new(),
+            conflicts: Vec::new(),
+            notices: Vec::new(),
+            resolutions: BTreeMap::new(),
+            used_resolutions: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    fn merge_keeps_annotations_from_both_sides() {
+        let base = task_with("");
+        let local = task_with("annotations:\n  ci:\n    passed: true\n");
+        let remote = task_with("annotations:\n  planner:\n    order: 1\n");
+        let mut outcome = outcome();
+        let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
+        let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
+        assert_eq!(
+            serde_json::to_value(&parsed.front.annotations).unwrap(),
+            serde_json::json!({"ci": {"passed": true}, "planner": {"order": 1}})
+        );
+        assert!(outcome.conflicts.is_empty());
+    }
+
+    #[test]
+    fn merge_keeps_a_source_key_set_on_one_side() {
+        let base = task_with("");
+        let local = task_with("source_key: planner:plan-7:step-1\n");
+        let remote = task_with("");
+        let mut outcome = outcome();
+        let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
+        let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
+        assert_eq!(
+            parsed.front.source_key.as_deref(),
+            Some("planner:plan-7:step-1")
+        );
+    }
 }

@@ -18,6 +18,7 @@ pub mod lock;
 pub mod mcp;
 pub mod migrate;
 pub mod mutation;
+pub mod ops;
 pub mod output;
 pub mod remote;
 pub mod repository;

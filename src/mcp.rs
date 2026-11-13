@@ -305,6 +305,26 @@ fn tool_definitions() -> Vec<Value> {
             &["action"],
         ),
         tool(
+            "batch",
+            "Apply many task operations in one commit, all or none. Same operations as `orbit batch`.",
+            json!({
+                "operations": { "type": "array", "items": { "type": "object" } },
+                "dry_run": { "type": "boolean" },
+                "by": { "type": "string" }
+            }),
+            &["operations"],
+        ),
+        tool(
+            "annotate",
+            "Set a tool's Annotation (a JSON object) on a task, or remove it with value null.",
+            json!({
+                "id": { "type": "string" },
+                "owner": { "type": "string" },
+                "value": { "type": ["object", "null"] }
+            }),
+            &["id", "owner"],
+        ),
+        tool(
             "comment",
             "Add or list task comments.",
             json!({
@@ -474,6 +494,8 @@ fn dispatch_tool(
     }
 
     let mut args: Vec<String> = Vec::new();
+    // A Batch travels as a temporary file because tool calls spawn the CLI without stdin.
+    let mut batch_file: Option<std::path::PathBuf> = None;
 
     match name {
         "ready" => {
@@ -917,6 +939,52 @@ fn dispatch_tool(
                 _ => return tool_invalid("`action` must be `add`, `remove`, or `list`"),
             }
         }
+        "batch" => {
+            let Some(operations) = arguments.get("operations").filter(|v| v.is_array()) else {
+                return tool_invalid("missing or invalid `operations`");
+            };
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or_default();
+            let path = std::env::temp_dir()
+                .join(format!("orbit-batch-{}-{nanos}.json", std::process::id()));
+            let body = json!({ "operations": operations }).to_string();
+            if let Err(error) = std::fs::write(&path, body) {
+                return tool_invalid(format!("cannot stage the batch: {error}"));
+            }
+            args.extend(["batch".to_string(), "--file".to_string()]);
+            args.push(path.to_string_lossy().to_string());
+            batch_file = Some(path);
+            if bool_arg(arguments, "dry_run") {
+                args.push("--dry-run".to_string());
+            }
+            if let Some(by) = optional_str(arguments, "by") {
+                args.push("--by".to_string());
+                args.push(by);
+            }
+        }
+        "annotate" => {
+            let Some(id) = required_str(arguments, "id") else {
+                return tool_invalid("missing or invalid `id`");
+            };
+            let Some(owner) = required_str(arguments, "owner") else {
+                return tool_invalid("missing or invalid `owner`");
+            };
+            args.push("annotation".to_string());
+            match arguments.get("value") {
+                None => return tool_invalid("missing `value`; pass null to remove the Annotation"),
+                Some(Value::Null) => {
+                    args.extend(["remove".to_string(), id, owner]);
+                }
+                Some(value @ Value::Object(_)) => {
+                    args.extend(["set".to_string(), id, owner]);
+                    args.push("--value".to_string());
+                    args.push(value.to_string());
+                }
+                Some(_) => return tool_invalid("`value` must be an object or null"),
+            }
+        }
         "comment" => {
             let Some(action) = required_str(arguments, "action") else {
                 return tool_invalid("missing or invalid `action`");
@@ -953,7 +1021,11 @@ fn dispatch_tool(
         other => return tool_invalid(format!("unknown tool `{other}`")),
     }
 
-    match run_orbit(executable, dir, &args, true) {
+    let outcome = run_orbit(executable, dir, &args, true);
+    if let Some(path) = batch_file {
+        let _ = std::fs::remove_file(path);
+    }
+    match outcome {
         Ok(run) => {
             let stdout = run.stdout.trim();
             if stdout.is_empty() && !run.success && run.code == Some(2) {
@@ -1134,7 +1206,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 16);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -1154,6 +1226,8 @@ mod tests {
             "delete",
             "label",
             "comment",
+            "annotate",
+            "batch",
         ] {
             assert!(names.contains(&expected), "{expected}");
         }

@@ -414,6 +414,8 @@ mod tests {
                     baseline: None,
                 }),
                 repo: None,
+                source_key: None,
+                annotations: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: body.into(),

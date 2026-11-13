@@ -378,6 +378,16 @@ impl Task {
                 subtasks: gate.open_subtasks.clone(),
             });
         }
+        // The current holder renews its own Claim, live or Stale; this makes a
+        // repeated claim (for example a retried Batch) a safe no-op.
+        if let Some(claim) = &mut self.front.claim
+            && claim.holder == agent
+        {
+            claim.lease_until = Some(now + lease);
+            self.front.status = Status::InProgress;
+            self.touch(now);
+            return Ok(());
+        }
         if let Some(claim) = &self.front.claim
             && !steal
         {
@@ -578,6 +588,8 @@ mod tests {
                 }),
                 created_at: now(),
                 updated_at: now() - Duration::hours(1),
+                source_key: None,
+                annotations: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: String::new(),

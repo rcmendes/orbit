@@ -112,6 +112,14 @@ pub enum Command {
     #[command(long_about = help::LABEL_LONG, after_long_help = help::LABEL_EXAMPLES)]
     Label(LabelArgs),
 
+    /// Apply many task operations in one commit, all or none.
+    #[command(long_about = help::BATCH_LONG, after_long_help = help::BATCH_EXAMPLES)]
+    Batch(BatchArgs),
+
+    /// Set or remove a tool's Annotation on a task.
+    #[command(long_about = help::ANNOTATION_LONG, after_long_help = help::ANNOTATION_EXAMPLES)]
+    Annotation(AnnotationArgs),
+
     /// Add to or read a task's comment thread.
     #[command(long_about = help::COMMENT_LONG, after_long_help = help::COMMENT_EXAMPLES)]
     Comment(CommentArgs),
@@ -364,6 +372,10 @@ pub struct AddArgs {
     /// Read the task body from a file. Use "-" to read stdin.
     #[arg(long = "body-file", value_name = "PATH", conflicts_with = "body")]
     pub body_file: Option<PathBuf>,
+
+    /// Caller-chosen identity; an add whose Source Key exists returns that Task.
+    #[arg(long = "source-key", value_name = "KEY")]
+    pub source_key: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -757,6 +769,60 @@ pub struct LabelMutationArgs {
     /// One or more lowercase labels.
     #[arg(required = true, num_args = 1.., value_name = "LABEL")]
     pub labels: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct BatchArgs {
+    /// JSON file with the operations; "-" reads stdin.
+    #[arg(long, value_name = "PATH")]
+    pub file: String,
+
+    /// Validate every operation and report the result without writing.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Default agent for operations without `by`. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AnnotationArgs {
+    #[command(subcommand)]
+    pub command: AnnotationCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AnnotationCommand {
+    /// Replace one owner's Annotation with a JSON object.
+    #[command(after_long_help = help::ANNOTATION_SET_EXAMPLES)]
+    Set(AnnotationSetArgs),
+
+    /// Remove one owner's Annotation.
+    #[command(after_long_help = help::ANNOTATION_REMOVE_EXAMPLES)]
+    Remove(AnnotationRemoveArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AnnotationSetArgs {
+    /// Task ID, for example orb-a7b2c9.
+    pub id: String,
+
+    /// Owner: the lowercase slug naming the tool, for example ci.
+    pub owner: String,
+
+    /// The Annotation, a JSON object of at most 8192 bytes.
+    #[arg(long, value_name = "JSON")]
+    pub value: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AnnotationRemoveArgs {
+    /// Task ID, for example orb-a7b2c9.
+    pub id: String,
+
+    /// Owner whose Annotation is removed.
+    pub owner: String,
 }
 
 #[derive(Debug, Args)]

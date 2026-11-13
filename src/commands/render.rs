@@ -363,6 +363,9 @@ pub(super) fn format_detail(
     if let Some(waiting) = &task.front.waiting_on {
         lines.push(format!("waiting_on: {waiting}"));
     }
+    for (owner, value) in &task.front.annotations {
+        lines.push(format!("annotation {owner}: {value}"));
+    }
     if let Some(checkpoint) = &task.front.checkpoint {
         let label = if task.front.status.is_terminal() {
             "checkpoint (archived)"

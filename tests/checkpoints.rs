@@ -317,3 +317,34 @@ fn only_the_claimant_can_record_a_checkpoint() {
     ]);
     assert_eq!(terminal["error"]["code"], "INVALID_TRANSITION");
 }
+
+#[test]
+fn claim_by_current_holder_renews_the_lease() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Work", &[]);
+    let first = repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
+    let first_lease = first["data"]["lease_until"].as_str().unwrap().to_string();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let again = repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
+    assert_eq!(again["data"]["claimed_by"], "a");
+    assert!(
+        again["data"]["lease_until"].as_str().unwrap() > first_lease.as_str(),
+        "{again}"
+    );
+    let (_, error) = repo.err_json(&["claim", &id, "--by", "b", "--json"]);
+    assert_eq!(error["error"]["code"], "ALREADY_CLAIMED");
+}
+
+#[test]
+fn claim_by_current_holder_takes_back_a_stale_claim() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Work", &[]);
+    repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
+    repo.make_stale(&id);
+    let again = repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
+    assert_eq!(again["data"]["claimed_by"], "a");
+    let (_, error) = repo.err_json(&["claim", &id, "--by", "b", "--json"]);
+    assert_eq!(error["error"]["code"], "ALREADY_CLAIMED");
+}

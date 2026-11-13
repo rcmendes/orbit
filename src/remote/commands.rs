@@ -68,8 +68,7 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         &github,
         &DiagnosisOptions {
             repository_scope: repo_scope.clone(),
-            check_member_repositories: true,
-            strict_member_projects: true,
+            strict_connected_projects: true,
         },
     )?;
     let configured = diagnosis.configured;
@@ -311,9 +310,8 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
 /// Board or included by the Workspace catalog. Workspace members need no
 /// per-repository `orbit remote connect`.
 ///
-/// `doctor` projects the shared [`diagnosis::Diagnosis`]: member
-/// Repository projects count for the link/label rules but are not
-/// access-checked, matching the historical doctor behavior.
+/// `doctor` projects the shared [`diagnosis::Diagnosis`] over the same
+/// connected-projects universe `remote status` reports.
 pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     let github = github_config(board);
     if !github.is_enabled() {
@@ -331,8 +329,7 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
         &github,
         &DiagnosisOptions {
             repository_scope: None,
-            check_member_repositories: false,
-            strict_member_projects: false,
+            strict_connected_projects: false,
         },
     ) {
         Ok(diagnosis) => diagnosis.doctor_issues(),
@@ -1235,7 +1232,7 @@ fn cmd_link(board: &Board, args: RemoteLinkArgs) -> Result<crate::output::Comman
 fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::CommandOutput> {
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let resolver = github_resolver(board)?;
-    let candidates = create_project_candidates(board, &resolver)?;
+    let candidates = crate::remote::connected_projects(board)?;
     let create_project = select_create_project(&candidates, args.project.as_deref())?;
     let project_label = format!("{}:{}", create_project.tracker, create_project.project);
     crate::remote::execution::require_project_available(board, &resolver, &create_project)?;
@@ -1524,27 +1521,6 @@ fn format_create_preview(task: &Task, repository: &str, issue_state: &str) -> St
     )
 }
 
-/// Remote Projects `orbit remote create` may target: every configured
-/// project plus each installed tracker's implicit projects.
-fn create_project_candidates(
-    board: &Board,
-    resolver: &dyn RemoteResolver,
-) -> Result<Vec<RemoteProject>> {
-    let mut candidates = configured_projects(board);
-    for tracker in resolver.trackers() {
-        let adapter = resolver.adapter(&tracker)?;
-        for project in adapter.implicit_projects(board)? {
-            if !candidates.iter().any(|candidate| {
-                candidate.tracker == project.tracker
-                    && candidate.project.eq_ignore_ascii_case(&project.project)
-            }) {
-                candidates.push(project);
-            }
-        }
-    }
-    Ok(candidates)
-}
-
 fn select_create_project(
     candidates: &[RemoteProject],
     requested: Option<&str>,
@@ -1668,15 +1644,7 @@ fn cmd_auto_push(board: &Board, args: RemoteAutoPushArgs) -> Result<crate::outpu
         warnings.extend(crate::mutation::commit_warning(outcome));
     }
     if changed && enabled {
-        let mut repositories = crate::repository::github_member_projects(board)?;
-        for repository in &github_config(board).repositories {
-            if !repositories
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(repository))
-            {
-                repositories.push(repository.clone());
-            }
-        }
+        let repositories = crate::remote::connected_github_projects(board)?;
         match repositories.len() {
             1 => {}
             0 => warnings.push(

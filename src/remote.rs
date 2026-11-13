@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::board::Board;
 use crate::error::{OrbitError, Result};
 use crate::github::config::GitHubConfig;
-use crate::graph::{Graph, LoadMode};
+use crate::graph::Graph;
 
 pub mod auto_push;
 pub mod catalog;
@@ -31,18 +31,48 @@ pub use crate::task::RemoteLink;
 pub fn configured_projects(board: &Board) -> Vec<RemoteProject> {
     let mut projects = board.config.remote.projects.clone();
     for repository in &board.config.github.repositories {
-        let project = RemoteProject {
-            tracker: "github".to_string(),
-            project: repository.clone(),
-        };
-        if !projects.iter().any(|candidate| {
-            candidate.tracker == project.tracker
-                && candidate.project.eq_ignore_ascii_case(&project.project)
-        }) {
-            projects.push(project);
-        }
+        push_project(&mut projects, "github", repository.clone());
     }
     projects
+}
+
+/// Append `project` to `projects` unless an entry on the same tracker with
+/// a case-insensitive project match already exists.
+fn push_project(projects: &mut Vec<RemoteProject>, tracker: &str, project: String) {
+    if !projects.iter().any(|candidate| {
+        candidate.tracker == tracker && candidate.project.eq_ignore_ascii_case(&project)
+    }) {
+        projects.push(RemoteProject {
+            tracker: tracker.to_string(),
+            project,
+        });
+    }
+}
+
+/// Every Remote Project connected to the Board: the configured projects
+/// plus the Remote Projects implied by member Repository `origin`s (for
+/// GitHub, member checkouts whose `origin` points at github.com). The one
+/// rule every "connected projects" surface shares; deduplicated
+/// case-insensitively on (tracker, project), configured projects first.
+///
+/// Member origins cost one `git remote get-url origin` per member, so
+/// callers that only need the configured set use [`configured_projects`].
+pub fn connected_projects(board: &Board) -> Result<Vec<RemoteProject>> {
+    let mut projects = configured_projects(board);
+    for repository in crate::repository::github_member_projects(board)? {
+        push_project(&mut projects, "github", repository);
+    }
+    Ok(projects)
+}
+
+/// `owner/repo` names of the connected github Remote Projects, in
+/// [`connected_projects`] order.
+pub fn connected_github_projects(board: &Board) -> Result<Vec<String>> {
+    Ok(connected_projects(board)?
+        .into_iter()
+        .filter(|project| project.tracker == "github")
+        .map(|project| project.project)
+        .collect())
 }
 
 /// Whether the Board has any Remote Tracker configuration at all: Remote
@@ -67,17 +97,22 @@ pub fn configured(board: &Board) -> bool {
 /// line, and the `list` link filters from human output; `--json` is
 /// unaffected.
 pub fn details_visible(board: &Board, graph: &Graph) -> bool {
-    !configured_projects(board).is_empty()
-        || graph
+    remote_details_visible(board, || {
+        graph
             .tasks
             .values()
             .any(|task| link::link_view(task).is_some())
+    })
 }
 
 /// Resolve the Board for `dir` (`None` walks from the current directory) and
 /// report whether Remote Tracker material is visible. Any resolution failure
 /// reads as "not visible" so help text and setup templates degrade to the
 /// local-only surface instead of guessing.
+///
+/// Unlike [`details_visible`] this does not load and validate the Task graph:
+/// it probes each Task file's frontmatter for a `remote:`/`github:` link key,
+/// which answers the same question cheaply enough to run before help renders.
 pub fn details_visible_for(dir: Option<&Path>) -> bool {
     let discovery = Board::discovery(dir);
     let Some(root) = discovery.root else {
@@ -86,10 +121,44 @@ pub fn details_visible_for(dir: Option<&Path>) -> bool {
     let Ok(board) = Board::at_root(root, discovery.warnings) else {
         return false;
     };
-    let Ok((graph, _)) = Graph::load(&board, LoadMode::Lenient) else {
+    remote_details_visible(&board, || any_task_link(&board))
+}
+
+fn remote_details_visible(board: &Board, any_link: impl FnOnce() -> bool) -> bool {
+    !configured_projects(board).is_empty() || any_link()
+}
+
+/// Cheap stand-in for the `graph.tasks.any(link_view)` half of
+/// [`details_visible`]: true when any Task file's frontmatter carries a
+/// `remote:` or legacy `github:` link, active or detached.
+fn any_task_link(board: &Board) -> bool {
+    let Ok(ids) = board.task_ids() else {
         return false;
     };
-    details_visible(&board, &graph)
+    ids.iter().any(|id| task_has_link(board, id))
+}
+
+/// Frontmatter fields probed for a Remote link. Only the two link keys are
+/// deserialized: a link that fails to parse reads as "no link", matching a
+/// corrupt Task dropped by a Lenient load, while unrelated malformed fields
+/// cannot hide a valid link (the safe direction for help gating).
+#[derive(Deserialize)]
+struct LinkProbe {
+    #[serde(default)]
+    remote: Option<RemoteLink>,
+    #[serde(default)]
+    github: Option<crate::github::link::GitHubLink>,
+}
+
+fn task_has_link(board: &Board, id: &str) -> bool {
+    let Ok(content) = std::fs::read_to_string(board.task_path(id)) else {
+        return false;
+    };
+    let Some((frontmatter, _)) = crate::task::split_frontmatter(&content) else {
+        return false;
+    };
+    serde_yaml_ng::from_str::<LinkProbe>(frontmatter)
+        .is_ok_and(|probe| probe.remote.is_some() || probe.github.is_some())
 }
 
 /// `[remote]` section of `config.toml`.
@@ -257,4 +326,66 @@ fn parse_issue_url(url: &str) -> Result<(String, String)> {
         return Err(invalid());
     }
     Ok((repo, number.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::Config;
+
+    fn board_with(config: Config) -> (tempfile::TempDir, Board) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let board = Board {
+            lock_path: root.join(".lock"),
+            root,
+            config,
+            warnings: Vec::new(),
+            orbit_dir: None,
+            needs_migration: false,
+            commit_failed: Default::default(),
+        };
+        (dir, board)
+    }
+
+    fn project(tracker: &str, project: &str) -> RemoteProject {
+        RemoteProject {
+            tracker: tracker.to_string(),
+            project: project.to_string(),
+        }
+    }
+
+    #[test]
+    fn configured_projects_merges_remote_projects_and_legacy_github() {
+        let mut config = Config::default();
+        config.remote.projects = vec![project("github", "Acme/Widget"), project("jira", "PROJ-1")];
+        config.github.repositories = vec!["acme/widget".to_string(), "acme/gadget".to_string()];
+        let (_dir, board) = board_with(config);
+
+        assert_eq!(
+            configured_projects(&board),
+            vec![
+                project("github", "Acme/Widget"),
+                project("jira", "PROJ-1"),
+                project("github", "acme/gadget"),
+            ]
+        );
+    }
+
+    #[test]
+    fn connected_projects_matches_configured_without_members() {
+        let mut config = Config::default();
+        config.remote.projects = vec![project("github", "Acme/Widget")];
+        config.github.repositories = vec!["acme/gadget".to_string()];
+        let (_dir, board) = board_with(config);
+
+        assert_eq!(
+            connected_projects(&board).unwrap(),
+            configured_projects(&board)
+        );
+        assert_eq!(
+            connected_github_projects(&board).unwrap(),
+            vec!["Acme/Widget".to_string(), "acme/gadget".to_string()]
+        );
+    }
 }

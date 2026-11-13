@@ -61,7 +61,12 @@ pub enum Command {
     Add(AddArgs),
 
     /// List tasks with filters. Closed work is hidden unless --include-closed.
-    #[command(long_about = help::LIST_LONG, after_long_help = help::LIST_EXAMPLES)]
+    /// The default help assumes Remote Tracker material; `parse` swaps in the
+    /// local-only variant for Boards without it.
+    #[command(
+        long_about = help::list_long(true),
+        after_long_help = help::list_examples(true)
+    )]
     List(ListArgs),
 
     /// List or atomically claim the next ready task.
@@ -1298,8 +1303,8 @@ pub fn parse() -> Cli {
         command = command.mut_subcommand("list", |list| {
             list.mut_arg("linked", |arg| arg.hide(true))
                 .mut_arg("local", |arg| arg.hide(true))
-                .long_about(help::LIST_LONG_UNCONNECTED)
-                .after_long_help(help::LIST_EXAMPLES_UNCONNECTED)
+                .long_about(help::list_long(false))
+                .after_long_help(help::list_examples(false))
         });
     }
     let matches = command.get_matches();

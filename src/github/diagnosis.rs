@@ -17,19 +17,16 @@ use crate::github::config::GitHubConfig;
 use crate::github::status::IN_PROGRESS_LABEL;
 use crate::graph::Issue;
 
-/// Which repositories the diagnosis probes and how strictly member
-/// Repository projects are resolved.
+/// Which repositories the diagnosis probes and how strictly the connected
+/// project set is resolved.
 #[derive(Debug, Clone, Default)]
 pub struct DiagnosisOptions {
     /// `remote status --repo` filter; `None` checks every repository.
     pub repository_scope: Option<String>,
-    /// Whether member Repository projects join the repository-access check.
-    /// `remote status` checks them; `doctor` only counts them for the
-    /// "any repository linked" and Auto-push label rules.
-    pub check_member_repositories: bool,
-    /// Whether a member-project resolution error aborts the diagnosis
-    /// (`remote status`) or reads as "no members" (`doctor`).
-    pub strict_member_projects: bool,
+    /// Whether a connected-projects resolution error aborts the diagnosis
+    /// (`remote status`) or reads as an empty set (`doctor`, matching its
+    /// historical `unwrap_or_default`).
+    pub strict_connected_projects: bool,
 }
 
 /// The typed result both `remote status` and `doctor` project.
@@ -64,10 +61,8 @@ pub struct AuthDiagnosis {
 #[derive(Debug)]
 pub struct RepositoryDiagnosis {
     pub name: String,
-    /// `true` for `[github] repositories`/`[remote] projects` entries,
-    /// `false` for member Repository `origin` projects.
-    pub configured_repository: bool,
-    /// Whether `repository_info` ran for this repository.
+    /// Whether `repository_info` ran for this repository (authenticated
+    /// sessions only).
     pub access_checked: bool,
     /// `None` when the repository was not access-checked.
     pub accessible: Option<bool>,
@@ -197,69 +192,52 @@ pub fn diagnose(
         });
     }
 
-    // The checked repository universe: configured repositories first,
-    // then member Repository projects deduplicated case-insensitively.
-    let scope = options.repository_scope.as_deref();
-    let mut names: Vec<(String, bool)> = config
-        .repositories
-        .iter()
-        .filter(|name| scope.is_none_or(|scope| name.eq_ignore_ascii_case(scope)))
-        .map(|name| (name.clone(), true))
-        .collect();
-    let members = if options.strict_member_projects {
-        crate::repository::github_member_projects(board)?
+    // The checked repository universe is the Board's connected GitHub
+    // projects — configured Remote Projects plus member Repository origins —
+    // the same set `remote status` and `doctor` both report on.
+    let connected = if options.strict_connected_projects {
+        crate::remote::connected_github_projects(board)?
     } else {
-        crate::repository::github_member_projects(board).unwrap_or_default()
+        crate::remote::connected_github_projects(board).unwrap_or_default()
     };
-    for member in members {
-        if scope.is_some_and(|scope| !member.eq_ignore_ascii_case(scope)) {
-            continue;
-        }
-        if names
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case(&member))
-        {
-            continue;
-        }
-        names.push((member, false));
-    }
+    let scope = options.repository_scope.as_deref();
+    let names: Vec<String> = connected
+        .into_iter()
+        .filter(|name| scope.is_none_or(|scope| name.eq_ignore_ascii_case(scope)))
+        .collect();
 
     let mut repositories = Vec::with_capacity(names.len());
-    for (name, configured_repository) in names {
-        let access_checked = configured_repository || options.check_member_repositories;
+    for name in names {
         let mut repository = RepositoryDiagnosis {
             name: name.clone(),
-            configured_repository,
-            access_checked,
+            access_checked: auth_status.authenticated,
             accessible: None,
             owner_type: None,
             access_error: None,
             label: None,
         };
         if auth_status.authenticated {
-            if access_checked {
-                match client.repository_info(&name) {
-                    Ok(info) => {
-                        repository.accessible = Some(true);
-                        repository.owner_type = Some(info.owner_type);
-                    }
-                    Err(error) => {
-                        repository.accessible = Some(false);
-                        repository.access_error = Some(RemoteFailure {
-                            code: error.code,
-                            message: error.message.clone(),
-                        });
-                        findings.push(Finding {
-                            code: error.code,
-                            kind: FindingKind::RepositoryAccess {
-                                failure: RemoteFailure {
-                                    code: error.code,
-                                    message: error.message,
-                                },
+            match client.repository_info(&name) {
+                Ok(info) => {
+                    repository.accessible = Some(true);
+                    repository.owner_type = Some(info.owner_type);
+                }
+                Err(error) => {
+                    repository.accessible = Some(false);
+                    repository.access_error = Some(RemoteFailure {
+                        code: error.code,
+                        message: error.message.clone(),
+                    });
+                    findings.push(Finding {
+                        code: error.code,
+                        kind: FindingKind::RepositoryAccess {
+                            failure: RemoteFailure {
+                                code: error.code,
+                                message: error.message,
                             },
-                            repository: Some(name.clone()),
-                        });
-                    }
+                        },
+                        repository: Some(name.clone()),
+                    });
                 }
             }
             let probe = client.label_exists(&name, IN_PROGRESS_LABEL);
@@ -994,8 +972,7 @@ mod tests {
             &board,
             &client,
             &DiagnosisOptions {
-                check_member_repositories: true,
-                strict_member_projects: true,
+                strict_connected_projects: true,
                 ..DiagnosisOptions::default()
             },
         );
@@ -1097,28 +1074,32 @@ mod tests {
     }
 
     #[test]
-    fn doctor_skips_member_repository_access_checks() {
-        // `remote status` access-checks member projects; `doctor` only
-        // counts them, so an inaccessible member produces no access issue.
+    fn diagnosis_repository_scope_filters_the_checked_universe() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = healthy_store();
-        store["repositories"]["acme/widget"]["accessible"] = serde_json::json!(true);
-        store["repositories"]["acme/member"] =
-            serde_json::json!({ "owner_type": "Organization", "accessible": false });
+        store["repositories"]["acme/other"] =
+            serde_json::json!({ "owner_type": "Organization", "accessible": true });
         let client = fixture_client(&dir, store);
-        let board = configured_board();
-        // No members exist in the test board, so both projections agree;
-        // this pins that `check_member_repositories` only widens the
-        // access-checked set.
-        let status_options = DiagnosisOptions {
-            check_member_repositories: true,
-            strict_member_projects: true,
-            ..DiagnosisOptions::default()
-        };
-        let doctor_options = DiagnosisOptions::default();
-        let status = diagnose_fixture(&board, &client, &status_options);
-        let doctor = diagnose_fixture(&board, &client, &doctor_options);
-        assert_eq!(status.repositories.len(), doctor.repositories.len());
+        let mut config = github_config();
+        config.repositories.push("acme/other".to_string());
+        let mut board_config = Config::default();
+        board_config.github = config;
+        let board = board_with(board_config);
+
+        let scoped = diagnose_fixture(
+            &board,
+            &client,
+            &DiagnosisOptions {
+                repository_scope: Some("acme/other".to_string()),
+                ..DiagnosisOptions::default()
+            },
+        );
+        assert_eq!(scoped.repositories.len(), 1);
+        assert_eq!(scoped.repositories[0].name, "acme/other");
+        assert_eq!(scoped.repository_scope.as_deref(), Some("acme/other"));
+
+        let unscoped = diagnose_fixture(&board, &client, &DiagnosisOptions::default());
+        assert_eq!(unscoped.repositories.len(), 2);
     }
 
     fn resolved_fields() -> FieldsDiagnosis {

@@ -5,7 +5,7 @@
 //! `gh` client. The sync engine only sees [`RemoteIssue`] and
 //! [`MappedFields`].
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::board::Board;
 use crate::error::{OrbitError, Result};
@@ -26,8 +26,13 @@ use crate::remote::port::RemoteAdapter;
 use crate::task::Status;
 
 /// The GitHub adapter: a [`GitHubClient`] plus the Board's GitHub settings.
+///
+/// The client is built lazily: [`GitHubAdapter::from_config`] resolves the
+/// config-only port facts ([`RemoteAdapter::mapped_fields`],
+/// [`RemoteAdapter::project_available`], …) without probing `gh` or the
+/// fixture; the client is only constructed on the first call that needs it.
 pub struct GitHubAdapter {
-    client: Arc<dyn GitHubClient>,
+    client: OnceLock<Result<Arc<dyn GitHubClient>>>,
     config: GitHubConfig,
 }
 
@@ -36,7 +41,30 @@ impl GitHubAdapter {
     /// (or a fixture in tests) and shares it across every adapter and
     /// direct call in the operation.
     pub fn with_client(client: Arc<dyn GitHubClient>, config: GitHubConfig) -> Self {
-        Self { client, config }
+        let slot = OnceLock::new();
+        let _ = slot.set(Ok(client));
+        Self {
+            client: slot,
+            config,
+        }
+    }
+
+    /// Adapter over Board config alone. Config-only port facts resolve
+    /// immediately; the first call that reaches GitHub builds the client
+    /// from the environment, exactly as [`Self::with_client`] callers do
+    /// up front.
+    pub fn from_config(config: GitHubConfig) -> Self {
+        Self {
+            client: OnceLock::new(),
+            config,
+        }
+    }
+
+    fn client(&self) -> Result<&Arc<dyn GitHubClient>> {
+        self.client
+            .get_or_init(crate::github::client::client_from_env)
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// The effective `[github]` settings: `[remote.github]` (written by
@@ -50,7 +78,9 @@ impl GitHubAdapter {
     }
 
     fn fetch(&self, repo: &str, number: u64) -> Result<IssueSnapshot> {
-        let mut issue = self.client.get_issue(repo, number, self.issue_fields())?;
+        let mut issue = self
+            .client()?
+            .get_issue(repo, number, self.issue_fields())?;
         if self.config.mode.is_basic() {
             issue.area = None;
             issue.verification = None;
@@ -60,8 +90,11 @@ impl GitHubAdapter {
 }
 
 /// Merge the legacy `[github]` section with the migrated `[remote.github]`
-/// adapter settings. Repositories always come from `[github] repositories`
-/// plus `[remote] projects` on the github tracker.
+/// adapter settings. `repositories` is the availability list: the github
+/// Remote Projects configured on the Board — `[remote] projects` on the
+/// github tracker plus legacy `[github] repositories` — resolved by the
+/// shared `remote::configured_projects` rule. Member Repository origins are
+/// not adapter settings; `remote::connected_projects` resolves them.
 fn effective_config(board: &Board) -> GitHubConfig {
     let mut config = board.config.remote.github.clone().unwrap_or_else(|| {
         // Legacy boards keep everything under `[github]`; carry the
@@ -70,18 +103,11 @@ fn effective_config(board: &Board) -> GitHubConfig {
         config.auto_push = board.config.remote.auto_push || config.auto_push;
         config
     });
-    // `[remote] projects` naming github trackers are Remote Projects, not
-    // adapter settings; keep `repositories` as the availability list.
-    for project in &board.config.remote.projects {
-        if project.tracker == "github"
-            && !config
-                .repositories
-                .iter()
-                .any(|repo| repo.trim().eq_ignore_ascii_case(project.project.trim()))
-        {
-            config.repositories.push(project.project.clone());
-        }
-    }
+    config.repositories = crate::remote::configured_projects(board)
+        .into_iter()
+        .filter(|project| project.tracker == "github")
+        .map(|project| project.project)
+        .collect();
     config
 }
 
@@ -202,37 +228,14 @@ impl RemoteAdapter for GitHubAdapter {
 
     fn project_available(&self, board: &Board, project: &str) -> Result<bool> {
         let repo = GitHubConfig::normalize_repo(project)?;
-        if crate::repository::github_member_projects(board)?
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(&repo))
-        {
+        if self.config.contains_repo(&repo) {
             return Ok(true);
         }
-        Ok(self.config.contains_repo(&repo)
-            || crate::remote::configured_projects(board)
-                .iter()
-                .any(|candidate| {
-                    candidate.tracker == "github" && candidate.project.eq_ignore_ascii_case(&repo)
-                }))
-    }
-
-    fn implicit_projects(&self, board: &Board) -> Result<Vec<RemoteProject>> {
-        let mut projects = Vec::new();
-        let mut push = |repo: &str| {
-            if let Ok(repo) = GitHubConfig::normalize_repo(repo) {
-                projects.push(RemoteProject {
-                    tracker: "github".to_string(),
-                    project: repo,
-                });
-            }
-        };
-        for repository in crate::repository::github_member_projects(board)? {
-            push(&repository);
-        }
-        for repository in &self.config.repositories {
-            push(repository);
-        }
-        Ok(projects)
+        Ok(crate::remote::connected_projects(board)?
+            .iter()
+            .any(|candidate| {
+                candidate.tracker == "github" && candidate.project.eq_ignore_ascii_case(&repo)
+            }))
     }
 
     fn fetch_issue(&self, project: &RemoteProject, id: &str) -> Result<RemoteIssue> {
@@ -258,9 +261,16 @@ impl RemoteAdapter for GitHubAdapter {
                 (Err(error), _) | (_, Err(error)) => out[index] = Some(Err(error)),
             }
         }
-        let snapshots = self.client.get_issues(&batch, self.issue_fields());
+        let client = match self.client() {
+            Ok(client) => client,
+            Err(error) => {
+                return refs.iter().map(|_| Err(error.clone())).collect();
+            }
+        };
+        let snapshots = client.get_issues(&batch, self.issue_fields());
         for (position, snapshot) in batch_positions.into_iter().zip(snapshots) {
-            out[position] = Some(snapshot.map(|snapshot| snapshot_to_issue(&snapshot, &self.config)));
+            out[position] =
+                Some(snapshot.map(|snapshot| snapshot_to_issue(&snapshot, &self.config)));
         }
         out.into_iter()
             .map(|entry| entry.expect("every requested ref was resolved"))
@@ -270,7 +280,7 @@ impl RemoteAdapter for GitHubAdapter {
     fn list_issues(&self, project: &RemoteProject) -> Result<Vec<RemoteIssueSummary>> {
         let repo = GitHubConfig::normalize_repo(&project.project)?;
         Ok(self
-            .client
+            .client()?
             .list_all_issues(&repo, self.issue_fields())?
             .iter()
             .map(|item| item_to_summary(item, &self.config))
@@ -283,7 +293,7 @@ impl RemoteAdapter for GitHubAdapter {
         fields: RemoteIssueFields,
     ) -> Result<RemoteIssue> {
         let repo = GitHubConfig::normalize_repo(&project.project)?;
-        let snapshot = self.client.create_issue(
+        let snapshot = self.client()?.create_issue(
             &repo,
             &CreateIssueInput {
                 title: fields.title,
@@ -313,7 +323,7 @@ impl RemoteAdapter for GitHubAdapter {
             .labels
             .as_ref()
             .map(|labels| labels_for_status(labels, orbit_status));
-        let snapshot = self.client.update_issue(
+        let snapshot = self.client()?.update_issue(
             &repo,
             number,
             &UpdateIssueInput {
@@ -385,7 +395,7 @@ impl RemoteAdapter for GitHubAdapter {
             .collect::<Result<_>>()?;
         // `removals` only ever carries Remove actions from the planner, but
         // pass Add-capable changes through unchanged for completeness.
-        self.client
+        self.client()?
             .update_relationships(&repo, number, &supported, &changes)
     }
 

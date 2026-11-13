@@ -154,8 +154,7 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
         entries.push((task.clone(), link));
     }
 
-    let mut fetched: Vec<Option<Result<RemoteIssue>>> =
-        entries.iter().map(|_| None).collect();
+    let mut fetched: Vec<Option<Result<RemoteIssue>>> = entries.iter().map(|_| None).collect();
     let mut tracker_order: Vec<&str> = Vec::new();
     let mut by_tracker: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (index, (_, link)) in entries.iter().enumerate() {

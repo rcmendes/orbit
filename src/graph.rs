@@ -302,6 +302,27 @@ impl Graph {
         issues
     }
 
+    /// The Task carrying `key` as its Source Key. Two carriers are an error,
+    /// because picking one would silently hide the other.
+    pub fn find_by_source_key(&self, key: &str) -> Result<Option<&Task>> {
+        let mut found = self
+            .tasks
+            .values()
+            .filter(|task| task.front.source_key.as_deref() == Some(key));
+        let first = found.next();
+        if let Some(second) = found.next() {
+            return Err(OrbitError::new(
+                code::DUPLICATE_SOURCE_KEY,
+                format!(
+                    "source key {key} is on more than one task: {}, {}",
+                    first.map(|task| task.id.as_str()).unwrap_or_default(),
+                    second.id
+                ),
+            ));
+        }
+        Ok(first)
+    }
+
     pub fn is_ready(&self, task: &Task) -> bool {
         task.front.status == Status::Todo
             && task.front.claim.is_none()
@@ -654,6 +675,8 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
             .map(|_| task.front.status.is_terminal()),
         "area": task.front.area.as_deref(),
         "verification": task.front.verification,
+        "source_key": task.front.source_key,
+        "annotations": task.front.annotations,
         "github": crate::remote::link::github_compat_json(task),
         "remote": crate::remote::link::link_json(task),
         "claimed_by": task.holder(),
@@ -720,6 +743,8 @@ mod tests {
                 stray_claim_times: None,
                 created_at: now,
                 updated_at: now,
+                source_key: None,
+                annotations: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: String::new(),

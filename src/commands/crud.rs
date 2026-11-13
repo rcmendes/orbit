@@ -3,106 +3,45 @@ use serde_json::json;
 
 use crate::cli::{AddArgs, DeleteArgs, UpdateArgs};
 use crate::graph::LoadMode;
-use crate::task::{Status, TaskFrontmatter, TaskType};
+use crate::task::TaskType;
+use crate::transition::FieldUpdate;
 
 use super::*;
 
 pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-
-    let title = args.title.trim().to_string();
-    if title.is_empty() {
-        return Err(OrbitError::invalid_argument("title must not be empty"));
-    }
-
-    let priority = args.priority.unwrap_or(board.config.board.default_priority);
-    validate_priority(priority)?;
-    let task_type = args.task_type.unwrap_or(TaskType::Task);
-    let labels = normalize_labels(&args.label)?;
-
-    let mut depends_on = Vec::new();
-    for dep in args.depends_on {
-        if !graph.tasks.contains_key(&dep) {
-            return Err(OrbitError::not_found(&dep));
-        }
-        if !depends_on.contains(&dep) {
-            depends_on.push(dep);
-        }
-    }
-
-    let parent = match args.parent {
-        Some(parent_id) => {
-            let parent_task = graph.get(&parent_id)?;
-            if parent_task.front.status.is_terminal() {
-                return Err(OrbitError::invalid_argument(format!(
-                    "parent {parent_id} is {}; a SubTask needs an active Parent Task",
-                    parent_task.front.status.as_str()
-                )));
-            }
-            if parent_task.front.parent.is_some() {
-                return Err(OrbitError::invalid_argument(format!(
-                    "parent {parent_id} is a SubTask; SubTasks are one level deep"
-                )));
-            }
-            Some(parent_id)
-        }
-        None => None,
-    };
-
-    if parent.is_some() && task_type == TaskType::Epic {
-        return Err(OrbitError::new(
-            code::INVALID_TYPE,
-            "epic type is only allowed on a top-level Task",
-        ));
-    }
-
-    if let Some(parent_id) = &parent
-        && depends_on.iter().any(|dep| dep == parent_id)
-    {
-        return Err(OrbitError::invalid_argument(
-            "a SubTask cannot depend on its Parent Task; parentage already makes the parent wait",
-        ));
-    }
-
-    let waiting_on = normalize_waiting(args.waiting_on)?;
-    let area = parse_area_option(board, args.area)?;
-    let verification = task::normalize_verification(args.verification)?;
     let body = resolve_body(args.body, args.body_file)?;
     // Record the member Repository the command runs in; a worktree resolves
     // to its main checkout's Repository.
     let repo = crate::repository::current_member_name(board)?;
-    let id = generate_unique_id(board, parent.as_deref())?;
-    let now = Utc::now();
-
-    let task = Task {
-        id: id.clone(),
-        front: TaskFrontmatter {
-            title: title.clone(),
-            status: Status::Todo,
-            task_type,
-            priority,
-            labels,
-            depends_on,
-            parent,
-            waiting_on,
-            checkpoint: None,
-            area,
-            verification,
-            github: None,
-            remote: None,
-            repo,
-            claim: None,
-            stray_claim_times: None,
-            created_at: now,
-            updated_at: now,
-            extra: Default::default(),
-        },
+    let new = crate::ops::NewTask {
+        title: args.title,
+        priority: args.priority,
+        task_type: args.task_type,
+        labels: args.label,
+        depends_on: args.depends_on,
+        parent: args.parent,
+        waiting_on: args.waiting_on,
+        area: args.area,
+        verification: args.verification,
+        repo,
         body,
+        source_key: args.source_key,
+        annotations: Default::default(),
     };
+    let outcome = crate::ops::add(&mut graph, board, new, Utc::now())?;
+    let task = graph.get(&outcome.id)?.clone();
+    let id = &task.id;
+    if outcome.matched {
+        let human = format!("{id} already exists for source key");
+        return Ok(task_output(&graph, &task, human, None).with_meta(json!({ "matched": true })));
+    }
 
     crate::mutation::create_task(board, &task)?;
-    graph.insert(task.clone());
 
+    let priority = task.front.priority;
+    let title = &task.front.title;
+    let task_type = task.front.task_type;
     let type_prefix = if task_type == TaskType::Task {
         String::new()
     } else {
@@ -115,7 +54,7 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
         None => format!("created {id}  P{priority}  {type_prefix}{title}"),
     };
     let warning = crate::mutation::commit(board, &format!("orbit: add {id}"))?;
-    Ok(task_output(&graph, &task, human, warning))
+    Ok(task_output(&graph, &task, human, warning).with_meta(json!({ "matched": false })))
 }
 
 fn subtasks_exist_error(id: &str, subtasks: &[String]) -> OrbitError {
@@ -146,62 +85,29 @@ pub(super) fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::outpu
         ));
     }
 
-    if let Some(priority) = args.priority {
-        validate_priority(priority)?;
-    }
-    let current = graph.get(&args.id)?;
-    let next_type = args.task_type.unwrap_or(current.front.task_type);
-    if next_type == TaskType::Epic && current.front.parent.is_some() {
-        return Err(OrbitError::new(
-            code::INVALID_TYPE,
-            "epic type is only allowed on a top-level Task",
-        ));
-    }
     let body = if args.body.is_some() || args.body_file.is_some() {
         Some(resolve_body(args.body, args.body_file)?)
     } else {
         None
     };
-    let waiting_on = normalize_waiting(args.waiting_on)?;
-    let area = parse_area_option(board, args.area)?;
-    let verification = task::normalize_verification(args.verification)?;
-
-    let task = {
-        let task = graph.get_mut(&args.id)?;
-        if let Some(title) = args.title {
-            let title = title.trim().to_string();
-            if title.is_empty() {
-                return Err(OrbitError::invalid_argument("title must not be empty"));
-            }
-            task.front.title = title;
+    let field = |value: Option<String>, clear: bool| {
+        if clear {
+            FieldUpdate::Clear
+        } else {
+            value.map_or(FieldUpdate::Keep, FieldUpdate::Set)
         }
-        if let Some(body) = body {
-            task.body = body;
-        }
-        if let Some(priority) = args.priority {
-            task.front.priority = priority;
-        }
-        if let Some(task_type) = args.task_type {
-            task.front.task_type = task_type;
-        }
-        if args.clear_waiting {
-            task.front.waiting_on = None;
-        } else if waiting_on.is_some() {
-            task.front.waiting_on = waiting_on;
-        }
-        if args.clear_area {
-            task.front.area = None;
-        } else if let Some(area) = area {
-            task.front.area = Some(area);
-        }
-        if args.clear_verification {
-            task.front.verification = None;
-        } else if verification.is_some() {
-            task.front.verification = verification;
-        }
-        task.touch(Utc::now());
-        task.clone()
     };
+    let change = crate::ops::TaskUpdate {
+        title: args.title,
+        body,
+        priority: args.priority,
+        task_type: args.task_type,
+        waiting_on: field(args.waiting_on, args.clear_waiting),
+        area: field(args.area, args.clear_area),
+        verification: field(args.verification, args.clear_verification),
+    };
+    crate::ops::update(&mut graph, board, &args.id, change, Utc::now())?;
+    let task = graph.get(&args.id)?.clone();
 
     let warning = crate::mutation::save(board, &task, &format!("orbit: update {}", args.id))?;
     Ok(task_output(
@@ -311,26 +217,4 @@ fn delete_subtree(
     graph.remove(id);
     deleted.push(id.to_string());
     Ok(())
-}
-
-fn generate_unique_id(board: &Board, parent: Option<&str>) -> Result<String> {
-    let config = &board.config.id;
-    for attempt in 0..50 {
-        let length = if attempt < 40 {
-            config.length
-        } else {
-            (config.length + 2).min(8)
-        };
-        let id = match parent {
-            Some(parent) => task::generate_subtask_id(parent, length),
-            None => task::generate_id(&config.prefix, length),
-        };
-        if !board.task_path(&id).exists() {
-            return Ok(id);
-        }
-    }
-    Err(OrbitError::new(
-        code::ID_COLLISION,
-        "could not generate a unique task id",
-    ))
 }

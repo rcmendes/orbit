@@ -313,12 +313,9 @@ fn migrate_rewrites_the_github_section_to_remote_projects() {
     assert_eq!(value["data"]["remote_projects"], 2);
 
     let config = config_value(&repo.board_path());
-    // Every config.toml carries the default `[github.issue_fields]` table;
-    // what matters is that no provider settings survive under `[github]`.
-    let github = config["github"].as_table().unwrap();
-    for key in ["mode", "organization", "repositories", "auto_push"] {
-        assert!(!github.contains_key(key), "{github:?}");
-    }
+    // No provider settings survive under `[github]`, not even the default
+    // `[github.issue_fields]` table.
+    assert!(config.get("github").is_none(), "{config:?}");
     let remote = &config["remote"];
     assert!(remote["auto_push"].as_bool().unwrap());
     let projects = remote["projects"].as_array().unwrap();

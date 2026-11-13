@@ -47,6 +47,18 @@ _Avoid_: Label, component tag, free-form tag
 Optional, concise checks or commands agents should run for a Task, stored separately from narrative acceptance criteria in the body. Project-wide defaults live in [`docs/agents/project-guidance.md`](./agents/project-guidance.md); Task-level `verification` adds to or narrows those defaults.
 _Avoid_: Acceptance criteria, comment, checkpoint
 
+**Batch**:
+A list of Task operations that Orbit applies under one Board lock and publishes as one commit. Either every operation applies or none does.
+_Avoid_: Transaction, script, bulk edit
+
+**Source Key**:
+An optional caller-chosen string that names a Task in the system that asked for it. It is unique per Board; adding a Task with a Source Key that already exists returns that Task instead of creating another, so a retried add creates no duplicate.
+_Avoid_: External ID, idempotency token, alias
+
+**Annotation**:
+Structured data that one tool attaches to a Task under the tool's name, its owner. Orbit stores, returns, and shows it but never interprets it: an Annotation never affects Ready, Blocked, Claim eligibility, or Status, and it is never synchronized with a Remote Tracker.
+_Avoid_: Metadata, custom field, namespace, extra
+
 **Status**:
 The stored lifecycle position of a Task: `todo`, `in_progress`, `done`, or `cancelled`.
 _Avoid_: State, phase

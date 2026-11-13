@@ -18,6 +18,7 @@ From any member Repository, these commands resolve the shared Board across the G
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.
+- `orbit batch --file plan.json` applies many changes in one commit, all or none; `--source-key` makes retries safe.
 - Run `orbit prime` at session start for ready work, stale claims, and counts.
 - `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines.
 

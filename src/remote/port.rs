@@ -5,8 +5,11 @@
 //! adapter only translates Remote Issues into Orbit field terms and
 //! declares which Orbit fields it maps.
 
+use std::sync::Arc;
+
 use crate::board::Board;
 use crate::error::{OrbitError, Result};
+use crate::github::client::GitHubClient;
 use crate::remote::RemoteProject;
 use crate::remote::model::*;
 use crate::task::Status;
@@ -108,8 +111,14 @@ where
 }
 
 /// The production resolver: built-in adapters configured from the Board.
+///
+/// The command edge may share one `GitHubClient` across every adapter in
+/// the operation via [`BoardResolver::with_client`]; [`BoardResolver::new`]
+/// defers client construction to adapter resolution for callers that may
+/// not touch GitHub at all.
 pub struct BoardResolver<'a> {
     pub board: &'a Board,
+    client: Option<Arc<dyn GitHubClient>>,
 }
 
 impl RemoteResolver for BoardResolver<'_> {
@@ -119,9 +128,18 @@ impl RemoteResolver for BoardResolver<'_> {
 
     fn adapter(&self, tracker: &str) -> Result<Box<dyn RemoteAdapter>> {
         match tracker {
-            "github" => Ok(Box::new(crate::github::adapter::GitHubAdapter::from_board(
-                self.board,
-            )?)),
+            "github" => {
+                let client = match &self.client {
+                    Some(client) => client.clone(),
+                    None => crate::github::client::client_from_env()?,
+                };
+                Ok(Box::new(
+                    crate::github::adapter::GitHubAdapter::with_client(
+                        client,
+                        crate::github::adapter::GitHubAdapter::effective_config(self.board),
+                    ),
+                ))
+            }
             other => Err(OrbitError::config(format!(
                 "no Remote Tracker adapter is installed for `{other}`"
             ))),
@@ -131,7 +149,20 @@ impl RemoteResolver for BoardResolver<'_> {
 
 impl<'a> BoardResolver<'a> {
     /// The resolver the engine uses when the caller does not inject one.
+    /// The client is built lazily when a GitHub adapter is resolved.
     pub fn new(board: &'a Board) -> Self {
-        Self { board }
+        Self {
+            board,
+            client: None,
+        }
+    }
+
+    /// The resolver for a command edge that already built the operation's
+    /// shared `GitHubClient`.
+    pub fn with_client(board: &'a Board, client: Arc<dyn GitHubClient>) -> Self {
+        Self {
+            board,
+            client: Some(client),
+        }
     }
 }

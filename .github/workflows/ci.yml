@@ -60,3 +60,25 @@ jobs:
       - name: Check generated release workflow
         run: dist generate --check
 
+
+  version-bump:
+    name: version bump
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a version higher than main
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          ver() { sed -n 's/^version = "\(.*\)"/\1/p' | head -1; }
+          base=$(git show "origin/$BASE_REF:Cargo.toml" | ver)
+          head=$(ver < Cargo.toml)
+          echo "main: $base, this PR: $head"
+          if [ "$base" = "$head" ] || [ "$(printf '%s\n%s\n' "$base" "$head" | sort -V | tail -1)" != "$head" ]; then
+            echo "Cargo.toml version must be higher than $base" >&2
+            exit 1
+          fi

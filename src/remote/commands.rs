@@ -41,6 +41,12 @@ pub fn run(board: &Board, args: RemoteArgs) -> Result<crate::output::CommandOutp
     }
 }
 
+/// The command edge's shared-client resolver: one `GitHubClient` serves
+/// every adapter the operation resolves.
+fn github_resolver(board: &Board) -> Result<BoardResolver<'_>> {
+    Ok(BoardResolver::with_client(board, client_from_env()?))
+}
+
 fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let client = client_from_env()?;
     let auth = client.auth_status();
@@ -201,8 +207,9 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let mut conflicts = Vec::new();
     let mut unsupported = Vec::new();
     let github_link = |task: &Task| active_link(task).filter(|link| link.tracker == "github");
-    let adapter = GitHubAdapter::from_board(board)?;
-    let resolver = BoardResolver::new(board);
+    let adapter =
+        GitHubAdapter::with_client(client.clone(), GitHubAdapter::effective_config(board));
+    let resolver = BoardResolver::with_client(board, client.clone());
     for task in graph.iter().filter(|task| github_link(task).is_some()) {
         let link = github_link(task).expect("filtered linked task");
         let project = link.remote_project();
@@ -1395,6 +1402,19 @@ fn disconnect_remote_project(board: &Board, tracker: &str, project: &str) -> Res
             }
             config.github.unlink_repo(&project)?;
         }
+        // The last GitHub project is gone: drop the adapter settings too, or
+        // doctor keeps flagging a configured-but-unlinked GitHub.
+        let projects_left = config.remote.projects.iter().any(|p| p.tracker == "github");
+        if tracker == "github"
+            && !projects_left
+            && config
+                .remote
+                .github
+                .as_ref()
+                .is_some_and(|github| github.repositories.is_empty())
+        {
+            config.remote.github = None;
+        }
         let _ = remote;
         Ok(())
     })?;
@@ -1405,7 +1425,7 @@ fn disconnect_remote_project(board: &Board, tracker: &str, project: &str) -> Res
 /// for a Local Task (the successor of `orbit github adopt`).
 fn cmd_link(board: &Board, args: RemoteLinkArgs) -> Result<crate::output::CommandOutput> {
     let (project, id) = parse_issue_ref(&args.issue)?;
-    let resolver = BoardResolver::new(board);
+    let resolver = github_resolver(board)?;
     crate::remote::execution::require_project_available(board, &resolver, &project)?;
     let adapter = resolver.adapter(&project.tracker)?;
     let issue = adapter.fetch_issue(&project, &id)?;
@@ -1476,7 +1496,7 @@ fn cmd_link(board: &Board, args: RemoteLinkArgs) -> Result<crate::output::Comman
 
 fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::CommandOutput> {
     let graph = Graph::load(board, LoadMode::Strict)?.0;
-    let resolver = BoardResolver::new(board);
+    let resolver = github_resolver(board)?;
     let candidates = create_project_candidates(board, &resolver)?;
     let create_project = select_create_project(&candidates, args.project.as_deref())?;
     let project_label = format!("{}:{}", create_project.tracker, create_project.project);
@@ -1524,11 +1544,6 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
         plans.push((task.clone(), rejected));
     }
 
-    if args.apply && plans.iter().any(|(_, error)| error.is_none()) {
-        // Fail fast on a missing `gh` before per-Task work begins; the
-        // adapter resolves its own client inside `create_and_link`.
-        client_from_env()?;
-    }
     let project = create_project;
     let mut results = Vec::new();
     let mut human = Vec::new();
@@ -1925,8 +1940,7 @@ fn cmd_sync(board: &Board, args: RemoteSyncArgs) -> Result<crate::output::Comman
         RemoteSyncDirection::Pull => SyncDirection::Pull,
         RemoteSyncDirection::Push => SyncDirection::Push,
     };
-    client_from_env()?;
-    let resolver = BoardResolver::new(board);
+    let resolver = github_resolver(board)?;
     let report = execution::synchronize(
         board,
         &resolver,
@@ -2247,7 +2261,7 @@ fn issues_list(
 /// tracker, with catalog staleness and link state.
 fn issues_show(board: &Board, args: &RemoteIssueRefArgs) -> Result<crate::output::CommandOutput> {
     let (project, id) = parse_issue_ref(&args.issue)?;
-    let resolver = BoardResolver::new(board);
+    let resolver = github_resolver(board)?;
     let adapter = resolver.adapter(&project.tracker)?;
     let issue = adapter.fetch_issue(&project, &id)?;
     let root = catalog::root_for_board(board)?;
@@ -2381,7 +2395,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
     let catalog = catalog::load(&catalog::cache_path(&root))?;
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let mappings = parse_link_mappings(&args.link, &args.issues)?;
-    let resolver = BoardResolver::new(board);
+    let resolver = github_resolver(board)?;
 
     let mut linked_issues = std::collections::BTreeMap::new();
     for task in graph.iter() {
@@ -2723,6 +2737,8 @@ fn create_imported_task(
             repo: None,
             claim: None,
             stray_claim_times: None,
+            source_key: None,
+            annotations: std::collections::BTreeMap::new(),
             created_at: now,
             updated_at: now,
             extra: std::collections::BTreeMap::new(),
@@ -2944,7 +2960,7 @@ fn cmd_reattach(board: &Board, args: RemoteMutationArgs) -> Result<crate::output
         project: link.project.clone(),
     };
     let identity = format!("{}:{}#{}", link.tracker, link.project, link.id);
-    let resolver = BoardResolver::new(board);
+    let resolver = github_resolver(board)?;
     if !crate::remote::execution::project_available(board, &resolver, &project)? {
         return Err(OrbitError::invalid_argument(format!(
             "Remote Project `{}:{}` is not connected to this Board; connect it before reattaching",

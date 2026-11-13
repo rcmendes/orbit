@@ -5,11 +5,11 @@
 //! `gh` client. The sync engine only sees [`RemoteIssue`] and
 //! [`MappedFields`].
 
+use std::sync::Arc;
+
 use crate::board::Board;
 use crate::error::{OrbitError, Result};
-use crate::github::client::{
-    CreateIssueInput, GitHubClient, IssueCatalogItem, UpdateIssueInput, client_from_env,
-};
+use crate::github::client::{CreateIssueInput, GitHubClient, IssueCatalogItem, UpdateIssueInput};
 use crate::github::config::{GitHubConfig, IssueFieldConfig};
 use crate::github::model::IssueSnapshot;
 use crate::github::relationships::{RelationshipChange, SupportedRelationship};
@@ -27,23 +27,15 @@ use crate::task::Status;
 
 /// The GitHub adapter: a [`GitHubClient`] plus the Board's GitHub settings.
 pub struct GitHubAdapter {
-    client: Box<dyn GitHubClient>,
+    client: Arc<dyn GitHubClient>,
     config: GitHubConfig,
 }
 
 impl GitHubAdapter {
-    /// Production adapter: `gh` CLI or the `ORBIT_GITHUB_FIXTURE` client,
-    /// configured from the Board's `[github]`/`[remote.github]` settings.
-    pub fn from_board(board: &Board) -> Result<Self> {
-        Ok(Self {
-            client: client_from_env()?,
-            config: effective_config(board),
-        })
-    }
-
-    /// Adapter over an injected client (tests and `orbit remote` commands
-    /// that already resolved one).
-    pub fn with_client(client: Box<dyn GitHubClient>, config: GitHubConfig) -> Self {
+    /// Adapter over an injected client: the command edge builds one client
+    /// (or a fixture in tests) and shares it across every adapter and
+    /// direct call in the operation.
+    pub fn with_client(client: Arc<dyn GitHubClient>, config: GitHubConfig) -> Self {
         Self { client, config }
     }
 

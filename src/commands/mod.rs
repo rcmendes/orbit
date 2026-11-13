@@ -1,3 +1,5 @@
+mod annotation;
+mod batch;
 mod board;
 mod crud;
 mod init;
@@ -18,6 +20,8 @@ use crate::error::{OrbitError, Result, code};
 use crate::graph::{self, Graph};
 use crate::task::{self, Task};
 
+use annotation::cmd_annotation;
+use batch::cmd_batch;
 use crud::{cmd_add, cmd_delete, cmd_update};
 use init::cmd_init;
 use lifecycle::{
@@ -87,6 +91,13 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Label(args) => {
             let exclusive = !matches!(args.command, LabelCommand::List);
             with_task_board(dir.as_deref(), exclusive, |board| cmd_label(board, args))
+        }
+        Command::Batch(args) => {
+            let exclusive = !args.dry_run;
+            with_task_board(dir.as_deref(), exclusive, |board| cmd_batch(board, args))
+        }
+        Command::Annotation(args) => {
+            with_task_board(dir.as_deref(), true, |board| cmd_annotation(board, args))
         }
         Command::Comment(args) => {
             let exclusive = matches!(args.command, CommentCommand::Add(_));
@@ -301,7 +312,7 @@ fn task_output(
     output
 }
 
-fn validate_priority(priority: u8) -> Result<()> {
+pub(crate) fn validate_priority(priority: u8) -> Result<()> {
     if priority > 3 {
         return Err(OrbitError::invalid_argument(
             "priority must be between 0 and 3",
@@ -310,7 +321,7 @@ fn validate_priority(priority: u8) -> Result<()> {
     Ok(())
 }
 
-fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {
+pub(crate) fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {
     let mut normalized = Vec::with_capacity(labels.len());
     for label in labels {
         normalized.push(task::normalize_label(label)?);
@@ -345,7 +356,7 @@ fn matches_repo(task: &Task, repo: Option<&str>) -> bool {
     })
 }
 
-fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {
+pub(crate) fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {
     match waiting_on {
         None => Ok(None),
         Some(value) => {
@@ -360,7 +371,7 @@ fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {
     }
 }
 
-fn parse_area_option(board: &Board, area: Option<String>) -> Result<Option<String>> {
+pub(crate) fn parse_area_option(board: &Board, area: Option<String>) -> Result<Option<String>> {
     match area {
         None => Ok(None),
         Some(value) => Ok(Some(parse_area_value(board, &value)?)),
@@ -382,7 +393,10 @@ fn normalize_areas(board: &Board, areas: &[String]) -> Result<Vec<String>> {
         .collect()
 }
 
-fn resolve_body(body: Option<String>, file: Option<std::path::PathBuf>) -> Result<String> {
+pub(crate) fn resolve_body(
+    body: Option<String>,
+    file: Option<std::path::PathBuf>,
+) -> Result<String> {
     match (body, file) {
         (Some(body), None) => {
             if body == "-" {

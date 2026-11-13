@@ -606,3 +606,15 @@ fn concurrent_ids_never_collide() {
     }
     assert_eq!(ids.len(), 12);
 }
+
+#[test]
+fn depend_existing_edge_is_unchanged() {
+    let repo = TestRepo::new();
+    repo.init();
+    let first = repo.add("First", &[]);
+    let second = repo.add("Second", &[]);
+    repo.ok_json(&["depend", &second, &first, "--json"]);
+    let again = repo.ok_json(&["depend", &second, &first, "--json"]);
+    assert_eq!(again["meta"]["changed"], false);
+    assert_eq!(again["data"]["depends_on"], serde_json::json!([first]));
+}

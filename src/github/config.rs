@@ -16,7 +16,7 @@ pub struct GitHubConfig {
     /// Publish mapped Task changes to linked Issues after a local mutation.
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_push: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "IssueFieldConfig::is_default")]
     pub issue_fields: IssueFieldConfig,
 }
 
@@ -66,6 +66,12 @@ fn default_verification_name() -> String {
     "Verification".to_string()
 }
 
+impl IssueFieldConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 impl Default for IssueFieldConfig {
     fn default() -> Self {
         Self {
@@ -78,6 +84,10 @@ impl Default for IssueFieldConfig {
 }
 
 impl GitHubConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.mode.is_basic() || self.organization.is_some() || !self.repositories.is_empty()
     }

@@ -252,7 +252,11 @@ its tickets are SubTasks. Epic is refused on a SubTask. When an external tracker
 or skill says \"sub-issue\", use --parent. Parentage is not a dependency: the
 Parent Task waits for its SubTasks, not the other way around. A SubTask can still
 have real --depends-on edges. Closing a Parent Task with open SubTasks is refused;
---force cancels them.";
+--force cancels them.
+
+--source-key gives the Task a caller-chosen identity, unique per Board. An add
+whose Source Key already exists returns that Task unchanged (meta.matched is
+true) instead of creating a second one, so a retried add is safe.";
 
 pub const ADD_EXAMPLES: &str = "\
 Examples:
@@ -261,6 +265,9 @@ Examples:
 
   # Create work that waits for a blocker task to finish
   orbit add \"Publish the release\" -p 1 --depends-on orb-a7b2c9
+
+  # Make a scripted add safe to retry
+  orbit add \"Step 3\" --source-key planner:plan-7:step-3
 
   # Record an external blocker while the body comes from stdin
   orbit add \"Upgrade the parser\" --waiting-on \"upstream 2.4\" --body-file -
@@ -483,7 +490,8 @@ as needs-triage or ready-for-human.
 A claim sets status in_progress, records the agent, and starts a lease (30 minutes
 by default, configurable in config.toml). Extend it with `orbit heartbeat`.
 --steal takes over another agent's claim even while its lease is live; hold
-labels still block. The agent defaults to ORBIT_AGENT, then USER.";
+labels still block. A claim by the current holder renews its own lease, live or
+stale. The agent defaults to ORBIT_AGENT, then USER.";
 
 pub const CLAIM_EXAMPLES: &str = "\
 Examples:
@@ -637,6 +645,78 @@ Examples:
 
   # Replace the body from a file
   orbit update orb-a7b2c9 --body-file refined-spec.md";
+
+pub const BATCH_LONG: &str = "\
+Applies a list of task operations under one Board lock and publishes them as one
+commit. Either every operation applies or none does: operations run in order
+against an in-memory snapshot, and nothing is written until all succeed. A
+failure names the operation's index and op in error.details.
+
+Operations: add, update, label, depend, undepend, claim, heartbeat, release,
+done, cancel, reopen, comment, annotate. Each takes the fields and follows the
+rules of its command. A reference (id, on, parent, depends_on) is a Task ID or
+`key:` followed by a Source Key added earlier in the Batch or already on the
+Board. An add whose Source Key exists matches that Task instead of creating
+another, a claim by the current holder renews it, and reopen of an open Task
+is a no-op, so re-running a Batch after a crash finishes it. Exceptions: comment
+appends again, and an operation a later one invalidated (claim before done of
+the same Task) fails on the re-run.
+
+The result lists the Source Key to Task ID map, one result per operation, and
+whether a commit was made. --dry-run validates and reports without writing. A
+Batch of only heartbeats makes no commit.";
+
+pub const BATCH_EXAMPLES: &str = "\
+Examples:
+  # File a plan: an epic, two SubTasks, and a dependency, in one commit
+  orbit batch --file plan.json
+
+  # plan.json
+  {\"operations\": [
+    {\"op\": \"add\", \"key\": \"planner:plan-7:epic\", \"title\": \"Plan 7\", \"type\": \"epic\"},
+    {\"op\": \"add\", \"key\": \"planner:plan-7:step-1\", \"title\": \"Step 1\",
+     \"parent\": \"key:planner:plan-7:epic\"},
+    {\"op\": \"add\", \"key\": \"planner:plan-7:step-2\", \"title\": \"Step 2\",
+     \"parent\": \"key:planner:plan-7:epic\", \"depends_on\": [\"key:planner:plan-7:step-1\"]}
+  ]}
+
+  # Check a Batch without writing
+  orbit batch --file plan.json --dry-run
+
+  # Reserve a held task for one agent: remove the hold and claim in one step
+  echo '{\"operations\": [{\"op\": \"label\", \"id\": \"orb-a7b2c9\", \"remove\": [\"needs-triage\"]},
+        {\"op\": \"claim\", \"id\": \"orb-a7b2c9\", \"by\": \"planner-7\"}]}' | orbit batch --file -";
+
+pub const ANNOTATION_LONG: &str = "\
+An Annotation is structured data that one tool attaches to a Task under the
+tool's name, its owner. Orbit stores, returns, and shows it but never
+interprets it: Annotations never affect readiness, claims, or status, and they
+are never synchronized with a Remote Tracker.
+
+`set` replaces the owner's whole Annotation with a JSON object of at most 8192
+bytes; `remove` deletes it. Other owners' Annotations are untouched. An owner
+is a lowercase slug of at most 40 characters.";
+
+pub const ANNOTATION_EXAMPLES: &str = "\
+Examples:
+  # Record a CI result on a task
+  orbit annotation set orb-a7b2c9 ci --value '{\"passed\":true,\"run\":412}'
+
+  # Read it back
+  orbit show orb-a7b2c9 --json | jq '.data.annotations.ci'
+
+  # Remove it
+  orbit annotation remove orb-a7b2c9 ci";
+
+pub const ANNOTATION_SET_EXAMPLES: &str = "\
+Examples:
+  # Replace the ci Annotation on a task
+  orbit annotation set orb-a7b2c9 ci --value '{\"passed\":true}'";
+
+pub const ANNOTATION_REMOVE_EXAMPLES: &str = "\
+Examples:
+  # Remove the ci Annotation from a task
+  orbit annotation remove orb-a7b2c9 ci";
 
 pub const LABEL_LONG: &str = "\
 Labels are free-form lowercase slugs stored on the task. They are the triage state
@@ -795,11 +875,11 @@ Examples:
 pub const EXPORT_LONG: &str = "\
 Emits a deterministic JSON snapshot of the whole Board: every Task and SubTask,
 including terminal work, with type, labels, dependency and parent edges, derived
-readiness, and comments. The snapshot is ordered by task ID and contains no
+readiness, Annotations, and comments. The snapshot is ordered by task ID and contains no
 timestamps or machine-local paths, so the same board state always produces the
 same data.
 
-The top-level data object carries schema_version; consumers should pin it. Use
+The top-level data object carries schema_version (3); consumers should pin it. Use
 export to feed a knowledge base, archive a board, or diff two snapshots.";
 
 pub const EXPORT_EXAMPLES: &str = "\

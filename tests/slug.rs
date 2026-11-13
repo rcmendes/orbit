@@ -380,7 +380,7 @@ fn export_carries_the_prefix_and_prime_does_not() {
     repo.init();
 
     let export = repo.ok_json(&["export", "--json"]);
-    assert_eq!(export["data"]["schema_version"], 2);
+    assert_eq!(export["data"]["schema_version"], 3);
     assert_eq!(export["data"]["board"]["prefix"], "orb-");
 
     let prime = repo.ok_json(&["prime", "--json"]);

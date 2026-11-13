@@ -764,11 +764,9 @@ fn github_connect_configures_organization_and_is_idempotent() {
     let repo = TestRepo::new();
     repo.init();
     let config_path = repo.board_path().join("config.toml");
-    let config = fs::read_to_string(&config_path).unwrap().replace(
-        "[github.issue_fields]",
-        "[github]\norganization = \"acme\"\nrepositories = [\"acme/other\"]\n\
-[github.issue_fields]\narea_id = \"AREA_ID\"\nverification_id = \"VERIFICATION_ID\"",
-    );
+    let config = fs::read_to_string(&config_path).unwrap()
+        + "\n[github]\norganization = \"acme\"\nrepositories = [\"acme/other\"]\n\n\
+[github.issue_fields]\narea_id = \"AREA_ID\"\nverification_id = \"VERIFICATION_ID\"\n";
     fs::write(&config_path, config).unwrap();
     repo.git(&[
         "remote",
@@ -2260,7 +2258,7 @@ fn fixture_resolver<'a>(
         }
         Ok(Box::new(
             orbit_tracker::github::adapter::GitHubAdapter::with_client(
-                Box::new(
+                std::sync::Arc::new(
                     orbit_tracker::github::client::FixtureClient::load(fixture).unwrap(),
                 ),
                 orbit_tracker::github::adapter::GitHubAdapter::effective_config(board),
@@ -3171,4 +3169,19 @@ fn remote_connect_list_and_disconnect_manage_projects() {
         repo.ok_json(&["remote", "list", "--json"])["data"]["count"],
         0
     );
+}
+
+#[test]
+fn disconnecting_the_last_project_clears_migrated_github_settings() {
+    let repo = TestRepo::new();
+    repo.init();
+    let path = repo.board_path().join("config.toml");
+    let mut config = std::fs::read_to_string(&path).unwrap();
+    config.push_str("\n[remote.github]\nmode = \"basic\"\n\n[[remote.projects]]\ntracker = \"github\"\nproject = \"acme/widget\"\n");
+    std::fs::write(&path, config).unwrap();
+
+    repo.ok_json(&["remote", "disconnect", "acme/widget", "--json"]);
+
+    let config = std::fs::read_to_string(&path).unwrap();
+    assert!(!config.contains("remote.github"), "{config}");
 }

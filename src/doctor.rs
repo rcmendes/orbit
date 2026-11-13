@@ -306,26 +306,26 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
         issues.push(Issue::new(error.code, None, error.message.clone()));
     }
 
-    if let Some(board) = board {
-        if let Some(configured) = board.config.board.storage {
-            let actual = StorageMode::detect(&board.root);
-            if configured != actual {
-                let hint = if configured == StorageMode::Worktree {
-                    "its .git link to the orbit worktree is missing or damaged; run `orbit doctor --fix`, or run `orbit migrate` to convert the Board"
-                } else {
-                    "run `orbit migrate` to convert the Board"
-                };
-                issues.push(Issue::new(
-                    STORAGE_MISMATCH,
-                    None,
-                    format!(
-                        "Board at {} records storage = {} but its Git shape is {}; {hint}",
-                        board.root.display(),
-                        configured.as_str(),
-                        actual.as_str()
-                    ),
-                ));
-            }
+    if let Some(board) = board
+        && let Some(configured) = board.config.board.storage
+    {
+        let actual = StorageMode::detect(&board.root);
+        if configured != actual {
+            let hint = if configured == StorageMode::Worktree {
+                "its .git link to the orbit worktree is missing or damaged; run `orbit doctor --fix`, or run `orbit migrate` to convert the Board"
+            } else {
+                "run `orbit migrate` to convert the Board"
+            };
+            issues.push(Issue::new(
+                STORAGE_MISMATCH,
+                None,
+                format!(
+                    "Board at {} records storage = {} but its Git shape is {}; {hint}",
+                    board.root.display(),
+                    configured.as_str(),
+                    actual.as_str()
+                ),
+            ));
         }
     }
 

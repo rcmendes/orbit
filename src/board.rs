@@ -605,9 +605,10 @@ impl Board {
         let cwd = match std::env::current_dir() {
             Ok(cwd) => cwd,
             Err(error) => {
-                let mut discovery = Discovery::default();
-                discovery.error = Some(OrbitError::io("resolve current directory", error));
-                return discovery;
+                return Discovery {
+                    error: Some(OrbitError::io("resolve current directory", error)),
+                    ..Default::default()
+                };
             }
         };
         Self::discovery_at(&cwd, dir_override)
@@ -1371,7 +1372,7 @@ fn resolve_from(cwd: &Path, discovery: &mut Discovery) {
 
         // 2. The nearest `.orbit` walking up from the current directory,
         //    across Git boundaries.
-        let nearest = nearest_orbit_board(&cwd);
+        let nearest = nearest_orbit_board(cwd);
         discovery.steps.push(DiscoveryStep::new(
             DiscoverySource::Nearest,
             nearest.as_ref().map(orbit_root),
@@ -1485,7 +1486,7 @@ fn resolve_from(cwd: &Path, discovery: &mut Discovery) {
 
     // Outside a Git working tree there is no link pointer and no main
     // checkout: the walk up from the current directory is the whole search.
-    let nearest = nearest_orbit_board(&cwd);
+    let nearest = nearest_orbit_board(cwd);
     discovery.steps.push(DiscoveryStep::new(
         DiscoverySource::Nearest,
         nearest.as_ref().map(orbit_root),

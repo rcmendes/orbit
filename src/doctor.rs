@@ -271,8 +271,23 @@ fn render_discovery(discovery: &Discovery) -> String {
 }
 
 fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<Issue>) {
-    if let Some(message) = &discovery.legacy {
-        issues.push(Issue::new(LEGACY_LAYOUT, None, message.clone()));
+    // One LEGACY_LAYOUT issue from the authoritative verdict; the discovery
+    // finding, when present, explains which legacy shape produced it.
+    if discovery.needs_migration {
+        let message = match &discovery.legacy {
+            Some(detail) => {
+                format!("{detail}; run `orbit migrate` to convert it to a standalone Board folder")
+            }
+            None => format!(
+                "Board at {} uses a pre-ADR-0019 layout; run `orbit migrate` to convert it to a standalone Board folder",
+                discovery
+                    .root
+                    .as_ref()
+                    .map(|root| root.display().to_string())
+                    .unwrap_or_default()
+            ),
+        };
+        issues.push(Issue::new(LEGACY_LAYOUT, None, message));
     }
     if let Some((new, legacy)) = &discovery.ambiguous {
         issues.push(Issue::new(
@@ -291,36 +306,26 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
         issues.push(Issue::new(error.code, None, error.message.clone()));
     }
 
-    if let Some(board) = board {
-        if board.needs_migration(Some(discovery)) && discovery.legacy.is_none() {
+    if let Some(board) = board
+        && let Some(configured) = board.config.board.storage
+    {
+        let actual = StorageMode::detect(&board.root);
+        if configured != actual {
+            let hint = if configured == StorageMode::Worktree {
+                "its .git link to the orbit worktree is missing or damaged; run `orbit doctor --fix`, or run `orbit migrate` to convert the Board"
+            } else {
+                "run `orbit migrate` to convert the Board"
+            };
             issues.push(Issue::new(
-                LEGACY_LAYOUT,
+                STORAGE_MISMATCH,
                 None,
                 format!(
-                    "Board at {} uses a pre-ADR-0019 layout; run `orbit migrate` to convert it to a standalone Board folder",
-                    board.root.display()
+                    "Board at {} records storage = {} but its Git shape is {}; {hint}",
+                    board.root.display(),
+                    configured.as_str(),
+                    actual.as_str()
                 ),
             ));
-        }
-        if let Some(configured) = board.config.board.storage {
-            let actual = StorageMode::detect(&board.root);
-            if configured != actual {
-                let hint = if configured == StorageMode::Worktree {
-                    "its .git link to the orbit worktree is missing or damaged; run `orbit doctor --fix`, or run `orbit migrate` to convert the Board"
-                } else {
-                    "run `orbit migrate` to convert the Board"
-                };
-                issues.push(Issue::new(
-                    STORAGE_MISMATCH,
-                    None,
-                    format!(
-                        "Board at {} records storage = {} but its Git shape is {}; {hint}",
-                        board.root.display(),
-                        configured.as_str(),
-                        actual.as_str()
-                    ),
-                ));
-            }
         }
     }
 

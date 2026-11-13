@@ -53,7 +53,7 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
     let mut board = Board::at_root(root, discovery.warnings.clone())?;
     board.orbit_dir = discovery.orbit_dir.clone();
 
-    let needs_layout = board.needs_migration(Some(&discovery));
+    let needs_layout = discovery.needs_migration;
     let layout = plan_layout(&board, &discovery)?;
     let stats = plan_content(&board)?;
     let content_needed = stats.github_links > 0
@@ -189,8 +189,13 @@ fn repo_context_for_legacy(root: &Path) -> Result<Option<crate::board::RepoConte
     Ok(None)
 }
 
-/// Decides the post-migration Board folder location.
+/// Decides the post-migration Board folder location. The discovery verdict
+/// already decided WHETHER the layout converts; the classification below only
+/// chooses the migration TARGET shape and can never contradict the verdict.
 fn plan_layout(board: &Board, discovery: &Discovery) -> Result<Layout> {
+    if !discovery.needs_migration {
+        return Ok(Layout::InPlace);
+    }
     let root = &board.root;
     let orbit_dir = orbit_dir_of(board, discovery);
     let worktree = root.join(".git").is_file();

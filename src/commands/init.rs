@@ -148,7 +148,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
         let discovery = Board::discovery(Some(candidate));
         if let Some(root) = discovery.root.clone()
             && let Ok(board) = Board::at_root(root, Vec::new())
-            && board.needs_migration(Some(&discovery))
+            && discovery.needs_migration
         {
             return Err(OrbitError::new(
                 code::BOARD_NOT_MIGRATED,
@@ -905,7 +905,7 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
     let mut notes = Vec::new();
     for child in children {
         let source = Board::at_root(child.board.clone(), Vec::new())?;
-        if source.needs_migration(None) {
+        if source.needs_migration() {
             return Err(OrbitError::new(
                 code::BOARD_NOT_MIGRATED,
                 format!(

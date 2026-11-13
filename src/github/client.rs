@@ -212,11 +212,11 @@ pub trait GitHubClient: Send + Sync {
     ) -> Result<()>;
 }
 
-pub fn client_from_env() -> Result<Box<dyn GitHubClient>> {
+pub fn client_from_env() -> Result<Arc<dyn GitHubClient>> {
     if let Ok(path) = std::env::var("ORBIT_GITHUB_FIXTURE") {
-        return Ok(Box::new(FixtureClient::load(Path::new(&path))?));
+        return Ok(Arc::new(FixtureClient::load(Path::new(&path))?));
     }
-    Ok(Box::new(GhCliClient))
+    Ok(Arc::new(GhCliClient))
 }
 
 struct GhCliClient;

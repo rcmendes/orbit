@@ -2258,7 +2258,7 @@ fn fixture_resolver<'a>(
         }
         Ok(Box::new(
             orbit_tracker::github::adapter::GitHubAdapter::with_client(
-                Box::new(
+                std::sync::Arc::new(
                     orbit_tracker::github::client::FixtureClient::load(fixture).unwrap(),
                 ),
                 orbit_tracker::github::adapter::GitHubAdapter::effective_config(board),

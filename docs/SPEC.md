@@ -369,7 +369,8 @@ issues list`/`show` browse it. `orbit remote import`, `detach`, and `reattach`
 link or unlink Tasks; nothing is imported without an explicit request
 ([ADR 0018](./adr/0018-remote-trackers-behind-an-orbit-port.md)). On Boards
 migrated from the Workspace era the frozen GitHub repository catalog
-(`<anchor>/.orbit/cache/repositories.json`) remains readable legacy state.
+(`<anchor>/.orbit/cache/repositories.json`) remains on disk as legacy state;
+nothing reads it — member Repository origins replaced it.
 
 ### Board host and sync
 

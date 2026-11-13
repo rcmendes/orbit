@@ -82,14 +82,12 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     }
 
     let mut linked_repositories = github.repositories.clone();
-    if let Some(workspace_repositories) = crate::workspace::export_repositories(board)? {
-        for repository in workspace_repositories {
-            if !linked_repositories
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
-            {
-                linked_repositories.push(repository);
-            }
+    for repository in crate::repository::github_member_projects(board)? {
+        if !linked_repositories
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
+        {
+            linked_repositories.push(repository);
         }
     }
 
@@ -504,7 +502,11 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
             "github.organization is not set; run `orbit remote connect`",
         ));
     }
-    if github.repositories.is_empty() && !board.is_workspace_board() {
+    if github.repositories.is_empty()
+        && crate::repository::github_member_projects(board)
+            .unwrap_or_default()
+            .is_empty()
+    {
         issues.push(crate::graph::Issue::new(
             code::GITHUB_REPO_NOT_LINKED,
             None,
@@ -525,14 +527,12 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     }
     if auto_push_enabled(board) {
         let mut repositories = github.repositories.clone();
-        if let Ok(Some(workspace_repositories)) = crate::workspace::export_repositories(board) {
-            for repository in workspace_repositories {
-                if !repositories
-                    .iter()
-                    .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
-                {
-                    repositories.push(repository);
-                }
+        for repository in crate::repository::github_member_projects(board).unwrap_or_default() {
+            if !repositories
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
+            {
+                repositories.push(repository);
             }
         }
         if repositories.is_empty() {
@@ -1083,27 +1083,14 @@ fn connect_blocked(data: serde_json::Value, human: String) -> crate::output::Com
 }
 
 fn parse_github_remote(remote: &str) -> Result<String> {
-    let path = if let Some(path) = remote.strip_prefix("https://github.com/") {
-        path
-    } else if let Some(path) = remote.strip_prefix("http://github.com/") {
-        path
-    } else if let Some(path) = remote.strip_prefix("ssh://git@github.com/") {
-        path
-    } else if let Some(path) = remote.strip_prefix("git@github.com:") {
-        path
-    } else {
-        return Err(OrbitError::new(
+    crate::github::GitHubConfig::repo_of_origin(remote).ok_or_else(|| {
+        OrbitError::new(
             code::GITHUB_NOT_CONFIGURED,
             format!(
                 "origin `{remote}` is not a supported github.com remote; use HTTPS or SSH and rerun `orbit remote connect`"
             ),
-        ));
-    };
-    let path = path
-        .strip_suffix(".git")
-        .unwrap_or(path)
-        .trim_end_matches('/');
-    crate::github::GitHubConfig::normalize_repo(path)
+        )
+    })
 }
 
 /// Whether this Board keeps GitHub settings under `[remote]` (the shape
@@ -2032,7 +2019,7 @@ fn cmd_auto_push(board: &Board, args: RemoteAutoPushArgs) -> Result<crate::outpu
         warnings.extend(crate::mutation::commit_warning(outcome));
     }
     if changed && enabled {
-        let mut repositories = crate::workspace::export_repositories(board)?.unwrap_or_default();
+        let mut repositories = crate::repository::github_member_projects(board)?;
         for repository in &github_config(board).repositories {
             if !repositories
                 .iter()

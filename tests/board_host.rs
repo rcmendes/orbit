@@ -225,6 +225,77 @@ fn board_sync_fetches_only_the_board_branch() {
     );
 }
 
+/// A git repository with one commit inside `dir`, returning its path.
+fn git_checkout(repo: &TestRepo, dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.name", "Test"][..],
+        &["config", "user.email", "test@example.com"][..],
+        &["commit", "--allow-empty", "-q", "-m", "init"][..],
+    ] {
+        let output = repo.git_in(dir, args);
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    dir.to_path_buf()
+}
+
+#[test]
+fn board_host_resolves_a_member_repository_name() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let anchor = parent.path().join("acme");
+    std::fs::create_dir(&anchor).unwrap();
+    repo.ok_json_in(
+        parent.path(),
+        &[
+            "init",
+            anchor.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+
+    // A member Repository discovered beneath the anchor whose origin is the
+    // host. Nothing writes the legacy `.orbit/cache/repositories.json`, so
+    // name resolution must go through the member Repository set.
+    let host = parent.path().join("host.git");
+    let output = repo.git_in(parent.path(), &["init", "--bare", "-q", "host.git"]);
+    assert!(output.status.success());
+    let member = git_checkout(&repo, &anchor.join("hub"));
+    let output = repo.git_in(
+        &member,
+        &["remote", "add", "origin", host_arg(&host).as_str()],
+    );
+    assert!(output.status.success());
+    assert!(
+        !anchor
+            .join(".orbit")
+            .join("cache")
+            .join("repositories.json")
+            .exists(),
+        "the legacy repository catalog must be absent"
+    );
+
+    // Run from inside the member so `hub` cannot be mistaken for a path.
+    let set = repo.ok_json_in(&member, &["board", "host", "hub", "--json"]);
+    assert_eq!(set["data"]["host"], "hub");
+    assert_eq!(set["data"]["url"], host_arg(&host));
+
+    let published = repo.ok_json_in(&anchor, &["board", "sync", "--json"]);
+    assert_eq!(published["data"]["state"], "published");
+    let tip = repo.git_in(
+        parent.path(),
+        &["ls-remote", host_arg(&host).as_str(), "refs/heads/orbit"],
+    );
+    assert!(String::from_utf8_lossy(&tip.stdout).contains("refs/heads/orbit"));
+}
+
 #[test]
 fn local_repository_host_publishes_through_its_origin() {
     let repo = TestRepo::new();

@@ -344,8 +344,8 @@ standard GitHub Issue URL. Identities may also be written `PROJECT#ID`
 `github:acme-corp/widget#42`). Titles and bodies are not used as identifiers.
 
 On a single-Repository Board, Orbit selects the only linked repository
-automatically. On a multi-Repository Board, the member Repository catalog is
-used. If zero or multiple repositories are available, link or include one, or
+automatically. On a multi-Repository Board, member Repository `origin`s that
+point at github.com count as available projects. If zero or multiple repositories are available, link or include one, or
 pass `--project OWNER/REPO`. An explicit destination must be a linked Remote
 Project or a member Repository's `origin`.
 

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::board::Board;
 use crate::error::{OrbitError, Result};
-use crate::graph::{Graph, LoadMode};
+use crate::graph::Graph;
 
 pub mod auto_push;
 pub mod catalog;
@@ -66,17 +66,22 @@ pub fn configured(board: &Board) -> bool {
 /// line, and the `list` link filters from human output; `--json` is
 /// unaffected.
 pub fn details_visible(board: &Board, graph: &Graph) -> bool {
-    !configured_projects(board).is_empty()
-        || graph
+    remote_details_visible(board, || {
+        graph
             .tasks
             .values()
             .any(|task| link::link_view(task).is_some())
+    })
 }
 
 /// Resolve the Board for `dir` (`None` walks from the current directory) and
 /// report whether Remote Tracker material is visible. Any resolution failure
 /// reads as "not visible" so help text and setup templates degrade to the
 /// local-only surface instead of guessing.
+///
+/// Unlike [`details_visible`] this does not load and validate the Task graph:
+/// it probes each Task file's frontmatter for a `remote:`/`github:` link key,
+/// which answers the same question cheaply enough to run before help renders.
 pub fn details_visible_for(dir: Option<&Path>) -> bool {
     let discovery = Board::discovery(dir);
     let Some(root) = discovery.root else {
@@ -85,10 +90,44 @@ pub fn details_visible_for(dir: Option<&Path>) -> bool {
     let Ok(board) = Board::at_root(root, discovery.warnings) else {
         return false;
     };
-    let Ok((graph, _)) = Graph::load(&board, LoadMode::Lenient) else {
+    remote_details_visible(&board, || any_task_link(&board))
+}
+
+fn remote_details_visible(board: &Board, any_link: impl FnOnce() -> bool) -> bool {
+    !configured_projects(board).is_empty() || any_link()
+}
+
+/// Cheap stand-in for the `graph.tasks.any(link_view)` half of
+/// [`details_visible`]: true when any Task file's frontmatter carries a
+/// `remote:` or legacy `github:` link, active or detached.
+fn any_task_link(board: &Board) -> bool {
+    let Ok(ids) = board.task_ids() else {
         return false;
     };
-    details_visible(&board, &graph)
+    ids.iter().any(|id| task_has_link(board, id))
+}
+
+/// Frontmatter fields probed for a Remote link. Only the two link keys are
+/// deserialized: a link that fails to parse reads as "no link", matching a
+/// corrupt Task dropped by a Lenient load, while unrelated malformed fields
+/// cannot hide a valid link (the safe direction for help gating).
+#[derive(Deserialize)]
+struct LinkProbe {
+    #[serde(default)]
+    remote: Option<RemoteLink>,
+    #[serde(default)]
+    github: Option<crate::github::link::GitHubLink>,
+}
+
+fn task_has_link(board: &Board, id: &str) -> bool {
+    let Ok(content) = std::fs::read_to_string(board.task_path(id)) else {
+        return false;
+    };
+    let Some((frontmatter, _)) = crate::task::split_frontmatter(&content) else {
+        return false;
+    };
+    serde_yaml_ng::from_str::<LinkProbe>(frontmatter)
+        .is_ok_and(|probe| probe.remote.is_some() || probe.github.is_some())
 }
 
 /// `[remote]` section of `config.toml`.

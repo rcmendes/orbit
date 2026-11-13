@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::board::{self, BOARD_DIR, Board};
+use crate::board::{self, BOARD_DIR, Board, BoardAccess};
 use crate::error::{OrbitError, Result};
 use crate::git;
 
@@ -23,7 +23,9 @@ pub struct MoveOutcome {
     pub relinked: Vec<PathBuf>,
 }
 
-pub fn move_board(board: &Board, target: &Path) -> Result<MoveOutcome> {
+/// Takes the Board's exclusive access so no writer runs during the move.
+pub fn move_board(access: BoardAccess, target: &Path) -> Result<MoveOutcome> {
+    let board = access.board();
     let orbit = board.resolved_orbit_dir().ok_or_else(|| {
         OrbitError::invalid_argument(
             "this Board has no `.orbit` anchor to repoint; move it by hand and run `orbit repo add` from each member",
@@ -80,6 +82,12 @@ pub fn move_board(board: &Board, target: &Path) -> Result<MoveOutcome> {
         std::fs::remove_file(&hidden)
             .map_err(|error| OrbitError::io(format!("remove {}", hidden.display()), error))?;
     }
+    // Windows cannot rename a folder while a file in it is open, and the
+    // Board lock file lives in the folder: release the lock for the rename.
+    // shortcut: a writer starting in this instant fails its own write (or the
+    // rename fails with "access denied"); acceptable for a manual command.
+    #[cfg(windows)]
+    drop(access);
     if let Err(error) = std::fs::rename(&from, &to) {
         if !visible {
             let _ = board::write_pointer_file(&orbit, &from);

@@ -132,9 +132,14 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             crate::cli::BoardCommand::Move(move_args) => {
                 // The old root is gone after the move; never auto-sync from it.
                 crate::board_sync::suppress();
-                with_board(dir.as_deref(), true, |board| {
-                    board::cmd_move(board, move_args)
-                })
+                let access = crate::board::BoardAccess::open(
+                    dir.as_deref(),
+                    crate::board::AccessMode::Write,
+                )?;
+                let warnings = access.board().warnings.clone();
+                let mut output = board::cmd_move(access, move_args)?;
+                output.warnings.extend(warnings);
+                Ok(output)
             }
         },
         Command::Remote(args) => {

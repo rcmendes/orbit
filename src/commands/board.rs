@@ -92,8 +92,11 @@ pub(super) fn cmd_sync(board: &Board, args: &BoardSyncArgs) -> Result<CommandOut
 }
 
 /// `orbit board move DIR` — relocate the Board folder.
-pub(super) fn cmd_move(board: &Board, args: &crate::cli::BoardMoveArgs) -> Result<CommandOutput> {
-    let outcome = crate::board_move::move_board(board, &args.target)?;
+pub(super) fn cmd_move(
+    access: crate::board::BoardAccess,
+    args: &crate::cli::BoardMoveArgs,
+) -> Result<CommandOutput> {
+    let outcome = crate::board_move::move_board(access, &args.target)?;
     let data = json!({
         "from": outcome.from,
         "to": outcome.to,

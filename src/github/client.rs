@@ -1312,13 +1312,15 @@ const GRAPHQL_BATCH_ISSUES: usize = 50;
 /// Whether a batch failure is GitHub throttling rather than a per-issue or
 /// query problem. Signatures cover `gh api` output (`API rate limit exceeded`,
 /// `HTTP 403`), GraphQL `errors[]` payloads (`type: RATE_LIMITED`,
-/// `secondary rate limit`), and HTTP status wording; a batch failure that is
-/// not throttling still falls back so each Task keeps its own result.
+/// `secondary rate limit`, `abuse detection mechanism`), and HTTP status
+/// wording; a batch failure that is not throttling still falls back so each
+/// Task keeps its own result.
 fn is_throttled(lowercase_message: &str) -> bool {
     [
         "rate limit",
         "rate_limit",
         "secondary rate",
+        "abuse detection",
         "too many requests",
         "429",
         "403",
@@ -2363,6 +2365,7 @@ mod tests {
             "RATE LIMIT reached",
             "GraphQL: You have exceeded a secondary rate limit",
             "graphql: rate_limit type returned for issue 42",
+            "You have triggered an abuse detection mechanism",
             "HTTP 429 Too Many Requests",
             "too many requests; retry later",
         ] {

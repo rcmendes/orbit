@@ -559,15 +559,12 @@ impl Board {
 
     /// Loads a Board whose root is already known. The caller decides how the
     /// path was found; discovery warnings are carried through unchanged. The
-    /// Legacy verdict is derived with the same classifier and the same legacy
-    /// signal an explicit `--dir` discovery pass on `root` produces.
+    /// Legacy verdict is derived by [`at_root_migration_verdict`] — the same
+    /// classifier and the same legacy signal an explicit `--dir` discovery
+    /// pass on `root` produces.
     pub fn at_root(root: PathBuf, warnings: Vec<String>) -> Result<Self> {
         let config = Config::load(&root)?;
-        // `resolve_explicit` flags a directly-named Board legacy only when it
-        // is the retired `<git-common-dir>/orbit/board` store; every other
-        // flag source names an anchor folder, not the Board root itself.
-        let needs_migration = layout_needs_migration(&root, None, config.board.storage, false)
-            || legacy_local_board_for(&root).is_some_and(|legacy| legacy == root);
+        let needs_migration = at_root_migration_verdict(&root, config.board.storage);
         Self::at_root_loaded(root, config, warnings, needs_migration)
     }
 
@@ -1191,6 +1188,15 @@ fn initialize_board_files(
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(path, bytes)
         .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
+}
+
+/// The verdict [`Board::at_root`] computes without a discovery pass: the
+/// `layout_needs_migration` classifier an explicit `--dir` pass runs, plus
+/// the legacy-local signal discovery's `flagged_legacy` carries for a
+/// directly-named retired `<git-common-dir>/orbit/board` store.
+fn at_root_migration_verdict(root: &Path, storage: Option<StorageMode>) -> bool {
+    layout_needs_migration(root, None, storage, false)
+        || legacy_local_board_for(root).is_some_and(|legacy| legacy == root)
 }
 
 /// The one Legacy layout classifier: whether a resolved Board folder uses a

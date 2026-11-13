@@ -177,7 +177,10 @@ and `data.unsupported_details` report relationships Orbit cannot synchronize.
 an executable command when one applies. `data.auth.scopes_known` distinguishes
 an unreported scope list from an empty one. `data.repository_scope` echoes the
 `--repo` filter when one is given, and `data.linked_tasks` counts only the
-Linked Tasks inside that scope. When the GitHub provider is
+Linked Tasks inside that scope. `data.repositories[].reserved_label_present`
+reports whether the reserved `orbit:in-progress` label exists, but only when
+auto-push is enabled — the check is skipped on other Boards and the field
+reads `null`. When the GitHub provider is
 configured, `orbit doctor` also reports authentication, repository access, and
 Issue Field configuration problems alongside normal Board diagnostics.
 

@@ -68,23 +68,6 @@ fn repair_context(dir: Option<&Path>) -> Option<RepoContext> {
     Board::repo_context_at(&start).ok().flatten()
 }
 
-/// Canonical form of a path that may not exist: the nearest existing ancestor
-/// is resolved (`/var` vs `/private/var`) and the rest is appended.
-fn canonical_lenient(path: &Path) -> PathBuf {
-    let mut tail = Vec::new();
-    let mut current = path;
-    while !current.exists() {
-        let (Some(parent), Some(name)) = (current.parent(), current.file_name()) else {
-            return path.to_path_buf();
-        };
-        tail.push(name);
-        current = parent;
-    }
-    let mut resolved = dunce::canonicalize(current).unwrap_or_else(|_| current.to_path_buf());
-    resolved.extend(tail.into_iter().rev());
-    resolved
-}
-
 /// Re-attaches an `orbit` worktree whose directory disappeared. The branch is
 /// the source of truth, so this never rewrites a Task.
 fn reattach_orphans(context: &RepoContext) -> Result<Vec<String>> {
@@ -100,7 +83,8 @@ fn reattach_orphans(context: &RepoContext) -> Result<Vec<String>> {
     git::worktree_prune(&context.repo_root)?;
     let mut fixed = Vec::new();
     for record in missing {
-        if canonical_lenient(&record.path) == canonical_lenient(&context.legacy_local_board)
+        if crate::repository::canonical_lenient(&record.path)
+            == crate::repository::canonical_lenient(&context.legacy_local_board)
             && Board::is_board(&context.main_checkout.join(".orbit"))
         {
             continue;
@@ -127,7 +111,9 @@ fn reattach_orphans(context: &RepoContext) -> Result<Vec<String>> {
                 .map_err(|error| OrbitError::io(format!("create {}", parent.display()), error))?;
         }
         git::worktree_add(&context.repo_root, &target, "orbit")?;
-        if canonical_lenient(&target) != canonical_lenient(&context.legacy_local_board) {
+        if crate::repository::canonical_lenient(&target)
+            != crate::repository::canonical_lenient(&context.legacy_local_board)
+        {
             Board::ensure_excluded(&target)?;
         }
         fixed.push(format!("reattached {}", target.display()));

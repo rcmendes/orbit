@@ -2408,6 +2408,7 @@ Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task
 From any member Repository, these commands resolve the shared Board across the Git boundary. Tasks, dependencies, and claims are shared across its Repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
+- `orbit claim <id> --by <agent> --worktree` claims one task and creates `.worktrees/<id>` on `ticket/<id>` in the Task's Repository.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 - `orbit checkpoint <id> --by <agent> --progress \"...\" [--next \"...\"] [--blocker \"...\"]` records a handoff that survives release and takeover.
 {COMPLETION_LINE}
@@ -2479,6 +2480,7 @@ We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdo
 
 - To find actionable work, run `orbit ready --json` and parse `data.tasks`.
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
+- To claim a known Task and prepare its worktree, run `orbit claim <ID> --by <agent> --worktree`; it creates or reuses `.worktrees/<ID>` on `ticket/<ID>` in the Task's Repository. If preparation fails after claiming, `CLAIM_WORKTREE_FAILED` means the claim remains active; fix the cause and retry.
 - To hand off work, run `orbit checkpoint <ID> --by <agent> --progress \"...\" --next \"...\"`; the record survives release and takeover, and never affects readiness.
 - To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change.
 - To create work, run `orbit add \"Title\" -p N --depends-on <ID>`.

@@ -40,6 +40,7 @@ pub mod code {
     pub const BOARD_NOT_FOUND: &str = "BOARD_NOT_FOUND";
     pub const BOARD_CORRUPT: &str = "BOARD_CORRUPT";
     pub const GIT_ERROR: &str = "GIT_ERROR";
+    pub const CLAIM_WORKTREE_FAILED: &str = "CLAIM_WORKTREE_FAILED";
     pub const IO_ERROR: &str = "IO_ERROR";
     pub const CONFIG_ERROR: &str = "CONFIG_ERROR";
     pub const ID_COLLISION: &str = "ID_COLLISION";

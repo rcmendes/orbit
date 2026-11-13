@@ -523,7 +523,7 @@ orbit list [--status S] [--priority N] [--claimed-by NAME] [--waiting] [--type T
 orbit ready [--limit N] [--parent ID] [--repo NAME] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--all] [--claim] [--by NAME]
 orbit show <id>
 orbit tree <id>
-orbit claim <id> [--by NAME] [--steal]
+orbit claim <id> [--by NAME] [--steal] [--worktree]
 orbit release <id> [--by NAME] [--force]
 orbit heartbeat <id> [--by NAME]
 orbit checkpoint <id> [--progress TEXT] [--next TEXT|--clear-next] [--blocker TEXT|--clear-blocker] [--by NAME]
@@ -797,7 +797,7 @@ Operations run in order on one in-memory snapshot under the exclusive lock. On t
 - The snapshot is a pure function of board state: no export timestamp and no machine-local paths. Comments keep their file order.
 - Consumers should pin `schema_version` and ignore unknown fields.
 
-Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, `PREFIX_MISMATCH`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `SUBTASKS_OPEN`, `SUBTASKS_EXIST`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_SLUG`, `SLUG_LOCKED`, `MIGRATION_BLOCKED`, `BOARD_NOT_MIGRATED`, `PREFIX_COLLISION`, `INVALID_TYPE`, `INVALID_AREA`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`, `NOT_A_REPOSITORY`, `LINK_NOT_FOUND`, `EPHEMERAL_BIN`, `GITHUB_NOT_CONFIGURED`, `GITHUB_REPO_NOT_LINKED`, `GITHUB_SETUP_INCOMPLETE`, `REMOTE_TRACKER_UNKNOWN`, `REMOTE_PROJECT_NOT_LINKED`, `REMOTE_ISSUE_CONFLICT`, `BOARD_HOST_NOT_CONFIGURED`, `BOARD_HOST_CONFLICT`, `BOARD_SYNC_CONFLICT`, `TRIAGE_APPROVAL_REQUIRED`, `TRIAGE_INVALID_PROPOSAL`.
+Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, `PREFIX_MISMATCH`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `SUBTASKS_OPEN`, `SUBTASKS_EXIST`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_SLUG`, `SLUG_LOCKED`, `MIGRATION_BLOCKED`, `BOARD_NOT_MIGRATED`, `PREFIX_COLLISION`, `INVALID_TYPE`, `INVALID_AREA`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `CLAIM_WORKTREE_FAILED`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`, `NOT_A_REPOSITORY`, `LINK_NOT_FOUND`, `EPHEMERAL_BIN`, `GITHUB_NOT_CONFIGURED`, `GITHUB_REPO_NOT_LINKED`, `GITHUB_SETUP_INCOMPLETE`, `REMOTE_TRACKER_UNKNOWN`, `REMOTE_PROJECT_NOT_LINKED`, `REMOTE_ISSUE_CONFLICT`, `BOARD_HOST_NOT_CONFIGURED`, `BOARD_HOST_CONFLICT`, `BOARD_SYNC_CONFLICT`, `TRIAGE_APPROVAL_REQUIRED`, `TRIAGE_INVALID_PROPOSAL`.
 
 Warnings and `doctor` findings use a separate namespace. The base findings are `LEGACY_LAYOUT`, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and `ABSOLUTE_BOARD_PATH`; Remote Tracker findings report configuration, link, and sync problems. They appear in `meta.warnings` or in the `doctor` issue list; they are not command failures. Findings include `severity` (`error` or `warning`), the affected repository/Task/Issue when applicable, `cause`, and a safe `next_action`. Retired `WORKSPACE_*`, `MATTPOCOCK_*`, and `GITHUB_*` finding codes remain defined for compatibility.
 

@@ -491,7 +491,18 @@ A claim sets status in_progress, records the agent, and starts a lease (30 minut
 by default, configurable in config.toml). Extend it with `orbit heartbeat`.
 --steal takes over another agent's claim even while its lease is live; hold
 labels still block. A claim by the current holder renews its own lease, live or
-stale. The agent defaults to ORBIT_AGENT, then USER.";
+stale. The agent defaults to ORBIT_AGENT, then USER.
+
+--worktree also creates the Task's worktree: .worktrees/<id> on branch
+ticket/<id> in the Task's Repository, falling back to the member Repository
+containing the current directory. A new branch starts at the local default
+branch (origin/HEAD's local branch, else main, master, or current branch), without
+fetching. Existing ticket/<id> commits are preserved; a matching worktree is
+reused. A branch checked out elsewhere is rejected before claiming.
+If worktree preparation fails after claiming, CLAIM_WORKTREE_FAILED reports the
+successful claim in error.details.claim and the original error in
+error.details.cause. The claim remains active; fix the cause and retry, or
+explicitly release it. Orbit never automatically releases an existing claim.";
 
 pub const CLAIM_EXAMPLES: &str = "\
 Examples:
@@ -500,6 +511,9 @@ Examples:
 
   # Recover a task whose agent crashed
   orbit claim orb-a7b2c9 --by claude --steal
+
+  # Claim and create .worktrees/orb-a7b2c9 on ticket/orb-a7b2c9
+  orbit claim orb-a7b2c9 --by claude --worktree
 
   # Inspect the claim and its lease
   orbit show orb-a7b2c9 --json";

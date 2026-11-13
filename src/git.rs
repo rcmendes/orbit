@@ -274,6 +274,53 @@ pub fn worktree_add(repo: &Path, path: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Adds a worktree at `path` on a new `branch` created from `base`.
+pub fn worktree_add_new(repo: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
+    run_git(
+        Some(repo),
+        &[
+            "worktree",
+            "add",
+            path.to_string_lossy().as_ref(),
+            "-b",
+            branch,
+            base,
+        ],
+        None,
+    )?;
+    Ok(())
+}
+
+/// The Repository's default branch: the `origin/HEAD` symref when configured,
+/// else `main` or `master`, else the branch currently checked out.
+pub fn default_branch(repo: &Path) -> Result<String> {
+    let output = run_git_raw(
+        Some(repo),
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+        None,
+    )?;
+    if output.status.success() {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if let Some(short) = name.strip_prefix("origin/") {
+            return Ok(short.to_string());
+        }
+        if !name.is_empty() {
+            return Ok(name);
+        }
+    }
+    for candidate in ["main", "master"] {
+        if branch_exists(repo, candidate)? {
+            return Ok(candidate.to_string());
+        }
+    }
+    current_branch(repo)
+}
+
 /// Adds a detached worktree at `path` using the commit currently checked out by
 /// `repo`. Detaching avoids competing with the Board branch while the migration
 /// is built and committed.

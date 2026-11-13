@@ -532,6 +532,10 @@ pub struct ClaimArgs {
     /// Take over another agent's claim, even while its lease is live.
     #[arg(long)]
     pub steal: bool,
+
+    /// Create .worktrees/<id> on branch ticket/<id> in the Task's Repository.
+    #[arg(long)]
+    pub worktree: bool,
 }
 
 #[derive(Debug, Args)]

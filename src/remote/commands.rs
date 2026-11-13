@@ -92,23 +92,9 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         }));
     }
 
-    let mut linked_repositories = github.repositories.clone();
+    let mut linked_repositories = crate::remote::connected_github_projects(board)?;
     if let Some(scope) = repo_scope.as_deref() {
         linked_repositories.retain(|name| name.eq_ignore_ascii_case(scope));
-    }
-    for repository in crate::repository::github_member_projects(board)? {
-        if repo_scope
-            .as_deref()
-            .is_some_and(|scope| !repository.eq_ignore_ascii_case(scope))
-        {
-            continue;
-        }
-        if !linked_repositories
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
-        {
-            linked_repositories.push(repository);
-        }
     }
 
     let mut repositories = Vec::new();
@@ -563,18 +549,15 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
             "github.organization is not set; run `orbit remote connect`",
         ));
     }
-    if github.repositories.is_empty()
-        && crate::repository::github_member_projects(board)
-            .unwrap_or_default()
-            .is_empty()
-    {
+    let connected = crate::remote::connected_github_projects(board).unwrap_or_default();
+    if connected.is_empty() {
         issues.push(crate::graph::Issue::new(
             code::GITHUB_REPO_NOT_LINKED,
             None,
             "no GitHub repositories are linked; run `orbit remote connect OWNER/REPO`",
         ));
     }
-    for repository in &github.repositories {
+    for repository in &connected {
         if let Err(error) = client.repository_info(repository) {
             issues.push(crate::graph::Issue::new(
                 error.code,
@@ -587,24 +570,15 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
         }
     }
     if auto_push_enabled(board) {
-        let mut repositories = github.repositories.clone();
-        for repository in crate::repository::github_member_projects(board).unwrap_or_default() {
-            if !repositories
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
-            {
-                repositories.push(repository);
-            }
-        }
-        if repositories.is_empty() {
+        if connected.is_empty() {
             issues.push(crate::graph::Issue::new(
                 code::GITHUB_REPO_NOT_LINKED,
                 None,
                 "auto-push is enabled but no GitHub repository is linked or included; new Tasks stay local",
             ));
         }
-        for repository in repositories {
-            match client.label_exists(&repository, crate::github::status::IN_PROGRESS_LABEL) {
+        for repository in &connected {
+            match client.label_exists(repository, crate::github::status::IN_PROGRESS_LABEL) {
                 Ok(true) => {}
                 Ok(false) => issues.push(crate::graph::Issue::new(
                     code::GITHUB_SETUP_INCOMPLETE,
@@ -1551,7 +1525,7 @@ fn cmd_link(board: &Board, args: RemoteLinkArgs) -> Result<crate::output::Comman
 fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::CommandOutput> {
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let resolver = github_resolver(board)?;
-    let candidates = create_project_candidates(board, &resolver)?;
+    let candidates = crate::remote::connected_projects(board)?;
     let create_project = select_create_project(&candidates, args.project.as_deref())?;
     let project_label = format!("{}:{}", create_project.tracker, create_project.project);
     crate::remote::execution::require_project_available(board, &resolver, &create_project)?;
@@ -1943,27 +1917,6 @@ fn parse_issue_url(url: &str) -> Result<(String, String)> {
     Ok((repo, number.to_string()))
 }
 
-/// Remote Projects `orbit remote create` may target: every configured
-/// project plus each installed tracker's implicit projects.
-fn create_project_candidates(
-    board: &Board,
-    resolver: &dyn RemoteResolver,
-) -> Result<Vec<RemoteProject>> {
-    let mut candidates = configured_projects(board);
-    for tracker in resolver.trackers() {
-        let adapter = resolver.adapter(&tracker)?;
-        for project in adapter.implicit_projects(board)? {
-            if !candidates.iter().any(|candidate| {
-                candidate.tracker == project.tracker
-                    && candidate.project.eq_ignore_ascii_case(&project.project)
-            }) {
-                candidates.push(project);
-            }
-        }
-    }
-    Ok(candidates)
-}
-
 fn select_create_project(
     candidates: &[RemoteProject],
     requested: Option<&str>,
@@ -2087,15 +2040,7 @@ fn cmd_auto_push(board: &Board, args: RemoteAutoPushArgs) -> Result<crate::outpu
         warnings.extend(crate::mutation::commit_warning(outcome));
     }
     if changed && enabled {
-        let mut repositories = crate::repository::github_member_projects(board)?;
-        for repository in &github_config(board).repositories {
-            if !repositories
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(repository))
-            {
-                repositories.push(repository.clone());
-            }
-        }
+        let repositories = crate::remote::connected_github_projects(board)?;
         match repositories.len() {
             1 => {}
             0 => warnings.push(

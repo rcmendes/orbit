@@ -26,13 +26,6 @@ pub trait RemoteAdapter {
     /// Whether `project` may receive new Remote Issues on this Board.
     fn project_available(&self, board: &Board, project: &str) -> Result<bool>;
 
-    /// Remote Projects implied by Board membership beyond `remote.projects`
-    /// (for GitHub, the member Repositories' `owner/repo` origins).
-    fn implicit_projects(&self, board: &Board) -> Result<Vec<RemoteProject>> {
-        let _ = board;
-        Ok(Vec::new())
-    }
-
     /// Fetch one Remote Issue in Orbit terms.
     fn fetch_issue(&self, project: &RemoteProject, id: &str) -> Result<RemoteIssue>;
 
@@ -149,7 +142,7 @@ impl RemoteResolver for BoardResolver<'_> {
             "github" => {
                 // Without an injected client the adapter resolves lazily:
                 // config-only port facts (`mapped_fields`, `project_available`,
-                // `implicit_projects`, …) never build a `GitHubClient`, and
+                // …) never build a `GitHubClient`, and
                 // the first call that reaches GitHub does.
                 let config =
                     crate::github::adapter::GitHubAdapter::effective_config(self.board);

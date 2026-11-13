@@ -88,8 +88,11 @@ impl GitHubAdapter {
 }
 
 /// Merge the legacy `[github]` section with the migrated `[remote.github]`
-/// adapter settings. Repositories always come from `[github] repositories`
-/// plus `[remote] projects` on the github tracker.
+/// adapter settings. `repositories` is the availability list: the github
+/// Remote Projects configured on the Board — `[remote] projects` on the
+/// github tracker plus legacy `[github] repositories` — resolved by the
+/// shared `remote::configured_projects` rule. Member Repository origins are
+/// not adapter settings; `remote::connected_projects` resolves them.
 fn effective_config(board: &Board) -> GitHubConfig {
     let mut config = board.config.remote.github.clone().unwrap_or_else(|| {
         // Legacy boards keep everything under `[github]`; carry the
@@ -98,18 +101,11 @@ fn effective_config(board: &Board) -> GitHubConfig {
         config.auto_push = board.config.remote.auto_push || config.auto_push;
         config
     });
-    // `[remote] projects` naming github trackers are Remote Projects, not
-    // adapter settings; keep `repositories` as the availability list.
-    for project in &board.config.remote.projects {
-        if project.tracker == "github"
-            && !config
-                .repositories
-                .iter()
-                .any(|repo| repo.trim().eq_ignore_ascii_case(project.project.trim()))
-        {
-            config.repositories.push(project.project.clone());
-        }
-    }
+    config.repositories = crate::remote::configured_projects(board)
+        .into_iter()
+        .filter(|project| project.tracker == "github")
+        .map(|project| project.project)
+        .collect();
     config
 }
 
@@ -230,37 +226,14 @@ impl RemoteAdapter for GitHubAdapter {
 
     fn project_available(&self, board: &Board, project: &str) -> Result<bool> {
         let repo = GitHubConfig::normalize_repo(project)?;
-        if crate::repository::github_member_projects(board)?
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(&repo))
-        {
+        if self.config.contains_repo(&repo) {
             return Ok(true);
         }
-        Ok(self.config.contains_repo(&repo)
-            || crate::remote::configured_projects(board)
-                .iter()
-                .any(|candidate| {
-                    candidate.tracker == "github" && candidate.project.eq_ignore_ascii_case(&repo)
-                }))
-    }
-
-    fn implicit_projects(&self, board: &Board) -> Result<Vec<RemoteProject>> {
-        let mut projects = Vec::new();
-        let mut push = |repo: &str| {
-            if let Ok(repo) = GitHubConfig::normalize_repo(repo) {
-                projects.push(RemoteProject {
-                    tracker: "github".to_string(),
-                    project: repo,
-                });
-            }
-        };
-        for repository in crate::repository::github_member_projects(board)? {
-            push(&repository);
-        }
-        for repository in &self.config.repositories {
-            push(repository);
-        }
-        Ok(projects)
+        Ok(crate::remote::connected_projects(board)?
+            .iter()
+            .any(|candidate| {
+                candidate.tracker == "github" && candidate.project.eq_ignore_ascii_case(&repo)
+            }))
     }
 
     fn fetch_issue(&self, project: &RemoteProject, id: &str) -> Result<RemoteIssue> {

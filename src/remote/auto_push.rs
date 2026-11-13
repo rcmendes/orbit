@@ -132,26 +132,9 @@ pub fn after_command_default(board: &Board, before: &TaskSnapshot) -> Vec<String
 }
 
 /// Candidate Remote Projects a new Task on this Board may publish to:
-/// explicitly configured projects first, then adapter-implied ones (for
-/// GitHub, the member Repositories' `owner/repo` origins).
-fn create_projects<R: RemoteResolver + ?Sized>(
-    board: &Board,
-    resolver: &R,
-) -> Result<Vec<crate::remote::RemoteProject>> {
-    let mut projects = crate::remote::configured_projects(board);
-    for tracker in resolver.trackers() {
-        if let Ok(adapter) = resolver.adapter(&tracker) {
-            for project in adapter.implicit_projects(board)? {
-                if !projects.iter().any(|candidate| {
-                    candidate.tracker == project.tracker
-                        && candidate.project.eq_ignore_ascii_case(&project.project)
-                }) {
-                    projects.push(project);
-                }
-            }
-        }
-    }
-    Ok(projects)
+/// every project connected to the Board (`remote::connected_projects`).
+fn create_projects(board: &Board) -> Result<Vec<crate::remote::RemoteProject>> {
+    crate::remote::connected_projects(board)
 }
 
 fn auto_create<R: RemoteResolver + ?Sized>(
@@ -171,7 +154,7 @@ fn auto_create<R: RemoteResolver + ?Sized>(
     {
         return create_in(board, resolver, task, &project);
     }
-    let projects = match create_projects(board, resolver) {
+    let projects = match create_projects(board) {
         Ok(projects) => projects,
         Err(error) => {
             return vec![format!(

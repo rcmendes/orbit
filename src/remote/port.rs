@@ -26,13 +26,6 @@ pub trait RemoteAdapter {
     /// Whether `project` may receive new Remote Issues on this Board.
     fn project_available(&self, board: &Board, project: &str) -> Result<bool>;
 
-    /// Remote Projects implied by Board membership beyond `remote.projects`
-    /// (for GitHub, the member Repositories' `owner/repo` origins).
-    fn implicit_projects(&self, board: &Board) -> Result<Vec<RemoteProject>> {
-        let _ = board;
-        Ok(Vec::new())
-    }
-
     /// Fetch one Remote Issue in Orbit terms.
     fn fetch_issue(&self, project: &RemoteProject, id: &str) -> Result<RemoteIssue>;
 

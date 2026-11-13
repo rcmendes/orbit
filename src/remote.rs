@@ -30,18 +30,48 @@ pub use crate::task::RemoteLink;
 pub fn configured_projects(board: &Board) -> Vec<RemoteProject> {
     let mut projects = board.config.remote.projects.clone();
     for repository in &board.config.github.repositories {
-        let project = RemoteProject {
-            tracker: "github".to_string(),
-            project: repository.clone(),
-        };
-        if !projects.iter().any(|candidate| {
-            candidate.tracker == project.tracker
-                && candidate.project.eq_ignore_ascii_case(&project.project)
-        }) {
-            projects.push(project);
-        }
+        push_project(&mut projects, "github", repository.clone());
     }
     projects
+}
+
+/// Append `project` to `projects` unless an entry on the same tracker with
+/// a case-insensitive project match already exists.
+fn push_project(projects: &mut Vec<RemoteProject>, tracker: &str, project: String) {
+    if !projects.iter().any(|candidate| {
+        candidate.tracker == tracker && candidate.project.eq_ignore_ascii_case(&project)
+    }) {
+        projects.push(RemoteProject {
+            tracker: tracker.to_string(),
+            project,
+        });
+    }
+}
+
+/// Every Remote Project connected to the Board: the configured projects
+/// plus the Remote Projects implied by member Repository `origin`s (for
+/// GitHub, member checkouts whose `origin` points at github.com). The one
+/// rule every "connected projects" surface shares; deduplicated
+/// case-insensitively on (tracker, project), configured projects first.
+///
+/// Member origins cost one `git remote get-url origin` per member, so
+/// callers that only need the configured set use [`configured_projects`].
+pub fn connected_projects(board: &Board) -> Result<Vec<RemoteProject>> {
+    let mut projects = configured_projects(board);
+    for repository in crate::repository::github_member_projects(board)? {
+        push_project(&mut projects, "github", repository);
+    }
+    Ok(projects)
+}
+
+/// `owner/repo` names of the connected github Remote Projects, in
+/// [`connected_projects`] order.
+pub fn connected_github_projects(board: &Board) -> Result<Vec<String>> {
+    Ok(connected_projects(board)?
+        .into_iter()
+        .filter(|project| project.tracker == "github")
+        .map(|project| project.project)
+        .collect())
 }
 
 /// Whether the Board has any Remote Tracker configuration at all: Remote
@@ -152,5 +182,73 @@ impl RemoteProject {
             return Err(OrbitError::config("remote project id must be non-empty"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::Config;
+
+    fn board_with(config: Config) -> (tempfile::TempDir, Board) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let board = Board {
+            lock_path: root.join(".lock"),
+            root,
+            config,
+            warnings: Vec::new(),
+            orbit_dir: None,
+            needs_migration: false,
+            commit_failed: Default::default(),
+        };
+        (dir, board)
+    }
+
+    fn project(tracker: &str, project: &str) -> RemoteProject {
+        RemoteProject {
+            tracker: tracker.to_string(),
+            project: project.to_string(),
+        }
+    }
+
+    #[test]
+    fn configured_projects_merges_remote_projects_and_legacy_github() {
+        let mut config = Config::default();
+        config.remote.projects = vec![
+            project("github", "Acme/Widget"),
+            project("jira", "PROJ-1"),
+        ];
+        config.github.repositories = vec![
+            "acme/widget".to_string(),
+            "acme/gadget".to_string(),
+        ];
+        let (_dir, board) = board_with(config);
+
+        assert_eq!(
+            configured_projects(&board),
+            vec![
+                project("github", "Acme/Widget"),
+                project("jira", "PROJ-1"),
+                project("github", "acme/gadget"),
+            ]
+        );
+    }
+
+    #[test]
+    fn connected_projects_matches_configured_without_members() {
+        let mut config = Config::default();
+        config.remote.projects = vec![project("github", "Acme/Widget")];
+        config.github.repositories = vec!["acme/gadget".to_string()];
+        let (_dir, board) = board_with(config);
+
+        assert_eq!(
+            connected_projects(&board).unwrap(),
+            configured_projects(&board)
+        );
+        assert_eq!(
+            connected_github_projects(&board).unwrap(),
+            vec!["Acme/Widget".to_string(), "acme/gadget".to_string()]
+        );
     }
 }

@@ -41,7 +41,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     } = cli;
     if no_sync {
         crate::remote::auto_push::suppress();
-        crate::board_sync::suppress();
+        crate::board_host::suppress();
     }
 
     if json && matches!(&command, Command::Prime(args) if args.hook_json) {
@@ -117,32 +117,35 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
         Command::Board(args) => match &args.command {
             crate::cli::BoardCommand::Host(host_args) => {
-                if host_args.target.is_none() && !host_args.none {
-                    with_board(dir.as_deref(), false, |board| {
+                if host_args.target.is_some() {
+                    let board = crate::board_host::unlocked_for_network(dir.as_deref())?;
+                    let mut output = board::cmd_host(&board, host_args)?;
+                    output
+                        .warnings
+                        .extend(crate::board_host::auto_after_board(&board));
+                    output.warnings.extend(board.warnings.iter().cloned());
+                    Ok(output)
+                } else if host_args.none {
+                    with_board(dir.as_deref(), true, |board| {
                         board::cmd_host(board, host_args)
                     })
                 } else {
-                    with_board(dir.as_deref(), true, |board| {
+                    with_board(dir.as_deref(), false, |board| {
                         board::cmd_host(board, host_args)
                     })
                 }
             }
             crate::cli::BoardCommand::Sync(sync_args) => {
                 // The command performs the sync itself; do not auto-sync again.
-                crate::board_sync::suppress();
-                // `sync` takes the Board lock itself, only around local steps.
-                let board = crate::board::BoardAccess::open(
-                    dir.as_deref(),
-                    crate::board::AccessMode::Write,
-                )?
-                .into_board();
+                crate::board_host::suppress();
+                let board = crate::board_host::unlocked_for_network(dir.as_deref())?;
                 let mut output = board::cmd_sync(&board, sync_args)?;
                 output.warnings.extend(board.warnings.iter().cloned());
                 Ok(output)
             }
             crate::cli::BoardCommand::Move(move_args) => {
                 // The old root is gone after the move; never auto-sync from it.
-                crate::board_sync::suppress();
+                crate::board_host::suppress();
                 let access = crate::board::BoardAccess::open(
                     dir.as_deref(),
                     crate::board::AccessMode::Write,
@@ -263,13 +266,13 @@ where
                 ));
         }
     }
-    // Host sync does network I/O: release the Board lock first.
-    let board = access.into_board();
     if matches!(mode, crate::board::AccessMode::Write) {
-        output
-            .warnings
-            .extend(crate::board_sync::auto_after(&board));
+        let (board, warnings) = crate::board_host::auto_after_write(access);
+        output.warnings.extend(warnings);
+        output.warnings.extend(board.warnings.iter().cloned());
+        return Ok(output);
     }
+    let board = access.into_board();
     output.warnings.extend(board.warnings.iter().cloned());
     Ok(output)
 }
@@ -281,30 +284,11 @@ fn prime_with_host_sync(
     dir: Option<&Path>,
     args: crate::cli::PrimeArgs,
 ) -> Result<crate::output::CommandOutput> {
-    if host_sync_at_prime(dir) {
-        // `sync` takes the Board lock itself, only around local steps.
-        let board =
-            crate::board::BoardAccess::open(dir, crate::board::AccessMode::Write)?.into_board();
-        let mut warnings = crate::board_sync::auto_after(&board);
-        let mut output = with_board(dir, false, |board| cmd_prime(board, args))?;
-        warnings.append(&mut output.warnings);
-        output.warnings = warnings;
-        return Ok(output);
-    }
-    with_board(dir, false, |board| cmd_prime(board, args))
-}
-
-fn host_sync_at_prime(dir: Option<&Path>) -> bool {
-    if crate::board_sync::suppressed() {
-        return false;
-    }
-    let Ok(board) = Board::discover(dir) else {
-        return false;
-    };
-    let Ok(config) = crate::board::Config::load(&board.root) else {
-        return false;
-    };
-    config.board.host_sync == crate::board::HostSyncMode::Auto && config.board.host.is_some()
+    let mut warnings = crate::board_host::auto_before_prime(dir)?;
+    let mut output = with_board(dir, false, |board| cmd_prime(board, args))?;
+    warnings.append(&mut output.warnings);
+    output.warnings = warnings;
+    Ok(output)
 }
 
 fn mutation_output(

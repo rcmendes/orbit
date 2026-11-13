@@ -7,16 +7,40 @@
 //! — while the git remote `host` always mirrors the resolved URL.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::json;
 
-use crate::board::Board;
+use crate::board::{AccessMode, Board, BoardAccess, Config, HostSyncMode};
 use crate::error::{OrbitError, Result, code};
 use crate::git;
 use crate::slug;
 
 /// The git remote Orbit uses inside the Board repository for its host.
 pub const HOST_REMOTE: &str = "host";
+
+static SUPPRESSED: AtomicBool = AtomicBool::new(false);
+
+/// Suppress host auto-sync for the rest of this process (`orbit board sync`
+/// performs the sync itself; `--no-sync` sets this too).
+pub fn suppress() {
+    SUPPRESSED.store(true, Ordering::Relaxed);
+}
+
+fn suppressed() -> bool {
+    if SUPPRESSED.load(Ordering::Relaxed) {
+        return true;
+    }
+    ["ORBIT_NO_AUTO_SYNC", "ORBIT_NO_HOST_SYNC"]
+        .iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .any(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
 
 /// What `orbit board host` changed or found.
 #[derive(Debug)]
@@ -162,15 +186,22 @@ fn member_repo_url(board: &Board, name: &str) -> Option<String> {
 
 /// Points the Board repository's `host` remote at `url`, creating it when
 /// needed. Local configuration only; remote branches are never touched.
-pub fn ensure_remote(root: &Path, url: &str) -> Result<()> {
+fn ensure_remote(root: &Path, url: &str) -> Result<()> {
     git::remote_set_url(root, HOST_REMOTE, url)
 }
 
-/// The remote tip of the Board branch on the host, when it exists.
-pub fn remote_tip(board: &Board, url: &str) -> Result<Option<String>> {
-    let branch = board.config.board.branch.clone();
+/// Fetches the Board branch tip from `url` and returns its commit.
+///
+/// The tip comes from the resolved URL, never from a stale
+/// `refs/remotes/host/*` tracking ref left by an earlier host. Only the
+/// Board branch is fetched, and it lands in `FETCH_HEAD` for object access.
+pub fn fetch_tip(root: &Path, url: &str, branch: &str) -> Result<Option<String>> {
+    ensure_remote(root, url)?;
     let reference = format!("refs/heads/{branch}");
-    git::ls_remote(&board.root, url, &reference)
+    if git::ls_remote(root, url, &reference)?.is_none() {
+        return Ok(None);
+    }
+    git::fetch_head(root, url, branch).map(Some)
 }
 
 /// Reads the Board config stored at `commit` (`FETCH_HEAD`-style ref or sha).
@@ -233,15 +264,11 @@ pub fn set_host(root: &Path, spec: &str, join: bool) -> Result<HostOutcome> {
     let branch = board.config.board.branch.clone();
     let board_slug = slug::slug_of_prefix(&board.config.id.prefix).to_string();
 
-    ensure_remote(root, &url)?;
-    let tip = git::ls_remote(root, HOST_REMOTE, &format!("refs/heads/{branch}"))?
-        .map(|sha| {
-            // Fetch the objects so the config check and a possible join can
-            // read the remote tree.
-            git::fetch_head(root, HOST_REMOTE, &branch).map(|_| sha)
-        })
-        .transpose()?;
+    // Host lookup is network I/O and stays outside the Board lock.
+    let tip = fetch_tip(root, &url, &branch)?;
 
+    let board = Board::at_root(root.to_path_buf(), Vec::new())?;
+    let _lock = board.lock_exclusive()?;
     let mut joined = false;
     if let Some(tip) = &tip {
         check_host_slug(root, tip, &board_slug)?;
@@ -281,6 +308,74 @@ pub fn clear_host(root: &Path) -> Result<HostOutcome> {
         joined: false,
         remote_tip: None,
     })
+}
+
+/// Opens a Board for a caller that is about to do host network I/O.
+///
+/// The write open performs discovery and repair under the normal command path,
+/// then immediately releases the Board lock; `board_sync::sync` takes the lock
+/// itself around local commits and merges.
+pub fn unlocked_for_network(dir: Option<&Path>) -> Result<Board> {
+    Ok(BoardAccess::open(dir, AccessMode::Write)?.into_board())
+}
+
+/// Releases a completed write command's lock, then applies the auto-sync gate.
+pub fn auto_after_write(access: BoardAccess) -> (Board, Vec<String>) {
+    let board = access.into_board();
+    let warnings = auto_sync(&board);
+    (board, warnings)
+}
+
+/// Applies the auto-sync gate after a lock-free host-network command commits.
+pub fn auto_after_board(board: &Board) -> Vec<String> {
+    auto_sync(board)
+}
+
+/// Runs the `prime` auto-sync before the read-only prime view is opened.
+///
+/// Discovery/config failures leave prime to report the real Board error through
+/// its normal read path. Once the gate is open, the sync itself uses the same
+/// lock-free network entry point as an explicit `board sync`.
+pub fn auto_before_prime(dir: Option<&Path>) -> Result<Vec<String>> {
+    if suppressed() {
+        return Ok(Vec::new());
+    }
+    let Ok(board) = Board::discover(dir) else {
+        return Ok(Vec::new());
+    };
+    if !auto_enabled(&board.root) {
+        return Ok(Vec::new());
+    }
+    let board = unlocked_for_network(dir)?;
+    Ok(auto_sync(&board))
+}
+
+fn auto_enabled(root: &Path) -> bool {
+    let Ok(config) = Config::load(root) else {
+        return false;
+    };
+    config.board.host_sync == HostSyncMode::Auto && config.board.host.is_some()
+}
+
+/// The `host_sync = auto` hook: sync after a committed mutation or at prime.
+/// Failures and contested claims surface as warnings, never errors.
+fn auto_sync(board: &Board) -> Vec<String> {
+    if suppressed() || !auto_enabled(&board.root) {
+        return Vec::new();
+    }
+    match crate::board_sync::sync(board, &[]) {
+        Ok(report) => {
+            let mut warnings = report.notices;
+            if report.state == crate::board_sync::SyncState::Merged {
+                warnings.push(format!(
+                    "board host: merged divergent history and pushed ({} files)",
+                    report.merged_files
+                ));
+            }
+            warnings
+        }
+        Err(error) => vec![format!("BOARD_HOST_SYNC_FAILED: {}", error.message)],
+    }
 }
 
 /// Reports the configured host without changing anything.

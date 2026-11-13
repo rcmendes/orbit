@@ -676,12 +676,6 @@ pub fn ls_remote(repo: &Path, remote: &str, reference: &str) -> Result<Option<St
         .map(str::to_string))
 }
 
-/// Fetches every branch the remote advertises into `refs/remotes/<remote>/*`.
-pub fn fetch(repo: &Path, remote: &str) -> Result<()> {
-    run_git_network_ok(repo, &["fetch", "--", remote])?;
-    Ok(())
-}
-
 /// Fetches one branch from an explicit URL without configuring a remote and
 /// returns the fetched tip commit.
 pub fn fetch_head(repo: &Path, url: &str, branch: &str) -> Result<String> {

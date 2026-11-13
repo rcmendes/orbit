@@ -281,7 +281,11 @@ Examples:
   # Publish a ticket under a spec or epic parent
   orbit add \"web: login redirect\" --parent orb-a7b2c9 --label ready-for-agent";
 
-pub const LIST_LONG: &str = "\
+/// `orbit list --help` prose is assembled from these fragments by
+/// [`list_long`] and [`list_examples`], so the shared text exists once and the
+/// Remote Tracker sentences are added only for Boards that have Remote
+/// material (`remote::details_visible`).
+const LIST_LONG_HEAD: &str = "\
 Lists tasks from a consistent snapshot of the Board. Done and cancelled tasks are
 hidden by default; pass --include-closed to include them, or name a terminal
 status with --status. Filters combine, so --status in_progress --claimed-by
@@ -291,9 +295,18 @@ Inside a member Repository or one of its worktrees the list is scoped to that
 Repository's Tasks plus Board-wide Tasks (tasks with no repo); --all widens it
 to the whole Board. At the Board's root there is no scoping.
 
-Human output is an aligned table with ID, STATUS, P, TYPE, ISSUE, TITLE, LABELS,
+Human output is an aligned table with ID, STATUS, P, TYPE,";
+
+/// ISSUE column wording for a Board with Remote Tracker material.
+const LIST_LONG_ISSUE: &str = " ISSUE, TITLE, LABELS,
 and CLAIMED BY columns. ISSUE is `-` for a Local Task, `#N` for a Linked Task,
-and `~#N` for detached provenance. Long titles are shortened to 60 characters.
+and `~#N` for detached provenance.";
+
+/// Column list for a Board with no Remote Tracker material: no ISSUE column.
+const LIST_LONG_PLAIN: &str = " TITLE, LABELS, and
+CLAIMED BY columns.";
+
+const LIST_LONG_TABLE: &str = " Long titles are shortened to 60 characters.
 Root Tasks are ordered by priority, then creation time and ID; each Parent Task
 is followed by its SubTasks, also ordered by priority. --group renders one
 outlined table with a banner for each Parent Task and its SubTasks beneath it;
@@ -301,46 +314,25 @@ tasks with no parent follow in a final No parent section. The table is for
 reading; use --json when another program consumes the result, because it returns
 the full task objects in data.tasks plus data.count.
 
---linked shows only Tasks with an active Remote Issue link; --local shows only
+";
+
+/// `--linked`/`--local` filter docs; omitted on Boards with no Remote material.
+const LIST_LONG_LINKED: &str =
+    "--linked shows only Tasks with an active Remote Issue link; --local shows only
 Tasks without one, including detached provenance. The ISSUE column and these
-filters appear only while the Board has Remote Tracker material. --parent lists
-only the SubTasks of one Parent Task. --type is repeatable and matches any
-listed work shape; --exclude-type hides any listed shape. --label is repeatable
-and every label must match; --exclude-label is repeatable and hides a task
-carrying any of the named labels. --repo NAME is shorthand for --label
-repo:NAME. For work an agent can start, use `orbit ready` instead of filtering
-this list.";
+filters appear only while the Board has Remote Tracker material.
 
-/// `orbit list --help` on a Board with no Remote Project and no Task links:
-/// the ISSUE column and the link filters do not exist, so help omits them.
-pub const LIST_LONG_UNCONNECTED: &str = "\
-Lists tasks from a consistent snapshot of the Board. Done and cancelled tasks are
-hidden by default; pass --include-closed to include them, or name a terminal
-status with --status. Filters combine, so --status in_progress --claimed-by
-claude shows everything one agent is holding.
+";
 
-Inside a member Repository or one of its worktrees the list is scoped to that
-Repository's Tasks plus Board-wide Tasks (tasks with no repo); --all widens it
-to the whole Board. At the Board's root there is no scoping.
-
-Human output is an aligned table with ID, STATUS, P, TYPE, TITLE, LABELS, and
-CLAIMED BY columns. Long titles are shortened to 60 characters. Root Tasks are
-ordered by priority, then creation time and ID; each Parent Task is followed by
-its SubTasks, also ordered by priority. --group renders one outlined table with
-a banner for each Parent Task and its SubTasks beneath it; tasks with no parent
-follow in a final No parent section. The table is for reading; use --json when
-another program consumes the result, because it returns the full task objects
-in data.tasks plus data.count.
-
---parent lists only the SubTasks of one Parent Task. --type is repeatable and
+const LIST_LONG_FILTERS: &str =
+    "--parent lists only the SubTasks of one Parent Task. --type is repeatable and
 matches any listed work shape; --exclude-type hides any listed shape. --label
 is repeatable and every label must match; --exclude-label is repeatable and
 hides a task carrying any of the named labels. --repo NAME is shorthand for
 --label repo:NAME. For work an agent can start, use `orbit ready` instead of
 filtering this list.";
 
-pub const LIST_EXAMPLES: &str = "\
-Examples:
+const LIST_EXAMPLES_HEAD: &str = "Examples:
   # What is open right now?
   orbit list
 
@@ -363,47 +355,51 @@ Examples:
   orbit list --repo api
   orbit list --repo api --label ready-for-agent
 
-  # Only work linked to a Remote Issue, or only local work
+";
+
+/// `--linked`/`--local` examples; omitted on Boards with no Remote material.
+const LIST_EXAMPLES_LINKED: &str = "  # Only work linked to a Remote Issue, or only local work
   orbit list --linked
   orbit list --local
 
-  # Only epics and specs
+";
+
+const LIST_EXAMPLES_TAIL: &str = "  # Only epics and specs
   orbit list --type epic
 
   # Hide epics and specs from the list
   orbit list --exclude-type epic";
 
-/// `orbit list --help` examples on a Board with no Remote material: the
-/// `--linked`/`--local` examples do not apply.
-pub const LIST_EXAMPLES_UNCONNECTED: &str = "\
-Examples:
-  # What is open right now?
-  orbit list
+/// Long help for `orbit list`. `remote` adds the ISSUE column description and
+/// the `--linked`/`--local` filter docs; pass `crate::remote::details_visible`
+/// so Boards with no Remote material get the local-only surface.
+pub fn list_long(remote: bool) -> String {
+    let mut help = String::with_capacity(4096);
+    help.push_str(LIST_LONG_HEAD);
+    help.push_str(if remote {
+        LIST_LONG_ISSUE
+    } else {
+        LIST_LONG_PLAIN
+    });
+    help.push_str(LIST_LONG_TABLE);
+    if remote {
+        help.push_str(LIST_LONG_LINKED);
+    }
+    help.push_str(LIST_LONG_FILTERS);
+    help
+}
 
-  # Everything awaiting triage
-  orbit list --label needs-triage
-
-  # What is claude working on?
-  orbit list --status in_progress --claimed-by claude
-
-  # Full history, including closed work
-  orbit list --include-closed --json
-
-  # The pieces of one feature
-  orbit list --parent orb-a7b2c9
-
-  # Group Parent Tasks and SubTasks in one outlined table
-  orbit list --group
-
-  # Everything for one repository, optionally with another label
-  orbit list --repo api
-  orbit list --repo api --label ready-for-agent
-
-  # Only epics and specs
-  orbit list --type epic
-
-  # Hide epics and specs from the list
-  orbit list --exclude-type epic";
+/// `Examples:` block for `orbit list --help`; `remote` adds the
+/// `--linked`/`--local` examples.
+pub fn list_examples(remote: bool) -> String {
+    let mut help = String::with_capacity(2048);
+    help.push_str(LIST_EXAMPLES_HEAD);
+    if remote {
+        help.push_str(LIST_EXAMPLES_LINKED);
+    }
+    help.push_str(LIST_EXAMPLES_TAIL);
+    help
+}
 
 pub const READY_LONG: &str = "\
 Shows tasks that can start now: todo, unclaimed, not waiting on an external

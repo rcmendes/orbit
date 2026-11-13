@@ -3187,6 +3187,26 @@ fn disconnecting_the_last_project_clears_migrated_github_settings() {
 }
 
 #[test]
+fn remote_connect_deduplicates_remote_projects_case_insensitively() {
+    let repo = TestRepo::new();
+    repo.init();
+    let path = repo.board_path().join("config.toml");
+    let mut config = std::fs::read_to_string(&path).unwrap();
+    config.push_str(
+        "\n[[remote.projects]]\ntracker = \"github\"\nproject = \"acme/widget\"\n",
+    );
+    std::fs::write(&path, config).unwrap();
+
+    // `acme/Widget` must not duplicate the configured `acme/widget`.
+    let connected = repo.ok_json(&["remote", "connect", "acme/Widget", "--json"]);
+    assert_eq!(connected["data"]["status"], "connected");
+
+    let listed = repo.ok_json(&["remote", "list", "--json"]);
+    assert_eq!(listed["data"]["count"], 1, "{listed}");
+    assert_eq!(listed["data"]["projects"][0]["project"], "acme/widget");
+}
+
+#[test]
 fn remote_status_repo_scope_skips_other_repositories() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_status_fixture(&fixture_dir);
@@ -3223,10 +3243,7 @@ fn remote_status_repo_scope_skips_other_repositories() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(full["data"]["linked_tasks"], 2);
-    assert_eq!(
-        full["data"]["repositories"].as_array().unwrap().len(),
-        2
-    );
+    assert_eq!(full["data"]["repositories"].as_array().unwrap().len(), 2);
 
     let scoped = repo.ok_json_with_env(
         &["remote", "status", "--repo", "acme/other", "--json"],
@@ -3257,7 +3274,13 @@ fn whole_board_sync_reports_tasks_it_could_not_check() {
     let first = adopt_fixture_task(&repo, &fixture, "First task");
     let second = repo.add("Second task", &[]);
     repo.ok_json_with_env(
-        &["remote", "link", second.as_str(), "acme/widget#43", "--json"],
+        &[
+            "remote",
+            "link",
+            second.as_str(),
+            "acme/widget#43",
+            "--json",
+        ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     // The remote Issue disappears before the sync; the run must report it

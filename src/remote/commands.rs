@@ -1,6 +1,7 @@
 use crate::github::adapter::GitHubAdapter;
 use crate::github::client::client_from_env;
 use crate::github::config::GitHubConfig;
+use crate::github::diagnosis::{self, DiagnosisOptions, NextActionInput, StatusIssue};
 use crate::mutation::persist_task;
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -21,7 +22,9 @@ use crate::remote::model::{
     RemoteIssue, RemoteIssueRef, RemoteIssueSummary, SyncDirection, SyncPlan,
 };
 use crate::remote::port::{BoardResolver, RemoteAdapter, RemoteResolver};
-use crate::remote::{RemoteProject, configured_projects, relationships, sync};
+use crate::remote::{
+    RemoteProject, configured_projects, parse_issue_ref, parse_remote_project, relationships, sync,
+};
 use crate::task::{self, Status, Task};
 
 pub fn run(board: &Board, args: RemoteArgs) -> Result<crate::output::CommandOutput> {
@@ -49,7 +52,6 @@ fn github_resolver(board: &Board) -> Result<BoardResolver<'_>> {
 
 fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::CommandOutput> {
     let client = client_from_env()?;
-    let auth = client.auth_status();
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let github = github_config(board);
     let repo_scope = args
@@ -57,176 +59,31 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         .as_deref()
         .map(GitHubConfig::normalize_repo)
         .transpose()?;
-    let configured = github.is_enabled();
-    let basic_mode = github.mode.is_basic();
-    let auto_push = auto_push_enabled(board);
+    // The shared health diagnosis (`src/github/diagnosis.rs`) owns every
+    // configuration/auth/repository/field rule; this command projects it
+    // into the status envelope and adds its own per-task sync preview.
+    let diagnosis = diagnosis::diagnose(
+        board,
+        client.as_ref(),
+        &github,
+        &DiagnosisOptions {
+            repository_scope: repo_scope.clone(),
+            strict_connected_projects: true,
+        },
+    )?;
+    let configured = diagnosis.configured;
+    let basic_mode = diagnosis.basic_mode;
+    let auto_push = diagnosis.auto_push;
 
-    let username = auth
-        .username
-        .clone()
-        .or_else(|| crate::github::client::parse_auth_username(&auth.message));
-    let scopes = if auth.scopes.is_empty() {
-        crate::github::client::parse_auth_scopes(&auth.message)
-    } else {
-        auth.scopes.clone()
-    };
-    let (required_scopes, missing_scopes) = github_scope_status(basic_mode, &scopes);
+    let mut issues = diagnosis.status_issues();
 
-    let mut issues = Vec::<Value>::new();
-    if !configured {
-        issues.push(json!({
-            "code": "GITHUB_NOT_CONFIGURED",
-            "message": "GitHub is not configured for this Board",
-        }));
-    }
-    if !auth.authenticated {
-        issues.push(json!({
-            "code": "GITHUB_AUTH_REQUIRED",
-            "message": auth.message,
-        }));
-    }
-    if !missing_scopes.is_empty() {
-        issues.push(json!({
-            "code": "GITHUB_SCOPES_MISSING",
-            "message": format!("GitHub token is missing required scopes: {}", missing_scopes.join(", ")),
-        }));
-    }
-
-    let mut linked_repositories = github.repositories.clone();
-    if let Some(scope) = repo_scope.as_deref() {
-        linked_repositories.retain(|name| name.eq_ignore_ascii_case(scope));
-    }
-    for repository in crate::repository::github_member_projects(board)? {
-        if repo_scope
-            .as_deref()
-            .is_some_and(|scope| !repository.eq_ignore_ascii_case(scope))
-        {
-            continue;
-        }
-        if !linked_repositories
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
-        {
-            linked_repositories.push(repository);
-        }
-    }
-
-    let mut repositories = Vec::new();
-    if auth.authenticated {
-        for name in &linked_repositories {
-            match client.repository_info(name) {
-                Ok(info) => {
-                    let label_present = client
-                        .label_exists(name, crate::github::status::IN_PROGRESS_LABEL)
-                        .ok();
-                    if auto_push && label_present == Some(false) {
-                        issues.push(json!({
-                            "code": "GITHUB_SETUP_INCOMPLETE",
-                            "message": format!(
-                                "the `{}` label is missing on `{name}`; run `orbit remote connect` or create it",
-                                crate::github::status::IN_PROGRESS_LABEL
-                            ),
-                            "repository": name,
-                        }));
-                    }
-                    repositories.push(json!({
-                        "name": name,
-                        "accessible": true,
-                        "owner_type": info.owner_type,
-                        "reserved_label_present": label_present,
-                    }));
-                }
-                Err(error) => {
-                    issues.push(json!({
-                        "code": error.code,
-                        "message": error.message,
-                        "repository": name,
-                    }));
-                    repositories.push(json!({
-                        "name": name,
-                        "accessible": false,
-                        "owner_type": null,
-                        "reserved_label_present": null,
-                    }));
-                }
-            }
-        }
-    } else {
-        repositories.extend(linked_repositories.iter().map(|name| {
-            json!({
-                "name": name,
-                "accessible": null,
-                "owner_type": null,
-                "reserved_label_present": null,
-            })
-        }));
-    }
-    if configured && linked_repositories.is_empty() {
-        issues.push(json!({
-            "code": "GITHUB_REPO_NOT_LINKED",
-            "message": match repo_scope.as_deref() {
-                Some(repo) => format!("GitHub repository `{repo}` is not linked to this Board"),
-                None => "No GitHub repositories are linked to this Board".to_string(),
-            },
-        }));
-    }
-
-    let area_id_configured = !basic_mode && github.issue_fields.area_id.is_some();
-    let verification_id_configured = !basic_mode && github.issue_fields.verification_id.is_some();
-    let mut area_resolved = None;
-    let mut verification_resolved = None;
-    let mut area_matches = None;
-    let mut verification_matches = None;
-    let mut field_validation_failed = false;
-    if !basic_mode && let Some(org) = github.organization.as_deref() {
-        if auth.authenticated {
-            match client.validate_org_fields(org, &github.issue_fields) {
-                Ok(fields) => {
-                    area_resolved = Some(true);
-                    verification_resolved = Some(true);
-                    area_matches = Some(
-                        github.issue_fields.area_id.as_deref() == Some(fields.area_id.as_str()),
-                    );
-                    verification_matches = Some(
-                        github.issue_fields.verification_id.as_deref()
-                            == Some(fields.verification_id.as_str()),
-                    );
-                    if area_matches == Some(false) || verification_matches == Some(false) {
-                        issues.push(json!({
-                            "code": "GITHUB_SETUP_INCOMPLETE",
-                            "message": "stored GitHub Issue Field ids do not match the organization fields; run `orbit remote connect --fields`",
-                        }));
-                    }
-                }
-                Err(error) => {
-                    field_validation_failed = true;
-                    let missing = missing_field_names(&error);
-                    if !missing.is_empty() {
-                        area_resolved =
-                            Some(!missing.contains(&github.issue_fields.area_name.as_str()));
-                        verification_resolved = Some(
-                            !missing.contains(&github.issue_fields.verification_name.as_str()),
-                        );
-                    }
-                    issues.push(json!({ "code": error.code, "message": error.message }));
-                }
-            }
-        }
-    } else if configured && !basic_mode {
-        issues.push(json!({
-            "code": "GITHUB_SETUP_INCOMPLETE",
-            "message": "github.organization is not set; run `orbit remote connect`",
-        }));
-    }
-
+    let github_link = |task: &Task| active_link(task).filter(|link| link.tracker == "github");
     let mut pending_pull = Vec::new();
     let mut pending_push = Vec::new();
     let mut conflicts = Vec::new();
     let mut unsupported = Vec::new();
-    let github_link = |task: &Task| active_link(task).filter(|link| link.tracker == "github");
     let adapter =
         GitHubAdapter::with_client(client.clone(), GitHubAdapter::effective_config(board));
-    let resolver = BoardResolver::with_client(board, client.clone());
     let targets: Vec<_> = graph
         .iter()
         .filter(|task| github_link(task).is_some())
@@ -249,15 +106,25 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
     let mut fetch_refs = Vec::new();
     let mut fetch_positions = Vec::new();
     for (index, (task, link)) in targets.iter().enumerate() {
-        let project = link.remote_project();
-        let linked_repo = crate::remote::execution::project_available(board, &resolver, &project)?;
+        // Availability is membership in the diagnosis's connected-projects
+        // set: resolving it once avoids a member-origin `git remote` scan
+        // per linked Task. Every target links the github tracker.
+        let linked_repo = diagnosis
+            .connected_projects
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(link.project.trim()));
         if !linked_repo {
-            issues.push(json!({
-                "code": "GITHUB_REPO_NOT_LINKED",
-                "task": task.id,
-                "repository": link.project,
-                "message": format!("Task {} links to {}, which is not linked to this Board", task.id, link.project),
-            }));
+            issues.push(
+                StatusIssue::new(
+                    code::GITHUB_REPO_NOT_LINKED,
+                    format!(
+                        "Task {} links to {}, which is not linked to this Board",
+                        task.id, link.project
+                    ),
+                )
+                .with_task(task.id.as_str())
+                .with_repository(link.project.as_str()),
+            );
         }
 
         let children: Vec<_> = graph
@@ -289,7 +156,7 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
             })
         }));
 
-        if !auth.authenticated || !linked_repo {
+        if !diagnosis.auth.authenticated || !linked_repo {
             continue;
         }
         fetch_refs.push(RemoteIssueRef {
@@ -333,11 +200,9 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
                     conflicts.push(json!({ "task": task.id, "repository": link.project, "number": link.id, "conflicts": plan.conflicts }));
                 }
             }
-            Err(error) => issues.push(json!({
-                "code": error.code,
-                "task": task.id,
-                "message": error.message,
-            })),
+            Err(error) => {
+                issues.push(StatusIssue::new(error.code, error.message).with_task(task.id.as_str()))
+            }
         }
     }
 
@@ -345,86 +210,43 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         "area": {
             "name": github.issue_fields.area_name,
             "applicable": !basic_mode,
-            "configured": if basic_mode { Value::Null } else { json!(area_id_configured) },
-            "resolved": area_resolved,
-            "matches": area_matches,
+            "configured": if basic_mode { Value::Null } else { json!(diagnosis.fields.area.configured) },
+            "resolved": diagnosis.fields.area.resolved,
+            "matches": diagnosis.fields.area.matches,
         },
         "verification": {
             "name": github.issue_fields.verification_name,
             "applicable": !basic_mode,
-            "configured": if basic_mode { Value::Null } else { json!(verification_id_configured) },
-            "resolved": verification_resolved,
-            "matches": verification_matches,
+            "configured": if basic_mode { Value::Null } else { json!(diagnosis.fields.verification.configured) },
+            "resolved": diagnosis.fields.verification.resolved,
+            "matches": diagnosis.fields.verification.matches,
         },
     });
-    let scope_refresh = if basic_mode {
-        "gh auth refresh --hostname github.com --scopes repo"
-    } else {
-        "gh auth refresh --hostname github.com --scopes read:org,repo"
-    };
-    let next_action = if !auth.authenticated {
-        "gh auth login".to_string()
-    } else if !missing_scopes.is_empty() {
-        scope_refresh.to_string()
-    } else if !configured || (!basic_mode && github.organization.is_none()) {
-        "orbit remote connect".to_string()
-    } else if github.repositories.is_empty() {
-        "orbit remote connect OWNER/REPO".to_string()
-    } else if field_validation_failed && area_resolved.is_none() && verification_resolved.is_none()
-    {
-        scope_refresh.to_string()
-    } else if area_resolved == Some(false)
-        || verification_resolved == Some(false)
-        || area_matches == Some(false)
-        || verification_matches == Some(false)
-        || (!basic_mode && (!area_id_configured || !verification_id_configured))
-    {
-        "orbit remote connect --fields".to_string()
-    } else if !unsupported.is_empty() {
-        "review unsupported GitHub relationships".to_string()
-    } else if !conflicts.is_empty() {
-        "resolve_github_sync_conflicts".to_string()
-    } else if !pending_pull.is_empty() || !pending_push.is_empty() {
-        "orbit remote sync".to_string()
-    } else if issues
+    let first_repo_not_linked = issues
         .iter()
-        .any(|issue| issue["code"] == "GITHUB_REPO_NOT_LINKED")
-    {
-        "orbit remote connect OWNER/REPO".to_string()
-    } else if issues
-        .iter()
-        .any(|issue| issue["repository"].is_string() && issue["accessible"] != true)
-    {
-        "check GitHub repository access".to_string()
-    } else {
-        "none".to_string()
-    };
-    let next_command = match next_action.as_str() {
-        "gh auth login"
-        | "orbit remote connect"
-        | "orbit remote connect --fields"
-        | "orbit remote sync" => Some(next_action.clone()),
-        "gh auth refresh --hostname github.com --scopes read:org,repo"
-        | "gh auth refresh --hostname github.com --scopes repo" => Some(next_action.clone()),
-        "orbit remote connect OWNER/REPO" => {
-            let repository = issues
-                .iter()
-                .find(|issue| issue["code"] == "GITHUB_REPO_NOT_LINKED")
-                .and_then(|issue| issue["repository"].as_str())
-                .unwrap_or("OWNER/REPO");
-            Some(next_action.replace("OWNER/REPO", repository))
-        }
-        "resolve_github_sync_conflicts" => conflicts
+        .find(|issue| issue.code == code::GITHUB_REPO_NOT_LINKED);
+    let next = diagnosis::next_action(&NextActionInput {
+        authenticated: diagnosis.auth.authenticated,
+        missing_scopes: &diagnosis.auth.missing_scopes,
+        configured,
+        basic_mode,
+        organization_configured: github.organization.is_some(),
+        repositories_configured: !github.repositories.is_empty(),
+        field_validation_failed: diagnosis.fields.validation_failed,
+        fields: &diagnosis.fields,
+        unsupported_relationships: unsupported.len(),
+        has_conflicts: !conflicts.is_empty(),
+        first_conflict_task: conflicts
             .first()
-            .and_then(|conflict| conflict["task"].as_str())
-            .map(|task| format!("orbit remote sync {task}")),
-        "check GitHub repository access" => issues
-            .iter()
-            .find(|issue| issue["repository"].is_string() && issue["accessible"] != true)
-            .and_then(|issue| issue["repository"].as_str())
-            .map(|repository| format!("gh repo view {repository}")),
-        _ => None,
-    };
+            .and_then(|conflict| conflict["task"].as_str()),
+        pending_changes: !pending_pull.is_empty() || !pending_push.is_empty(),
+        repo_not_linked: first_repo_not_linked.is_some(),
+        repo_not_linked_repository: first_repo_not_linked
+            .and_then(|issue| issue.repository.as_deref()),
+        repository_issue: issues.iter().find_map(|issue| issue.repository.as_deref()),
+    });
+    let next_action = next.action();
+    let next_command = next.command();
     let healthy = issues.is_empty()
         && pending_pull.is_empty()
         && pending_push.is_empty()
@@ -435,16 +257,31 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         "healthy": healthy,
         "mode": if basic_mode { "basic" } else { "full" },
         "auth": {
-            "authenticated": auth.authenticated,
-            "username": username,
-            "scopes": scopes,
-            "scopes_known": !scopes.is_empty(),
-            "required_scopes": required_scopes,
-            "missing_scopes": missing_scopes,
-            "message": auth.message,
+            "authenticated": diagnosis.auth.authenticated,
+            "username": diagnosis.auth.username,
+            "scopes": diagnosis.auth.scopes,
+            "scopes_known": diagnosis.auth.scopes_known,
+            "required_scopes": diagnosis.auth.required_scopes,
+            "missing_scopes": diagnosis.auth.missing_scopes,
+            "message": diagnosis.auth.message,
         },
         "organization": github.organization,
-        "repositories": repositories,
+        "repositories": diagnosis
+            .repositories
+            .iter()
+            .map(|repository| {
+                json!({
+                    "name": repository.name,
+                    "accessible": repository.accessible,
+                    "owner_type": repository.owner_type,
+                    "reserved_label_present": if repository.accessible == Some(true) {
+                        repository.label.as_ref().and_then(|label| label.present)
+                    } else {
+                        None
+                    },
+                })
+            })
+            .collect::<Vec<_>>(),
         "fields": fields,
         "auto_push": {
             "enabled": auto_push,
@@ -463,7 +300,7 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         "conflict_details": conflicts,
         "unsupported_relationships": unsupported.len(),
         "unsupported_details": unsupported,
-        "issues": issues,
+        "issues": issues.iter().map(StatusIssue::to_json).collect::<Vec<_>>(),
         "next_action": next_action,
         "next_command": next_command,
     });
@@ -471,189 +308,35 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
     Ok(crate::output::CommandOutput::new(data, human))
 }
 
-/// The Issue Field names reported missing by `validate_org_fields`, read from
-/// the error's structured details rather than its message text.
-fn missing_field_names(error: &OrbitError) -> Vec<&str> {
-    error
-        .details
-        .as_ref()
-        .and_then(|details| details.get("fields"))
-        .and_then(|fields| fields.as_array())
-        .map(|fields| fields.iter().filter_map(|field| field.as_str()).collect())
-        .unwrap_or_default()
-}
-
-fn github_scope_status(
-    basic_mode: bool,
-    scopes: &[String],
-) -> (&'static [&'static str], Vec<&'static str>) {
-    const BASIC_REQUIRED_SCOPES: &[&str] = &["repo"];
-    const FULL_REQUIRED_SCOPES: &[&str] = &["read:org", "repo"];
-
-    let required_scopes = if basic_mode {
-        BASIC_REQUIRED_SCOPES
-    } else {
-        FULL_REQUIRED_SCOPES
-    };
-    let missing_scopes = if scopes.is_empty() {
-        Vec::new()
-    } else {
-        required_scopes
-            .iter()
-            .filter(|required| !scopes.iter().any(|scope| scope_satisfies(scope, required)))
-            .copied()
-            .collect()
-    };
-
-    (required_scopes, missing_scopes)
-}
-
-fn scope_satisfies(granted: &str, required: &str) -> bool {
-    granted == required || (required == "read:org" && matches!(granted, "admin:org" | "write:org"))
-}
-
-/// A repository is available when it is directly linked on a repository-local
-/// Board or included by the Workspace catalog. Workspace members need no
-/// per-repository `orbit remote connect`.
+/// `orbit doctor`'s GitHub health projection: the shared
+/// [`diagnosis::Diagnosis`] rendered as doctor issues over the connected
+/// GitHub projects universe — configured Remote Projects plus member
+/// Repository origins, the same set `remote status` reports. A Board with
+/// no GitHub configuration reports nothing; a client or diagnosis failure
+/// degrades to a single issue entry rather than aborting doctor.
 pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     let github = github_config(board);
     if !github.is_enabled() {
         return Vec::new();
     }
-    let mut issues = Vec::new();
     let client = match client_from_env() {
         Ok(client) => client,
         Err(error) => {
-            issues.push(crate::graph::Issue::new(error.code, None, error.message));
-            return issues;
+            return vec![crate::graph::Issue::new(error.code, None, error.message)];
         }
     };
-    let auth = client.auth_status();
-    if !auth.authenticated {
-        issues.push(crate::graph::Issue::new(
-            "GITHUB_AUTH_REQUIRED",
-            None,
-            format!(
-                "GitHub authentication is unavailable; run `gh auth login` ({})",
-                auth.message
-            ),
-        ));
-        return issues;
+    match diagnosis::diagnose(
+        board,
+        client.as_ref(),
+        &github,
+        &DiagnosisOptions {
+            repository_scope: None,
+            strict_connected_projects: false,
+        },
+    ) {
+        Ok(diagnosis) => diagnosis.doctor_issues(),
+        Err(error) => vec![crate::graph::Issue::new(error.code, None, error.message)],
     }
-    let scopes = if auth.scopes.is_empty() {
-        crate::github::client::parse_auth_scopes(&auth.message)
-    } else {
-        auth.scopes
-    };
-    let (_, missing_scopes) = github_scope_status(github.mode.is_basic(), &scopes);
-    if !missing_scopes.is_empty() {
-        issues.push(crate::graph::Issue::new(
-            "GITHUB_SCOPES_MISSING",
-            None,
-            format!(
-                "GitHub token is missing scopes: {}",
-                missing_scopes.join(", ")
-            ),
-        ));
-    }
-    if !github.mode.is_basic() && github.organization.is_none() {
-        issues.push(crate::graph::Issue::new(
-            code::GITHUB_SETUP_INCOMPLETE,
-            None,
-            "github.organization is not set; run `orbit remote connect`",
-        ));
-    }
-    if github.repositories.is_empty()
-        && crate::repository::github_member_projects(board)
-            .unwrap_or_default()
-            .is_empty()
-    {
-        issues.push(crate::graph::Issue::new(
-            code::GITHUB_REPO_NOT_LINKED,
-            None,
-            "no GitHub repositories are linked; run `orbit remote connect OWNER/REPO`",
-        ));
-    }
-    for repository in &github.repositories {
-        if let Err(error) = client.repository_info(repository) {
-            issues.push(crate::graph::Issue::new(
-                error.code,
-                None,
-                format!(
-                    "GitHub repository `{repository}` is unavailable: {}",
-                    error.message
-                ),
-            ));
-        }
-    }
-    if auto_push_enabled(board) {
-        let mut repositories = github.repositories.clone();
-        for repository in crate::repository::github_member_projects(board).unwrap_or_default() {
-            if !repositories
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
-            {
-                repositories.push(repository);
-            }
-        }
-        if repositories.is_empty() {
-            issues.push(crate::graph::Issue::new(
-                code::GITHUB_REPO_NOT_LINKED,
-                None,
-                "auto-push is enabled but no GitHub repository is linked or included; new Tasks stay local",
-            ));
-        }
-        for repository in repositories {
-            match client.label_exists(&repository, crate::github::status::IN_PROGRESS_LABEL) {
-                Ok(true) => {}
-                Ok(false) => issues.push(crate::graph::Issue::new(
-                    code::GITHUB_SETUP_INCOMPLETE,
-                    None,
-                    format!(
-                        "the `{}` label is missing on `{repository}`; run `orbit remote connect` or create it",
-                        crate::github::status::IN_PROGRESS_LABEL
-                    ),
-                )),
-                Err(error) => issues.push(crate::graph::Issue::new(
-                    error.code,
-                    None,
-                    format!(
-                        "could not check the `{}` label on `{repository}`: {}",
-                        crate::github::status::IN_PROGRESS_LABEL,
-                        error.message
-                    ),
-                )),
-            }
-        }
-    }
-    if github.mode.is_basic() {
-        return issues;
-    }
-    if let Some(org) = github.organization.as_deref() {
-        match client.validate_org_fields(org, &github.issue_fields) {
-            Ok(fields) => {
-                if github.issue_fields.area_id.as_deref() != Some(fields.area_id.as_str())
-                    || github.issue_fields.verification_id.as_deref()
-                        != Some(fields.verification_id.as_str())
-                {
-                    issues.push(crate::graph::Issue::new(
-                        code::GITHUB_SETUP_INCOMPLETE,
-                        None,
-                        "GitHub Issue Field ids are missing or stale; run `orbit remote connect --fields`",
-                    ));
-                }
-            }
-            Err(error) => issues.push(crate::graph::Issue::new(
-                error.code,
-                None,
-                format!(
-                    "GitHub Issue Fields are not ready: {}; run `orbit remote connect --fields`",
-                    error.message
-                ),
-            )),
-        }
-    }
-    issues
 }
 
 fn count_pull_changes(plan: &SyncPlan) -> usize {
@@ -1029,7 +712,7 @@ fn connect_origin(
         }
         Err(error) => {
             let message = error.message.clone();
-            let missing = missing_field_names(&error);
+            let missing = diagnosis::missing_field_names(&error);
             let area_missing = missing.contains(&effective.issue_fields.area_name.as_str());
             let verification_missing =
                 missing.contains(&effective.issue_fields.verification_name.as_str());
@@ -1399,7 +1082,11 @@ fn link_remote_project(board: &Board, project: &RemoteProject) -> Result<()> {
                 tracker: tracker.clone(),
                 project: project_id.clone(),
             };
-            if !config.remote.projects.contains(&entry) {
+            // Case-insensitive like every other connected-project check:
+            // `acme/Widget` must not duplicate a configured `acme/widget`.
+            if !config.remote.projects.iter().any(|candidate| {
+                candidate.tracker == tracker && candidate.project.eq_ignore_ascii_case(&project_id)
+            }) {
                 config.remote.projects.push(entry);
             }
             if let Some(github) = config.remote.github.as_mut()
@@ -1551,7 +1238,7 @@ fn cmd_link(board: &Board, args: RemoteLinkArgs) -> Result<crate::output::Comman
 fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::CommandOutput> {
     let graph = Graph::load(board, LoadMode::Strict)?.0;
     let resolver = github_resolver(board)?;
-    let candidates = create_project_candidates(board, &resolver)?;
+    let candidates = crate::remote::connected_projects(board)?;
     let create_project = select_create_project(&candidates, args.project.as_deref())?;
     let project_label = format!("{}:{}", create_project.tracker, create_project.project);
     crate::remote::execution::require_project_available(board, &resolver, &create_project)?;
@@ -1840,130 +1527,6 @@ fn format_create_preview(task: &Task, repository: &str, issue_state: &str) -> St
     )
 }
 
-/// Parse a Remote Project reference: `TRACKER:PROJECT` or a bare `PROJECT`
-/// that resolves to the sole installed Remote Tracker.
-fn parse_remote_project(input: &str) -> Result<(String, String)> {
-    let input = input.trim();
-    if input.is_empty() {
-        return Err(OrbitError::invalid_argument(
-            "Remote Project must not be empty",
-        ));
-    }
-    if let Some((tracker, project)) = input.split_once(':') {
-        let tracker = tracker.trim();
-        let project = project.trim();
-        if tracker.is_empty() || project.is_empty() {
-            return Err(OrbitError::invalid_argument(format!(
-                "invalid Remote Project `{input}`; expected `TRACKER:PROJECT`"
-            )));
-        }
-        let project = if tracker == "github" {
-            GitHubConfig::normalize_repo(project)?
-        } else {
-            project.to_string()
-        };
-        return Ok((tracker.to_string(), project));
-    }
-    let project = if input.contains('/') {
-        GitHubConfig::normalize_repo(input)?
-    } else {
-        input.to_string()
-    };
-    Ok(("github".to_string(), project))
-}
-
-/// Parse a Remote Issue reference into its Remote Project and issue id.
-/// Accepts `TRACKER:PROJECT#ID`, `PROJECT#ID`, or a Remote Tracker Issue
-/// URL (GitHub: `https://github.com/OWNER/REPO/issues/NUMBER`).
-fn parse_issue_ref(input: &str) -> Result<(RemoteProject, String)> {
-    let input = input.trim();
-    if input.contains("://") {
-        let (project, id) = parse_issue_url(input)?;
-        return Ok((
-            RemoteProject {
-                tracker: "github".to_string(),
-                project,
-            },
-            id,
-        ));
-    }
-    let invalid = || {
-        OrbitError::invalid_argument(format!(
-            "invalid Remote Issue `{input}`; expected `TRACKER:PROJECT#ID`, `PROJECT#ID`, or a Remote Tracker Issue URL"
-        ))
-    };
-    // A `tracker:` prefix precedes the project; the issue id follows `#`.
-    let (tracker, rest) = match input.split_once(':') {
-        Some((tracker, rest)) if !tracker.contains(['/', '#']) => (Some(tracker.trim()), rest),
-        _ => (None, input),
-    };
-    let (project_part, id) = rest.rsplit_once('#').ok_or_else(invalid)?;
-    let id = id.trim();
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
-        return Err(invalid());
-    }
-    let (default_tracker, project) = parse_remote_project(project_part.trim())?;
-    let tracker = tracker.unwrap_or(default_tracker.as_str()).to_string();
-    Ok((RemoteProject { tracker, project }, id.to_string()))
-}
-
-fn parse_issue_url(url: &str) -> Result<(String, String)> {
-    let invalid = || {
-        OrbitError::invalid_argument(format!(
-            "invalid GitHub Issue URL `{url}`; expected `https://github.com/OWNER/REPO/issues/NUMBER`"
-        ))
-    };
-    let (scheme, address) = url.split_once("://").ok_or_else(invalid)?;
-    if !scheme.eq_ignore_ascii_case("https") {
-        return Err(invalid());
-    }
-    let (host, path) = address.split_once('/').ok_or_else(invalid)?;
-    if !host.eq_ignore_ascii_case("github.com")
-        || path
-            .chars()
-            .any(|character| character.is_whitespace() || matches!(character, '?' | '#' | '\\'))
-    {
-        return Err(invalid());
-    }
-    let parts: Vec<_> = path.split('/').collect();
-    let parts = if parts.last() == Some(&"") {
-        &parts[..parts.len() - 1]
-    } else {
-        &parts[..]
-    };
-    if parts.len() != 4 || parts[2] != "issues" {
-        return Err(invalid());
-    }
-    let repo = GitHubConfig::normalize_repo(&format!("{}/{}", parts[0], parts[1]))
-        .map_err(|_| invalid())?;
-    let number = parts[3].parse::<u64>().map_err(|_| invalid())?;
-    if number == 0 {
-        return Err(invalid());
-    }
-    Ok((repo, number.to_string()))
-}
-
-/// Remote Projects `orbit remote create` may target: every configured
-/// project plus each installed tracker's implicit projects.
-fn create_project_candidates(
-    board: &Board,
-    resolver: &dyn RemoteResolver,
-) -> Result<Vec<RemoteProject>> {
-    let mut candidates = configured_projects(board);
-    for tracker in resolver.trackers() {
-        let adapter = resolver.adapter(&tracker)?;
-        for project in adapter.implicit_projects(board)? {
-            if !candidates.iter().any(|candidate| {
-                candidate.tracker == project.tracker
-                    && candidate.project.eq_ignore_ascii_case(&project.project)
-            }) {
-                candidates.push(project);
-            }
-        }
-    }
-    Ok(candidates)
-}
-
 fn select_create_project(
     candidates: &[RemoteProject],
     requested: Option<&str>,
@@ -2087,15 +1650,7 @@ fn cmd_auto_push(board: &Board, args: RemoteAutoPushArgs) -> Result<crate::outpu
         warnings.extend(crate::mutation::commit_warning(outcome));
     }
     if changed && enabled {
-        let mut repositories = crate::repository::github_member_projects(board)?;
-        for repository in &github_config(board).repositories {
-            if !repositories
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(repository))
-            {
-                repositories.push(repository.clone());
-            }
-        }
+        let repositories = crate::remote::connected_github_projects(board)?;
         match repositories.len() {
             1 => {}
             0 => warnings.push(
@@ -3279,23 +2834,4 @@ fn apply_issue_to_task(task: &mut Task, issue: &RemoteIssue, include_fields: boo
     task.front.status = issue.status;
     execution::set_baseline(task, issue);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::github_scope_status;
-
-    #[test]
-    fn organization_admin_scope_satisfies_read_org() {
-        let scopes = vec!["admin:org".to_string(), "repo".to_string()];
-        let (_, missing) = github_scope_status(false, &scopes);
-        assert!(missing.is_empty(), "missing: {missing:?}");
-    }
-
-    #[test]
-    fn organization_write_scope_satisfies_read_org() {
-        let scopes = vec!["write:org".to_string(), "repo".to_string()];
-        let (_, missing) = github_scope_status(false, &scopes);
-        assert!(missing.is_empty(), "missing: {missing:?}");
-    }
 }

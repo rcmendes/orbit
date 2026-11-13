@@ -3185,3 +3185,119 @@ fn disconnecting_the_last_project_clears_migrated_github_settings() {
     let config = std::fs::read_to_string(&path).unwrap();
     assert!(!config.contains("remote.github"), "{config}");
 }
+
+#[test]
+fn remote_status_repo_scope_skips_other_repositories() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_status_fixture(&fixture_dir);
+    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    data["repositories"]["acme/other"] =
+        serde_json::json!({ "owner_type": "Organization", "accessible": true });
+    data["issues"]["acme/other#7"] = serde_json::json!({
+        "repo": "acme/other",
+        "number": 7,
+        "title": "Other issue",
+        "body": "",
+        "state": "open",
+        "labels": [],
+        "assignees": [],
+        "updated_at": "2026-10-23T13:00:00Z"
+    });
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config_for_repositories(&repo, &["acme/widget", "acme/other"]);
+    let first = repo.add("First linked task", &[]);
+    repo.ok_json_with_env(
+        &["remote", "link", first.as_str(), "acme/widget#42", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    let second = repo.add("Second linked task", &[]);
+    repo.ok_json_with_env(
+        &["remote", "link", second.as_str(), "acme/other#7", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+
+    let full = repo.ok_json_with_env(
+        &["remote", "status", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(full["data"]["linked_tasks"], 2);
+    assert_eq!(
+        full["data"]["repositories"].as_array().unwrap().len(),
+        2
+    );
+
+    let scoped = repo.ok_json_with_env(
+        &["remote", "status", "--repo", "acme/other", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(scoped["data"]["repository_scope"], "acme/other");
+    assert_eq!(scoped["data"]["linked_tasks"], 1);
+    let repositories = scoped["data"]["repositories"].as_array().unwrap();
+    assert_eq!(repositories.len(), 1);
+    assert_eq!(repositories[0]["name"], "acme/other");
+    // The scoped Task is the only one checked for pending changes.
+    for task in scoped["data"]["pending"]["pull_tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(scoped["data"]["pending"]["push_tasks"].as_array().unwrap())
+    {
+        assert_eq!(task["task"], second);
+    }
+}
+
+#[test]
+fn whole_board_sync_reports_tasks_it_could_not_check() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    add_fixture_issue(&fixture, "acme/widget#43", 43, "Second issue");
+    let repo = TestRepo::new();
+    let first = adopt_fixture_task(&repo, &fixture, "First task");
+    let second = repo.add("Second task", &[]);
+    repo.ok_json_with_env(
+        &["remote", "link", second.as_str(), "acme/widget#43", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    // The remote Issue disappears before the sync; the run must report it
+    // instead of failing the whole command.
+    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    data["issues"]
+        .as_object_mut()
+        .unwrap()
+        .remove("acme/widget#43");
+    data["catalog_issues"]["acme/widget"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|issue| issue["number"] != 43);
+    fs::write(&fixture, serde_json::to_vec_pretty(&data).unwrap()).unwrap();
+
+    let report = repo.ok_json_with_env(
+        &["remote", "sync", "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(report["data"]["count"], 2);
+    assert_eq!(report["data"]["failure_count"], 1);
+    assert_eq!(report["data"]["failures"][0]["task"], second);
+    assert_eq!(report["data"]["failures"][0]["retry_safe"], true);
+    let tasks = report["data"]["tasks"].as_array().unwrap();
+    let second_plan = tasks
+        .iter()
+        .find(|entry| entry["task"] == second)
+        .expect("second task plan");
+    assert_eq!(second_plan["success"], false);
+    let first_plan = tasks
+        .iter()
+        .find(|entry| entry["task"] == first)
+        .expect("first task plan");
+    assert_ne!(first_plan["success"], false);
+
+    // A single-Task sync still fails the command outright.
+    let (status, error) = repo.json_with_env(
+        &["remote", "sync", second.as_str(), "--json"],
+        &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
+    );
+    assert_eq!(status, 1);
+    assert_eq!(error["error"]["code"], "NOT_FOUND");
+}

@@ -1175,7 +1175,9 @@ Examples:
 pub const BOARD_HOST_LONG: &str = "\
 Show, set, or clear the Board host. The host may be a member Repository name,
 a local repository path, or a git URL; the Board's `orbit` branch is pushed
-there. A local repository path resolves to its `origin` remote when it has one.
+there. A member Repository name — or its `owner/repo` origin identity —
+resolves to that Repository's `origin`, or its local path when it has none.
+A local repository path resolves to its `origin` remote when it has one.
 When the host already serves an `orbit` branch it must hold a Board with
 the same Slug — one Board per host. `--none` clears the local configuration and
 removes the local `host` remote; it never deletes the remote `orbit` branch.";

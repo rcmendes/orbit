@@ -362,6 +362,29 @@ pub fn origin_of(path: &Path) -> Option<String> {
         .filter(|origin| !origin.is_empty())
 }
 
+/// The `owner/repo` Remote Projects implied by member Repository `origin`s
+/// that point at github.com, deduplicated case-insensitively. Members
+/// without an `origin`, or whose `origin` is not a github.com remote,
+/// contribute nothing.
+pub fn github_member_projects(board: &Board) -> Result<Vec<String>> {
+    let mut projects: Vec<String> = Vec::new();
+    for member in members(board)? {
+        let Some(origin) = origin_of(&member.path) else {
+            continue;
+        };
+        let Some(project) = crate::github::GitHubConfig::repo_of_origin(&origin) else {
+            continue;
+        };
+        if !projects
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(&project))
+        {
+            projects.push(project);
+        }
+    }
+    Ok(projects)
+}
+
 /// Error used when `orbit repo remove` names a discovered child, which cannot
 /// be removed because membership comes from the folder layout.
 pub fn child_not_removable(name: &str) -> OrbitError {

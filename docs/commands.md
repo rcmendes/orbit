@@ -898,7 +898,10 @@ orbit sync
 A Board has no host by default — its history stays on this machine — or
 exactly one host whose remote stores the Board's `orbit` branch (ADR 0019).
 The host may be a member Repository name, a local repository path, or a git
-URL. A local repository path resolves to that repository's `origin` remote when
+URL. A member Repository name — or the `owner/repo` identity of its `origin`,
+matched case-insensitively — resolves through the Board's member Repositories
+to that Repository's `origin`, or to its local path when it has none. A local
+repository path resolves to that repository's `origin` remote when
 it has one, so `orbit board host ../hub` stores the Board on the hub's tracker
 (for example GitHub) rather than in a local `orbit` branch of the checkout; a
 path without `origin`, such as a bare repository, is used as is. One Board per host: when the host already serves an `orbit` branch it

@@ -2,14 +2,13 @@
 //!
 //! The Workspace/child-repository Board distinction is retired: a Board now
 //! has member Repositories (see `crate::repository`). What remains here is
-//! the `workspace.*` configuration block and the GitHub repository catalog
-//! that legacy GitHub commands still read. The
-//! catalog is refresh-free: `orbit repo refresh` owns member discovery.
+//! the `workspace.*` configuration block and the Board-anchor lookup the
+//! Remote Issue catalog still uses. Member Repository discovery and origins
+//! live in `crate::repository`; `orbit repo refresh` owns the inventory.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::board::Board;
@@ -89,64 +88,6 @@ impl WorkspaceConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct RepositoryCatalog {
-    #[serde(default)]
-    pub(crate) organization: Option<String>,
-    #[serde(default)]
-    pub(crate) last_refreshed_at: Option<DateTime<Utc>>,
-    #[serde(default)]
-    pub(crate) repositories: BTreeMap<String, RepositoryEntry>,
-    #[serde(default)]
-    pub(crate) non_git_directories: Vec<String>,
-    #[serde(default)]
-    pub(crate) missing_origins: Vec<String>,
-    #[serde(default)]
-    pub(crate) unsupported_origins: Vec<UnsupportedOrigin>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RepositoryEntry {
-    pub(crate) repository: String,
-    pub(crate) path: String,
-    pub(crate) discovered: bool,
-    pub(crate) status: RepositoryStatus,
-    pub(crate) included: bool,
-    #[serde(default)]
-    pub(crate) cached: bool,
-    pub(crate) origin: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) last_checked_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum RepositoryStatus {
-    Included,
-    Excluded,
-    Inaccessible,
-    Stale,
-    Removed,
-    UnsupportedOwner,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct UnsupportedOrigin {
-    pub(crate) path: String,
-    pub(crate) origin: String,
-    pub(crate) reason: String,
-}
-
-pub(crate) fn workspace_root(board: &Board) -> Result<PathBuf> {
-    workspace_root_if_board(board).ok_or_else(|| {
-        OrbitError::invalid_argument(
-            "this command requires a Board anchored outside Git at `<anchor>/.orbit/board`",
-        )
-    })
-}
-
 /// The anchor folder of a Board that lives outside every Git working tree —
 /// the successor of the old Workspace root.
 pub(crate) fn workspace_root_if_board(board: &Board) -> Option<PathBuf> {
@@ -158,44 +99,4 @@ pub(crate) fn workspace_root_if_board(board: &Board) -> Option<PathBuf> {
     let orbit = board.resolved_orbit_dir()?;
     let anchor = orbit.parent()?;
     Some(dunce::canonicalize(anchor).unwrap_or_else(|_| anchor.to_path_buf()))
-}
-
-pub(crate) fn catalog_path(workspace: &Path) -> PathBuf {
-    workspace
-        .join(".orbit")
-        .join("cache")
-        .join("repositories.json")
-}
-
-/// Return repositories available for issue creation from the catalog.
-/// `None` means that this Board does not anchor member repositories.
-pub(crate) fn export_repositories(board: &Board) -> Result<Option<Vec<String>>> {
-    if !board.is_workspace_board() {
-        return Ok(None);
-    }
-    let workspace = workspace_root(board)?;
-    let catalog = load_catalog(&catalog_path(&workspace))?;
-    Ok(Some(
-        catalog
-            .repositories
-            .values()
-            .filter(|entry| entry.included)
-            .map(|entry| entry.repository.clone())
-            .collect(),
-    ))
-}
-
-pub(crate) fn catalog_for_diagnostics(workspace: &Path) -> Result<RepositoryCatalog> {
-    load_catalog(&catalog_path(workspace))
-}
-
-fn load_catalog(path: &Path) -> Result<RepositoryCatalog> {
-    match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|error| OrbitError::config(format!("invalid {}: {error}", path.display()))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(RepositoryCatalog::default())
-        }
-        Err(error) => Err(OrbitError::io(format!("read {}", path.display()), error)),
-    }
 }

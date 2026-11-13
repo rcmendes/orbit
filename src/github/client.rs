@@ -1309,6 +1309,24 @@ fn parse_rest_issue(repo: &str, bytes: &[u8]) -> Result<IssueSnapshot> {
 /// round-trips into N/50 queries.
 const GRAPHQL_BATCH_ISSUES: usize = 50;
 
+/// Whether a batch failure is GitHub throttling rather than a per-issue or
+/// query problem. Signatures cover `gh api` output (`API rate limit exceeded`,
+/// `HTTP 403`), GraphQL `errors[]` payloads (`type: RATE_LIMITED`,
+/// `secondary rate limit`), and HTTP status wording; a batch failure that is
+/// not throttling still falls back so each Task keeps its own result.
+fn is_throttled(lowercase_message: &str) -> bool {
+    [
+        "rate limit",
+        "rate_limit",
+        "secondary rate",
+        "too many requests",
+        "429",
+        "403",
+    ]
+    .iter()
+    .any(|signature| lowercase_message.contains(signature))
+}
+
 fn resolve_issue_batch(
     batch: Result<Vec<Result<IssueSnapshot>>>,
     numbers: &[u64],
@@ -1318,10 +1336,7 @@ fn resolve_issue_batch(
         Ok(snapshots) => snapshots,
         Err(error) => {
             let message = error.message.to_ascii_lowercase();
-            if ["rate limit", "403", "secondary rate"]
-                .iter()
-                .any(|signature| message.contains(signature))
-            {
+            if is_throttled(&message) {
                 // Never amplify throttling with one REST process per issue.
                 return numbers.iter().map(|_| Err(error.clone())).collect();
             }
@@ -2346,6 +2361,10 @@ mod tests {
             "HTTP 403 Forbidden",
             "secondary rate restriction",
             "RATE LIMIT reached",
+            "GraphQL: You have exceeded a secondary rate limit",
+            "graphql: rate_limit type returned for issue 42",
+            "HTTP 429 Too Many Requests",
+            "too many requests; retry later",
         ] {
             let results = resolve_issue_batch(
                 Err(OrbitError::new(code::GITHUB_NOT_CONFIGURED, message)),

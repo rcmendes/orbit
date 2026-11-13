@@ -125,8 +125,9 @@ where
 ///
 /// The command edge may share one `GitHubClient` across every adapter in
 /// the operation via [`BoardResolver::with_client`]; [`BoardResolver::new`]
-/// resolves adapters without a client, so config-only port facts never
-/// probe `gh` or the fixture — the client is built on first use.
+/// adapters resolve their client from the environment when the adapter is
+/// constructed (still at a command edge), so config-only port facts never
+/// call `gh` or read the fixture.
 pub struct BoardResolver<'a> {
     pub board: &'a Board,
     client: Option<Arc<dyn GitHubClient>>,
@@ -140,10 +141,10 @@ impl RemoteResolver for BoardResolver<'_> {
     fn adapter(&self, tracker: &str) -> Result<Box<dyn RemoteAdapter>> {
         match tracker {
             "github" => {
-                // Without an injected client the adapter resolves lazily:
-                // config-only port facts (`mapped_fields`, `project_available`,
-                // …) never build a `GitHubClient`, and
-                // the first call that reaches GitHub does.
+                // Without an injected client the adapter resolves the client
+                // from the environment at construction; config-only port
+                // facts (`mapped_fields`, `project_available`, …) never call
+                // it — the first call that reaches GitHub does.
                 let config = crate::github::adapter::GitHubAdapter::effective_config(self.board);
                 Ok(Box::new(match &self.client {
                     Some(client) => {
@@ -161,7 +162,7 @@ impl RemoteResolver for BoardResolver<'_> {
 
 impl<'a> BoardResolver<'a> {
     /// The resolver the engine uses when the caller does not inject one.
-    /// Adapters build their client lazily on first use.
+    /// Adapters resolve their client from the environment at construction.
     pub fn new(board: &'a Board) -> Self {
         Self {
             board,

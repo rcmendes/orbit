@@ -181,19 +181,23 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
         }
     }
 
+    struct PreparedReady {
+        task: Task,
+        link: crate::remote::link::RemoteLinkView,
+        issue: RemoteIssue,
+        plan: SyncPlan,
+        relationship: RelationshipReport,
+    }
+
+    struct PreparedFailure {
+        task: Task,
+        link: crate::remote::link::RemoteLinkView,
+        failure: SyncFailure,
+    }
+
     enum Prepared {
-        Ready {
-            task: Task,
-            link: crate::remote::link::RemoteLinkView,
-            issue: RemoteIssue,
-            plan: SyncPlan,
-            relationship: RelationshipReport,
-        },
-        FetchFailed {
-            task: Task,
-            link: crate::remote::link::RemoteLinkView,
-            failure: SyncFailure,
-        },
+        Ready(Box<PreparedReady>),
+        FetchFailed(Box<PreparedFailure>),
     }
 
     let mut prepared: Vec<Prepared> = Vec::new();
@@ -209,7 +213,7 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
                 if request.task.is_some() {
                     return Err(error);
                 }
-                prepared.push(Prepared::FetchFailed {
+                prepared.push(Prepared::FetchFailed(Box::new(PreparedFailure {
                     task: task.clone(),
                     link: link.clone(),
                     failure: SyncFailure {
@@ -221,7 +225,7 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
                         message: error.message,
                         retry_safe: true,
                     },
-                });
+                })));
                 continue;
             }
         };
@@ -270,13 +274,13 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
         if direction == SyncDirection::Pull {
             relationship.changes.clear();
         }
-        prepared.push(Prepared::Ready {
+        prepared.push(Prepared::Ready(Box::new(PreparedReady {
             task,
             link,
             issue,
             plan,
             relationship,
-        });
+        })));
     }
 
     let unused_resolutions: Vec<_> = resolutions
@@ -294,9 +298,9 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
     let unresolved: Vec<_> = prepared
         .iter()
         .filter_map(|entry| match entry {
-            Prepared::Ready {
-                task, link, plan, ..
-            } if plan.has_conflicts() => Some((task, link, plan)),
+            Prepared::Ready(ready) if ready.plan.has_conflicts() => {
+                Some((&ready.task, &ready.link, &ready.plan))
+            }
             _ => None,
         })
         .map(|(task, link, plan)| {
@@ -331,11 +335,12 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
     let mut warnings = Vec::new();
     for entry in prepared {
         let (task, link, issue, plan, relationship) = match entry {
-            Prepared::FetchFailed {
-                task,
-                link,
-                failure,
-            } => {
+            Prepared::FetchFailed(entry) => {
+                let PreparedFailure {
+                    task,
+                    link,
+                    failure,
+                } = *entry;
                 failures.push(failure.clone());
                 plans.push(SyncTaskResult {
                     task,
@@ -366,13 +371,16 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
                 });
                 continue;
             }
-            Prepared::Ready {
-                task,
-                link,
-                issue,
-                plan,
-                relationship,
-            } => (task, link, issue, plan, relationship),
+            Prepared::Ready(entry) => {
+                let PreparedReady {
+                    task,
+                    link,
+                    issue,
+                    plan,
+                    relationship,
+                } = *entry;
+                (task, link, issue, plan, relationship)
+            }
         };
         let mut item = SyncTaskResult {
             task: task.clone(),

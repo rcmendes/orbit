@@ -1081,6 +1081,7 @@ explicit `orbit remote sync` is unaffected. See
 orbit remote connect
 orbit remote status
 orbit remote status --json
+orbit remote status --repo acme/widget
 orbit remote connect acme/widget
 orbit remote connect --fields
 orbit remote connect --fields --create-fields       # explicitly create missing org Issue Fields

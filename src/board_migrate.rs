@@ -50,7 +50,8 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
             "no Orbit Board found; run `orbit init` to create one\n".to_string(),
         ));
     };
-    let mut board = Board::at_root(root, discovery.warnings.clone())?;
+    let mut board =
+        Board::at_root_verdict(root, discovery.warnings.clone(), discovery.needs_migration)?;
     board.orbit_dir = discovery.orbit_dir.clone();
 
     let needs_layout = discovery.needs_migration;

@@ -3192,9 +3192,7 @@ fn remote_connect_deduplicates_remote_projects_case_insensitively() {
     repo.init();
     let path = repo.board_path().join("config.toml");
     let mut config = std::fs::read_to_string(&path).unwrap();
-    config.push_str(
-        "\n[[remote.projects]]\ntracker = \"github\"\nproject = \"acme/widget\"\n",
-    );
+    config.push_str("\n[[remote.projects]]\ntracker = \"github\"\nproject = \"acme/widget\"\n");
     std::fs::write(&path, config).unwrap();
 
     // `acme/Widget` must not duplicate the configured `acme/widget`.

@@ -5,7 +5,7 @@
 //! `gh` client. The sync engine only sees [`RemoteIssue`] and
 //! [`MappedFields`].
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::board::Board;
 use crate::error::{OrbitError, Result};
@@ -27,12 +27,15 @@ use crate::task::Status;
 
 /// The GitHub adapter: a [`GitHubClient`] plus the Board's GitHub settings.
 ///
-/// The client is built lazily: [`GitHubAdapter::from_config`] resolves the
-/// config-only port facts ([`RemoteAdapter::mapped_fields`],
-/// [`RemoteAdapter::project_available`], …) without probing `gh` or the
-/// fixture; the client is only constructed on the first call that needs it.
+/// The client is resolved when the adapter is built — [`GitHubAdapter::with_client`]
+/// takes the edge's shared client and [`GitHubAdapter::from_config`] resolves
+/// `client_from_env` on the spot, so `client_from_env` only ever runs where an
+/// adapter or resolver is constructed (a command edge). Config-only port facts
+/// ([`RemoteAdapter::mapped_fields`], [`RemoteAdapter::project_available`], …)
+/// never call the client; the stored `Result` only surfaces on the first call
+/// that reaches GitHub.
 pub struct GitHubAdapter {
-    client: OnceLock<Result<Arc<dyn GitHubClient>>>,
+    client: Result<Arc<dyn GitHubClient>>,
     config: GitHubConfig,
 }
 
@@ -41,30 +44,24 @@ impl GitHubAdapter {
     /// (or a fixture in tests) and shares it across every adapter and
     /// direct call in the operation.
     pub fn with_client(client: Arc<dyn GitHubClient>, config: GitHubConfig) -> Self {
-        let slot = OnceLock::new();
-        let _ = slot.set(Ok(client));
         Self {
-            client: slot,
+            client: Ok(client),
             config,
         }
     }
 
-    /// Adapter over Board config alone. Config-only port facts resolve
-    /// immediately; the first call that reaches GitHub builds the client
-    /// from the environment, exactly as [`Self::with_client`] callers do
-    /// up front.
+    /// Adapter over Board config alone. The client is resolved from the
+    /// environment immediately — the same construction an edge performs —
+    /// but no `gh` call happens until a GitHub-reaching method runs.
     pub fn from_config(config: GitHubConfig) -> Self {
         Self {
-            client: OnceLock::new(),
+            client: crate::github::client::client_from_env(),
             config,
         }
     }
 
     fn client(&self) -> Result<&Arc<dyn GitHubClient>> {
-        self.client
-            .get_or_init(crate::github::client::client_from_env)
-            .as_ref()
-            .map_err(Clone::clone)
+        self.client.as_ref().map_err(Clone::clone)
     }
 
     /// The effective `[github]` settings: `[remote.github]` (written by
@@ -247,16 +244,14 @@ impl RemoteAdapter for GitHubAdapter {
 
     fn fetch_issues(&self, refs: &[RemoteIssueRef]) -> Vec<Result<RemoteIssue>> {
         let mut out: Vec<Option<Result<RemoteIssue>>> = refs.iter().map(|_| None).collect();
-        let mut batch = Vec::new();
-        let mut batch_positions = Vec::new();
+        let mut batch: Vec<(usize, crate::github::model::IssueRef)> = Vec::new();
         for (index, issue) in refs.iter().enumerate() {
             match (
                 GitHubConfig::normalize_repo(&issue.project),
                 parse_number(&issue.id),
             ) {
                 (Ok(repo), Ok(number)) => {
-                    batch.push(crate::github::model::IssueRef { repo, number });
-                    batch_positions.push(index);
+                    batch.push((index, crate::github::model::IssueRef { repo, number }));
                 }
                 (Err(error), _) | (_, Err(error)) => out[index] = Some(Err(error)),
             }
@@ -267,7 +262,9 @@ impl RemoteAdapter for GitHubAdapter {
                 return refs.iter().map(|_| Err(error.clone())).collect();
             }
         };
-        let snapshots = client.get_issues(&batch, self.issue_fields());
+        let (batch_positions, batch_refs): (Vec<usize>, Vec<crate::github::model::IssueRef>) =
+            batch.into_iter().unzip();
+        let snapshots = client.get_issues(&batch_refs, self.issue_fields());
         for (position, snapshot) in batch_positions.into_iter().zip(snapshots) {
             out[position] =
                 Some(snapshot.map(|snapshot| snapshot_to_issue(&snapshot, &self.config)));

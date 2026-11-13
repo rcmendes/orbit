@@ -328,9 +328,9 @@ pub fn clear_host(root: &Path) -> Result<HostOutcome> {
 
 /// Opens a Board for a caller that is about to do host network I/O.
 ///
-/// The write open performs discovery and repair under the normal command path,
-/// then immediately releases the Board lock; `board_sync::sync` takes the lock
-/// itself around local commits and merges.
+/// The write open performs read-only discovery under the normal command
+/// path, then immediately releases the Board lock; `board_sync::sync` takes
+/// the lock itself around local commits and merges.
 pub fn unlocked_for_network(dir: Option<&Path>) -> Result<Board> {
     Ok(BoardAccess::open(dir, AccessMode::Write)?.into_board())
 }

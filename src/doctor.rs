@@ -37,7 +37,8 @@ fn fix(dir: Option<&Path>) -> Result<Vec<String>> {
     let mut fixed = Vec::new();
     let discovery = Board::discovery(dir);
     if let Some(root) = &discovery.root
-        && let Ok(board) = Board::at_root(root.clone(), Vec::new())
+        && let Ok(board) =
+            Board::at_root_verdict(root.clone(), Vec::new(), discovery.needs_migration)
     {
         let _lock = board.lock_exclusive()?;
         let mut temps = atomic::clean_stale_temps(&board.tasks_dir(), Duration::ZERO)?;
@@ -144,7 +145,11 @@ fn diagnose(
     let mut warnings = Vec::new();
 
     let board = match &discovery.root {
-        Some(root) => match Board::at_root(root.clone(), discovery.warnings.clone()) {
+        Some(root) => match Board::at_root_verdict(
+            root.clone(),
+            discovery.warnings.clone(),
+            discovery.needs_migration,
+        ) {
             Ok(board) => Some(board),
             Err(error) => {
                 issues.push(Issue::new(error.code, None, error.message));

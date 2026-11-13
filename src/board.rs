@@ -572,7 +572,14 @@ impl Board {
     }
 
     /// Loads a Board carrying the verdict its discovery pass computed.
-    fn at_root_verdict(root: PathBuf, warnings: Vec<String>, verdict: bool) -> Result<Self> {
+    /// Callers holding a `Discovery` use this so every consumer reads the
+    /// one verdict instead of `at_root` re-deriving it without discovery's
+    /// `orbit_dir` and legacy flag.
+    pub(crate) fn at_root_verdict(
+        root: PathBuf,
+        warnings: Vec<String>,
+        verdict: bool,
+    ) -> Result<Self> {
         let config = Config::load(&root)?;
         Self::at_root_loaded(root, config, warnings, verdict)
     }

@@ -374,7 +374,8 @@ issues list`/`show` browse it. `orbit remote import`, `detach`, and `reattach`
 link or unlink Tasks; nothing is imported without an explicit request
 ([ADR 0018](./adr/0018-remote-trackers-behind-an-orbit-port.md)). On Boards
 migrated from the Workspace era the frozen GitHub repository catalog
-(`<anchor>/.orbit/cache/repositories.json`) remains readable legacy state.
+(`<anchor>/.orbit/cache/repositories.json`) remains on disk as legacy state;
+nothing reads it — member Repository origins replaced it.
 
 ### Board host and sync
 
@@ -808,7 +809,7 @@ Warnings and `doctor` findings use a separate namespace. The base findings are `
 - Readers acquire the same lock shared for the duration of the command, so multi-file reads see a consistent snapshot.
 - Each file is written to a temp file in its directory (`tasks/` or `comments/`), fsynced, renamed over the target, and the directory is fsynced on Unix.
 - A crash mid-write leaves the old file intact and a stale temp file; `doctor` reports it and `doctor --fix` removes it.
-- A forced removal of `DIR` leaves the `orbit` branch and a stale worktree record. `doctor` reports `ORPHAN_WORKTREE`. Any command that finds no Board re-attaches `DIR` from the `orbit` branch on its own and warns `repaired: reattached ...`; `doctor --fix` and `orbit init` do the same explicitly. No Task is lost.
+- A forced removal of a legacy worktree Board's `DIR` leaves the `orbit` branch and a stale worktree record. Discovery never writes files or Git state, even when no Board resolves. `doctor` reports `ORPHAN_WORKTREE` with a migration hint; explicitly run `orbit doctor --fix` to restore `DIR` from the branch, then `orbit migrate` to convert it to a standalone Board folder. Ordinary commands do not re-attach it or emit repair warnings. No committed Task is lost.
 - Multi-file mutations (`delete --force`, `done --comment`/`cancel --comment`, comment append plus task `updated_at`) are serialized but not transactional across files. A crash can leave a partially cleaned board; `doctor` reports dangling dependencies and a repeated `delete --force` resumes the cleanup.
 - `slug migrate` is the exception: it builds the complete rewrite in a temporary detached Git worktree, validates it, commits once, and only then resets the real Board. A crash before the reset leaves the original Board untouched; a crash after it leaves the migrated Board at one commit plus a removable temporary worktree.
 - Network filesystems are unsupported. Locks are advisory; all writes must go through Orbit.

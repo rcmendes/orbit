@@ -144,19 +144,34 @@ flowchart LR
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
-| Application | `src/commands/`, `src/migrate.rs`, `src/board_migrate.rs`, `src/repository.rs`, `src/board_host.rs`, `src/board_sync.rs`, `src/health.rs`, `src/github/`, `src/remote/`, `src/workspace.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. `src/remote/` owns the provider-neutral Remote Tracker port — sync engine, baselines, auto-push, relationships, link persistence, and the Remote Issue catalog seam — while `src/github/` is the built-in GitHub adapter. `src/repository.rs` owns Board membership (discovered child Repositories plus explicit `[repositories]` entries) and the rebuildable inventory cache; `src/board_host.rs`/`src/board_sync.rs` own host configuration and the Orbit-aware merge used by `orbit board sync`. `src/workspace.rs` is a compatibility shim that still stores the `[workspace]` config block and the legacy GitHub repository catalog. `doctor` adds read-only repository/cache, migration, link, and managed-agent diagnostics. Prefix migration rewrites one Board's IDs; `orbit migrate` converts a legacy layout and `init` merges child Boards on an anchor. |
+| Application | `src/commands/`, `src/migrate.rs`, `src/board_migrate.rs`, `src/repository.rs`, `src/board_host.rs`, `src/board_sync.rs`, `src/health.rs`, `src/github/`, `src/remote/`, `src/workspace.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. `src/remote/` owns the provider-neutral Remote Tracker port — sync engine, baselines, auto-push, relationships, link persistence, and the Remote Issue catalog seam — while `src/github/` is the built-in GitHub adapter. `src/repository.rs` owns Board membership (discovered child Repositories plus explicit `[repositories]` entries) and the rebuildable inventory cache; `src/board_host.rs`/`src/board_sync.rs` own host configuration and the Orbit-aware merge used by `orbit board sync`. `src/workspace.rs` is a compatibility shim that still stores the `[workspace]` config block and the Board-anchor lookup. `doctor` adds read-only repository/cache, migration, link, and managed-agent diagnostics. Prefix migration rewrites one Board's IDs; `orbit migrate` converts a legacy layout and `init` merges child Boards on an anchor. |
 | Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Execution | `src/mutation.rs`, `src/remote/execution.rs` | Board mutation execution (lifecycle, terminal, reopen, shared Task persistence and commit warnings) and provider-neutral Remote Tracker execution (`synchronize`, `create_and_link`, `apply_plan`) behind a resolved `RemoteAdapter`; both run inside the caller's Board access scope. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
 | Setup | `src/setup.rs` | Detect harnesses and write managed instruction files, MCP entries, and the Claude SessionStart hook. |
 
+### Board sync tree seam
+
+`src/board_sync.rs` materializes the base, local, and host Git revisions as
+path-to-content maps before merging divergent histories. Its private
+`merge_trees` seam runs the ADR 0019 Task, Claim, and Comment rules entirely in
+memory; the caller supplies the timestamp used for Claim-loser notices. An
+empty base map represents unrelated histories. Git reads, applying files,
+creating the merge commit, and pushing remain outside the merge engine.
+
+Unit tests exercise these rules with in-memory trees. Board host integration
+tests retain end-to-end coverage of unrelated histories, CLI conflict resolution,
+and preserving merge history, alongside host configuration and transport checks.
+This seam does not add to the Board host module's public interface.
+
 ### Scoped access and execution modules
 
 `board::BoardAccess::open` keeps discovery policy and the Board lock in one scope.
-`Read` retains normal worktree-record recovery and takes a shared lock; `Write`
-takes an exclusive lock; `Inspect` resolves without recovery and takes a shared
-lock. Dropping the access value releases the lock. Command handlers keep the
+Discovery runs once and never writes files or repairs Git worktrees. `Read`
+and `Inspect` take a shared lock; `Write` takes an exclusive lock. Orphan `orbit`
+worktree records are reported by `doctor`; restore them explicitly with
+`doctor --fix`, then convert the legacy Board with `orbit migrate`. Dropping the access value releases the lock. Command handlers keep the
 scope alive through execution and append its discovery warnings to the result.
 
 `mutation` owns lifecycle execution and shared Task persistence. It returns

@@ -202,10 +202,9 @@ impl RemoteAdapter for GitHubAdapter {
 
     fn project_available(&self, board: &Board, project: &str) -> Result<bool> {
         let repo = GitHubConfig::normalize_repo(project)?;
-        if let Some(repositories) = crate::workspace::export_repositories(board)?
-            && repositories
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(&repo))
+        if crate::repository::github_member_projects(board)?
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&repo))
         {
             return Ok(true);
         }
@@ -227,10 +226,8 @@ impl RemoteAdapter for GitHubAdapter {
                 });
             }
         };
-        if let Some(repositories) = crate::workspace::export_repositories(board)? {
-            for repository in repositories {
-                push(&repository);
-            }
+        for repository in crate::repository::github_member_projects(board)? {
+            push(&repository);
         }
         for repository in &self.config.repositories {
             push(repository);

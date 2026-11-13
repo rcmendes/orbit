@@ -108,6 +108,23 @@ impl GitHubConfig {
         Ok(format!("{}/{}", parts[0], parts[1]))
     }
 
+    /// The `owner/repo` a github.com remote URL points at, when it is one.
+    /// Accepts HTTPS, HTTP, `ssh://git@github.com/`, and `git@github.com:`;
+    /// anything else (non-GitHub hosts, local paths) returns `None`.
+    pub fn repo_of_origin(origin: &str) -> Option<String> {
+        let origin = origin.trim();
+        let path = [
+            "https://github.com/",
+            "http://github.com/",
+            "ssh://git@github.com/",
+            "git@github.com:",
+        ]
+        .iter()
+        .find_map(|prefix| origin.strip_prefix(prefix))?;
+        let path = path.strip_suffix(".git").unwrap_or(path);
+        Self::normalize_repo(path.trim_end_matches('/')).ok()
+    }
+
     pub fn contains_repo(&self, repo: &str) -> bool {
         let normalized = repo.trim().to_lowercase();
         self.repositories

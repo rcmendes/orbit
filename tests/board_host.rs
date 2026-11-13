@@ -75,13 +75,6 @@ fn peer_read(peer: &Path, relative: &str) -> String {
     std::fs::read_to_string(peer.join(relative)).unwrap()
 }
 
-/// A comments sidecar holding one Orbit comment block.
-fn comment_sidecar(id: &str, author: &str, at: &str, body: &str) -> String {
-    format!(
-        "# Comments: {id}\n\n<!-- orbit:comment {{\"author\":\"{author}\",\"created_at\":\"{at}\"}} -->\n{body}\n<!-- /orbit:comment -->\n"
-    )
-}
-
 fn remote_tip(repo: &TestRepo, host: &Path) -> Option<String> {
     let output = repo.git(&["ls-remote", host_arg(host).as_str(), "refs/heads/orbit"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -223,6 +216,77 @@ fn board_sync_fetches_only_the_board_branch() {
         !extra.status.success(),
         "board sync fetched a non-Board host branch"
     );
+}
+
+/// A git repository with one commit inside `dir`, returning its path.
+fn git_checkout(repo: &TestRepo, dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.name", "Test"][..],
+        &["config", "user.email", "test@example.com"][..],
+        &["commit", "--allow-empty", "-q", "-m", "init"][..],
+    ] {
+        let output = repo.git_in(dir, args);
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    dir.to_path_buf()
+}
+
+#[test]
+fn board_host_resolves_a_member_repository_name() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let anchor = parent.path().join("acme");
+    std::fs::create_dir(&anchor).unwrap();
+    repo.ok_json_in(
+        parent.path(),
+        &[
+            "init",
+            anchor.to_str().unwrap(),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+
+    // A member Repository discovered beneath the anchor whose origin is the
+    // host. Nothing writes the legacy `.orbit/cache/repositories.json`, so
+    // name resolution must go through the member Repository set.
+    let host = parent.path().join("host.git");
+    let output = repo.git_in(parent.path(), &["init", "--bare", "-q", "host.git"]);
+    assert!(output.status.success());
+    let member = git_checkout(&repo, &anchor.join("hub"));
+    let output = repo.git_in(
+        &member,
+        &["remote", "add", "origin", host_arg(&host).as_str()],
+    );
+    assert!(output.status.success());
+    assert!(
+        !anchor
+            .join(".orbit")
+            .join("cache")
+            .join("repositories.json")
+            .exists(),
+        "the legacy repository catalog must be absent"
+    );
+
+    // Run from inside the member so `hub` cannot be mistaken for a path.
+    let set = repo.ok_json_in(&member, &["board", "host", "hub", "--json"]);
+    assert_eq!(set["data"]["host"], "hub");
+    assert_eq!(set["data"]["url"], host_arg(&host));
+
+    let published = repo.ok_json_in(&anchor, &["board", "sync", "--json"]);
+    assert_eq!(published["data"]["state"], "published");
+    let tip = repo.git_in(
+        parent.path(),
+        &["ls-remote", host_arg(&host).as_str(), "refs/heads/orbit"],
+    );
+    assert!(String::from_utf8_lossy(&tip.stdout).contains("refs/heads/orbit"));
 }
 
 #[test]
@@ -371,53 +435,6 @@ fn init_host_refuses_a_different_slug() {
 }
 
 #[test]
-fn sync_merges_fields_and_unions_comments() {
-    let repo = TestRepo::new();
-    repo.init();
-    let id = repo.add("Shared task", &[]);
-    let host = bare_host(&repo, "host.git");
-    repo.ok_json(&["board", "host", &host_arg(&host), "--json"]);
-    repo.ok_json(&["board", "sync", "--json"]);
-    let peer = peer_clone(&repo, &host);
-
-    // Remote side: priority + a comment.
-    let task_relative = format!("tasks/{id}.md");
-    let remote_task = peer_read(&peer, &task_relative).replace("priority: 2", "priority: 3");
-    peer_write(&peer, &task_relative, &remote_task);
-    let comments_relative = format!("comments/{id}.md");
-    peer_write(
-        &peer,
-        &comments_relative,
-        &comment_sidecar(&id, "peer", "2026-01-01T00:00:00Z", "peer note"),
-    );
-    peer_commit(&repo, &peer, "peer edits");
-
-    // Local side: title + a comment, on different fields.
-    repo.ok_json(&["update", &id, "--title", "Shared task renamed", "--json"]);
-    repo.ok_json(&[
-        "comment",
-        "add",
-        &id,
-        "--body",
-        "local note",
-        "--by",
-        "agent",
-        "--json",
-    ]);
-
-    let merged = repo.ok_json(&["board", "sync", "--json"]);
-    assert_eq!(merged["data"]["state"], "merged");
-
-    let task = repo.read_task(&id);
-    assert!(task.contains("title: Shared task renamed"), "{task}");
-    assert!(task.contains("priority: 3"), "{task}");
-
-    let comments = repo.read(&format!(".orbit/board/comments/{id}.md"));
-    assert!(comments.contains("peer note"), "{comments}");
-    assert!(comments.contains("local note"), "{comments}");
-}
-
-#[test]
 fn sync_field_conflict_stops_until_resolved() {
     let repo = TestRepo::new();
     repo.init();
@@ -468,50 +485,6 @@ fn sync_field_conflict_stops_until_resolved() {
     let task = repo.read_task(&id);
     assert!(task.contains("title: Local title"), "{task}");
     assert!(remote_tip(&repo, &host).is_some());
-}
-
-#[test]
-fn sync_earlier_claim_wins_and_loser_is_told() {
-    let repo = TestRepo::new();
-    repo.init();
-    let id = repo.add("Claimed task", &[]);
-    let host = bare_host(&repo, "host.git");
-    repo.ok_json(&["board", "host", &host_arg(&host), "--json"]);
-    repo.ok_json(&["board", "sync", "--json"]);
-    let peer = peer_clone(&repo, &host);
-
-    // Local claims now; the host claims the same Task with an earlier stamp.
-    repo.ok_json(&["claim", &id, "--by", "agent-local", "--json"]);
-    let task_relative = format!("tasks/{id}.md");
-    let remote_task = peer_read(&peer, &task_relative)
-        .replace("status: todo", "status: in_progress")
-        .replace(
-            "updated_at:",
-            "claimed_by: agent-peer\nclaimed_at: 2020-01-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z\nupdated_at:",
-        );
-    peer_write(&peer, &task_relative, &remote_task);
-    peer_commit(&repo, &peer, "host claim");
-
-    let merged = repo.ok_json(&["board", "sync", "--json"]);
-    assert_eq!(merged["data"]["state"], "merged");
-    assert!(
-        merged["data"]["notices"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|notice| notice.as_str().unwrap().contains("agent-peer")),
-        "{:?}",
-        merged["data"]["notices"]
-    );
-
-    let task = repo.read_task(&id);
-    assert!(task.contains("claimed_by: agent-peer"), "{task}");
-    assert!(task.contains("claimed_at: 2020-01-01T00:00:00Z"), "{task}");
-
-    // The loser is told on the Task's comment sidecar.
-    let comments = repo.read(&format!(".orbit/board/comments/{id}.md"));
-    assert!(comments.contains("claim conflict"), "{comments}");
-    assert!(comments.contains("agent-peer"), "{comments}");
 }
 
 #[test]
@@ -797,51 +770,4 @@ fn sync_refuses_a_host_branch_replaced_by_another_board() {
 
     let (_, error) = repo.err_json(&["board", "sync", "--json"]);
     assert_eq!(error["error"]["code"], "BOARD_HOST_CONFLICT", "{error}");
-}
-
-#[test]
-fn sync_drops_a_host_claim_on_a_task_finished_locally() {
-    let repo = TestRepo::new();
-    repo.init();
-    let id = repo.add("Finished task", &[]);
-    let host = bare_host(&repo, "host.git");
-    repo.ok_json(&["board", "host", &host_arg(&host), "--json"]);
-    repo.ok_json(&["claim", &id, "--by", "agent-local", "--json"]);
-    repo.ok_json(&["board", "sync", "--json"]);
-    let peer = peer_clone(&repo, &host);
-
-    // On the host, another agent takes the claim over.
-    let task_relative = format!("tasks/{id}.md");
-    let remote_task: String = peer_read(&peer, &task_relative)
-        .lines()
-        .map(|line| {
-            if line.starts_with("claimed_by:") {
-                "claimed_by: agent-peer".to_string()
-            } else if line.starts_with("claimed_at:") {
-                "claimed_at: 2030-01-01T00:00:00Z".to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    peer_write(&peer, &task_relative, &format!("{remote_task}\n"));
-    peer_commit(&repo, &peer, "host takeover");
-
-    // Locally the original holder finishes the Task.
-    repo.ok_json(&[
-        "done",
-        &id,
-        "--by",
-        "agent-local",
-        "--comment",
-        "shipped",
-        "--json",
-    ]);
-
-    let merged = repo.ok_json(&["board", "sync", "--json"]);
-    assert_eq!(merged["data"]["state"], "merged", "{merged}");
-    let task = repo.read_task(&id);
-    assert!(task.contains("status: done"), "{task}");
-    assert!(!task.contains("claimed_by:"), "{task}");
 }

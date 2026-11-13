@@ -62,8 +62,8 @@ enum HostSpec {
     Path(PathBuf),
     /// A git URL (`https://`, `git@`, `ssh://`, scp-like `host:path`, `file:`).
     Url(String),
-    /// A member Repository name (`owner/repo` or a catalog name), resolved at
-    /// sync time through the Workspace repository catalog.
+    /// A member Repository name or its `owner/repo` origin identity,
+    /// resolved at sync time through the member Repository set.
     Name(String),
 }
 
@@ -139,11 +139,10 @@ pub fn normalize_host_spec(spec: &str) -> Result<String> {
 /// A local repository path resolves to its own `origin` remote when it has
 /// one, so a code repository hosts the Board on its tracker (GitHub, …) rather
 /// than in a local branch; a path without `origin` (a bare host) is used as is.
-/// URLs pass through. Names go through the member-Repository seam:
-/// a Workspace Board's repository catalog maps a Repository name or `owner/repo`
-/// identity to its `origin` (falling back to its local path). The
-/// member-Repositories model lands with `orbit repo`; until then this is the
-/// single resolution point.
+/// URLs pass through. Names go through the member-Repository seam: a Board's
+/// member Repositories map a Repository name or the `owner/repo` identity of
+/// its `origin` to that `origin` (falling back to the Repository's local path
+/// when it has no `origin`). This is the single resolution point.
 pub fn resolve_host_url(board: &Board, spec: &str) -> Result<String> {
     match classify(spec)? {
         HostSpec::Path(path) => Ok(match git::remote_url(&path, "origin")? {
@@ -159,29 +158,46 @@ pub fn resolve_host_url(board: &Board, spec: &str) -> Result<String> {
     }
 }
 
-/// Look up a member Repository by name in the Workspace catalog.
+/// Look up a member Repository by name or by the `owner/repo` identity of
+/// its `origin`, case-insensitively. The match resolves to the Repository's
+/// `origin`, or to its local path when it has none.
 fn member_repo_url(board: &Board, name: &str) -> Option<String> {
-    if !board.is_workspace_board() {
-        return None;
-    }
-    let workspace = crate::workspace::workspace_root(board).ok()?;
-    let catalog = crate::workspace::catalog_for_diagnostics(&workspace).ok()?;
     let wanted = name.trim();
-    catalog.repositories.values().find_map(|entry| {
-        let by_identity = entry.repository.eq_ignore_ascii_case(wanted);
-        let by_path = Path::new(&entry.path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|file| file.eq_ignore_ascii_case(wanted));
-        if !(by_identity || by_path) {
-            return None;
-        }
-        if !entry.origin.trim().is_empty() {
-            Some(entry.origin.clone())
-        } else {
-            Some(entry.path.clone())
-        }
-    })
+    crate::repository::members(board)
+        .ok()?
+        .into_iter()
+        .find_map(|member| {
+            let origin = crate::repository::origin_of(&member.path)
+                .filter(|origin| !origin.trim().is_empty());
+            let by_name = member.name.eq_ignore_ascii_case(wanted);
+            let by_origin = origin
+                .as_deref()
+                .and_then(origin_identity)
+                .is_some_and(|identity| identity.eq_ignore_ascii_case(wanted));
+            if !(by_name || by_origin) {
+                return None;
+            }
+            Some(origin.unwrap_or_else(|| member.path.to_string_lossy().into_owned()))
+        })
+}
+
+/// The `owner/repo` identity at the end of a git remote URL: the last two
+/// path segments of an `https://…`, `ssh://…`, or scp-like `host:owner/repo`
+/// origin, with a trailing `.git` dropped. Local paths return `None`.
+fn origin_identity(origin: &str) -> Option<String> {
+    let origin = origin.trim();
+    let path = if let Some((_, path)) = origin.split_once("://") {
+        path.split_once('/').map(|(_, rest)| rest).unwrap_or(path)
+    } else if origin.starts_with("git@") {
+        origin.split_once(':').map(|(_, path)| path)?
+    } else {
+        return None;
+    };
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let mut segments = path.rsplit('/').filter(|segment| !segment.is_empty());
+    let repo = segments.next()?;
+    let owner = segments.next()?;
+    Some(format!("{owner}/{repo}"))
 }
 
 /// Points the Board repository's `host` remote at `url`, creating it when

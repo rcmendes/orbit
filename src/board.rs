@@ -467,10 +467,10 @@ pub struct Board {
     pub(crate) commit_failed: std::cell::Cell<bool>,
 }
 
-/// Opening policy includes discovery side effects and lock lifetime.
+/// Opening policy selects the lock mode; discovery never repairs storage.
 #[derive(Clone, Copy, Debug)]
 pub enum AccessMode {
-    /// Ordinary reads retain automatic orphan-worktree recovery.
+    /// Ordinary reads take a shared lock.
     Read,
     Write,
     /// Diagnostics resolve storage without repairing it.
@@ -485,28 +485,9 @@ pub struct BoardAccess {
 
 impl BoardAccess {
     pub fn open(dir: Option<&Path>, mode: AccessMode) -> Result<Self> {
-        let (board, discovery) = if matches!(mode, AccessMode::Inspect) {
-            let mut discovery = Board::discovery(dir);
-            if let Some(error) = discovery.error {
-                return Err(error);
-            }
-            let orbit_dir = discovery.orbit_dir.clone();
-            let root = discovery
-                .root
-                .clone()
-                .ok_or_else(OrbitError::board_not_found)?;
-            let warnings = std::mem::take(&mut discovery.warnings);
-            let mut board = Board::at_root(root, warnings)?;
-            board.orbit_dir = orbit_dir.or_else(|| discovery_orbit_dir(&board.root));
-            (board, Some(discovery))
-        } else {
-            let board = Board::discover(dir)?;
-            // `discover` re-resolves after orphan repair; refresh the trace so
-            // the migration check sees the post-repair layout.
-            let discovery = Board::discovery(dir);
-            (board, Some(discovery))
-        };
-        if board.needs_migration(discovery.as_ref()) {
+        let mut discovery = Board::discovery(dir);
+        let board = Board::from_discovery(&mut discovery)?;
+        if board.needs_migration(Some(&discovery)) {
             return Err(OrbitError::new(
                 code::BOARD_NOT_MIGRATED,
                 format!(
@@ -536,34 +517,19 @@ impl BoardAccess {
 
 impl Board {
     pub fn discover(dir_override: Option<&Path>) -> Result<Self> {
-        let mut discovery = Self::discovery(dir_override);
-        // A forced working-tree cleanup can delete DIR and leave the `orbit`
-        // worktree record behind; the branch still holds every Task, so
-        // re-attach it and resolve again instead of failing.
-        if dir_override.is_none()
-            && discovery.root.is_none()
-            && discovery
-                .error
-                .as_ref()
-                .is_none_or(|error| error.code == code::BOARD_NOT_FOUND)
-            && let Some(context) = Self::repo_context()
-            && let Ok(fixed) = crate::doctor::reattach_orphans(&context)
-            && !fixed.is_empty()
-        {
-            discovery = Self::discovery(dir_override);
-            for note in fixed {
-                push_warning(&mut discovery.warnings, format!("repaired: {note}"));
-            }
-        }
-        if let Some(error) = discovery.error {
+        Self::from_discovery(&mut Self::discovery(dir_override))
+    }
+
+    fn from_discovery(discovery: &mut Discovery) -> Result<Self> {
+        if let Some(error) = discovery.error.take() {
             return Err(error);
         }
-        let Some(root) = discovery.root else {
+        let Some(root) = discovery.root.clone() else {
             return Err(OrbitError::board_not_found());
         };
         let linked = matches!(discovery.source, DiscoverySource::Link);
         let orbit_dir = discovery.orbit_dir.clone();
-        let mut board = Self::at_root(root, discovery.warnings)?;
+        let mut board = Self::at_root(root, std::mem::take(&mut discovery.warnings))?;
         board.orbit_dir = orbit_dir.or_else(|| discovery_orbit_dir(&board.root));
         if linked && board.needs_migration(None) {
             push_warning(

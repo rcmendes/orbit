@@ -86,7 +86,7 @@ fn canonical_lenient(path: &Path) -> PathBuf {
 
 /// Re-attaches an `orbit` worktree whose directory disappeared. The branch is
 /// the source of truth, so this never rewrites a Task.
-pub(crate) fn reattach_orphans(context: &RepoContext) -> Result<Vec<String>> {
+fn reattach_orphans(context: &RepoContext) -> Result<Vec<String>> {
     let records = git::worktree_records(&context.repo_root)?;
     let missing = records
         .into_iter()
@@ -332,7 +332,7 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
                         ORPHAN_WORKTREE,
                         None,
                         format!(
-                            "the orbit worktree at {} is missing; run `orbit doctor --fix` to re-attach it without task loss",
+                            "the orbit worktree at {} is missing; run `orbit doctor --fix` to restore the legacy Board, then `orbit migrate` to convert it to a standalone Board folder",
                             record.path.display()
                         ),
                     ));

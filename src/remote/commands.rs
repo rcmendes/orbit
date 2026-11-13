@@ -84,7 +84,6 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
     let mut unsupported = Vec::new();
     let adapter =
         GitHubAdapter::with_client(client.clone(), GitHubAdapter::effective_config(board));
-    let resolver = BoardResolver::with_client(board, client.clone());
     let targets: Vec<_> = graph
         .iter()
         .filter(|task| github_link(task).is_some())
@@ -107,8 +106,13 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
     let mut fetch_refs = Vec::new();
     let mut fetch_positions = Vec::new();
     for (index, (task, link)) in targets.iter().enumerate() {
-        let project = link.remote_project();
-        let linked_repo = crate::remote::execution::project_available(board, &resolver, &project)?;
+        // Availability is membership in the diagnosis's connected-projects
+        // set: resolving it once avoids a member-origin `git remote` scan
+        // per linked Task. Every target links the github tracker.
+        let linked_repo = diagnosis
+            .connected_projects
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(link.project.trim()));
         if !linked_repo {
             issues.push(
                 StatusIssue::new(
@@ -230,8 +234,6 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         repositories_configured: !github.repositories.is_empty(),
         field_validation_failed: diagnosis.fields.validation_failed,
         fields: &diagnosis.fields,
-        area_id_configured: diagnosis.fields.area.configured,
-        verification_id_configured: diagnosis.fields.verification.configured,
         unsupported_relationships: unsupported.len(),
         has_conflicts: !conflicts.is_empty(),
         first_conflict_task: conflicts
@@ -306,12 +308,12 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
     Ok(crate::output::CommandOutput::new(data, human))
 }
 
-/// A repository is available when it is directly linked on a repository-local
-/// Board or included by the Workspace catalog. Workspace members need no
-/// per-repository `orbit remote connect`.
-///
-/// `doctor` projects the shared [`diagnosis::Diagnosis`] over the same
-/// connected-projects universe `remote status` reports.
+/// `orbit doctor`'s GitHub health projection: the shared
+/// [`diagnosis::Diagnosis`] rendered as doctor issues over the connected
+/// GitHub projects universe — configured Remote Projects plus member
+/// Repository origins, the same set `remote status` reports. A Board with
+/// no GitHub configuration reports nothing; a client or diagnosis failure
+/// degrades to a single issue entry rather than aborting doctor.
 pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     let github = github_config(board);
     if !github.is_enabled() {
@@ -1080,7 +1082,11 @@ fn link_remote_project(board: &Board, project: &RemoteProject) -> Result<()> {
                 tracker: tracker.clone(),
                 project: project_id.clone(),
             };
-            if !config.remote.projects.contains(&entry) {
+            // Case-insensitive like every other connected-project check:
+            // `acme/Widget` must not duplicate a configured `acme/widget`.
+            if !config.remote.projects.iter().any(|candidate| {
+                candidate.tracker == tracker && candidate.project.eq_ignore_ascii_case(&project_id)
+            }) {
                 config.remote.projects.push(entry);
             }
             if let Some(github) = config.remote.github.as_mut()

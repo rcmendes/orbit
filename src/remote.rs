@@ -27,9 +27,16 @@ pub use crate::task::RemoteLink;
 
 /// Remote Projects explicitly configured on the Board: `[remote] projects`
 /// plus the legacy `[github] repositories` list, which names GitHub Remote
-/// Projects.
+/// Projects. Entries deduplicate case-insensitively on (tracker, project),
+/// first occurrence wins, so hand-edited config cannot list one Remote
+/// Project twice.
 pub fn configured_projects(board: &Board) -> Vec<RemoteProject> {
-    let mut projects = board.config.remote.projects.clone();
+    let mut projects = Vec::with_capacity(
+        board.config.remote.projects.len() + board.config.github.repositories.len(),
+    );
+    for project in &board.config.remote.projects {
+        push_project(&mut projects, &project.tracker, project.project.clone());
+    }
     for repository in &board.config.github.repositories {
         push_project(&mut projects, "github", repository.clone());
     }
@@ -369,6 +376,80 @@ mod tests {
                 project("jira", "PROJ-1"),
                 project("github", "acme/gadget"),
             ]
+        );
+    }
+
+    #[test]
+    fn configured_projects_deduplicates_case_insensitively() {
+        let mut config = Config::default();
+        config.remote.projects = vec![
+            project("github", "Acme/Widget"),
+            project("github", "acme/widget"),
+            project("github", "ACME/WIDGET"),
+            project("jira", "PROJ-1"),
+        ];
+        config.github.repositories = vec!["acme/widget".to_string(), "acme/gadget".to_string()];
+        let (_dir, board) = board_with(config);
+
+        // First occurrence wins; the legacy `[github] repositories` entry
+        // matching a `[remote] projects` project adds nothing.
+        assert_eq!(
+            configured_projects(&board),
+            vec![
+                project("github", "Acme/Widget"),
+                project("jira", "PROJ-1"),
+                project("github", "acme/gadget"),
+            ]
+        );
+    }
+
+    #[test]
+    fn connected_projects_includes_member_origins_deduplicated() {
+        let dir = tempfile::tempdir().unwrap();
+        let member = dir.path().join("member");
+        crate::git::init_repo(&member).unwrap();
+        crate::git::git_output(
+            &member,
+            &["remote", "add", "origin", "https://github.com/Acme/Widget.git"],
+        )
+        .unwrap();
+        let other = dir.path().join("other");
+        crate::git::init_repo(&other).unwrap();
+        crate::git::git_output(
+            &other,
+            &["remote", "add", "origin", "git@github.com:acme/gadget.git"],
+        )
+        .unwrap();
+
+        let mut config = Config::default();
+        config.remote.projects = vec![project("github", "acme/widget")];
+        config.repositories = vec![
+            crate::repository::RepositoryConfig {
+                name: "member".to_string(),
+                path: member,
+                remote_project: None,
+            },
+            crate::repository::RepositoryConfig {
+                name: "other".to_string(),
+                path: other,
+                remote_project: None,
+            },
+        ];
+        let (_dir, board) = board_with(config);
+
+        // The first member's origin matches the configured project
+        // case-insensitively and adds nothing; the second member's origin
+        // joins the connected set after the configured projects.
+        assert_eq!(
+            connected_projects(&board).unwrap(),
+            vec![
+                project("github", "acme/widget"),
+                project("github", "acme/gadget"),
+            ]
+        );
+        assert_eq!(
+            connected_github_projects(&board).unwrap(),
+            vec!["acme/widget".to_string(), "acme/gadget".to_string()]
         );
     }
 

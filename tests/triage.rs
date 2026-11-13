@@ -806,10 +806,7 @@ fn triage_linked_task_resolves_mapped_fields_without_a_remote_client() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|warning| !warning
-                .as_str()
-                .unwrap()
-                .contains("no installed adapter")),
+            .all(|warning| !warning.as_str().unwrap().contains("no installed adapter")),
         "unexpected unavailable-tracker warning: {}",
         ctx["meta"]["warnings"]
     );

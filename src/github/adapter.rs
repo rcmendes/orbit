@@ -78,7 +78,9 @@ impl GitHubAdapter {
     }
 
     fn fetch(&self, repo: &str, number: u64) -> Result<IssueSnapshot> {
-        let mut issue = self.client()?.get_issue(repo, number, self.issue_fields())?;
+        let mut issue = self
+            .client()?
+            .get_issue(repo, number, self.issue_fields())?;
         if self.config.mode.is_basic() {
             issue.area = None;
             issue.verification = None;
@@ -267,7 +269,8 @@ impl RemoteAdapter for GitHubAdapter {
         };
         let snapshots = client.get_issues(&batch, self.issue_fields());
         for (position, snapshot) in batch_positions.into_iter().zip(snapshots) {
-            out[position] = Some(snapshot.map(|snapshot| snapshot_to_issue(&snapshot, &self.config)));
+            out[position] =
+                Some(snapshot.map(|snapshot| snapshot_to_issue(&snapshot, &self.config)));
         }
         out.into_iter()
             .map(|entry| entry.expect("every requested ref was resolved"))

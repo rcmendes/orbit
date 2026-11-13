@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::board::Board;
 use crate::error::{OrbitError, Result};
+use crate::github::config::GitHubConfig;
 use crate::graph::Graph;
 
 pub mod auto_push;
@@ -224,6 +225,109 @@ impl RemoteProject {
     }
 }
 
+/// Parse a Remote Project reference: `TRACKER:PROJECT` or a bare `PROJECT`
+/// that resolves to the sole installed Remote Tracker.
+pub(crate) fn parse_remote_project(input: &str) -> Result<(String, String)> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(OrbitError::invalid_argument(
+            "Remote Project must not be empty",
+        ));
+    }
+    if let Some((tracker, project)) = input.split_once(':') {
+        let tracker = tracker.trim();
+        let project = project.trim();
+        if tracker.is_empty() || project.is_empty() {
+            return Err(OrbitError::invalid_argument(format!(
+                "invalid Remote Project `{input}`; expected `TRACKER:PROJECT`"
+            )));
+        }
+        let project = if tracker == "github" {
+            GitHubConfig::normalize_repo(project)?
+        } else {
+            project.to_string()
+        };
+        return Ok((tracker.to_string(), project));
+    }
+    let project = if input.contains('/') {
+        GitHubConfig::normalize_repo(input)?
+    } else {
+        input.to_string()
+    };
+    Ok(("github".to_string(), project))
+}
+
+/// Parse a Remote Issue reference into its Remote Project and issue id.
+/// Accepts `TRACKER:PROJECT#ID`, `PROJECT#ID`, or a Remote Tracker Issue
+/// URL (GitHub: `https://github.com/OWNER/REPO/issues/NUMBER`).
+pub(crate) fn parse_issue_ref(input: &str) -> Result<(RemoteProject, String)> {
+    let input = input.trim();
+    if input.contains("://") {
+        let (project, id) = parse_issue_url(input)?;
+        return Ok((
+            RemoteProject {
+                tracker: "github".to_string(),
+                project,
+            },
+            id,
+        ));
+    }
+    let invalid = || {
+        OrbitError::invalid_argument(format!(
+            "invalid Remote Issue `{input}`; expected `TRACKER:PROJECT#ID`, `PROJECT#ID`, or a Remote Tracker Issue URL"
+        ))
+    };
+    // A `tracker:` prefix precedes the project; the issue id follows `#`.
+    let (tracker, rest) = match input.split_once(':') {
+        Some((tracker, rest)) if !tracker.contains(['/', '#']) => (Some(tracker.trim()), rest),
+        _ => (None, input),
+    };
+    let (project_part, id) = rest.rsplit_once('#').ok_or_else(invalid)?;
+    let id = id.trim();
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    let (default_tracker, project) = parse_remote_project(project_part.trim())?;
+    let tracker = tracker.unwrap_or(default_tracker.as_str()).to_string();
+    Ok((RemoteProject { tracker, project }, id.to_string()))
+}
+
+fn parse_issue_url(url: &str) -> Result<(String, String)> {
+    let invalid = || {
+        OrbitError::invalid_argument(format!(
+            "invalid GitHub Issue URL `{url}`; expected `https://github.com/OWNER/REPO/issues/NUMBER`"
+        ))
+    };
+    let (scheme, address) = url.split_once("://").ok_or_else(invalid)?;
+    if !scheme.eq_ignore_ascii_case("https") {
+        return Err(invalid());
+    }
+    let (host, path) = address.split_once('/').ok_or_else(invalid)?;
+    if !host.eq_ignore_ascii_case("github.com")
+        || path
+            .chars()
+            .any(|character| character.is_whitespace() || matches!(character, '?' | '#' | '\\'))
+    {
+        return Err(invalid());
+    }
+    let parts: Vec<_> = path.split('/').collect();
+    let parts = if parts.last() == Some(&"") {
+        &parts[..parts.len() - 1]
+    } else {
+        &parts[..]
+    };
+    if parts.len() != 4 || parts[2] != "issues" {
+        return Err(invalid());
+    }
+    let repo = GitHubConfig::normalize_repo(&format!("{}/{}", parts[0], parts[1]))
+        .map_err(|_| invalid())?;
+    let number = parts[3].parse::<u64>().map_err(|_| invalid())?;
+    if number == 0 {
+        return Err(invalid());
+    }
+    Ok((repo, number.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,14 +358,8 @@ mod tests {
     #[test]
     fn configured_projects_merges_remote_projects_and_legacy_github() {
         let mut config = Config::default();
-        config.remote.projects = vec![
-            project("github", "Acme/Widget"),
-            project("jira", "PROJ-1"),
-        ];
-        config.github.repositories = vec![
-            "acme/widget".to_string(),
-            "acme/gadget".to_string(),
-        ];
+        config.remote.projects = vec![project("github", "Acme/Widget"), project("jira", "PROJ-1")];
+        config.github.repositories = vec!["acme/widget".to_string(), "acme/gadget".to_string()];
         let (_dir, board) = board_with(config);
 
         assert_eq!(

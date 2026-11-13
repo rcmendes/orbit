@@ -3223,10 +3223,7 @@ fn remote_status_repo_scope_skips_other_repositories() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(full["data"]["linked_tasks"], 2);
-    assert_eq!(
-        full["data"]["repositories"].as_array().unwrap().len(),
-        2
-    );
+    assert_eq!(full["data"]["repositories"].as_array().unwrap().len(), 2);
 
     let scoped = repo.ok_json_with_env(
         &["remote", "status", "--repo", "acme/other", "--json"],
@@ -3257,7 +3254,13 @@ fn whole_board_sync_reports_tasks_it_could_not_check() {
     let first = adopt_fixture_task(&repo, &fixture, "First task");
     let second = repo.add("Second task", &[]);
     repo.ok_json_with_env(
-        &["remote", "link", second.as_str(), "acme/widget#43", "--json"],
+        &[
+            "remote",
+            "link",
+            second.as_str(),
+            "acme/widget#43",
+            "--json",
+        ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     // The remote Issue disappears before the sync; the run must report it

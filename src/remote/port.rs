@@ -144,13 +144,11 @@ impl RemoteResolver for BoardResolver<'_> {
                 // config-only port facts (`mapped_fields`, `project_available`,
                 // …) never build a `GitHubClient`, and
                 // the first call that reaches GitHub does.
-                let config =
-                    crate::github::adapter::GitHubAdapter::effective_config(self.board);
+                let config = crate::github::adapter::GitHubAdapter::effective_config(self.board);
                 Ok(Box::new(match &self.client {
-                    Some(client) => crate::github::adapter::GitHubAdapter::with_client(
-                        client.clone(),
-                        config,
-                    ),
+                    Some(client) => {
+                        crate::github::adapter::GitHubAdapter::with_client(client.clone(), config)
+                    }
                     None => crate::github::adapter::GitHubAdapter::from_config(config),
                 }))
             }

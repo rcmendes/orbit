@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod client;
 pub mod config;
+pub mod diagnosis;
 pub mod link;
 pub mod model;
 pub mod relationships;

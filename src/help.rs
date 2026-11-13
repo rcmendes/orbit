@@ -317,13 +317,15 @@ the full task objects in data.tasks plus data.count.
 ";
 
 /// `--linked`/`--local` filter docs; omitted on Boards with no Remote material.
-const LIST_LONG_LINKED: &str = "--linked shows only Tasks with an active Remote Issue link; --local shows only
+const LIST_LONG_LINKED: &str =
+    "--linked shows only Tasks with an active Remote Issue link; --local shows only
 Tasks without one, including detached provenance. The ISSUE column and these
 filters appear only while the Board has Remote Tracker material.
 
 ";
 
-const LIST_LONG_FILTERS: &str = "--parent lists only the SubTasks of one Parent Task. --type is repeatable and
+const LIST_LONG_FILTERS: &str =
+    "--parent lists only the SubTasks of one Parent Task. --type is repeatable and
 matches any listed work shape; --exclude-type hides any listed shape. --label
 is repeatable and every label must match; --exclude-label is repeatable and
 hides a task carrying any of the named labels. --repo NAME is shorthand for

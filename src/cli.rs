@@ -1005,7 +1005,7 @@ pub struct RemoteArgs {
 pub enum RemoteCommand {
     /// Report Remote Tracker health without changing the Board or tracker.
     #[command(after_long_help = help::REMOTE_STATUS_EXAMPLES)]
-    Status,
+    Status(RemoteStatusArgs),
     /// Detect the origin Remote Project and connect its Remote Tracker, or
     /// configure the connected tracker's mapped fields.
     #[command(after_long_help = help::REMOTE_CONNECT_EXAMPLES)]
@@ -1040,6 +1040,15 @@ pub enum RemoteCommand {
     /// Enable or disable automatic push of Task changes to Remote Issues.
     #[command(after_long_help = help::REMOTE_AUTO_PUSH_EXAMPLES)]
     AutoPush(RemoteAutoPushArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RemoteStatusArgs {
+    /// Limit checks to Linked Tasks on one repository (`owner/repo`).
+    /// Other repositories are skipped entirely, which keeps the report
+    /// fast on multi-repository Boards.
+    #[arg(long, value_name = "OWNER/REPO")]
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Args)]

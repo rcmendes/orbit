@@ -175,12 +175,27 @@ identify the affected Tasks and counts. `data.conflicts` and
 and `data.unsupported_details` report relationships Orbit cannot synchronize.
 `data.next_action` recommends the next step, and `data.next_command` supplies
 an executable command when one applies. `data.auth.scopes_known` distinguishes
-an unreported scope list from an empty one. When the GitHub provider is
+an unreported scope list from an empty one. `data.repository_scope` echoes the
+`--repo` filter when one is given, and `data.linked_tasks` counts only the
+Linked Tasks inside that scope. When the GitHub provider is
 configured, `orbit doctor` also reports authentication, repository access, and
 Issue Field configuration problems alongside normal Board diagnostics.
 
+Linked Issues are fetched in batched GraphQL queries (up to 50 Issues per
+repository and query) instead of one `gh api` call per Task, so a Board with
+hundreds of Linked Tasks finishes `orbit remote status` in seconds rather
+than minutes. Issues a batch could not fetch — for example during a GitHub
+rate limit — are reported per Task in `data.issues` instead of failing the
+command. Rate-limit and HTTP 403 batch failures retain their cause for each
+unchecked Task and never trigger per-Issue REST retries. Partial GraphQL data
+is still used: only unavailable or invalid Issues receive per-Task errors.
+`--repo owner/repo` scopes every check and Issue fetch to a single repository,
+which keeps the report fast on multi-repository Boards. An unlinked repository
+scope is reported as not linked, rather than implying the Board has no links.
+
 ```bash
 orbit remote status
+orbit remote status --repo acme-corp/widget
 orbit remote status --json
 orbit doctor --json
 ```
@@ -401,6 +416,14 @@ conflict in that field. Sync plans all selected Tasks before writing. Apply
 then reports each Task's result independently; a failed Task keeps its
 previous baseline, so it can be retried without repeating already successful
 Tasks' writes.
+
+A whole-Board sync fetches every linked Issue in batched GraphQL queries
+(up to 50 Issues per repository and query) instead of one `gh api` call
+per Task, so hundreds of Linked Tasks plan in seconds. Issues a batch
+cannot fetch — for example during a GitHub rate limit — are reported as
+retry-safe per-Task failures in `data.failures` instead of aborting the
+run; a single-Task `orbit remote sync <task-id>` still fails the command
+outright.
 
 GitHub command errors include a `Next:` action in human output. With
 `--json`, the existing `{ "ok": false, "error": ... }` envelope is

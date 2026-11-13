@@ -242,6 +242,31 @@ impl RemoteAdapter for GitHubAdapter {
             .map(|snapshot| snapshot_to_issue(&snapshot, &self.config))
     }
 
+    fn fetch_issues(&self, refs: &[RemoteIssueRef]) -> Vec<Result<RemoteIssue>> {
+        let mut out: Vec<Option<Result<RemoteIssue>>> = refs.iter().map(|_| None).collect();
+        let mut batch = Vec::new();
+        let mut batch_positions = Vec::new();
+        for (index, issue) in refs.iter().enumerate() {
+            match (
+                GitHubConfig::normalize_repo(&issue.project),
+                parse_number(&issue.id),
+            ) {
+                (Ok(repo), Ok(number)) => {
+                    batch.push(crate::github::model::IssueRef { repo, number });
+                    batch_positions.push(index);
+                }
+                (Err(error), _) | (_, Err(error)) => out[index] = Some(Err(error)),
+            }
+        }
+        let snapshots = self.client.get_issues(&batch, self.issue_fields());
+        for (position, snapshot) in batch_positions.into_iter().zip(snapshots) {
+            out[position] = Some(snapshot.map(|snapshot| snapshot_to_issue(&snapshot, &self.config)));
+        }
+        out.into_iter()
+            .map(|entry| entry.expect("every requested ref was resolved"))
+            .collect()
+    }
+
     fn list_issues(&self, project: &RemoteProject) -> Result<Vec<RemoteIssueSummary>> {
         let repo = GitHubConfig::normalize_repo(&project.project)?;
         Ok(self

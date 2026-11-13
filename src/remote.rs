@@ -125,7 +125,8 @@ pub fn details_visible_for(dir: Option<&Path>) -> bool {
     let Some(root) = discovery.root else {
         return false;
     };
-    let Ok(board) = Board::at_root(root, discovery.warnings) else {
+    let Ok(board) = Board::at_root_verdict(root, discovery.warnings, discovery.needs_migration)
+    else {
         return false;
     };
     remote_details_visible(&board, || any_task_link(&board))
@@ -410,7 +411,12 @@ mod tests {
         crate::git::init_repo(&member).unwrap();
         crate::git::git_output(
             &member,
-            &["remote", "add", "origin", "https://github.com/Acme/Widget.git"],
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/Acme/Widget.git",
+            ],
         )
         .unwrap();
         let other = dir.path().join("other");

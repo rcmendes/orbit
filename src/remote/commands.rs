@@ -103,8 +103,7 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
     // linked Issue in one batched pass instead of one API call per Task.
     let mut issue_results: Vec<Option<Result<RemoteIssue>>> =
         targets.iter().map(|_| None).collect();
-    let mut fetch_refs = Vec::new();
-    let mut fetch_positions = Vec::new();
+    let mut fetch: Vec<(usize, RemoteIssueRef)> = Vec::new();
     for (index, (task, link)) in targets.iter().enumerate() {
         // Availability is membership in the diagnosis's connected-projects
         // set: resolving it once avoids a member-origin `git remote` scan
@@ -159,17 +158,21 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         if !diagnosis.auth.authenticated || !linked_repo {
             continue;
         }
-        fetch_refs.push(RemoteIssueRef {
-            project: link.project.clone(),
-            id: link.id.clone(),
-        });
-        fetch_positions.push(index);
+        fetch.push((
+            index,
+            RemoteIssueRef {
+                project: link.project.clone(),
+                id: link.id.clone(),
+            },
+        ));
     }
+    let (fetch_positions, fetch_refs): (Vec<usize>, Vec<RemoteIssueRef>) =
+        fetch.into_iter().unzip();
     for (position, result) in fetch_positions
-        .iter()
+        .into_iter()
         .zip(adapter.fetch_issues(&fetch_refs))
     {
-        issue_results[*position] = Some(result);
+        issue_results[position] = Some(result);
     }
     for (index, (task, link)) in targets.iter().enumerate() {
         let Some(result) = issue_results[index].take() else {

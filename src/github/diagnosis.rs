@@ -144,6 +144,12 @@ pub enum FindingKind {
     /// Auto-push is on but no repository exists at all; a `doctor`-only
     /// finding (`remote status` already reports `NoRepositoriesLinked`).
     AutoPushNoRepositories,
+    /// The connected-project set could not be resolved (member Repository
+    /// origins unreadable). `doctor` reports it; `remote status` resolves
+    /// the same set strictly and fails instead, so it never reaches here.
+    ConnectedProjectsFailed {
+        failure: RemoteFailure,
+    },
 }
 
 /// Run every shared health rule once and return the typed result.
@@ -198,11 +204,27 @@ pub fn diagnose(
 
     // The checked repository universe is the Board's connected GitHub
     // projects — configured Remote Projects plus member Repository origins —
-    // the same set `remote status` and `doctor` both report on.
-    let connected = if options.strict_connected_projects {
-        crate::remote::connected_github_projects(board)?
-    } else {
-        crate::remote::connected_github_projects(board).unwrap_or_default()
+    // the same set `remote status` and `doctor` both report on. `remote
+    // status` fails on a resolution error; `doctor` reports it as a finding
+    // instead of aborting or silently checking nothing.
+    let connected = match crate::remote::connected_github_projects(board) {
+        Ok(connected) => connected,
+        Err(error) => {
+            if options.strict_connected_projects {
+                return Err(error);
+            }
+            findings.push(Finding {
+                code: error.code,
+                kind: FindingKind::ConnectedProjectsFailed {
+                    failure: RemoteFailure {
+                        code: error.code,
+                        message: error.message,
+                    },
+                },
+                repository: None,
+            });
+            Vec::new()
+        }
     };
     let scope = options.repository_scope.as_deref();
     let names: Vec<String> = connected
@@ -245,15 +267,20 @@ pub fn diagnose(
                     });
                 }
             }
-            let probe = client.label_exists(&name, IN_PROGRESS_LABEL);
-            repository.label = Some(LabelDiagnosis {
-                present: probe.as_ref().ok().copied(),
-                error: probe.err().map(|error| RemoteFailure {
-                    code: error.code,
-                    message: error.message,
-                }),
-            });
-            if auto_push && let Some(label) = &repository.label {
+            // The reserved label only matters to auto-push: probing it costs
+            // one API call per repository, so non-auto-push Boards skip the
+            // call and `reserved_label_present` reports null.
+            if auto_push {
+                let probe = client.label_exists(&name, IN_PROGRESS_LABEL);
+                repository.label = Some(LabelDiagnosis {
+                    present: probe.as_ref().ok().copied(),
+                    error: probe.err().map(|error| RemoteFailure {
+                        code: error.code,
+                        message: error.message,
+                    }),
+                });
+            }
+            if let Some(label) = &repository.label {
                 if label.present == Some(false) {
                     findings.push(Finding {
                         code: code::GITHUB_SETUP_INCOMPLETE,
@@ -514,7 +541,9 @@ impl Diagnosis {
                     )
                     .with_repository(finding.repository.as_deref().unwrap_or_default())
                 }
-                FindingKind::LabelCheckFailed { .. } | FindingKind::AutoPushNoRepositories => {
+                FindingKind::LabelCheckFailed { .. }
+                | FindingKind::AutoPushNoRepositories
+                | FindingKind::ConnectedProjectsFailed { .. } => {
                     continue;
                 }
                 FindingKind::NoRepositoriesLinked => StatusIssue::new(
@@ -575,7 +604,7 @@ fn doctor_rank(finding: &Finding) -> u8 {
         FindingKind::AuthRequired => 0,
         FindingKind::ScopesMissing { .. } => 1,
         FindingKind::OrganizationMissing => 2,
-        FindingKind::NoRepositoriesLinked => 3,
+        FindingKind::NoRepositoriesLinked | FindingKind::ConnectedProjectsFailed { .. } => 3,
         FindingKind::RepositoryAccess { .. } => 4,
         FindingKind::AutoPushNoRepositories => 5,
         FindingKind::ReservedLabelMissing { .. } | FindingKind::LabelCheckFailed { .. } => 6,
@@ -605,6 +634,13 @@ fn doctor_issue(finding: &Finding, diagnosis: &Diagnosis) -> Issue {
         FindingKind::NoRepositoriesLinked => (
             finding.code,
             "no GitHub repositories are linked; run `orbit remote connect OWNER/REPO`".to_string(),
+        ),
+        FindingKind::ConnectedProjectsFailed { failure } => (
+            failure.code,
+            format!(
+                "could not resolve the Board's connected GitHub repositories: {}",
+                failure.message
+            ),
         ),
         FindingKind::RepositoryAccess { failure } => (
             failure.code,
@@ -837,8 +873,10 @@ mod tests {
         let mut config = github_config();
         config.issue_fields.area_id = Some("AREA_ID".to_string());
         config.issue_fields.verification_id = Some("VERIFICATION_ID".to_string());
-        let mut board_config = Config::default();
-        board_config.github = config;
+        let board_config = Config {
+            github: config,
+            ..Default::default()
+        };
         board_with(board_config)
     }
 
@@ -846,9 +884,14 @@ mod tests {
         let mut config = github_config();
         config.issue_fields.area_id = Some("AREA_ID".to_string());
         config.issue_fields.verification_id = Some("VERIFICATION_ID".to_string());
-        let mut board_config = Config::default();
-        board_config.github = config;
-        board_config.remote.auto_push = true;
+        let board_config = Config {
+            github: config,
+            remote: crate::remote::RemoteConfig {
+                auto_push: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         board_with(board_config)
     }
 
@@ -953,8 +996,10 @@ mod tests {
             if basic {
                 config.mode = GitHubMode::Basic;
             }
-            let mut board_config = Config::default();
-            board_config.github = config;
+            let board_config = Config {
+                github: config,
+                ..Default::default()
+            };
             let board = board_with(board_config);
             let diagnosis = diagnose_fixture(&board, &client, &DiagnosisOptions::default());
 
@@ -1047,8 +1092,10 @@ mod tests {
         let mut config = github_config();
         config.issue_fields.area_id = Some("STALE_AREA".to_string());
         config.issue_fields.verification_id = Some("VERIFICATION_ID".to_string());
-        let mut board_config = Config::default();
-        board_config.github = config;
+        let board_config = Config {
+            github: config,
+            ..Default::default()
+        };
         let board = board_with(board_config);
         let diagnosis = diagnose_fixture(&board, &client, &DiagnosisOptions::default());
 
@@ -1090,8 +1137,10 @@ mod tests {
         let client = fixture_client(&dir, store);
         let mut config = github_config();
         config.repositories.push("acme/other".to_string());
-        let mut board_config = Config::default();
-        board_config.github = config;
+        let board_config = Config {
+            github: config,
+            ..Default::default()
+        };
         let board = board_with(board_config);
 
         let scoped = diagnose_fixture(

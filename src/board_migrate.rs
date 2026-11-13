@@ -466,6 +466,10 @@ fn migrate_to_orbit_board(
     if !source.join(".git").exists() {
         refuse_tracked(&source)?;
     }
+    // Windows cannot rename a folder while a file in it is open, and a legacy
+    // Board keeps its lock file inside the folder being moved.
+    #[cfg(windows)]
+    drop(_lock);
     move_board_folder(&source, target)?;
     ensure_board_repo(target, &board.config.board.branch)?;
     if content_needed {

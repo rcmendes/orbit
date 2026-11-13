@@ -1408,6 +1408,19 @@ fn disconnect_remote_project(board: &Board, tracker: &str, project: &str) -> Res
             }
             config.github.unlink_repo(&project)?;
         }
+        // The last GitHub project is gone: drop the adapter settings too, or
+        // doctor keeps flagging a configured-but-unlinked GitHub.
+        let projects_left = config.remote.projects.iter().any(|p| p.tracker == "github");
+        if tracker == "github"
+            && !projects_left
+            && config
+                .remote
+                .github
+                .as_ref()
+                .is_some_and(|github| github.repositories.is_empty())
+        {
+            config.remote.github = None;
+        }
         let _ = remote;
         Ok(())
     })?;

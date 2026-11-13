@@ -125,7 +125,10 @@ pub struct Config {
     #[serde(default)]
     pub id: IdConfig,
     /// Legacy GitHub provider section; `orbit migrate` rewrites it to `remote`.
-    #[serde(default)]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::github::GitHubConfig::is_default"
+    )]
     pub github: crate::github::GitHubConfig,
     #[serde(default, skip_serializing_if = "crate::remote::RemoteConfig::is_empty")]
     pub remote: crate::remote::RemoteConfig,

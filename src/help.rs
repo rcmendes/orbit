@@ -894,8 +894,9 @@ field-level sync conflicts, and missing or conflicting managed agent setup.
 Every finding identifies severity, affected repository/Task/Issue, cause, and
 a safe next action.
 
-Doctor is read-only unless `--fix` is requested. --fix removes
-stale temp files and re-attaches an orphan orbit worktree. Boards that still
+Discovery never re-attaches orphan worktrees. Doctor is read-only unless
+`--fix` is requested. --fix removes stale temp files and restores an orphan
+orbit worktree; follow it with `orbit migrate` to convert the legacy Board. Boards that still
 use a pre-ADR-0019 layout are reported with LEGACY_LAYOUT; convert them with
 `orbit migrate`.";
 

@@ -1230,7 +1230,7 @@ orbit sync              # commit anything left uncommitted
 | `BOARD_NOT_MIGRATED` | The resolved Board uses a pre-ADR-0019 layout. Run `orbit migrate` (preview first, then `--apply`) to convert it; Board commands refuse until then. |
 | `LEGACY_LAYOUT` | A warning, not a failure: the Board still uses the old hidden, `<anchor>/board`, legacy pointer, or explicit old-board-root layout. It keeps working with the warning; run `orbit migrate` to move supported layouts to the current path. |
 | `AMBIGUOUS_BOARD` | A new `.orbit` and a legacy Board both exist. Run `orbit migrate` to finish or resume the move. |
-| `ORPHAN_WORKTREE` | `DIR` was deleted but the `orbit` branch remains. `orbit doctor --fix` or `orbit init` re-attaches it without task loss. |
+| `ORPHAN_WORKTREE` | Legacy `DIR` was deleted but the `orbit` branch remains. Discovery does not repair it. Run `orbit doctor --fix` to restore the legacy Board, then `orbit migrate` to convert it to a standalone Board folder. |
 | `STORAGE_MISMATCH` | `config.toml` still records `board.storage` but the Board folder's Git shape disagrees. `orbit migrate` removes the retired key and normalizes the layout. |
 | `ABSOLUTE_BOARD_PATH` | A managed agent config still records a Board path. Re-run `orbit setup` to rewrite it path-free. |
 | `LOCKED` | Retryable: another writer holds the lock. Retry after a short backoff. |

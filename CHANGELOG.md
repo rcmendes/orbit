@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `orbit remote disconnect` of the last GitHub project now removes `[remote.github]`, so `orbit doctor` no longer reports `GITHUB_REPO_NOT_LINKED`; default `[github]`/`[github.issue_fields]` tables are no longer written to `config.toml`, so `orbit migrate` leaves no legacy `[github]` section behind.
 - `orbit init` inside a code repository uses that repository's local `user.name`/`user.email` for the new Board repository when no global identity is set.
 - `orbit board move DIR` relocates the Board folder and repoints the `.orbit/board` pointer, the `.git/info/exclude` entry, and member Repository links.
 - A Board host given as a local repository path now pushes to that repository's `origin` remote when it has one, so a code repository hosts the Board on its tracker instead of in a local branch.

@@ -57,7 +57,8 @@ The port covers the sync engine (`src/remote/sync.rs`, `execution.rs`,
 `catalog.rs`). The `orbit remote` command layer (`src/remote/commands.rs`)
 still calls the GitHub client directly for setup and diagnostics: `gh` auth
 scopes, Issue Field creation and validation, and the reserved
-`orbit:in-progress` label in `connect`, `status`, and `doctor`. Adding a second
+`orbit:in-progress` label in `connect`; `status` and `doctor` share one typed
+diagnosis in `src/github/diagnosis.rs` that makes the same direct calls. Adding a second
 adapter means first moving those calls behind an adapter setup capability on
 `RemoteAdapter`. That move waits for the second adapter, so its shape follows
 a real need rather than a guess.

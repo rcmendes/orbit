@@ -207,12 +207,14 @@ pub fn diagnose(
     // the same set `remote status` and `doctor` both report on. `remote
     // status` fails on a resolution error; `doctor` reports it as a finding
     // instead of aborting or silently checking nothing.
+    let mut connected_failed = false;
     let connected = match crate::remote::connected_github_projects(board) {
         Ok(connected) => connected,
         Err(error) => {
             if options.strict_connected_projects {
                 return Err(error);
             }
+            connected_failed = true;
             findings.push(Finding {
                 code: error.code,
                 kind: FindingKind::ConnectedProjectsFailed {
@@ -306,14 +308,16 @@ pub fn diagnose(
         repositories.push(repository);
     }
 
-    if configured && repositories.is_empty() {
+    // An unresolved member origin is not an empty universe: the empty-set
+    // findings would misreport "nothing linked" beside ConnectedProjectsFailed.
+    if configured && repositories.is_empty() && !connected_failed {
         findings.push(Finding {
             code: code::GITHUB_REPO_NOT_LINKED,
             kind: FindingKind::NoRepositoriesLinked,
             repository: None,
         });
     }
-    if auto_push && repositories.is_empty() {
+    if auto_push && repositories.is_empty() && !connected_failed {
         findings.push(Finding {
             code: code::GITHUB_REPO_NOT_LINKED,
             kind: FindingKind::AutoPushNoRepositories,

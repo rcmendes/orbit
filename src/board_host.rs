@@ -188,8 +188,11 @@ fn origin_identity(origin: &str) -> Option<String> {
     let origin = origin.trim();
     let path = if let Some((_, path)) = origin.split_once("://") {
         path.split_once('/').map(|(_, rest)| rest).unwrap_or(path)
-    } else if origin.starts_with("git@") {
-        origin.split_once(':').map(|(_, path)| path)?
+    } else if let Some((_, path)) = origin
+        .split_once(':')
+        .filter(|(host, _)| host.len() > 1 && !host.contains('/') && !host.contains('\\'))
+    {
+        path
     } else {
         return None;
     };

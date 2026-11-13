@@ -147,7 +147,7 @@ pub(super) fn cmd_init(args: InitArgs, dir: Option<&Path>) -> Result<crate::outp
     for candidate in [&orbit_dir, &board_root] {
         let discovery = Board::discovery(Some(candidate));
         if let Some(root) = discovery.root.clone()
-            && let Ok(board) = Board::at_root(root, Vec::new())
+            && let Ok(board) = Board::at_root_verdict(root, Vec::new(), discovery.needs_migration)
             && discovery.needs_migration
         {
             return Err(OrbitError::new(

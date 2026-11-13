@@ -1703,7 +1703,7 @@ fn issues_refresh(board: &Board) -> Result<crate::output::CommandOutput> {
     let root = catalog::root_for_board(board)?;
     let path = catalog::cache_path(&root);
     let mut catalog = catalog::load(&path)?;
-    let resolver = BoardResolver::new(board);
+    let resolver = BoardResolver::with_client(board, crate::github::client::client_from_env()?);
     let projects = configured_projects(board);
     let mut errors = Vec::new();
     let mut refreshed_count = 0;

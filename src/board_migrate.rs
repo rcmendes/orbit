@@ -53,7 +53,7 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
     let mut board = Board::at_root(root, discovery.warnings.clone())?;
     board.orbit_dir = discovery.orbit_dir.clone();
 
-    let needs_layout = board.needs_migration(Some(&discovery));
+    let needs_layout = discovery.needs_migration;
     let layout = plan_layout(&board, &discovery)?;
     let stats = plan_content(&board)?;
     let content_needed = stats.github_links > 0

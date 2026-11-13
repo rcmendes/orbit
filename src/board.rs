@@ -90,6 +90,11 @@ pub struct Discovery {
     pub ambiguous: Option<(PathBuf, PathBuf)>,
     /// The `.orbit` folder the resolved Board hangs off, when known.
     pub orbit_dir: Option<PathBuf>,
+    /// The authoritative Legacy layout verdict: whether the resolved Board
+    /// uses a pre-ADR-0019 layout that `orbit migrate` must convert.
+    /// Computed once, here in the discovery pass; `BoardAccess::open`,
+    /// `doctor`, and `orbit migrate` consume it instead of re-deriving it.
+    pub needs_migration: bool,
     pub error: Option<OrbitError>,
 }
 
@@ -103,6 +108,7 @@ impl Default for Discovery {
             legacy: None,
             ambiguous: None,
             orbit_dir: None,
+            needs_migration: false,
             error: None,
         }
     }
@@ -487,7 +493,7 @@ impl BoardAccess {
     pub fn open(dir: Option<&Path>, mode: AccessMode) -> Result<Self> {
         let mut discovery = Board::discovery(dir);
         let board = Board::from_discovery(&mut discovery)?;
-        if board.needs_migration(Some(&discovery)) {
+        if discovery.needs_migration {
             return Err(OrbitError::new(
                 code::BOARD_NOT_MIGRATED,
                 format!(
@@ -531,7 +537,7 @@ impl Board {
         let orbit_dir = discovery.orbit_dir.clone();
         let mut board = Self::at_root(root, std::mem::take(&mut discovery.warnings))?;
         board.orbit_dir = orbit_dir.or_else(|| discovery_orbit_dir(&board.root));
-        if linked && board.needs_migration(None) {
+        if linked && discovery.needs_migration {
             push_warning(
                 &mut board.warnings,
                 format!(
@@ -565,12 +571,40 @@ impl Board {
     /// Resolves the Board without failing when none exists. Every candidate is
     /// recorded in order so `doctor` can print the trace.
     pub fn discovery(dir_override: Option<&Path>) -> Discovery {
+        let cwd = match std::env::current_dir() {
+            Ok(cwd) => cwd,
+            Err(error) => {
+                let mut discovery = Discovery::default();
+                discovery.error = Some(OrbitError::io("resolve current directory", error));
+                return discovery;
+            }
+        };
+        Self::discovery_at(&cwd, dir_override)
+    }
+
+    /// Resolves the Board from an explicit start path — the directory a
+    /// relative `--dir` hangs off and the root of the ancestor walk. Ends the
+    /// pass by computing `Discovery::needs_migration`, the one Legacy layout
+    /// verdict every consumer reads.
+    pub(crate) fn discovery_at(start: &Path, dir_override: Option<&Path>) -> Discovery {
+        let start = dunce::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
         let mut discovery = Discovery::default();
         if let Some(dir) = dir_override {
-            resolve_explicit(dir, &mut discovery);
-            return discovery;
+            resolve_explicit(dir, &start, &mut discovery);
+        } else {
+            resolve_from(&start, &mut discovery);
         }
-        resolve_from_cwd(&mut discovery);
+        if let Some(root) = discovery.root.clone() {
+            let storage = Config::load(&root)
+                .ok()
+                .and_then(|config| config.board.storage);
+            discovery.needs_migration = layout_needs_migration(
+                &root,
+                discovery.orbit_dir.as_deref(),
+                storage,
+                discovery.legacy.is_some(),
+            );
+        }
         discovery
     }
 
@@ -658,73 +692,16 @@ impl Board {
     }
 
     /// Whether the Board still uses a pre-ADR-0019 layout or configuration
-    /// that `orbit migrate` must convert before Board commands may run.
-    pub fn needs_migration(&self, discovery: Option<&Discovery>) -> bool {
-        // `board.storage` only existed to pick a worktree or in-repo layout.
-        if self.config.board.storage.is_some() {
-            return true;
-        }
-        // A Board backed by a Git worktree of another repository.
-        if self.root.join(".git").is_file() {
-            return true;
-        }
-        // Every Board is a standalone repository. A Board folder without its
-        // own `.git` — a plain directory, or the legacy `.git/orbit/board`
-        // store reached through an explicit `--dir` — predates ADR 0019.
-        if !self.root.join(".git").exists() {
-            return true;
-        }
-        // A Board folder sitting directly in an Orbit folder, or in the
-        // retired `.board` folder: both predate `.orbit/board`.
-        if self.root.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR)
-            || self
-                .root
-                .parent()
-                .and_then(|parent| parent.file_name())
-                .and_then(|name| name.to_str())
-                == Some(LEGACY_BOARD_DIR)
-        {
-            return true;
-        }
-        // A legacy `<workspace>/board` folder: named `board`, outside any Git
-        // working tree, and not anchored by an Orbit folder. Anchored Boards
-        // (`.orbit/board` hidden or a `board` pointer) are already covered by
-        // the checks above.
-        let anchored = self
-            .orbit_dir
-            .as_ref()
-            .is_some_and(|orbit| *orbit != self.root)
-            || discovery
-                .and_then(|discovery| discovery.orbit_dir.as_ref())
-                .is_some_and(|orbit| *orbit != self.root)
-            || self
-                .root
-                .parent()
-                .is_some_and(|parent| parent.join(ORBIT_DIR).exists());
-        if !anchored
-            && self.root.file_name().and_then(|name| name.to_str()) == Some(BOARD_DIR)
-            && self
-                .root
-                .parent()
-                .and_then(|parent| parent.file_name())
-                .and_then(|name| name.to_str())
-                != Some(ORBIT_DIR)
-            && self
-                .root
-                .parent()
-                .is_some_and(|parent| !crate::git::is_git_repo(parent))
-        {
-            return true;
-        }
-        // Discovery flagged a legacy layout. `ambiguous` alone does not gate:
-        // the selected Board may already be standalone while a shadowed
-        // legacy Board remains for `doctor` to report.
-        if let Some(discovery) = discovery
-            && discovery.legacy.is_some()
-        {
-            return true;
-        }
-        false
+    /// that `orbit migrate` must convert before Board commands may run. The
+    /// same classifier produces `Discovery::needs_migration`; this entry
+    /// exists for callers that hold only the Board.
+    pub fn needs_migration(&self) -> bool {
+        layout_needs_migration(
+            &self.root,
+            self.orbit_dir.as_deref(),
+            self.config.board.storage,
+            false,
+        )
     }
 
     pub fn storage_mode(&self) -> StorageMode {
@@ -1182,8 +1159,69 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
 }
 
-fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
-    let root = match resolve_external(dir) {
+/// The one Legacy layout classifier: whether a resolved Board folder uses a
+/// pre-ADR-0019 layout or configuration that `orbit migrate` must convert.
+/// `flagged_legacy` carries discovery's own legacy finding (a linked or
+/// explicitly-named layout whose shape this function does not re-derive);
+/// `ambiguous` alone does not gate — the selected Board may already be
+/// standalone while a shadowed legacy Board remains for `doctor` to report.
+fn layout_needs_migration(
+    root: &Path,
+    orbit_dir: Option<&Path>,
+    storage: Option<StorageMode>,
+    flagged_legacy: bool,
+) -> bool {
+    // `board.storage` only existed to pick a worktree or in-repo layout.
+    if storage.is_some() {
+        return true;
+    }
+    // A Board backed by a Git worktree of another repository.
+    if root.join(".git").is_file() {
+        return true;
+    }
+    // Every Board is a standalone repository. A Board folder without its
+    // own `.git` — a plain directory, or the legacy `.git/orbit/board`
+    // store reached through an explicit `--dir` — predates ADR 0019.
+    if !root.join(".git").exists() {
+        return true;
+    }
+    // A Board folder sitting directly in an Orbit folder, or in the
+    // retired `.board` folder: both predate `.orbit/board`.
+    if root.file_name().and_then(|name| name.to_str()) == Some(ORBIT_DIR)
+        || root
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            == Some(LEGACY_BOARD_DIR)
+    {
+        return true;
+    }
+    // A legacy `<workspace>/board` folder: named `board`, outside any Git
+    // working tree, and not anchored by an Orbit folder. Anchored Boards
+    // (`.orbit/board` hidden or a `board` pointer) are already covered by
+    // the checks above.
+    let anchored = orbit_dir.is_some_and(|orbit| orbit != root)
+        || root
+            .parent()
+            .is_some_and(|parent| parent.join(ORBIT_DIR).exists());
+    if !anchored
+        && root.file_name().and_then(|name| name.to_str()) == Some(BOARD_DIR)
+        && root
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            != Some(ORBIT_DIR)
+        && root
+            .parent()
+            .is_some_and(|parent| !crate::git::is_git_repo(parent))
+    {
+        return true;
+    }
+    flagged_legacy
+}
+
+fn resolve_explicit(dir: &Path, start: &Path, discovery: &mut Discovery) {
+    let root = match resolve_external_at(dir, start) {
         Ok(root) => root,
         Err(error) => {
             discovery
@@ -1275,16 +1313,8 @@ fn resolve_explicit(dir: &Path, discovery: &mut Discovery) {
 /// restarted from a worktree's main checkout, then nothing. A Board in the
 /// home directory is an ordinary Board found by that walk — there is no
 /// special global fallback.
-fn resolve_from_cwd(discovery: &mut Discovery) {
-    let cwd = match std::env::current_dir() {
-        Ok(cwd) => dunce::canonicalize(&cwd).unwrap_or(cwd),
-        Err(error) => {
-            discovery.error = Some(OrbitError::io("resolve current directory", error));
-            return;
-        }
-    };
-
-    if let Some(repo_root) = git::toplevel_containing(&cwd) {
+fn resolve_from(cwd: &Path, discovery: &mut Discovery) {
+    if let Some(repo_root) = git::toplevel_containing(cwd) {
         let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);
         let common = match git::common_dir_at(&repo_root) {
             Ok(common) => common,
@@ -1460,12 +1490,17 @@ fn resolve_from_cwd(discovery: &mut Discovery) {
 }
 
 pub(crate) fn resolve_external(dir: &Path) -> Result<PathBuf> {
+    let cwd = std::env::current_dir()
+        .map_err(|error| OrbitError::io("resolve current directory", error))?;
+    resolve_external_at(dir, &cwd)
+}
+
+/// Resolves `dir` against `base` when relative and canonicalizes the result.
+pub(crate) fn resolve_external_at(dir: &Path, base: &Path) -> Result<PathBuf> {
     let root = if dir.is_absolute() {
         dir.to_path_buf()
     } else {
-        std::env::current_dir()
-            .map_err(|error| OrbitError::io("resolve current directory", error))?
-            .join(dir)
+        base.join(dir)
     };
     if let Ok(canonical) = dunce::canonicalize(&root) {
         return Ok(canonical);
@@ -1907,6 +1942,126 @@ pub(crate) fn already_initialized(path: &Path) -> OrbitError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal Board folder: `config.toml` makes `Board::is_board` true.
+    fn board_files(root: &Path) {
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(root.join("config.toml"), "").unwrap();
+    }
+
+    /// A post-ADR-0019 Board: its own `.git` folder marks it standalone.
+    fn standalone_board(root: &Path) {
+        board_files(root);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+    }
+
+    #[test]
+    fn discovery_walks_up_to_the_nearest_orbit_board() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("acme");
+        let board = workspace.join(".orbit").join("board");
+        standalone_board(&board);
+        let start = workspace.join("projects/api");
+        std::fs::create_dir_all(&start).unwrap();
+
+        let discovery = Board::discovery_at(&start, None);
+
+        let board = dunce::canonicalize(&board).unwrap();
+        assert_eq!(discovery.root.as_deref(), Some(board.as_path()));
+        assert_eq!(discovery.source, DiscoverySource::Nearest);
+        assert_eq!(
+            discovery
+                .steps
+                .iter()
+                .map(|step| step.source)
+                .collect::<Vec<_>>(),
+            vec![DiscoverySource::Nearest]
+        );
+        assert!(discovery.steps[0].selected);
+        assert!(!discovery.needs_migration);
+    }
+
+    #[test]
+    fn discovery_records_the_resolution_order_inside_a_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git::init_repo(&repo).unwrap();
+
+        // The link pointer wins over the nearest `.orbit` Board.
+        let linked = dir.path().join("linked-board");
+        standalone_board(&linked);
+        Board::write_link_at(&repo.join(".git"), &linked).unwrap();
+        standalone_board(&repo.join(".orbit").join("board"));
+
+        let discovery = Board::discovery_at(&repo, None);
+
+        assert_eq!(
+            discovery
+                .steps
+                .iter()
+                .map(|step| step.source)
+                .collect::<Vec<_>>(),
+            vec![
+                DiscoverySource::Link,
+                DiscoverySource::Nearest,
+                DiscoverySource::MainCheckout,
+                DiscoverySource::LegacyLocal,
+            ]
+        );
+        let linked = dunce::canonicalize(&linked).unwrap();
+        assert_eq!(discovery.source, DiscoverySource::Link);
+        assert_eq!(discovery.root.as_deref(), Some(linked.as_path()));
+        assert!(discovery.steps[0].selected);
+        assert!(discovery.steps[1].found);
+        assert!(!discovery.needs_migration);
+    }
+
+    #[test]
+    fn discovery_marks_the_legacy_local_board_as_needing_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git::init_repo(&repo).unwrap();
+        board_files(&repo.join(".git/orbit/board"));
+
+        let discovery = Board::discovery_at(&repo, None);
+
+        assert_eq!(discovery.source, DiscoverySource::LegacyLocal);
+        assert!(discovery.needs_migration);
+        assert!(discovery.legacy.is_some());
+    }
+
+    #[test]
+    fn discovery_marks_an_explicit_legacy_workspace_board_as_needing_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("acme");
+        board_files(&workspace.join("board"));
+
+        let discovery = Board::discovery_at(dir.path(), Some(&workspace));
+
+        let board = dunce::canonicalize(workspace.join("board")).unwrap();
+        assert_eq!(discovery.source, DiscoverySource::Dir);
+        assert_eq!(discovery.root.as_deref(), Some(board.as_path()));
+        assert!(discovery.needs_migration);
+        assert!(discovery.legacy.is_some());
+    }
+
+    #[test]
+    fn discovery_marks_a_standalone_board_as_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let board = dir.path().join("standalone");
+        standalone_board(&board);
+
+        let discovery = Board::discovery_at(dir.path(), Some(&board));
+
+        assert_eq!(discovery.source, DiscoverySource::Dir);
+        assert_eq!(
+            discovery.root.as_deref(),
+            Some(dunce::canonicalize(&board).unwrap().as_path())
+        );
+        assert!(!discovery.needs_migration);
+    }
 
     #[test]
     fn workspace_local_boards_finds_legacy_and_nested_child_boards() {

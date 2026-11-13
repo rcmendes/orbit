@@ -292,7 +292,7 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
     }
 
     if let Some(board) = board {
-        if board.needs_migration(Some(discovery)) && discovery.legacy.is_none() {
+        if discovery.needs_migration && discovery.legacy.is_none() {
             issues.push(Issue::new(
                 LEGACY_LAYOUT,
                 None,

@@ -2,6 +2,7 @@ pub mod atomic;
 pub mod board;
 pub mod board_host;
 pub mod board_migrate;
+pub mod board_move;
 pub mod board_sync;
 pub mod cli;
 pub mod commands;

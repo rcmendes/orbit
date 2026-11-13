@@ -205,7 +205,7 @@ pub struct InitArgs {
 
     /// Use a visible Board folder instead of the hidden .orbit/board layout.
     ///
-    /// Bare `--visible` names the folder `board`; `--visible=NAME` picks the
+    /// Bare `--visible` names the folder `issues`; `--visible=NAME` picks the
     /// name. Only applies when the target resolves to a repository or Board
     /// anchor — an explicit directory is already a visible Board folder.
     #[arg(
@@ -1173,6 +1173,22 @@ pub enum BoardCommand {
     /// never rebased or force-pushed.
     #[command(long_about = help::BOARD_SYNC_LONG, after_long_help = help::BOARD_SYNC_EXAMPLES)]
     Sync(BoardSyncArgs),
+
+    /// Move the Board folder to DIR and repoint every anchor at it.
+    ///
+    /// Rewrites the `.orbit/board` pointer (or restores the hidden layout when
+    /// DIR is `.orbit/board`), hides a folder inside a Git working tree through
+    /// `.git/info/exclude`, and repoints member Repository links. History moves
+    /// with the folder.
+    #[command(long_about = help::BOARD_MOVE_LONG, after_long_help = help::BOARD_MOVE_EXAMPLES)]
+    Move(BoardMoveArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BoardMoveArgs {
+    /// New Board folder; must not exist or be an empty directory.
+    #[arg(value_name = "DIR")]
+    pub target: PathBuf,
 }
 
 #[derive(Debug, Args)]

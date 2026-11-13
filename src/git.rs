@@ -453,6 +453,29 @@ pub fn exclude_entry_for(repo: &Path, dir: &Path) -> Result<String> {
     Ok(format!("/{escaped}/"))
 }
 
+/// Removes an exact `pattern` line from the repository's local exclude file.
+pub fn remove_exclude_entry(repo: &Path, pattern: &str) -> Result<()> {
+    let path = common_dir_at(repo)?.join("info").join("exclude");
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(OrbitError::io(format!("read {}", path.display()), error)),
+    };
+    if !existing.lines().any(|line| line.trim() == pattern) {
+        return Ok(());
+    }
+    let mut content: String = existing
+        .lines()
+        .filter(|line| line.trim() != pattern)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    std::fs::write(&path, content)
+        .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
+}
+
 /// Adds an untracked exclusion for `dir` to the repository's local exclude file.
 /// The path never enters a tracked `.gitignore`.
 pub fn ensure_exclude_entry(repo: &Path, dir: &Path) -> Result<()> {

@@ -90,3 +90,23 @@ pub(super) fn cmd_sync(board: &Board, args: &BoardSyncArgs) -> Result<CommandOut
         .collect();
     Ok(output)
 }
+
+/// `orbit board move DIR` — relocate the Board folder.
+pub(super) fn cmd_move(board: &Board, args: &crate::cli::BoardMoveArgs) -> Result<CommandOutput> {
+    let outcome = crate::board_move::move_board(board, &args.target)?;
+    let data = json!({
+        "from": outcome.from,
+        "to": outcome.to,
+        "visible": outcome.visible,
+        "relinked": outcome.relinked,
+    });
+    let mut human = format!(
+        "moved the Board from {} to {}\n",
+        outcome.from.display(),
+        outcome.to.display()
+    );
+    for path in &outcome.relinked {
+        human.push_str(&format!("relinked member {}\n", path.display()));
+    }
+    Ok(CommandOutput::new(data, human))
+}

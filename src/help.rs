@@ -1174,7 +1174,8 @@ Examples:
 pub const BOARD_HOST_LONG: &str = "\
 Show, set, or clear the Board host. The host may be a member Repository name,
 a local repository path, or a git URL; the Board's `orbit` branch is pushed
-there. When the host already serves an `orbit` branch it must hold a Board with
+there. A local repository path resolves to its `origin` remote when it has one.
+When the host already serves an `orbit` branch it must hold a Board with
 the same Slug — one Board per host. `--none` clears the local configuration and
 removes the local `host` remote; it never deletes the remote `orbit` branch.";
 
@@ -1184,6 +1185,20 @@ Examples:
   orbit board host ../board-host
   orbit board host https://github.com/org/board-host.git
   orbit board host --none";
+
+pub const BOARD_MOVE_LONG: &str = "\
+Move the Board folder to DIR. The Board's Git history moves with it. Orbit
+rewrites the `.orbit/board` pointer file to name the new folder — or, when DIR
+is the anchor's `.orbit/board`, restores the hidden layout — adds DIR to the
+enclosing repository's `.git/info/exclude`, and repoints member Repository
+links. DIR must not exist or must be an empty directory, and must be on the
+same filesystem. The Board host and `cache/` are unchanged.";
+
+pub const BOARD_MOVE_EXAMPLES: &str = "\
+Examples:
+  orbit board move issues
+  orbit board move ~/src/acme/hub/issues
+  orbit board move .orbit/board";
 
 pub const BOARD_SYNC_LONG: &str = "\
 Synchronize the Board with its host: commit pending changes, fetch the host's

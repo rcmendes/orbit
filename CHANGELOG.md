@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `orbit board move DIR` relocates the Board folder and repoints the `.orbit/board` pointer, the `.git/info/exclude` entry, and member Repository links.
+- A Board host given as a local repository path now pushes to that repository's `origin` remote when it has one, so a code repository hosts the Board on its tracker instead of in a local branch.
+- Bare `orbit init --visible` (and the interactive name prompt) now names the visible Board folder `issues` instead of `board`.
 - **Breaking:** replaced `orbit github` with the provider-neutral `orbit remote` command surface (ADR 0018). There are no aliases or compatibility flags; `orbit github` and `orbit workspace issues` are rejected. The GitHub adapter, client, and `[github]`/`[remote.github]` configuration are unchanged — only the command names moved.
 
   | Old | New |

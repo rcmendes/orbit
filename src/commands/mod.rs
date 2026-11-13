@@ -129,6 +129,13 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 output.warnings.extend(board.warnings.iter().cloned());
                 Ok(output)
             }
+            crate::cli::BoardCommand::Move(move_args) => {
+                // The old root is gone after the move; never auto-sync from it.
+                crate::board_sync::suppress();
+                with_board(dir.as_deref(), true, |board| {
+                    board::cmd_move(board, move_args)
+                })
+            }
         },
         Command::Remote(args) => {
             if remote_is_read_only(&args) {

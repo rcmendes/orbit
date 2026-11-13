@@ -112,14 +112,20 @@ pub fn normalize_host_spec(spec: &str) -> Result<String> {
 
 /// Resolve a stored `board.host` spec to the git URL `fetch`/`push` use.
 ///
-/// Paths and URLs pass through. Names go through the member-Repository seam:
+/// A local repository path resolves to its own `origin` remote when it has
+/// one, so a code repository hosts the Board on its tracker (GitHub, …) rather
+/// than in a local branch; a path without `origin` (a bare host) is used as is.
+/// URLs pass through. Names go through the member-Repository seam:
 /// a Workspace Board's repository catalog maps a Repository name or `owner/repo`
 /// identity to its `origin` (falling back to its local path). The
 /// member-Repositories model lands with `orbit repo`; until then this is the
 /// single resolution point.
 pub fn resolve_host_url(board: &Board, spec: &str) -> Result<String> {
     match classify(spec)? {
-        HostSpec::Path(path) => Ok(path.to_string_lossy().to_string()),
+        HostSpec::Path(path) => Ok(match git::remote_url(&path, "origin")? {
+            Some(origin) => origin,
+            None => path.to_string_lossy().to_string(),
+        }),
         HostSpec::Url(url) => Ok(url),
         HostSpec::Name(name) => member_repo_url(board, &name).ok_or_else(|| {
             OrbitError::invalid_argument(format!(

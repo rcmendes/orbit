@@ -578,6 +578,7 @@ mod tests {
                 }),
                 created_at: now(),
                 updated_at: now() - Duration::hours(1),
+                annotations: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: String::new(),

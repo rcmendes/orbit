@@ -28,6 +28,7 @@ pub mod code {
     pub const INVALID_TYPE: &str = "INVALID_TYPE";
     pub const INVALID_AREA: &str = "INVALID_AREA";
     pub const INVALID_LABEL: &str = "INVALID_LABEL";
+    pub const INVALID_ANNOTATION: &str = "INVALID_ANNOTATION";
     pub const LABEL_BLOCKED: &str = "LABEL_BLOCKED";
     pub const CORRUPT_COMMENT: &str = "CORRUPT_COMMENT";
     pub const ORPHAN_COMMENT: &str = "ORPHAN_COMMENT";

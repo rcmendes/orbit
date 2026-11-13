@@ -47,6 +47,10 @@ _Avoid_: Label, component tag, free-form tag
 Optional, concise checks or commands agents should run for a Task, stored separately from narrative acceptance criteria in the body. Project-wide defaults live in [`docs/agents/project-guidance.md`](./agents/project-guidance.md); Task-level `verification` adds to or narrows those defaults.
 _Avoid_: Acceptance criteria, comment, checkpoint
 
+**Annotation**:
+Structured data that one tool attaches to a Task under the tool's name, its owner. Orbit stores, returns, and shows it but never interprets it: an Annotation never affects Ready, Blocked, Claim eligibility, or Status, and it is never synchronized with a Remote Tracker.
+_Avoid_: Metadata, custom field, namespace, extra
+
 **Status**:
 The stored lifecycle position of a Task: `todo`, `in_progress`, `done`, or `cancelled`.
 _Avoid_: State, phase

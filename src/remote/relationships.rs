@@ -221,6 +221,7 @@ mod tests {
                 github: None,
                 remote: None,
                 repo: None,
+                annotations: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: String::new(),

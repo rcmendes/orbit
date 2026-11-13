@@ -397,6 +397,14 @@ fn diagnose_tasks(
         issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message));
     }
 
+    for task in graph.tasks.values() {
+        for (owner, value) in &task.front.annotations {
+            if let Err(error) = crate::task::validate_annotation(owner, value) {
+                issues.push(Issue::new(error.code, Some(&task.id), error.message));
+            }
+        }
+    }
+
     for task in graph.stale_tasks() {
         warnings.push(format!(
             "{}: stale claim by {}",

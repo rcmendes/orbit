@@ -795,11 +795,11 @@ Examples:
 pub const EXPORT_LONG: &str = "\
 Emits a deterministic JSON snapshot of the whole Board: every Task and SubTask,
 including terminal work, with type, labels, dependency and parent edges, derived
-readiness, and comments. The snapshot is ordered by task ID and contains no
+readiness, Annotations, and comments. The snapshot is ordered by task ID and contains no
 timestamps or machine-local paths, so the same board state always produces the
 same data.
 
-The top-level data object carries schema_version; consumers should pin it. Use
+The top-level data object carries schema_version (3); consumers should pin it. Use
 export to feed a knowledge base, archive a board, or diff two snapshots.";
 
 pub const EXPORT_EXAMPLES: &str = "\

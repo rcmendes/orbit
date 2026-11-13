@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Tasks carry Annotations: tool-owned JSON objects keyed by owner slug, returned by `show`, `list`, and `export` and shown by human `show`. `orbit export` `schema_version` is now `3`. `doctor` reports malformed Annotations as `INVALID_ANNOTATION`.
 - `orbit remote disconnect` of the last GitHub project now removes `[remote.github]`, so `orbit doctor` no longer reports `GITHUB_REPO_NOT_LINKED`; default `[github]`/`[github.issue_fields]` tables are no longer written to `config.toml`, so `orbit migrate` leaves no legacy `[github]` section behind.
 - `orbit init` inside a code repository uses that repository's local `user.name`/`user.email` for the new Board repository when no global identity is set.
 - `orbit board move DIR` relocates the Board folder and repoints the `.orbit/board` pointer, the `.git/info/exclude` entry, and member Repository links.

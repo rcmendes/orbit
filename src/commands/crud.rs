@@ -95,6 +95,7 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
             stray_claim_times: None,
             created_at: now,
             updated_at: now,
+            annotations: Default::default(),
             extra: Default::default(),
         },
         body,

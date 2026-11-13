@@ -125,8 +125,8 @@ where
 ///
 /// The command edge may share one `GitHubClient` across every adapter in
 /// the operation via [`BoardResolver::with_client`]; [`BoardResolver::new`]
-/// defers client construction to adapter resolution for callers that may
-/// not touch GitHub at all.
+/// resolves adapters without a client, so config-only port facts never
+/// probe `gh` or the fixture — the client is built on first use.
 pub struct BoardResolver<'a> {
     pub board: &'a Board,
     client: Option<Arc<dyn GitHubClient>>,
@@ -140,16 +140,19 @@ impl RemoteResolver for BoardResolver<'_> {
     fn adapter(&self, tracker: &str) -> Result<Box<dyn RemoteAdapter>> {
         match tracker {
             "github" => {
-                let client = match &self.client {
-                    Some(client) => client.clone(),
-                    None => crate::github::client::client_from_env()?,
-                };
-                Ok(Box::new(
-                    crate::github::adapter::GitHubAdapter::with_client(
-                        client,
-                        crate::github::adapter::GitHubAdapter::effective_config(self.board),
+                // Without an injected client the adapter resolves lazily:
+                // config-only port facts (`mapped_fields`, `project_available`,
+                // …) never build a `GitHubClient`, and
+                // the first call that reaches GitHub does.
+                let config =
+                    crate::github::adapter::GitHubAdapter::effective_config(self.board);
+                Ok(Box::new(match &self.client {
+                    Some(client) => crate::github::adapter::GitHubAdapter::with_client(
+                        client.clone(),
+                        config,
                     ),
-                ))
+                    None => crate::github::adapter::GitHubAdapter::from_config(config),
+                }))
             }
             other => Err(OrbitError::config(format!(
                 "no Remote Tracker adapter is installed for `{other}`"
@@ -160,7 +163,7 @@ impl RemoteResolver for BoardResolver<'_> {
 
 impl<'a> BoardResolver<'a> {
     /// The resolver the engine uses when the caller does not inject one.
-    /// The client is built lazily when a GitHub adapter is resolved.
+    /// Adapters build their client lazily on first use.
     pub fn new(board: &'a Board) -> Self {
         Self {
             board,

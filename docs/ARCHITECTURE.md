@@ -154,9 +154,10 @@ flowchart LR
 ### Scoped access and execution modules
 
 `board::BoardAccess::open` keeps discovery policy and the Board lock in one scope.
-`Read` retains normal worktree-record recovery and takes a shared lock; `Write`
-takes an exclusive lock; `Inspect` resolves without recovery and takes a shared
-lock. Dropping the access value releases the lock. Command handlers keep the
+Discovery runs once and never writes files or repairs Git worktrees. `Read`
+and `Inspect` take a shared lock; `Write` takes an exclusive lock. Orphan `orbit`
+worktree records are reported by `doctor`; restore them explicitly with
+`doctor --fix`, then convert the legacy Board with `orbit migrate`. Dropping the access value releases the lock. Command handlers keep the
 scope alive through execution and append its discovery warnings to the result.
 
 `mutation` owns lifecycle execution and shared Task persistence. It returns

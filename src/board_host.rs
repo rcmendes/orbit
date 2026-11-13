@@ -264,8 +264,11 @@ pub fn set_host(root: &Path, spec: &str, join: bool) -> Result<HostOutcome> {
     let branch = board.config.board.branch.clone();
     let board_slug = slug::slug_of_prefix(&board.config.id.prefix).to_string();
 
+    // Host lookup is network I/O and stays outside the Board lock.
     let tip = fetch_tip(root, &url, &branch)?;
 
+    let board = Board::at_root(root.to_path_buf(), Vec::new())?;
+    let _lock = board.lock_exclusive()?;
     let mut joined = false;
     if let Some(tip) = &tip {
         check_host_slug(root, tip, &board_slug)?;
@@ -321,6 +324,11 @@ pub fn auto_after_write(access: BoardAccess) -> (Board, Vec<String>) {
     let board = access.into_board();
     let warnings = auto_sync(&board);
     (board, warnings)
+}
+
+/// Applies the auto-sync gate after a lock-free host-network command commits.
+pub fn auto_after_board(board: &Board) -> Vec<String> {
+    auto_sync(board)
 }
 
 /// Runs the `prime` auto-sync before the read-only prime view is opened.

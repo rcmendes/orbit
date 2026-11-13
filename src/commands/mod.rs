@@ -106,12 +106,20 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
         Command::Board(args) => match &args.command {
             crate::cli::BoardCommand::Host(host_args) => {
-                if host_args.target.is_none() && !host_args.none {
-                    with_board(dir.as_deref(), false, |board| {
+                if host_args.target.is_some() {
+                    let board = crate::board_host::unlocked_for_network(dir.as_deref())?;
+                    let mut output = board::cmd_host(&board, host_args)?;
+                    output
+                        .warnings
+                        .extend(crate::board_host::auto_after_board(&board));
+                    output.warnings.extend(board.warnings.iter().cloned());
+                    Ok(output)
+                } else if host_args.none {
+                    with_board(dir.as_deref(), true, |board| {
                         board::cmd_host(board, host_args)
                     })
                 } else {
-                    with_board(dir.as_deref(), true, |board| {
+                    with_board(dir.as_deref(), false, |board| {
                         board::cmd_host(board, host_args)
                     })
                 }

@@ -16,7 +16,8 @@ use crate::mutation::persist_task;
 use crate::remote::RemoteProject;
 use crate::remote::link::{active_link, encode_baseline, link_mut, link_view, materialize};
 use crate::remote::model::{
-    RemoteIssue, RemoteIssueFields, RemoteIssueUpdate, SyncDirection, SyncPlan, SyncResolution,
+    RemoteIssue, RemoteIssueFields, RemoteIssueRef, RemoteIssueUpdate, SyncDirection, SyncPlan,
+    SyncResolution,
 };
 use crate::remote::port::{RemoteAdapter, RemoteResolver};
 use crate::remote::relationships::{self, RelationshipReport, RemoteRelationsView};
@@ -128,8 +129,10 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
     }
 
     let mut adapters = Adapters::new(resolver);
-    let mut prepared = Vec::new();
-    let mut resolved_fields = BTreeSet::new();
+    // Validate links and availability first, then fetch every Remote Issue
+    // in one batched pass per tracker so a whole-Board sync costs a few
+    // round-trips instead of one API call per linked Task.
+    let mut entries = Vec::new();
     for id in &targets {
         let task = graph.get(id)?;
         let link = active_link(task)
@@ -148,17 +151,94 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
         if direction != SyncDirection::Pull {
             sync::reject_unmapped_metadata(adapter, &project, task)?;
         }
-        let issue = adapter.fetch_issue(&project, &link.id)?;
+        entries.push((task.clone(), link));
+    }
+
+    let mut fetched: Vec<Option<Result<RemoteIssue>>> =
+        entries.iter().map(|_| None).collect();
+    let mut tracker_order: Vec<&str> = Vec::new();
+    let mut by_tracker: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, (_, link)) in entries.iter().enumerate() {
+        if !by_tracker.contains_key(link.tracker.as_str()) {
+            tracker_order.push(link.tracker.as_str());
+        }
+        by_tracker
+            .entry(link.tracker.as_str())
+            .or_default()
+            .push(index);
+    }
+    for tracker in tracker_order {
+        let indices = &by_tracker[tracker];
+        let adapter = adapters.get(tracker)?;
+        let refs: Vec<RemoteIssueRef> = indices
+            .iter()
+            .map(|index| RemoteIssueRef {
+                project: entries[*index].1.project.clone(),
+                id: entries[*index].1.id.clone(),
+            })
+            .collect();
+        for (index, issue) in indices.iter().zip(adapter.fetch_issues(&refs)) {
+            fetched[*index] = Some(issue);
+        }
+    }
+
+    enum Prepared {
+        Ready {
+            task: Task,
+            link: crate::remote::link::RemoteLinkView,
+            issue: RemoteIssue,
+            plan: SyncPlan,
+            relationship: RelationshipReport,
+        },
+        FetchFailed {
+            task: Task,
+            link: crate::remote::link::RemoteLinkView,
+            failure: SyncFailure,
+        },
+    }
+
+    let mut prepared: Vec<Prepared> = Vec::new();
+    let mut resolved_fields = BTreeSet::new();
+    for (index, (task, link)) in entries.into_iter().enumerate() {
+        let adapter = adapters.get(&link.tracker)?;
+        let issue = match fetched[index].take().expect("fetched above") {
+            Ok(issue) => issue,
+            Err(error) => {
+                // A single explicit Task keeps the historical behavior of
+                // failing the command; a whole-Board sync reports the
+                // unchecked Task and keeps going.
+                if request.task.is_some() {
+                    return Err(error);
+                }
+                prepared.push(Prepared::FetchFailed {
+                    task: task.clone(),
+                    link: link.clone(),
+                    failure: SyncFailure {
+                        task: task.id.clone(),
+                        tracker: link.tracker.clone(),
+                        project: link.project.clone(),
+                        id: link.id.clone(),
+                        code: error.code,
+                        message: error.message,
+                        retry_safe: true,
+                    },
+                });
+                continue;
+            }
+        };
         let mut plan = sync::plan_sync(
             adapter,
-            OrbitSyncView { task, link: &link },
+            OrbitSyncView {
+                task: &task,
+                link: &link,
+            },
             &issue,
             direction,
         );
         resolved_fields.extend(resolve_sync_conflicts(
             adapter,
             &mut plan,
-            task,
+            &task,
             &issue,
             &resolutions,
         )?);
@@ -191,7 +271,13 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
         if direction == SyncDirection::Pull {
             relationship.changes.clear();
         }
-        prepared.push((task.clone(), link, issue, plan, relationship));
+        prepared.push(Prepared::Ready {
+            task,
+            link,
+            issue,
+            plan,
+            relationship,
+        });
     }
 
     let unused_resolutions: Vec<_> = resolutions
@@ -208,8 +294,13 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
 
     let unresolved: Vec<_> = prepared
         .iter()
-        .filter(|(_, _, _, plan, _)| plan.has_conflicts())
-        .map(|(task, link, _, plan, _)| {
+        .filter_map(|entry| match entry {
+            Prepared::Ready {
+                task, link, plan, ..
+            } if plan.has_conflicts() => Some((task, link, plan)),
+            _ => None,
+        })
+        .map(|(task, link, plan)| {
             json!({
                 "task": task.id,
                 "tracker": link.tracker,
@@ -239,7 +330,51 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
     let mut failures = Vec::new();
     let mut successes = 0usize;
     let mut warnings = Vec::new();
-    for (task, link, issue, plan, relationship) in prepared {
+    for entry in prepared {
+        let (task, link, issue, plan, relationship) = match entry {
+            Prepared::FetchFailed {
+                task,
+                link,
+                failure,
+            } => {
+                failures.push(failure.clone());
+                plans.push(SyncTaskResult {
+                    task,
+                    link,
+                    plan: SyncPlan {
+                        direction,
+                        apply_title: None,
+                        apply_body: None,
+                        apply_status: None,
+                        apply_labels: None,
+                        apply_area: None,
+                        apply_verification: None,
+                        push_title: None,
+                        push_body: None,
+                        push_labels: None,
+                        push_area: None,
+                        push_verification: None,
+                        push_status: None,
+                        conflicts: Vec::new(),
+                        warnings: Vec::new(),
+                    },
+                    relationships: RelationshipReport {
+                        supported: Vec::new(),
+                        unsupported: Vec::new(),
+                        changes: Vec::new(),
+                    },
+                    outcome: SyncOutcome::Failed(failure),
+                });
+                continue;
+            }
+            Prepared::Ready {
+                task,
+                link,
+                issue,
+                plan,
+                relationship,
+            } => (task, link, issue, plan, relationship),
+        };
         let mut item = SyncTaskResult {
             task: task.clone(),
             link: link.clone(),

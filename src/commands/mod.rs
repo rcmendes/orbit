@@ -178,7 +178,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
 fn remote_is_read_only(args: &crate::cli::RemoteArgs) -> bool {
     use crate::cli::{RemoteCommand, RemoteIssuesCommand};
     match &args.command {
-        RemoteCommand::Status | RemoteCommand::List => true,
+        RemoteCommand::Status(_) | RemoteCommand::List => true,
         RemoteCommand::Issues(issues) => {
             !matches!(issues.command, Some(RemoteIssuesCommand::Refresh))
         }

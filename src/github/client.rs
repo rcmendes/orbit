@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{OrbitError, Result, code};
 use crate::github::config::IssueFieldConfig;
-use crate::github::model::{IssueSnapshot, IssueState, IssueStateReason};
+use crate::github::model::{IssueRef, IssueSnapshot, IssueState, IssueStateReason};
 use crate::github::relationships::{RelationshipChange, SupportedRelationship};
 
 const AREA_FIELD_OPTIONS: [&str; 6] = ["board", "cli", "mcp", "setup", "docs", "release"];
@@ -129,6 +129,21 @@ pub trait GitHubClient: Send + Sync {
         number: u64,
         issue_fields: Option<&IssueFieldConfig>,
     ) -> Result<IssueSnapshot>;
+
+    /// Fetch many issues across repositories in one call. Returns one
+    /// entry per requested ref, in request order; a per-entry `Err`
+    /// isolates the failure to that ref so rate limits or missing issues
+    /// never sink the whole batch. The default issues one `get_issue`
+    /// call per ref; `gh` implementations batch through GraphQL.
+    fn get_issues(
+        &self,
+        refs: &[IssueRef],
+        issue_fields: Option<&IssueFieldConfig>,
+    ) -> Vec<Result<IssueSnapshot>> {
+        refs.iter()
+            .map(|issue| self.get_issue(&issue.repo, issue.number, issue_fields))
+            .collect()
+    }
 
     fn list_issues_page(
         &self,
@@ -417,6 +432,52 @@ impl GitHubClient for GhCliClient {
             })
             .collect();
         Ok(issue)
+    }
+
+    fn get_issues(
+        &self,
+        refs: &[IssueRef],
+        issue_fields: Option<&IssueFieldConfig>,
+    ) -> Vec<Result<IssueSnapshot>> {
+        let mut results: Vec<Option<Result<IssueSnapshot>>> =
+            refs.iter().map(|_| None).collect();
+        // Group by repository and chunk so one inaccessible repository or
+        // one failed GraphQL query only affects its own issues.
+        let mut order: Vec<usize> = (0..refs.len()).collect();
+        order.sort_by(|a, b| {
+            refs[*a]
+                .repo
+                .to_lowercase()
+                .cmp(&refs[*b].repo.to_lowercase())
+        });
+        for group in order
+            .chunk_by(|a, b| refs[*a].repo.eq_ignore_ascii_case(&refs[*b].repo))
+        {
+            for chunk in group.chunks(GRAPHQL_BATCH_ISSUES) {
+                let repo = refs[chunk[0]].repo.clone();
+                let numbers: Vec<u64> = chunk.iter().map(|i| refs[*i].number).collect();
+                match graphql_repository_issues(&repo, &numbers, issue_fields) {
+                    Ok(snapshots) => {
+                        for (i, snapshot) in chunk.iter().zip(snapshots) {
+                            results[*i] = Some(snapshot);
+                        }
+                    }
+                    Err(_) => {
+                        // The batched query failed (rate limit, repository
+                        // access, schema gap): fall back to one REST fetch
+                        // per issue so each ref reports its own error.
+                        for i in chunk {
+                            results[*i] =
+                                Some(self.get_issue(&repo, refs[*i].number, issue_fields));
+                        }
+                    }
+                }
+            }
+        }
+        results
+            .into_iter()
+            .map(|entry| entry.expect("every requested ref was resolved"))
+            .collect()
     }
 
     fn list_issues_page(
@@ -1254,6 +1315,237 @@ fn parse_rest_issue(repo: &str, bytes: &[u8]) -> Result<IssueSnapshot> {
     })
 }
 
+/// Issues fetched per GraphQL query. Aliased `issue(number:)` fields keep
+/// each query far below GitHub's node budget while turning N REST
+/// round-trips into N/50 queries.
+const GRAPHQL_BATCH_ISSUES: usize = 50;
+
+const GRAPHQL_ISSUE_FRAGMENT: &str = "number title body state stateReason updatedAt \
+    labels(first: 100) { nodes { name } } \
+    assignees(first: 100) { nodes { login } } \
+    subIssues(first: 100) { nodes { number repository { nameWithOwner } } } \
+    blockedBy(first: 100) { nodes { number repository { nameWithOwner } } }";
+
+const GRAPHQL_FIELD_VALUES_FRAGMENT: &str = "issueFieldValues(first: 100) { nodes { \
+    field { \
+        ... on IssueFieldSingleSelect { name } ... on IssueFieldText { name } \
+        ... on IssueFieldNumber { name } ... on IssueFieldDate { name } \
+        ... on IssueFieldMultiSelect { name } \
+    } \
+    ... on IssueFieldSingleSelectValue { name } \
+    ... on IssueFieldTextValue { value } \
+    ... on IssueFieldNumberValue { value } \
+    ... on IssueFieldDateValue { value } \
+    ... on IssueFieldMultiSelectValue { options { name } } \
+} }";
+
+/// Build one GraphQL query that fetches `numbers` in `repo` through
+/// aliases (`i0`, `i1`, …) inside a single `repository` field.
+fn batch_issues_query(repo: &str, numbers: &[u64], with_field_values: bool) -> String {
+    let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+    let owner = serde_json::to_string(owner).expect("owner is valid UTF-8");
+    let name = serde_json::to_string(name).expect("name is valid UTF-8");
+    let fragment = if with_field_values {
+        format!("{GRAPHQL_ISSUE_FRAGMENT} {GRAPHQL_FIELD_VALUES_FRAGMENT}")
+    } else {
+        GRAPHQL_ISSUE_FRAGMENT.to_string()
+    };
+    let aliases = numbers
+        .iter()
+        .enumerate()
+        .map(|(index, number)| format!("i{index}: issue(number: {number}) {{ {fragment} }}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("query {{ repository(owner: {owner}, name: {name}) {{ {aliases} }} }}")
+}
+
+fn graphql_repository_issues(
+    repo: &str,
+    numbers: &[u64],
+    issue_fields: Option<&IssueFieldConfig>,
+) -> Result<Vec<Result<IssueSnapshot>>> {
+    let query = batch_issues_query(repo, numbers, issue_fields.is_some());
+    let output = gh_api(&["api", "graphql", "-f", &format!("query={query}")])?;
+    parse_batch_issues_response(repo, numbers, issue_fields, &output)
+}
+
+fn parse_batch_issues_response(
+    repo: &str,
+    numbers: &[u64],
+    issue_fields: Option<&IssueFieldConfig>,
+    bytes: &[u8],
+) -> Result<Vec<Result<IssueSnapshot>>> {
+    let response: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+        OrbitError::new(
+            code::GITHUB_NOT_CONFIGURED,
+            format!("invalid GitHub GraphQL response: {error}"),
+        )
+    })?;
+    if let Some(errors) = response
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .filter(|errors| !errors.is_empty())
+    {
+        let message = errors
+            .iter()
+            .filter_map(|error| error.get("message").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(OrbitError::new(
+            code::GITHUB_NOT_CONFIGURED,
+            format!("GitHub GraphQL batch failed: {message}"),
+        ));
+    }
+    let repository = response
+        .get("data")
+        .and_then(|data| data.get("repository"))
+        .ok_or_else(|| {
+            OrbitError::new(
+                code::GITHUB_NOT_CONFIGURED,
+                "GitHub GraphQL response has no repository data",
+            )
+        })?;
+    if repository.is_null() {
+        return Err(OrbitError::new(
+            code::GITHUB_NOT_CONFIGURED,
+            format!("repository `{repo}` was not found or is not accessible"),
+        ));
+    }
+    Ok(numbers
+        .iter()
+        .enumerate()
+        .map(|(index, number)| {
+            match repository.get(format!("i{index}")) {
+                Some(serde_json::Value::Null) | None => {
+                    Err(OrbitError::not_found(&format!("{repo}#{number}")))
+                }
+                Some(node) => parse_graphql_issue(repo, node, issue_fields),
+            }
+        })
+        .collect())
+}
+
+fn parse_graphql_issue(
+    repo: &str,
+    node: &serde_json::Value,
+    issue_fields: Option<&IssueFieldConfig>,
+) -> Result<IssueSnapshot> {
+    let invalid = |field: &str| {
+        OrbitError::new(
+            code::GITHUB_NOT_CONFIGURED,
+            format!("invalid GitHub GraphQL issue payload: missing `{field}`"),
+        )
+    };
+    let number = node["number"].as_u64().ok_or_else(|| invalid("number"))?;
+    let updated_at = node["updatedAt"]
+        .as_str()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+        .ok_or_else(|| invalid("updatedAt"))?;
+    let labels = graphql_name_list(node, "labels");
+    let assignees = graphql_name_list(node, "assignees");
+    let sub_issues = graphql_issue_refs(node, "subIssues", repo);
+    let blocked_by = graphql_issue_refs(node, "blockedBy", repo);
+    let mut area = None;
+    let mut verification = None;
+    if let Some(issue_fields) = issue_fields {
+        let values = graphql_issue_field_map(node);
+        area = string_field(&values, &issue_fields.area_name);
+        verification = string_field(&values, &issue_fields.verification_name);
+    }
+    Ok(IssueSnapshot {
+        repo: repo.to_string(),
+        number,
+        title: node["title"].as_str().unwrap_or_default().to_string(),
+        body: node["body"].as_str().unwrap_or_default().to_string(),
+        state: if node["state"].as_str() == Some("OPEN") {
+            IssueState::Open
+        } else {
+            IssueState::Closed
+        },
+        state_reason: match node["stateReason"].as_str() {
+            // DUPLICATE reads as a completed close: Orbit has no duplicate
+            // reason and the legacy label check still applies.
+            Some("COMPLETED") | Some("DUPLICATE") => Some(IssueStateReason::Completed),
+            Some("NOT_PLANNED") => Some(IssueStateReason::NotPlanned),
+            Some("REOPENED") => Some(IssueStateReason::Reopened),
+            _ => None,
+        },
+        labels,
+        assignees,
+        updated_at,
+        area,
+        verification,
+        parent_issue: Vec::new(),
+        blocked_by,
+        blocking: sub_issues,
+    })
+}
+
+fn graphql_name_list(node: &serde_json::Value, field: &str) -> Vec<String> {
+    node[field]["nodes"]
+        .as_array()
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|entry| {
+                    entry["name"].as_str().or_else(|| entry["login"].as_str())
+                })
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn graphql_issue_refs(
+    node: &serde_json::Value,
+    field: &str,
+    default_repo: &str,
+) -> Vec<IssueRef> {
+    node[field]["nodes"]
+        .as_array()
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|entry| {
+                    let number = entry["number"].as_u64()?;
+                    let repo = entry["repository"]["nameWithOwner"]
+                        .as_str()
+                        .unwrap_or(default_repo)
+                        .to_string();
+                    Some(IssueRef { repo, number })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Reduce `issueFieldValues` nodes to the name→value map `string_field`
+/// consumes, matching the REST issue-field-values shape.
+fn graphql_issue_field_map(node: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
+    let mut fields = BTreeMap::new();
+    if let Some(nodes) = node["issueFieldValues"]["nodes"].as_array() {
+        for entry in nodes {
+            let Some(name) = entry["field"]["name"].as_str() else {
+                continue;
+            };
+            let value = if let Some(options) = entry["options"].as_array() {
+                serde_json::Value::Array(
+                    options
+                        .iter()
+                        .filter_map(|option| option["name"].as_str())
+                        .map(|option| serde_json::Value::String(option.to_string()))
+                        .collect(),
+                )
+            } else {
+                entry["value"].clone()
+            };
+            fields.insert(name.to_string(), value);
+        }
+    }
+    fields
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FixtureStore {
     #[serde(default = "fixture_authenticated")]
@@ -1979,5 +2271,108 @@ mod tests {
 
         let updated = client.get_issue("acme/widget", 42, None).unwrap();
         assert_eq!(updated.blocked_by, vec![issue_ref("acme/widget", 43)]);
+    }
+
+    fn graphql_issue_node(number: u64) -> serde_json::Value {
+        serde_json::json!({
+            "number": number,
+            "title": format!("Issue {number}"),
+            "body": "body",
+            "state": "CLOSED",
+            "stateReason": "NOT_PLANNED",
+            "updatedAt": "2026-11-13T10:00:00Z",
+            "labels": { "nodes": [{ "name": "bug" }] },
+            "assignees": { "nodes": [{ "login": "agent" }] },
+            "subIssues": { "nodes": [{ "number": number + 1, "repository": { "nameWithOwner": "acme/widget" } }] },
+            "blockedBy": { "nodes": [{ "number": number + 2, "repository": { "nameWithOwner": "acme/widget" } }] },
+            "issueFieldValues": { "nodes": [
+                { "field": { "name": "Area" }, "value": "cli" },
+                { "field": { "name": "Verification" }, "value": "cargo test" }
+            ] }
+        })
+    }
+
+    #[test]
+    fn batch_query_aliases_each_issue_inside_one_repository() {
+        let query = batch_issues_query("acme/widget", &[1, 2, 3], true);
+        assert!(query.contains("repository(owner: \"acme\", name: \"widget\")"));
+        for (index, number) in [(0, 1), (1, 2), (2, 3)] {
+            assert!(query.contains(&format!("i{index}: issue(number: {number})")));
+        }
+        assert!(query.contains("issueFieldValues"));
+        assert!(!batch_issues_query("acme/widget", &[1], false).contains("issueFieldValues"));
+    }
+
+    #[test]
+    fn batch_response_maps_each_alias_in_order() {
+        let response = serde_json::json!({
+            "data": { "repository": {
+                "i0": graphql_issue_node(7),
+                "i1": serde_json::Value::Null,
+                "i2": graphql_issue_node(9),
+            } }
+        });
+        let results = parse_batch_issues_response(
+            "acme/widget",
+            &[7, 8, 9],
+            None,
+            &serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].as_ref().unwrap().number, 7);
+        let missing = results[1].as_ref().unwrap_err();
+        assert_eq!(missing.code, code::NOT_FOUND);
+        assert_eq!(results[2].as_ref().unwrap().number, 9);
+    }
+
+    #[test]
+    fn batch_response_fails_fast_on_top_level_errors() {
+        let response = serde_json::json!({
+            "data": null,
+            "errors": [{ "message": "API rate limit exceeded" }]
+        });
+        let error = parse_batch_issues_response(
+            "acme/widget",
+            &[7],
+            None,
+            &serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("rate limit"));
+    }
+
+    #[test]
+    fn graphql_issue_maps_state_relations_and_field_values() {
+        let config = IssueFieldConfig {
+            area_name: "Area".into(),
+            verification_name: "Verification".into(),
+            area_id: None,
+            verification_id: None,
+        };
+        let issue =
+            parse_graphql_issue("acme/widget", &graphql_issue_node(42), Some(&config)).unwrap();
+        assert_eq!(issue.state, IssueState::Closed);
+        assert_eq!(issue.state_reason, Some(IssueStateReason::NotPlanned));
+        assert_eq!(issue.labels, vec!["bug".to_string()]);
+        assert_eq!(issue.assignees, vec!["agent".to_string()]);
+        assert_eq!(issue.blocking, vec![issue_ref("acme/widget", 43)]);
+        assert_eq!(issue.blocked_by, vec![issue_ref("acme/widget", 44)]);
+        assert_eq!(issue.area.as_deref(), Some("cli"));
+        assert_eq!(issue.verification.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn fixture_get_issues_keeps_per_ref_failures() {
+        let issue = snapshot("acme/widget", 42);
+        let (_dir, client) = fixture_client(&issue);
+        let results = GitHubClient::get_issues(
+            &client,
+            &[issue_ref("acme/widget", 42), issue_ref("acme/widget", 43)],
+            None,
+        );
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].as_ref().unwrap().number, 42);
+        assert!(results[1].is_err());
     }
 }

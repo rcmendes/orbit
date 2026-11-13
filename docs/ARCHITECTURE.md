@@ -151,6 +151,20 @@ flowchart LR
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
 | Setup | `src/setup.rs` | Detect harnesses and write managed instruction files, MCP entries, and the Claude SessionStart hook. |
 
+### Board sync tree seam
+
+`src/board_sync.rs` materializes the base, local, and host Git revisions as
+path-to-content maps before merging divergent histories. Its private
+`merge_trees` seam runs the ADR 0019 Task, Claim, and Comment rules entirely in
+memory; the caller supplies the timestamp used for Claim-loser notices. An
+empty base map represents unrelated histories. Git reads, applying files,
+creating the merge commit, and pushing remain outside the merge engine.
+
+Unit tests exercise these rules with in-memory trees. Board host integration
+tests retain end-to-end coverage of unrelated histories, CLI conflict resolution,
+and preserving merge history, alongside host configuration and transport checks.
+This seam does not add to the Board host module's public interface.
+
 ### Scoped access and execution modules
 
 `board::BoardAccess::open` keeps discovery policy and the Board lock in one scope.

@@ -36,6 +36,24 @@ pub trait RemoteAdapter {
     /// Fetch one Remote Issue in Orbit terms.
     fn fetch_issue(&self, project: &RemoteProject, id: &str) -> Result<RemoteIssue>;
 
+    /// Fetch many Remote Issues in one pass. Returns one entry per
+    /// requested ref, in request order; a per-entry `Err` isolates the
+    /// failure to that ref. The default issues one `fetch_issue` call per
+    /// ref; adapters with a batch endpoint override it.
+    fn fetch_issues(&self, refs: &[RemoteIssueRef]) -> Vec<Result<RemoteIssue>> {
+        refs.iter()
+            .map(|issue| {
+                self.fetch_issue(
+                    &RemoteProject {
+                        tracker: self.tracker().to_string(),
+                        project: issue.project.clone(),
+                    },
+                    &issue.id,
+                )
+            })
+            .collect()
+    }
+
     /// List a Remote Project's issues for the Remote Issue catalog.
     fn list_issues(&self, project: &RemoteProject) -> Result<Vec<RemoteIssueSummary>>;
 

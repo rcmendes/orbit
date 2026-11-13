@@ -1090,6 +1090,7 @@ Examples:
 pub const REMOTE_STATUS_EXAMPLES: &str = "\
 Examples:
   orbit remote status
+  orbit remote status --repo owner/repo
   orbit remote status --json";
 
 pub const REMOTE_CONNECT_EXAMPLES: &str = "\

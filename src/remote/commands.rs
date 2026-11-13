@@ -9,8 +9,8 @@ use crate::board::Board;
 use crate::cli::{
     AutoPushState, RemoteArgs, RemoteAutoPushArgs, RemoteCommand, RemoteConnectArgs,
     RemoteCreateArgs, RemoteImportArgs, RemoteIssueFilters, RemoteIssueRefArgs, RemoteIssuesArgs,
-    RemoteIssuesCommand, RemoteLinkArgs, RemoteMutationArgs, RemoteProjectArgs, RemoteSyncArgs,
-    RemoteSyncDirection,
+    RemoteIssuesCommand, RemoteLinkArgs, RemoteMutationArgs, RemoteProjectArgs, RemoteStatusArgs,
+    RemoteSyncArgs, RemoteSyncDirection,
 };
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{Graph, LoadMode};
@@ -26,7 +26,7 @@ use crate::task::{self, Status, Task};
 
 pub fn run(board: &Board, args: RemoteArgs) -> Result<crate::output::CommandOutput> {
     match args.command {
-        RemoteCommand::Status => cmd_status(board),
+        RemoteCommand::Status(args) => cmd_status(board, args),
         RemoteCommand::Connect(args) => cmd_connect(board, args),
         RemoteCommand::Disconnect(args) => cmd_disconnect(board, args),
         RemoteCommand::List => cmd_list(board),
@@ -47,11 +47,16 @@ fn github_resolver(board: &Board) -> Result<BoardResolver<'_>> {
     Ok(BoardResolver::with_client(board, client_from_env()?))
 }
 
-fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
+fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::CommandOutput> {
     let client = client_from_env()?;
     let auth = client.auth_status();
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let github = github_config(board);
+    let repo_scope = args
+        .repo
+        .as_deref()
+        .map(GitHubConfig::normalize_repo)
+        .transpose()?;
     let configured = github.is_enabled();
     let basic_mode = github.mode.is_basic();
     let auto_push = auto_push_enabled(board);
@@ -88,7 +93,16 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     }
 
     let mut linked_repositories = github.repositories.clone();
+    if let Some(scope) = repo_scope.as_deref() {
+        linked_repositories.retain(|name| name.eq_ignore_ascii_case(scope));
+    }
     for repository in crate::repository::github_member_projects(board)? {
+        if repo_scope
+            .as_deref()
+            .is_some_and(|scope| !repository.eq_ignore_ascii_case(scope))
+        {
+            continue;
+        }
         if !linked_repositories
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(&repository))
@@ -210,8 +224,23 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
     let adapter =
         GitHubAdapter::with_client(client.clone(), GitHubAdapter::effective_config(board));
     let resolver = BoardResolver::with_client(board, client.clone());
-    for task in graph.iter().filter(|task| github_link(task).is_some()) {
-        let link = github_link(task).expect("filtered linked task");
+    let targets: Vec<_> = graph
+        .iter()
+        .filter(|task| github_link(task).is_some())
+        .map(|task| (task.clone(), github_link(task).expect("filtered linked task")))
+        .filter(|(_, link)| {
+            repo_scope
+                .as_deref()
+                .is_none_or(|scope| link.project.eq_ignore_ascii_case(scope))
+        })
+        .collect();
+    // Validate availability and relationships locally, then fetch every
+    // linked Issue in one batched pass instead of one API call per Task.
+    let mut issue_results: Vec<Option<Result<RemoteIssue>>> =
+        targets.iter().map(|_| None).collect();
+    let mut fetch_refs = Vec::new();
+    let mut fetch_positions = Vec::new();
+    for (index, (task, link)) in targets.iter().enumerate() {
         let project = link.remote_project();
         let linked_repo = crate::remote::execution::project_available(board, &resolver, &project)?;
         if !linked_repo {
@@ -240,7 +269,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
             })
             .collect();
         let relationships = relationships::plan_relationship_sync(
-            &link,
+            link,
             &relationships::RemoteRelationsView::EMPTY,
             &children,
             &dependencies,
@@ -255,7 +284,23 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
         if !auth.authenticated || !linked_repo {
             continue;
         }
-        match adapter.fetch_issue(&project, &link.id) {
+        fetch_refs.push(RemoteIssueRef {
+            project: link.project.clone(),
+            id: link.id.clone(),
+        });
+        fetch_positions.push(index);
+    }
+    for (position, result) in fetch_positions
+        .iter()
+        .zip(adapter.fetch_issues(&fetch_refs))
+    {
+        issue_results[*position] = Some(result);
+    }
+    for (index, (task, link)) in targets.iter().enumerate() {
+        let Some(result) = issue_results[index].take() else {
+            continue;
+        };
+        match result {
             Ok(issue) => {
                 let direction = if basic_mode {
                     SyncDirection::Pull
@@ -264,7 +309,7 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
                 };
                 let plan = sync::plan_sync(
                     &adapter,
-                    sync::OrbitSyncView { task, link: &link },
+                    sync::OrbitSyncView { task, link },
                     &issue,
                     direction,
                 );
@@ -397,7 +442,8 @@ fn cmd_status(board: &Board) -> Result<crate::output::CommandOutput> {
             "enabled": auto_push,
             "reserved_label": crate::github::status::IN_PROGRESS_LABEL,
         },
-        "linked_tasks": graph.iter().filter(|task| github_link(task).is_some()).count(),
+        "repository_scope": repo_scope,
+        "linked_tasks": targets.len(),
         "local_tasks": graph.iter().filter(|task| github_link(task).is_none()).count(),
         "pending": {
             "pull": pending_pull.iter().map(|entry| entry["changes"].as_u64().unwrap_or(0)).sum::<u64>(),

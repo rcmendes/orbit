@@ -495,8 +495,14 @@ stale. The agent defaults to ORBIT_AGENT, then USER.
 
 --worktree also creates the Task's worktree: .worktrees/<id> on branch
 ticket/<id> in the Task's Repository, falling back to the member Repository
-containing the current directory. The worktree is created on the Repository's
-default branch unless ticket/<id> already exists.";
+containing the current directory. A new branch starts at the local default
+branch (origin/HEAD's local branch, else main, master, or current branch), without
+fetching. Existing ticket/<id> commits are preserved; a matching worktree is
+reused. A branch checked out elsewhere is rejected before claiming.
+If worktree preparation fails after claiming, CLAIM_WORKTREE_FAILED reports the
+successful claim in error.details.claim and the original error in
+error.details.cause. The claim remains active; fix the cause and retry, or
+explicitly release it. Orbit never automatically releases an existing claim.";
 
 pub const CLAIM_EXAMPLES: &str = "\
 Examples:

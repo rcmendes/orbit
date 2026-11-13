@@ -3,25 +3,6 @@ mod common;
 use common::TestRepo;
 use std::path::Path;
 
-/// A git repository with one commit inside `dir`, returning its path.
-fn git_repo(repo: &TestRepo, dir: &Path) -> std::path::PathBuf {
-    std::fs::create_dir_all(dir).unwrap();
-    for args in [
-        &["init", "-q"][..],
-        &["config", "user.name", "Test"][..],
-        &["config", "user.email", "test@example.com"][..],
-        &["commit", "--allow-empty", "-q", "-m", "init"][..],
-    ] {
-        let output = repo.git_in(dir, args);
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    dir.to_path_buf()
-}
-
 fn worktree_branch(repo: &TestRepo, worktree: &Path) -> String {
     let output = repo.git_in(worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
     assert!(output.status.success());
@@ -32,7 +13,7 @@ fn worktree_branch(repo: &TestRepo, worktree: &Path) -> String {
 fn claim_worktree_creates_the_worktree_in_the_tasks_repository() {
     let repo = TestRepo::new();
     repo.init();
-    let api = git_repo(&repo, &repo.path().join("api"));
+    let api = repo.named_repo("api");
     repo.ok_json(&[
         "repo",
         "add",
@@ -69,7 +50,7 @@ fn claim_worktree_creates_the_worktree_in_the_tasks_repository() {
 fn claim_worktree_is_idempotent_for_the_same_holder() {
     let repo = TestRepo::new();
     repo.init();
-    let api = git_repo(&repo, &repo.path().join("api"));
+    let api = repo.named_repo("api");
     repo.ok_json(&["repo", "add", api.to_str().unwrap(), "--json"]);
     let added = repo.ok_json_in(&api, &["add", "API work", "--json"]);
     let id = added["data"]["id"].as_str().unwrap().to_string();
@@ -88,17 +69,33 @@ fn claim_worktree_is_idempotent_for_the_same_holder() {
 fn claim_worktree_reuses_an_existing_ticket_branch() {
     let repo = TestRepo::new();
     repo.init();
-    let api = git_repo(&repo, &repo.path().join("api"));
+    let api = repo.named_repo("api");
     repo.ok_json(&["repo", "add", api.to_str().unwrap(), "--json"]);
     let added = repo.ok_json_in(&api, &["add", "API work", "--json"]);
     let id = added["data"]["id"].as_str().unwrap().to_string();
 
     // A leftover branch from an earlier attempt is checked out, not
     // recreated.
-    let output = repo.git_in(&api, &["branch", &format!("ticket/{id}")]);
-    assert!(output.status.success());
+    let original = worktree_branch(&repo, &api);
+    assert!(
+        repo.git_in(&api, &["checkout", "-b", &format!("ticket/{id}")])
+            .status
+            .success()
+    );
+    assert!(
+        repo.git_in(&api, &["commit", "--allow-empty", "-m", "existing work"])
+            .status
+            .success()
+    );
+    let tip = repo.git_in(&api, &["rev-parse", "HEAD"]).stdout;
+    assert!(repo.git_in(&api, &["checkout", &original]).status.success());
 
     repo.ok_json(&["claim", &id, "--by", "devin", "--worktree", "--json"]);
+    assert_eq!(
+        repo.git_in(&api.join(".worktrees").join(&id), &["rev-parse", "HEAD"])
+            .stdout,
+        tip
+    );
     assert_eq!(
         worktree_branch(&repo, &api.join(".worktrees").join(&id)),
         format!("ticket/{id}")
@@ -109,7 +106,7 @@ fn claim_worktree_reuses_an_existing_ticket_branch() {
 fn claim_worktree_falls_back_to_the_current_member_repository() {
     let repo = TestRepo::new();
     repo.init();
-    let api = git_repo(&repo, &repo.path().join("api"));
+    let api = repo.named_repo("api");
     repo.ok_json(&["repo", "add", api.to_str().unwrap(), "--json"]);
     // A Board-wide Task records no `repo`; claiming it from inside a member
     // Repository uses that member.
@@ -138,10 +135,85 @@ fn claim_worktree_without_a_repository_fails() {
 }
 
 #[test]
+fn claim_worktree_rejects_a_branch_checked_out_elsewhere_before_claiming() {
+    let repo = TestRepo::new();
+    repo.init();
+    let api = repo.named_repo("api");
+    repo.ok_json(&["repo", "add", api.to_str().unwrap(), "--json"]);
+    let added = repo.ok_json_in(&api, &["add", "API work", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap();
+    let other = api.join("other");
+    assert!(
+        repo.git_in(
+            &api,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &format!("ticket/{id}"),
+                other.to_str().unwrap()
+            ]
+        )
+        .status
+        .success()
+    );
+
+    let (status, value) = repo.json(&["claim", id, "--by", "devin", "--worktree", "--json"]);
+    assert_eq!(status, 1, "{value}");
+    assert_eq!(value["error"]["code"], "GIT_ERROR", "{value}");
+    let shown = repo.ok_json(&["show", id, "--json"]);
+    assert_eq!(shown["data"]["status"], "todo", "{shown}");
+}
+
+#[test]
+fn worktree_runtime_failure_reports_and_preserves_successful_claim() {
+    for already_claimed in [false, true] {
+        let repo = TestRepo::new();
+        repo.init();
+        let api = repo.named_repo("api");
+        repo.ok_json(&["repo", "add", api.to_str().unwrap(), "--json"]);
+        let added = repo.ok_json_in(&api, &["add", "API work", "--json"]);
+        let id = added["data"]["id"].as_str().unwrap();
+        if already_claimed {
+            repo.ok_json(&["claim", id, "--by", "devin", "--json"]);
+        }
+        // Portable deterministic I/O failure after claim commit, without chmod or races.
+        let exclude = api.join(".git/info/exclude");
+        std::fs::remove_file(&exclude).unwrap();
+        std::fs::create_dir(&exclude).unwrap();
+        let (status, value) = repo.json(&["claim", id, "--by", "devin", "--worktree", "--json"]);
+        assert_eq!(status, 1, "{value}");
+        assert_eq!(value["error"]["code"], "CLAIM_WORKTREE_FAILED", "{value}");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("claim remains active"),
+            "{value}"
+        );
+        assert_eq!(
+            value["error"]["details"]["claim"]["status"], "in_progress",
+            "{value}"
+        );
+        assert_eq!(
+            value["error"]["details"]["claim"]["claimed_by"], "devin",
+            "{value}"
+        );
+        assert_eq!(
+            value["error"]["details"]["cause"]["code"], "IO_ERROR",
+            "{value}"
+        );
+        let shown = repo.ok_json(&["show", id, "--json"]);
+        assert_eq!(shown["data"]["status"], "in_progress", "{shown}");
+        assert_eq!(shown["data"]["claimed_by"], "devin", "{shown}");
+    }
+}
+
+#[test]
 fn claim_worktree_rejects_a_blocked_target_path() {
     let repo = TestRepo::new();
     repo.init();
-    let api = git_repo(&repo, &repo.path().join("api"));
+    let api = repo.named_repo("api");
     repo.ok_json(&["repo", "add", api.to_str().unwrap(), "--json"]);
     let added = repo.ok_json_in(&api, &["add", "API work", "--json"]);
     let id = added["data"]["id"].as_str().unwrap().to_string();

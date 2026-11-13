@@ -35,7 +35,29 @@ pub(super) fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output:
         format!("claimed {} by {agent} until {lease}", args.id),
     );
     if let Some(plan) = worktree {
-        let created = plan.create()?;
+        let created = plan.create().map_err(|cause| {
+            OrbitError::new(
+                code::CLAIM_WORKTREE_FAILED,
+                format!(
+                    "{}; claim remains active, but worktree preparation failed: {}. Fix the cause and retry `orbit claim {} --by {agent} --worktree`; no claim was released",
+                    output.human, cause.message, args.id
+                ),
+            )
+            .with_details(json!({
+                "claim": output.data,
+                "worktree": {
+                    "repository": plan.repository,
+                    "path": plan.path,
+                    "branch": plan.branch,
+                },
+                "cause": {
+                    "code": cause.code,
+                    "message": cause.message,
+                    "retryable": cause.retryable,
+                    "details": cause.details,
+                },
+            }))
+        })?;
         if let Some(data) = output.data.as_object_mut() {
             data.insert(
                 "worktree".to_string(),
@@ -93,16 +115,24 @@ fn plan_worktree(board: &Board, id: &str) -> Result<WorktreePlan> {
     };
     let path = member.path.join(".worktrees").join(id);
     let branch = format!("ticket/{id}");
+    let records = crate::git::worktree_records(&member.path)?;
+    let target = crate::repository::canonical_lenient(&path);
+    if let Some(record) = records.iter().find(|record| {
+        record.branch.as_deref() == Some(branch.as_str())
+            && crate::repository::canonical_lenient(&record.path) != target
+    }) {
+        return Err(OrbitError::git(format!(
+            "{branch} is already checked out at {}; claim unchanged",
+            record.path.display()
+        )));
+    }
     let mut existing = false;
     if path.exists() {
-        let target = crate::repository::canonical_lenient(&path);
-        let matches = crate::git::worktree_records(&member.path)?
-            .iter()
-            .any(|record| {
-                !record.missing
-                    && crate::repository::canonical_lenient(&record.path) == target
-                    && record.branch.as_deref() == Some(branch.as_str())
-            });
+        let matches = records.iter().any(|record| {
+            !record.missing
+                && crate::repository::canonical_lenient(&record.path) == target
+                && record.branch.as_deref() == Some(branch.as_str())
+        });
         if !matches {
             return Err(OrbitError::git(format!(
                 "{} already exists and is not the {branch} worktree",

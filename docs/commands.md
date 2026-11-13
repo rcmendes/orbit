@@ -763,10 +763,23 @@ unfinished dependencies still block the claim.
 `.worktrees/<id>` on branch `ticket/<id>` inside the Task's Repository (its
 `repo` field), falling back to the member Repository containing the current
 directory when the Task names none. A new branch starts from the Repository's
-default branch; an existing `ticket/<id>` branch is checked out, and an existing
-worktree is reused, so repeating the claim is safe. `.worktrees/` is hidden
-through the Repository's `.git/info/exclude`. The JSON result carries
-`data.worktree` with `repository`, `path`, `branch`, and `created`.
+local default branch (the local branch named by `origin/HEAD`, else `main`,
+`master`, or the currently checked-out branch); no fetch is performed. An
+existing `ticket/<id>` branch is checked out without resetting its commits.
+An existing worktree is reused only at the expected path on that branch, so
+repeating the claim by the same holder is safe. A branch checked out elsewhere
+or an incompatible target path is rejected before changing the claim.
+`.worktrees/` is hidden through the Repository's `.git/info/exclude`. The JSON
+result carries `data.worktree` with `repository`, `path`, `branch`, and `created`.
+
+Claim and worktree creation are not one transaction. If preparation fails after
+the claim commits (including a concurrent Git change), the command exits 1 with
+`CLAIM_WORKTREE_FAILED`, but the claim remains active; Orbit never automatically
+releases it, including an existing claim renewed by the same holder. JSON
+`error.details.claim` contains the successful claim result, `worktree` describes
+the intended target, and `cause` contains the original error. Human output also
+states that the claim remains active. Fix the cause and retry the same command,
+or explicitly release the claim if you no longer intend to work on it.
 
 ### `orbit heartbeat` — keep a claim alive
 

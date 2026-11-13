@@ -165,6 +165,67 @@ fn board_sync_publishes_then_reports_up_to_date() {
 }
 
 #[test]
+fn board_sync_ignores_the_previous_host_tracking_ref() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.add("First task", &[]);
+    let first = bare_host(&repo, "first.git");
+    let second = bare_host(&repo, "second.git");
+    let output = repo.git(&["remote", "add", "origin", host_arg(&first).as_str()]);
+    assert!(output.status.success());
+    repo.ok_json(&["board", "host", &host_arg(repo.path()), "--json"]);
+    repo.ok_json(&["board", "sync", "--json"]);
+    assert!(remote_tip(&repo, &first).is_some());
+
+    let output = repo.git(&["remote", "set-url", "origin", host_arg(&second).as_str()]);
+    assert!(output.status.success());
+    let published = repo.ok_json(&["board", "sync", "--json"]);
+
+    assert_eq!(published["data"]["state"], "published");
+    assert!(
+        remote_tip(&repo, &second).is_some(),
+        "sync trusted the stale host/orbit ref instead of publishing to the new host"
+    );
+}
+
+#[test]
+fn board_sync_fetches_only_the_board_branch() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.add("First task", &[]);
+    let host = bare_host(&repo, "host.git");
+    repo.ok_json(&["board", "host", &host_arg(&host), "--json"]);
+    repo.ok_json(&["board", "sync", "--json"]);
+
+    let peer = peer_clone(&repo, &host);
+    let output = repo.git_in(&peer, &["checkout", "-q", "-b", "extra"]);
+    assert!(output.status.success());
+    peer_write(&peer, "extra.txt", "not part of the Board\n");
+    for args in [
+        &["add", "-A"][..],
+        &["commit", "-q", "-m", "extra branch"][..],
+        &["push", "-q", "origin", "extra"][..],
+    ] {
+        let output = repo.git_in(&peer, args);
+        assert!(
+            output.status.success(),
+            "peer git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    repo.ok_json(&["board", "sync", "--json"]);
+    let extra = repo.git_in(
+        &repo.board_path(),
+        &["show-ref", "--verify", "--quiet", "refs/remotes/host/extra"],
+    );
+    assert!(
+        !extra.status.success(),
+        "board sync fetched a non-Board host branch"
+    );
+}
+
+#[test]
 fn local_repository_host_publishes_through_its_origin() {
     let repo = TestRepo::new();
     repo.init();

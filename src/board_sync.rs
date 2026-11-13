@@ -7,40 +7,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::board::{Board, Config, HostSyncMode};
+use crate::board::{Board, Config};
 use crate::board_host;
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
 use crate::task::{self, Claim, Status, StrayClaimTimes, Task, TaskFrontmatter};
-
-static SUPPRESSED: AtomicBool = AtomicBool::new(false);
-
-/// Suppress host auto-sync for the rest of this process (`orbit board sync`
-/// performs the sync itself; `--no-sync` sets this too).
-pub fn suppress() {
-    SUPPRESSED.store(true, Ordering::Relaxed);
-}
-
-pub fn suppressed() -> bool {
-    if SUPPRESSED.load(Ordering::Relaxed) {
-        return true;
-    }
-    ["ORBIT_NO_AUTO_SYNC", "ORBIT_NO_HOST_SYNC"]
-        .iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .any(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeSide {
@@ -175,10 +151,7 @@ fn sync_once(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
     let branch = config.board.branch.clone();
     let resolutions = parse_resolutions(resolution_args)?;
 
-    board_host::ensure_remote(&board.root, &url)?;
-    git::fetch(&board.root, board_host::HOST_REMOTE)?;
-    let remote_ref = format!("refs/remotes/{}/{}", board_host::HOST_REMOTE, branch);
-    let remote_tip = git::rev_parse(&board.root, &remote_ref)?;
+    let remote_tip = board_host::fetch_tip(&board.root, &url, &branch)?;
     // One Board per host: the host branch may have been replaced since
     // `orbit board host` checked it.
     if let Some(tip) = &remote_tip {
@@ -325,33 +298,6 @@ fn rollback_merge(root: &Path, files: &BTreeMap<String, Option<String>>, local_h
         if matches!(git::show_file(root, local_head, path), Ok(None)) {
             let _ = std::fs::remove_file(root.join(path));
         }
-    }
-}
-
-/// The `host_sync = auto` hook: sync after a committed mutation or at prime.
-/// Failures and contested claims surface as warnings, never errors.
-pub fn auto_after(board: &Board) -> Vec<String> {
-    if suppressed() {
-        return Vec::new();
-    }
-    let Ok(config) = Config::load(&board.root) else {
-        return Vec::new();
-    };
-    if config.board.host_sync != HostSyncMode::Auto || config.board.host.is_none() {
-        return Vec::new();
-    }
-    match sync(board, &[]) {
-        Ok(report) => {
-            let mut warnings = report.notices;
-            if report.state == SyncState::Merged {
-                warnings.push(format!(
-                    "board host: merged divergent history and pushed ({} files)",
-                    report.merged_files
-                ));
-            }
-            warnings
-        }
-        Err(error) => vec![format!("BOARD_HOST_SYNC_FAILED: {}", error.message)],
     }
 }
 

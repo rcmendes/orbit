@@ -778,3 +778,74 @@ fn triage_apply_reports_commit_failure_after_publishing_metadata() {
         "cli"
     );
 }
+
+#[test]
+fn triage_linked_task_resolves_mapped_fields_without_a_remote_client() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    let repo = TestRepo::new();
+    repo.init();
+    let id = adopt_linked(&repo, &fixture);
+
+    // `gh` is absent from the isolated PATH and `ORBIT_GITHUB_FIXTURE`
+    // points at a file that does not exist, so building the Remote
+    // Tracker client would fail. Triage only needs the adapter's config:
+    // Mapped fields must resolve without constructing a client.
+    let missing = repo.path().join("missing-fixture.json");
+    let envs = [("ORBIT_GITHUB_FIXTURE", missing.to_str().unwrap())];
+
+    let ctx = repo.ok_json_with_env(&["triage", "context", id.as_str(), "--json"], &envs);
+    assert_eq!(ctx["data"]["remote"]["tracker"], "github");
+    assert_eq!(ctx["data"]["remote"]["project"], "acme/widget");
+    assert_eq!(ctx["data"]["remote"]["id"], "7");
+    assert_eq!(ctx["data"]["metadata_capabilities"]["area"], true);
+    assert_eq!(ctx["data"]["metadata_capabilities"]["verification"], true);
+    assert_eq!(ctx["data"]["metadata_capabilities"]["labels"], true);
+    assert!(
+        ctx["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|warning| !warning
+                .as_str()
+                .unwrap()
+                .contains("no installed adapter")),
+        "unexpected unavailable-tracker warning: {}",
+        ctx["meta"]["warnings"]
+    );
+
+    let proposal = repo.path().join("proposal.json");
+    fs::write(&proposal, r#"{"labels_add": ["bug"]}"#).unwrap();
+
+    let review = repo.ok_json_with_env(
+        &[
+            "triage",
+            "review",
+            id.as_str(),
+            "--proposal-file",
+            proposal.to_str().unwrap(),
+            "--json",
+        ],
+        &envs,
+    );
+    let note = review["data"]["sync_note"].as_str().unwrap();
+    assert!(note.contains("orbit remote sync"), "{note}");
+
+    let applied = repo.ok_json_with_env(
+        &[
+            "triage",
+            "apply",
+            id.as_str(),
+            "--proposal-file",
+            proposal.to_str().unwrap(),
+            "--approve",
+            "--json",
+        ],
+        &envs,
+    );
+    assert_eq!(applied["data"]["applied"], true);
+    assert_eq!(applied["data"]["sync_required"], true);
+    let command = applied["data"]["sync_command"].as_str().unwrap();
+    assert!(command.contains("orbit remote sync"), "{command}");
+    assert!(command.contains("--direction push --apply"), "{command}");
+}

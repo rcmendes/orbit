@@ -11,7 +11,7 @@ fn exclude(repo: &TestRepo) -> String {
 }
 
 fn canonical(path: &std::path::Path) -> String {
-    std::fs::canonicalize(path)
+    dunce::canonicalize(path)
         .unwrap()
         .to_string_lossy()
         .to_string()

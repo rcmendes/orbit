@@ -23,7 +23,7 @@ fn host_arg(path: &Path) -> String {
 
 /// `board.host` stores canonicalized paths (macOS `/var` → `/private/var`).
 fn canonical(path: &Path) -> String {
-    std::fs::canonicalize(path)
+    dunce::canonicalize(path)
         .unwrap()
         .to_string_lossy()
         .to_string()
@@ -527,7 +527,7 @@ fn init_visible_uses_a_visible_board_folder() {
         "--json",
     ]);
     let board = visible["data"]["board"].as_str().unwrap().to_string();
-    assert!(board.ends_with("/issues"), "{board}");
+    assert!(Path::new(&board).ends_with("issues"), "{board}");
     assert!(Path::new(&board).join("config.toml").exists());
     // The Orbit folder anchors it through the `board` pointer file.
     let pointer = repo.orbit_path().join("board");
@@ -550,7 +550,7 @@ fn init_visible_named_picks_the_folder_name() {
         "--json",
     ]);
     let board = named["data"]["board"].as_str().unwrap().to_string();
-    assert!(board.ends_with("/tracker"), "{board}");
+    assert!(Path::new(&board).ends_with("tracker"), "{board}");
     assert!(Path::new(&board).join("config.toml").exists());
     let listed = repo.ok_json(&["list", "--json"]);
     assert_eq!(listed["ok"], true);
@@ -612,9 +612,20 @@ fn host_sync_auto_failures_are_warnings_not_errors() {
     let config = std::fs::read_to_string(&config_path).unwrap();
     std::fs::write(
         &config_path,
+        // Line-based: Windows paths are TOML-escaped, so a substring match misses.
         config
-            .replace("auto_commit", "host_sync = \"auto\"\nauto_commit")
-            .replace(&host_arg(&host), "/nonexistent/host/path"),
+            .lines()
+            .map(|line| {
+                if line.starts_with("host = ") {
+                    "host = \"file:///nonexistent/host/path\"".to_string()
+                } else if line.starts_with("auto_commit") {
+                    format!("host_sync = \"auto\"\n{line}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
     )
     .unwrap();
 

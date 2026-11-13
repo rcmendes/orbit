@@ -123,7 +123,7 @@ grep -q '"name":"ready"' mcp-handshake.jsonl
 
 # The release artifact must include both commands and exercise GitHub entirely
 # through the local fixture client; this smoke must never call GitHub's network.
-"$orbit" github --help > /dev/null
+"$orbit" remote --help > /dev/null
 "$orbit" triage --help > /dev/null
 git remote add origin https://github.com/alice/widget.git
 cat > github-fixture.json <<'JSON'
@@ -151,28 +151,31 @@ cat > github-fixture.json <<'JSON'
 }
 JSON
 export ORBIT_GITHUB_FIXTURE="$workdir/github-fixture.json"
-"$orbit" github connect --json > github-connect.json
+"$orbit" remote connect --json > github-connect.json
 jq -e '.data.next_action == "choose_personal_account_path"' github-connect.json > /dev/null
-cat >> .orbit/config.toml <<'TOML'
+cat >> .orbit/board/config.toml <<'TOML'
 
-[github]
+[[remote.projects]]
+tracker = "github"
+project = "alice/widget"
+
+[remote.github]
 mode = "basic"
-repositories = ["alice/widget"]
 TOML
-"$orbit" github status --json > github-status.json
+"$orbit" remote status --json > github-status.json
 jq -e '.data.mode == "basic" and .data.auth.authenticated == true' github-status.json > /dev/null
 "$orbit" doctor --json > doctor.json
 jq -e '.data.healthy == true' doctor.json > /dev/null
 
-"$orbit" github adopt "$task_id" https://github.com/alice/widget/issues/42 --json > github-adopt.json
+"$orbit" remote link "$task_id" https://github.com/alice/widget/issues/42 --json > github-adopt.json
 jq -e '.data.github.number == 42' github-adopt.json > /dev/null
 jq '.issues["alice/widget#42"].title = "Updated in fixture" | .issues["alice/widget#42"].updated_at = "2026-10-24T13:00:00Z"' \
     "$ORBIT_GITHUB_FIXTURE" > github-fixture.updated.json
 mv github-fixture.updated.json "$ORBIT_GITHUB_FIXTURE"
-"$orbit" github sync "$task_id" --json > github-sync-preview.json
+"$orbit" remote sync "$task_id" --json > github-sync-preview.json
 jq -e '.data.apply == false' github-sync-preview.json > /dev/null
 grep -q 'Updated in fixture' github-sync-preview.json
-"$orbit" github sync "$task_id" --direction pull --apply --json > github-sync-apply.json
+"$orbit" remote sync "$task_id" --direction pull --apply --json > github-sync-apply.json
 jq -e '.data.apply == true' github-sync-apply.json > /dev/null
 "$orbit" show "$task_id" --json | jq -e '.data.title == "Updated in fixture"' > /dev/null
 
@@ -188,10 +191,10 @@ JSON
 jq -e '.data.apply_ready == true' triage-review.json > /dev/null
 "$orbit" triage apply "$task_id" --proposal-file triage-proposal.json --approve --json > triage-apply.json
 jq -e '.data.applied == true' triage-apply.json > /dev/null
-"$orbit" github sync "$task_id" --direction push --apply --json > github-sync-push.json
+"$orbit" remote sync "$task_id" --direction push --apply --json > github-sync-push.json
 
 created_id="$("$orbit" add "Create fixture issue" --json | jq -r '.data.id')"
-"$orbit" github create "$created_id" --apply --json > github-create.json
+"$orbit" remote create "$created_id" --apply --json > github-create.json
 jq -e '.data.success_count == 1 and .data.failure_count == 0 and .data.tasks[0].github.repo == "alice/widget"' github-create.json > /dev/null
 
 echo "onboarding smoke passed"

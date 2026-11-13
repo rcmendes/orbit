@@ -172,9 +172,25 @@ pub fn config_get(cwd: &Path, key: &str) -> Result<Option<String>> {
     }
 }
 
+/// Requires a commit identity for the Board repository at `cwd`. A Board
+/// created inside a code repository adopts that repository's local
+/// `user.name`/`user.email` when nothing global applies, so a repo-local
+/// identity is enough to create a Board in it.
 pub fn ensure_identity(cwd: &Path) -> Result<()> {
-    let name = config_get(cwd, "user.name")?;
-    let email = config_get(cwd, "user.email")?;
+    let mut name = config_get(cwd, "user.name")?;
+    let mut email = config_get(cwd, "user.email")?;
+    if (name.is_none() || email.is_none())
+        && let Some(enclosing) = cwd.parent().and_then(toplevel_containing)
+    {
+        for (key, value) in [("user.name", &mut name), ("user.email", &mut email)] {
+            if value.is_none()
+                && let Some(found) = config_get(&enclosing, key)?
+            {
+                run_git(Some(cwd), &["config", key, &found], None)?;
+                *value = Some(found);
+            }
+        }
+    }
     if name.is_none() || email.is_none() {
         return Err(OrbitError::config(
             "git user.name and user.email must be configured before creating a Board",
@@ -451,6 +467,29 @@ pub fn exclude_entry_for(repo: &Path, dir: &Path) -> Result<String> {
         escaped.push(ch);
     }
     Ok(format!("/{escaped}/"))
+}
+
+/// Removes an exact `pattern` line from the repository's local exclude file.
+pub fn remove_exclude_entry(repo: &Path, pattern: &str) -> Result<()> {
+    let path = common_dir_at(repo)?.join("info").join("exclude");
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(OrbitError::io(format!("read {}", path.display()), error)),
+    };
+    if !existing.lines().any(|line| line.trim() == pattern) {
+        return Ok(());
+    }
+    let mut content: String = existing
+        .lines()
+        .filter(|line| line.trim() != pattern)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    std::fs::write(&path, content)
+        .map_err(|error| OrbitError::io(format!("write {}", path.display()), error))
 }
 
 /// Adds an untracked exclusion for `dir` to the repository's local exclude file.

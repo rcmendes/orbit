@@ -23,7 +23,7 @@ fn host_arg(path: &Path) -> String {
 
 /// `board.host` stores canonicalized paths (macOS `/var` → `/private/var`).
 fn canonical(path: &Path) -> String {
-    std::fs::canonicalize(path)
+    dunce::canonicalize(path)
         .unwrap()
         .to_string_lossy()
         .to_string()
@@ -162,6 +162,28 @@ fn board_sync_publishes_then_reports_up_to_date() {
 
     let again = repo.ok_json(&["board", "sync", "--json"]);
     assert_eq!(again["data"]["state"], "up_to_date");
+}
+
+#[test]
+fn local_repository_host_publishes_through_its_origin() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.add("First task", &[]);
+    let origin = bare_host(&repo, "origin.git");
+    let output = repo.git(&["remote", "add", "origin", host_arg(&origin).as_str()]);
+    assert!(output.status.success());
+
+    // The code repository itself hosts the Board; its origin stores `orbit`.
+    let set = repo.ok_json(&["board", "host", &host_arg(repo.path()), "--json"]);
+    assert_eq!(set["data"]["host"], canonical(repo.path()));
+    assert_eq!(set["data"]["url"], host_arg(&origin));
+
+    let published = repo.ok_json(&["board", "sync", "--json"]);
+    assert_eq!(published["data"]["state"], "published");
+    assert!(remote_tip(&repo, &origin).is_some());
+    // Nothing lands in the code repository's own branches.
+    let local = repo.git(&["branch", "--list", "orbit"]);
+    assert!(String::from_utf8_lossy(&local.stdout).trim().is_empty());
 }
 
 #[test]
@@ -505,7 +527,7 @@ fn init_visible_uses_a_visible_board_folder() {
         "--json",
     ]);
     let board = visible["data"]["board"].as_str().unwrap().to_string();
-    assert!(board.ends_with("/board"), "{board}");
+    assert!(Path::new(&board).ends_with("issues"), "{board}");
     assert!(Path::new(&board).join("config.toml").exists());
     // The Orbit folder anchors it through the `board` pointer file.
     let pointer = repo.orbit_path().join("board");
@@ -528,7 +550,7 @@ fn init_visible_named_picks_the_folder_name() {
         "--json",
     ]);
     let board = named["data"]["board"].as_str().unwrap().to_string();
-    assert!(board.ends_with("/tracker"), "{board}");
+    assert!(Path::new(&board).ends_with("tracker"), "{board}");
     assert!(Path::new(&board).join("config.toml").exists());
     let listed = repo.ok_json(&["list", "--json"]);
     assert_eq!(listed["ok"], true);
@@ -590,9 +612,20 @@ fn host_sync_auto_failures_are_warnings_not_errors() {
     let config = std::fs::read_to_string(&config_path).unwrap();
     std::fs::write(
         &config_path,
+        // Line-based: Windows paths are TOML-escaped, so a substring match misses.
         config
-            .replace("auto_commit", "host_sync = \"auto\"\nauto_commit")
-            .replace(&host_arg(&host), "/nonexistent/host/path"),
+            .lines()
+            .map(|line| {
+                if line.starts_with("host = ") {
+                    "host = \"file:///nonexistent/host/path\"".to_string()
+                } else if line.starts_with("auto_commit") {
+                    format!("host_sync = \"auto\"\n{line}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
     )
     .unwrap();
 

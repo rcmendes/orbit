@@ -160,7 +160,7 @@ orbit init --visible=tracker  # visible Board folder instead of .orbit/board
 | `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents without a prompt: `none`, `all`, `auto`, or a comma-separated client list. | `orbit init --agents all` |
 | `--print` | Preview the Board, exclusion entry, and generated agent files without writing or prompting. | `orbit init DIR --print` |
-| `--visible[=NAME]` | Use a visible Board folder (default name `board`) instead of the hidden `.orbit/board` layout when the target is a repository or anchor root. | `orbit init --visible=tracker` |
+| `--visible[=NAME]` | Use a visible Board folder (default name `issues`) instead of the hidden `.orbit/board` layout when the target is a repository or anchor root. | `orbit init --visible=tracker` |
 | `--host[=REPO\|URL]` | Set the Board host — a member Repository name/path or git URL whose remote stores the Board's `orbit` branch. Bare `--host` prompts in a terminal. | `orbit init --host=../board-host` |
 
 **Choose by scenario**
@@ -646,7 +646,7 @@ orbit repo refresh             # rebuild the cached member inventory
 
 `orbit repo add PATH` writes the target repository's Orbit link pointer so discovery resolves this Board from inside it, then refreshes managed agent configuration; `orbit repo remove NAME` drops explicit membership and clears the pointer when it points back here. Repositories discovered below the anchor cannot be removed — their membership comes from the folder layout. `orbit repo refresh` rebuilds `.orbit/cache/member-repositories.json` and reports additions and removals; the cache is rebuildable and never stored in the Board repository.
 
-To give the Board a remote home, `orbit board host REPO|URL` records a member Repository or git URL whose remote stores the Board's `orbit` branch, and `orbit board sync` merges local and hosted histories — different Tasks and fields merge, Comments union, the earlier Claim wins, and a same-field conflict stops until `--resolve FIELD=local|host` picks a side.
+To give the Board a remote home, `orbit board host REPO|URL` records a member Repository, local repository path (resolved to its `origin`), or git URL whose remote stores the Board's `orbit` branch, and `orbit board sync` merges local and hosted histories — different Tasks and fields merge, Comments union, the earlier Claim wins, and a same-field conflict stops until `--resolve FIELD=local|host` picks a side.
 
 Board discovery is: `--dir`/`ORBIT_DIR`, then the repository link pointer, then the nearest `.orbit` walking up across Git boundaries (restarted from a worktree's main checkout), then the retired in-Git store for migration diagnostics, then nothing. An explicit override wins for one command:
 

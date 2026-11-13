@@ -1785,7 +1785,7 @@ pub(crate) fn main_checkout_for(repo_root: &Path, common: &Path) -> PathBuf {
     repo_root.to_path_buf()
 }
 
-fn worktree_exclusion(root: &Path) -> Result<Option<(PathBuf, String)>> {
+pub(crate) fn worktree_exclusion(root: &Path) -> Result<Option<(PathBuf, String)>> {
     let mut anchor = root;
     if let Some(repo_root) = git::toplevel_containing(root) {
         let repo_root = dunce::canonicalize(&repo_root).unwrap_or(repo_root);

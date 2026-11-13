@@ -608,12 +608,15 @@ fn run_init(
     })
 }
 
+/// Folder name for bare `--visible` and the interactive name prompt.
+const DEFAULT_VISIBLE_NAME: &str = "issues";
+
 /// How `--visible` / the interactive layout prompt resolved the Board folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VisibleChoice {
     /// The default layout for the target (hidden `.orbit/board` where it applies).
     Default,
-    /// A visible Board folder; `None` is bare `--visible` (name `board`).
+    /// A visible Board folder; `None` is bare `--visible` (name `issues`).
     Named(Option<String>),
 }
 
@@ -630,7 +633,10 @@ impl VisibleChoice {
     fn forced_name(&self) -> Option<String> {
         match self {
             Self::Default => None,
-            Self::Named(name) => Some(name.clone().unwrap_or_else(|| "board".to_string())),
+            Self::Named(name) => Some(
+                name.clone()
+                    .unwrap_or_else(|| DEFAULT_VISIBLE_NAME.to_string()),
+            ),
         }
     }
 }
@@ -1056,8 +1062,11 @@ fn prompt_board_layout(input: &mut impl BufRead, prompt: &mut impl Write) -> Res
 }
 
 fn prompt_board_name(input: &mut impl BufRead, prompt: &mut impl Write) -> Result<String> {
-    writeln!(prompt, "Visible Board folder name [board]:")
-        .map_err(|error| OrbitError::io("write the folder prompt", error))?;
+    writeln!(
+        prompt,
+        "Visible Board folder name [{DEFAULT_VISIBLE_NAME}]:"
+    )
+    .map_err(|error| OrbitError::io("write the folder prompt", error))?;
     write!(prompt, "> ").map_err(|error| OrbitError::io("write the folder prompt", error))?;
     prompt
         .flush()
@@ -1068,11 +1077,11 @@ fn prompt_board_name(input: &mut impl BufRead, prompt: &mut impl Write) -> Resul
         .map_err(|error| OrbitError::io("read the folder name", error))?
         == 0
     {
-        return Ok("board".to_string());
+        return Ok(DEFAULT_VISIBLE_NAME.to_string());
     }
     let name = line.trim();
     if name.is_empty() {
-        return Ok("board".to_string());
+        return Ok(DEFAULT_VISIBLE_NAME.to_string());
     }
     board_folder_name(name)
 }

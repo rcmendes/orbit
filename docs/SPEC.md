@@ -382,6 +382,14 @@ and pushes; history is merged, never rebased or force-pushed. The Slug is
 re-checked against the host before every merge, and the Board lock is held
 only around local steps, never across the fetch or push.
 `board.host_sync = "auto"` syncs at `orbit prime` and after commits.
+A local repository path resolves to that repository's `origin` remote when it
+has one; a path without `origin` (a bare repository) is pushed to directly.
+
+`orbit board move DIR` renames the Board folder to DIR (same filesystem; DIR
+must not exist or be empty), rewrites the anchor's `.orbit/board` pointer file
+— or restores the hidden layout when DIR is `.orbit/board` — moves the
+`.git/info/exclude` entry, and rewrites explicit members' `.git/orbit/link`.
+Bare `orbit init --visible` names the visible Board folder `issues`.
 
 ### Slugs
 

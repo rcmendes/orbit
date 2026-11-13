@@ -62,7 +62,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Collect or archive the board | `orbit export` |
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
 | Recover or maintain the board | `orbit doctor`, `orbit sync` |
-| Host and synchronize the Board | `orbit board host`, `orbit board sync` |
+| Host, synchronize, or relocate the Board | `orbit board host`, `orbit board sync`, `orbit board move` |
 | Link GitHub Issues (optional) | `orbit remote connect` — see [github-sync.md](./github-sync.md) |
 | Triage Tasks | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
 
@@ -98,7 +98,7 @@ orbit init --portable-mcp        # MCP command `orbit`; editor PATH must find it
 orbit init ~/src/acme            # anchor Board at ~/src/acme/.orbit/board
 (cd ~ && orbit init)            # ordinary Board at ~/.orbit/board
 orbit init --slug teramigo       # Task IDs become teramigo-…
-orbit init --visible             # visible Board folder ./board instead of ./.orbit/board
+orbit init --visible             # visible Board folder ./issues instead of ./.orbit/board
 orbit init --visible=tracker     # visible Board folder ./tracker
 orbit init --host=../board-host  # also set the Board host (repo path or git URL)
 ```
@@ -112,7 +112,7 @@ orbit init --host=../board-host  # also set the Board host (repo path or git URL
 | `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents non-interactively: `none`, `all`, `auto`, or a client list. | `orbit init --agents all` |
 | `--print` | Preview the Board, exclusion entries, and generated agent files without writing or prompting. | `orbit init DIR --print` |
-| `--visible[=NAME]` | Use a visible Board folder instead of the hidden `.orbit/board` layout. Bare `--visible` names it `board`; `=NAME` picks the name. Applies when the target resolves to a repository or anchor root — an explicit directory is already visible. | `orbit init --visible=tracker` |
+| `--visible[=NAME]` | Use a visible Board folder instead of the hidden `.orbit/board` layout. Bare `--visible` names it `issues`; `=NAME` picks the name. Applies when the target resolves to a repository or anchor root — an explicit directory is already visible. | `orbit init --visible=tracker` |
 | `--host[=REPO\|URL]` | Set the Board host: a member Repository name/path or git URL whose remote stores the Board's `orbit` branch. Bare `--host` prompts in a terminal; `=REPO\|URL` sets it without prompting. An existing host branch with a different Slug is refused (`BOARD_HOST_CONFLICT`); a matching one is joined. | `orbit init --host=../board-host` |
 
 **Choose by scenario**
@@ -898,7 +898,10 @@ orbit sync
 A Board has no host by default — its history stays on this machine — or
 exactly one host whose remote stores the Board's `orbit` branch (ADR 0019).
 The host may be a member Repository name, a local repository path, or a git
-URL. One Board per host: when the host already serves an `orbit` branch it
+URL. A local repository path resolves to that repository's `origin` remote when
+it has one, so `orbit board host ../hub` stores the Board on the hub's tracker
+(for example GitHub) rather than in a local `orbit` branch of the checkout; a
+path without `origin`, such as a bare repository, is used as is. One Board per host: when the host already serves an `orbit` branch it
 must hold a Board with the same Slug; `orbit board sync` checks this again
 before every merge (`BOARD_HOST_CONFLICT`). A host spec cannot start with `-`.
 
@@ -935,7 +938,16 @@ orbit board host ../board-host       # set or change the host
 orbit board host --none              # clear it; remote branch untouched
 orbit board sync                     # fetch, merge, push
 orbit board sync --resolve orb-a1b2c3.title=host --json
+orbit board move issues              # relocate the Board folder
 ```
+
+`orbit board move DIR` relocates the Board folder. The Board's Git history
+moves with it in one rename, so DIR must be on the same filesystem and must
+not exist or be an empty directory. Orbit rewrites the anchor's `.orbit/board`
+pointer file to name DIR — or restores the hidden layout when DIR is
+`.orbit/board` — moves the `.git/info/exclude` entry to the new folder, and
+repoints explicit member Repository links. The Board host and `cache/` are
+unchanged.
 
 ### `orbit remote` — GitHub Issue provider
 

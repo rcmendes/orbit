@@ -40,6 +40,10 @@ pub struct Diagnosis {
     pub organization: Option<String>,
     /// The normalized `--repo` scope, echoed back by `remote status`.
     pub repository_scope: Option<String>,
+    /// Every connected GitHub Remote Project (`owner/repo`), before the
+    /// `--repo` scope filter; `remote status` checks Task link availability
+    /// against this set without re-resolving member origins per Task.
+    pub connected_projects: Vec<String>,
     /// Every repository in the checked universe, in report order.
     pub repositories: Vec<RepositoryDiagnosis>,
     pub fields: FieldsDiagnosis,
@@ -202,8 +206,9 @@ pub fn diagnose(
     };
     let scope = options.repository_scope.as_deref();
     let names: Vec<String> = connected
-        .into_iter()
+        .iter()
         .filter(|name| scope.is_none_or(|scope| name.eq_ignore_ascii_case(scope)))
+        .cloned()
         .collect();
 
     let mut repositories = Vec::with_capacity(names.len());
@@ -375,6 +380,7 @@ pub fn diagnose(
         },
         organization: config.organization.clone(),
         repository_scope: options.repository_scope.clone(),
+        connected_projects: connected,
         repositories,
         fields,
         findings,
@@ -655,9 +661,10 @@ pub struct NextActionInput<'a> {
     /// Whether `[github] repositories` is non-empty (members do not count).
     pub repositories_configured: bool,
     pub field_validation_failed: bool,
+    /// Field ids configured on the Board; `area.configured` /
+    /// `verification.configured` double as the "id present" inputs the
+    /// cascade needs, so no separate flags are taken.
     pub fields: &'a FieldsDiagnosis,
-    pub area_id_configured: bool,
-    pub verification_id_configured: bool,
     pub unsupported_relationships: usize,
     pub has_conflicts: bool,
     pub first_conflict_task: Option<&'a str>,
@@ -716,7 +723,8 @@ pub fn next_action(input: &NextActionInput) -> NextAction {
         || input.fields.verification.resolved == Some(false)
         || input.fields.area.matches == Some(false)
         || input.fields.verification.matches == Some(false)
-        || (!input.basic_mode && (!input.area_id_configured || !input.verification_id_configured))
+        || (!input.basic_mode
+            && (!input.fields.area.configured || !input.fields.verification.configured))
     {
         return NextAction::ConnectFields;
     }
@@ -1128,8 +1136,6 @@ mod tests {
             repositories_configured: true,
             field_validation_failed: false,
             fields,
-            area_id_configured: true,
-            verification_id_configured: true,
             unsupported_relationships: 0,
             has_conflicts: false,
             first_conflict_task: None,

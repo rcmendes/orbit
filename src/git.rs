@@ -172,9 +172,25 @@ pub fn config_get(cwd: &Path, key: &str) -> Result<Option<String>> {
     }
 }
 
+/// Requires a commit identity for the Board repository at `cwd`. A Board
+/// created inside a code repository adopts that repository's local
+/// `user.name`/`user.email` when nothing global applies, so a repo-local
+/// identity is enough to create a Board in it.
 pub fn ensure_identity(cwd: &Path) -> Result<()> {
-    let name = config_get(cwd, "user.name")?;
-    let email = config_get(cwd, "user.email")?;
+    let mut name = config_get(cwd, "user.name")?;
+    let mut email = config_get(cwd, "user.email")?;
+    if (name.is_none() || email.is_none())
+        && let Some(enclosing) = cwd.parent().and_then(toplevel_containing)
+    {
+        for (key, value) in [("user.name", &mut name), ("user.email", &mut email)] {
+            if value.is_none()
+                && let Some(found) = config_get(&enclosing, key)?
+            {
+                run_git(Some(cwd), &["config", key, &found], None)?;
+                *value = Some(found);
+            }
+        }
+    }
     if name.is_none() || email.is_none() {
         return Err(OrbitError::config(
             "git user.name and user.email must be configured before creating a Board",

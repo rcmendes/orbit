@@ -103,7 +103,7 @@ try {
 
     # The release artifact must include both commands and exercise GitHub
     # entirely through the local fixture client; this never calls GitHub.
-    Invoke-Orbit github --help | Out-Null
+    Invoke-Orbit remote --help | Out-Null
     Invoke-Orbit triage --help | Out-Null
     git remote add origin https://github.com/alice/widget.git
     $fixturePath = Join-Path $workdir "github-fixture.json"
@@ -134,12 +134,12 @@ try {
     [System.IO.File]::WriteAllText($fixturePath, $fixtureJson, [System.Text.UTF8Encoding]::new($false))
     $env:ORBIT_GITHUB_FIXTURE = $fixturePath
 
-    $connect = Invoke-Orbit github connect --json | ConvertFrom-Json
+    $connect = Invoke-Orbit remote connect --json | ConvertFrom-Json
     if ($connect.data.next_action -ne "choose_personal_account_path") {
         throw "GitHub connect did not identify the personal-account setup path: $($connect | ConvertTo-Json -Depth 5)"
     }
-    Add-Content -Path ".orbit/config.toml" -Value "`n[github]`nmode = `"basic`"`nrepositories = [`"alice/widget`"]"
-    $status = Invoke-Orbit github status --json | ConvertFrom-Json
+    Add-Content -Path ".orbit/board/config.toml" -Value "`n[[remote.projects]]`ntracker = `"github`"`nproject = `"alice/widget`"`n`n[remote.github]`nmode = `"basic`""
+    $status = Invoke-Orbit remote status --json | ConvertFrom-Json
     if ($status.data.mode -ne "basic" -or -not $status.data.auth.authenticated) {
         throw "GitHub status did not report the configured fixture: $($status | ConvertTo-Json -Depth 5)"
     }
@@ -148,7 +148,7 @@ try {
         throw "doctor reported an issue for the configured fixture: $($doctor | ConvertTo-Json -Depth 5)"
     }
 
-    $adopt = Invoke-Orbit github adopt $taskId https://github.com/alice/widget/issues/42 --json | ConvertFrom-Json
+    $adopt = Invoke-Orbit remote link $taskId https://github.com/alice/widget/issues/42 --json | ConvertFrom-Json
     if ($adopt.data.github.number -ne 42) { throw "GitHub adopt did not link issue 42" }
     $fixture = Get-Content $fixturePath -Raw | ConvertFrom-Json
     $fixture.issues.'alice/widget#42'.title = "Updated in fixture"
@@ -156,12 +156,12 @@ try {
     $updatedFixture = ConvertTo-Json -InputObject $fixture -Depth 20
     [System.IO.File]::WriteAllText($fixturePath, $updatedFixture, [System.Text.UTF8Encoding]::new($false))
 
-    $preview = Invoke-Orbit github sync $taskId --json | ConvertFrom-Json
+    $preview = Invoke-Orbit remote sync $taskId --json | ConvertFrom-Json
     $previewText = $preview.data | ConvertTo-Json -Depth 10
     if ($preview.data.apply -or -not $previewText.Contains("Updated in fixture")) {
         throw "GitHub sync preview did not show the fixture change: $($preview | ConvertTo-Json -Depth 10)"
     }
-    $sync = Invoke-Orbit github sync $taskId --direction pull --apply --json | ConvertFrom-Json
+    $sync = Invoke-Orbit remote sync $taskId --direction pull --apply --json | ConvertFrom-Json
     if (-not $sync.data.apply) { throw "GitHub sync apply did not apply the pull" }
     $show = Invoke-Orbit show $taskId --json | ConvertFrom-Json
     if ($show.data.title -ne "Updated in fixture") { throw "GitHub sync did not update the Task title" }
@@ -180,10 +180,10 @@ try {
     if (-not $review.data.apply_ready) { throw "Triage review did not validate its proposal" }
     $triage = Invoke-Orbit triage apply $taskId --proposal-file $proposalPath --approve --json | ConvertFrom-Json
     if (-not $triage.data.applied) { throw "Triage apply did not apply the reviewed proposal" }
-    Invoke-Orbit github sync $taskId --direction push --apply --json | Out-Null
+    Invoke-Orbit remote sync $taskId --direction push --apply --json | Out-Null
 
     $createdId = (Invoke-Orbit add "Create fixture issue" --json | ConvertFrom-Json).data.id
-    $created = Invoke-Orbit github create $createdId --apply --json | ConvertFrom-Json
+    $created = Invoke-Orbit remote create $createdId --apply --json | ConvertFrom-Json
     if ($created.data.success_count -ne 1 -or $created.data.tasks[0].github.repo -ne "alice/widget") {
         throw "GitHub create did not use the linked fixture repository"
     }

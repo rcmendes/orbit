@@ -186,8 +186,12 @@ repository and query) instead of one `gh api` call per Task, so a Board with
 hundreds of Linked Tasks finishes `orbit remote status` in seconds rather
 than minutes. Issues a batch could not fetch — for example during a GitHub
 rate limit — are reported per Task in `data.issues` instead of failing the
-command. `--repo owner/repo` scopes every check and Issue fetch to a single
-repository, which keeps the report fast on multi-repository Boards.
+command. Rate-limit and HTTP 403 batch failures retain their cause for each
+unchecked Task and never trigger per-Issue REST retries. Partial GraphQL data
+is still used: only unavailable or invalid Issues receive per-Task errors.
+`--repo owner/repo` scopes every check and Issue fetch to a single repository,
+which keeps the report fast on multi-repository Boards. An unlinked repository
+scope is reported as not linked, rather than implying the Board has no links.
 
 ```bash
 orbit remote status

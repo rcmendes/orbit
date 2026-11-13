@@ -164,7 +164,10 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
     if configured && linked_repositories.is_empty() {
         issues.push(json!({
             "code": "GITHUB_REPO_NOT_LINKED",
-            "message": "No GitHub repositories are linked to this Board",
+            "message": match repo_scope.as_deref() {
+                Some(repo) => format!("GitHub repository `{repo}` is not linked to this Board"),
+                None => "No GitHub repositories are linked to this Board".to_string(),
+            },
         }));
     }
 
@@ -227,7 +230,12 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
     let targets: Vec<_> = graph
         .iter()
         .filter(|task| github_link(task).is_some())
-        .map(|task| (task.clone(), github_link(task).expect("filtered linked task")))
+        .map(|task| {
+            (
+                task.clone(),
+                github_link(task).expect("filtered linked task"),
+            )
+        })
         .filter(|(_, link)| {
             repo_scope
                 .as_deref()

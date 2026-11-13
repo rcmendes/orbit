@@ -439,8 +439,7 @@ impl GitHubClient for GhCliClient {
         refs: &[IssueRef],
         issue_fields: Option<&IssueFieldConfig>,
     ) -> Vec<Result<IssueSnapshot>> {
-        let mut results: Vec<Option<Result<IssueSnapshot>>> =
-            refs.iter().map(|_| None).collect();
+        let mut results: Vec<Option<Result<IssueSnapshot>>> = refs.iter().map(|_| None).collect();
         // Group by repository and chunk so one inaccessible repository or
         // one failed GraphQL query only affects its own issues.
         let mut order: Vec<usize> = (0..refs.len()).collect();
@@ -450,27 +449,17 @@ impl GitHubClient for GhCliClient {
                 .to_lowercase()
                 .cmp(&refs[*b].repo.to_lowercase())
         });
-        for group in order
-            .chunk_by(|a, b| refs[*a].repo.eq_ignore_ascii_case(&refs[*b].repo))
-        {
+        for group in order.chunk_by(|a, b| refs[*a].repo.eq_ignore_ascii_case(&refs[*b].repo)) {
             for chunk in group.chunks(GRAPHQL_BATCH_ISSUES) {
                 let repo = refs[chunk[0]].repo.clone();
                 let numbers: Vec<u64> = chunk.iter().map(|i| refs[*i].number).collect();
-                match graphql_repository_issues(&repo, &numbers, issue_fields) {
-                    Ok(snapshots) => {
-                        for (i, snapshot) in chunk.iter().zip(snapshots) {
-                            results[*i] = Some(snapshot);
-                        }
-                    }
-                    Err(_) => {
-                        // The batched query failed (rate limit, repository
-                        // access, schema gap): fall back to one REST fetch
-                        // per issue so each ref reports its own error.
-                        for i in chunk {
-                            results[*i] =
-                                Some(self.get_issue(&repo, refs[*i].number, issue_fields));
-                        }
-                    }
+                let snapshots = resolve_issue_batch(
+                    graphql_repository_issues(&repo, &numbers, issue_fields),
+                    &numbers,
+                    |number| self.get_issue(&repo, number, issue_fields),
+                );
+                for (i, snapshot) in chunk.iter().zip(snapshots) {
+                    results[*i] = Some(snapshot);
                 }
             }
         }
@@ -1320,6 +1309,38 @@ fn parse_rest_issue(repo: &str, bytes: &[u8]) -> Result<IssueSnapshot> {
 /// round-trips into N/50 queries.
 const GRAPHQL_BATCH_ISSUES: usize = 50;
 
+fn resolve_issue_batch(
+    batch: Result<Vec<Result<IssueSnapshot>>>,
+    numbers: &[u64],
+    mut fallback: impl FnMut(u64) -> Result<IssueSnapshot>,
+) -> Vec<Result<IssueSnapshot>> {
+    match batch {
+        Ok(snapshots) => snapshots,
+        Err(error) => {
+            let message = error.message.to_ascii_lowercase();
+            if ["rate limit", "403", "secondary rate"]
+                .iter()
+                .any(|signature| message.contains(signature))
+            {
+                // Never amplify throttling with one REST process per issue.
+                return numbers.iter().map(|_| Err(error.clone())).collect();
+            }
+            numbers
+                .iter()
+                .map(|number| {
+                    fallback(*number).map_err(|mut fallback_error| {
+                        fallback_error.message = format!(
+                            "{}; REST fallback failed: {}",
+                            error.message, fallback_error.message
+                        );
+                        fallback_error
+                    })
+                })
+                .collect()
+        }
+    }
+}
+
 const GRAPHQL_ISSUE_FRAGMENT: &str = "number title body state stateReason updatedAt \
     labels(first: 100) { nodes { name } } \
     assignees(first: 100) { nodes { login } } \
@@ -1384,7 +1405,7 @@ fn parse_batch_issues_response(
     if let Some(errors) = response
         .get("errors")
         .and_then(serde_json::Value::as_array)
-        .filter(|errors| !errors.is_empty())
+        .filter(|errors| !errors.is_empty() && !response["data"].is_object())
     {
         let message = errors
             .iter()
@@ -1414,14 +1435,14 @@ fn parse_batch_issues_response(
     Ok(numbers
         .iter()
         .enumerate()
-        .map(|(index, number)| {
-            match repository.get(format!("i{index}")) {
+        .map(
+            |(index, number)| match repository.get(format!("i{index}")) {
                 Some(serde_json::Value::Null) | None => {
                     Err(OrbitError::not_found(&format!("{repo}#{number}")))
                 }
                 Some(node) => parse_graphql_issue(repo, node, issue_fields),
-            }
-        })
+            },
+        )
         .collect())
 }
 
@@ -1478,46 +1499,38 @@ fn parse_graphql_issue(
         verification,
         parent_issue: Vec::new(),
         blocked_by,
+        // Existing IssueSnapshot convention stores hierarchical sub-issues in `blocking`.
         blocking: sub_issues,
     })
 }
 
-fn graphql_name_list(node: &serde_json::Value, field: &str) -> Vec<String> {
+fn graphql_nodes<'a>(node: &'a serde_json::Value, field: &str) -> &'a [serde_json::Value] {
     node[field]["nodes"]
         .as_array()
-        .map(|nodes| {
-            nodes
-                .iter()
-                .filter_map(|entry| {
-                    entry["name"].as_str().or_else(|| entry["login"].as_str())
-                })
-                .map(str::to_string)
-                .collect()
-        })
+        .map(Vec::as_slice)
         .unwrap_or_default()
 }
 
-fn graphql_issue_refs(
-    node: &serde_json::Value,
-    field: &str,
-    default_repo: &str,
-) -> Vec<IssueRef> {
-    node[field]["nodes"]
-        .as_array()
-        .map(|nodes| {
-            nodes
-                .iter()
-                .filter_map(|entry| {
-                    let number = entry["number"].as_u64()?;
-                    let repo = entry["repository"]["nameWithOwner"]
-                        .as_str()
-                        .unwrap_or(default_repo)
-                        .to_string();
-                    Some(IssueRef { repo, number })
-                })
-                .collect()
+fn graphql_name_list(node: &serde_json::Value, field: &str) -> Vec<String> {
+    graphql_nodes(node, field)
+        .iter()
+        .filter_map(|entry| entry["name"].as_str().or_else(|| entry["login"].as_str()))
+        .map(str::to_string)
+        .collect()
+}
+
+fn graphql_issue_refs(node: &serde_json::Value, field: &str, default_repo: &str) -> Vec<IssueRef> {
+    graphql_nodes(node, field)
+        .iter()
+        .filter_map(|entry| {
+            let number = entry["number"].as_u64()?;
+            let repo = entry["repository"]["nameWithOwner"]
+                .as_str()
+                .unwrap_or(default_repo)
+                .to_string();
+            Some(IssueRef { repo, number })
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// Reduce `issueFieldValues` nodes to the name→value map `string_field`
@@ -2324,6 +2337,54 @@ mod tests {
         let missing = results[1].as_ref().unwrap_err();
         assert_eq!(missing.code, code::NOT_FOUND);
         assert_eq!(results[2].as_ref().unwrap().number, 9);
+    }
+
+    #[test]
+    fn rate_limited_batches_never_attempt_rest_fallback() {
+        for message in [
+            "API rate limit exceeded",
+            "HTTP 403 Forbidden",
+            "secondary rate restriction",
+            "RATE LIMIT reached",
+        ] {
+            let results = resolve_issue_batch(
+                Err(OrbitError::new(code::GITHUB_NOT_CONFIGURED, message)),
+                &[7, 8, 9],
+                |_| panic!("rate-limited batch must not spawn REST requests"),
+            );
+            assert_eq!(results.len(), 3);
+            for result in results {
+                assert_eq!(result.unwrap_err().message, message);
+            }
+        }
+    }
+
+    #[test]
+    fn batch_response_preserves_partial_data_with_errors() {
+        let response = serde_json::json!({
+            "data": { "repository": {
+                "i0": graphql_issue_node(7),
+                "i1": null,
+                "i2": { "number": 9 }
+            } },
+            "errors": [{ "message": "Could not resolve issue 8", "path": ["repository", "i1"] }]
+        });
+        let results = parse_batch_issues_response(
+            "acme/widget",
+            &[7, 8, 9],
+            None,
+            &serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(results[0].as_ref().unwrap().number, 7);
+        assert_eq!(results[1].as_ref().unwrap_err().code, code::NOT_FOUND);
+        assert!(
+            results[2]
+                .as_ref()
+                .unwrap_err()
+                .message
+                .contains("updatedAt")
+        );
     }
 
     #[test]

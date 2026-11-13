@@ -122,6 +122,19 @@ fn doctor_reports_and_fixes_an_orphan_worktree() {
 
     let before = doctor_json(&repo, &["doctor", "--json"]);
     assert!(issue_codes(&before).contains(&"ORPHAN_WORKTREE".to_string()));
+    let orphan = before["data"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "ORPHAN_WORKTREE")
+        .unwrap();
+    assert!(
+        orphan["message"]
+            .as_str()
+            .unwrap()
+            .contains("orbit migrate")
+    );
+    assert!(!board.exists(), "diagnosis must not restore the Board");
 
     let value = doctor_json(&repo, &["doctor", "--fix", "--json"]);
     assert!(
@@ -209,19 +222,62 @@ fn doctor_reports_absolute_paths_in_user_scope_configs() {
 }
 
 #[test]
-fn commands_reattach_an_orphan_worktree_on_their_own() {
+fn read_commands_leave_orphan_worktrees_untouched() {
+    // Include Git administration files, not just the absent Board: pruning a
+    // stale record or changing an exclusion is also a forbidden discovery write.
+    fn snapshot(
+        root: &Path,
+    ) -> std::collections::BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)> {
+        let mut files = std::collections::BTreeMap::new();
+        for entry in std::fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files.extend(snapshot(&path));
+            } else {
+                files.insert(
+                    path.clone(),
+                    (
+                        std::fs::read(&path).unwrap(),
+                        path.metadata().unwrap().modified().unwrap(),
+                    ),
+                );
+            }
+        }
+        files
+    }
+
     let repo = TestRepo::new();
     let board = repo.orbit_path();
     legacy_worktree_board(&repo, &board);
     std::fs::remove_dir_all(&board).unwrap();
 
-    // Discovery repairs the missing worktree, then refuses the still-legacy
-    // Board until `orbit migrate` converts it.
+    let records = repo
+        .git_in(repo.path(), &["worktree", "list", "--porcelain"])
+        .stdout;
+    let head = repo.git_in(repo.path(), &["rev-parse", "orbit"]).stdout;
+    let before = snapshot(repo.path());
     let (status, value) = repo.json(&["list", "--json"]);
 
+    assert_eq!(
+        snapshot(repo.path()),
+        before,
+        "read commands must not write files"
+    );
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "BOARD_NOT_MIGRATED");
-    assert!(board.join("config.toml").is_file());
+    assert!(
+        !board.exists(),
+        "read commands must not restore the legacy Board"
+    );
+    assert_eq!(value["error"]["code"], "BOARD_NOT_FOUND");
+    assert_eq!(
+        repo.git_in(repo.path(), &["worktree", "list", "--porcelain"])
+            .stdout,
+        records
+    );
+    assert_eq!(
+        repo.git_in(repo.path(), &["rev-parse", "orbit"]).stdout,
+        head
+    );
 }
 
 #[test]

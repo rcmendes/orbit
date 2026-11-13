@@ -215,12 +215,18 @@ fn reconcile(
         ));
     }
 
+    let base_tree = match base.as_deref() {
+        Some(base) => read_tree(&board.root, base)?,
+        None => BTreeMap::new(),
+    };
+    let local_tree = read_tree(&board.root, &local_head)?;
+    let remote_tree = read_tree(&board.root, &remote_tip)?;
     let outcome = merge_trees(
-        &board.root,
-        base.as_deref(),
-        &local_head,
-        &remote_tip,
+        &base_tree,
+        &local_tree,
+        &remote_tree,
         resolutions,
+        Utc::now(),
     )?;
     if !outcome.conflicts.is_empty() {
         return Err(OrbitError::new(
@@ -807,16 +813,27 @@ fn merge_task(
     task::render_task(&merged)
 }
 
+/// Git adapter: materialize a revision before entering the merge engine.
+fn read_tree(root: &Path, revision: &str) -> Result<BTreeMap<String, String>> {
+    let mut tree = BTreeMap::new();
+    for path in git::tree_files(root, revision)? {
+        if let Some(content) = git::show_file(root, revision, &path)? {
+            tree.insert(path, content);
+        }
+    }
+    Ok(tree)
+}
+
 /// Merge the trees of `local` and `remote` three-way against `base`
-/// (`None` for unrelated histories). Every union path resolves to merged
+/// (empty for unrelated histories). Every union path resolves to merged
 /// content (`Some`) or deletion (`None`); unmerged divergences land in
 /// `conflicts` unless a `--resolve` covers them.
 fn merge_trees(
-    root: &Path,
-    base: Option<&str>,
-    local: &str,
-    remote: &str,
+    base: &BTreeMap<String, String>,
+    local: &BTreeMap<String, String>,
+    remote: &BTreeMap<String, String>,
     resolutions: &BTreeMap<String, MergeSide>,
+    notice_time: DateTime<Utc>,
 ) -> Result<MergeOutcome> {
     let mut outcome = MergeOutcome {
         files: BTreeMap::new(),
@@ -826,21 +843,13 @@ fn merge_trees(
         used_resolutions: BTreeSet::new(),
     };
 
-    let mut paths: BTreeSet<String> = git::tree_files(root, local)?.into_iter().collect();
-    paths.extend(git::tree_files(root, remote)?);
-
+    let paths: BTreeSet<&String> = local.keys().chain(remote.keys()).collect();
     for path in paths {
-        let local_content = git::show_file(root, local, &path)?;
-        let remote_content = git::show_file(root, remote, &path)?;
-        let base_content = match base {
-            Some(base) => git::show_file(root, base, &path)?,
-            None => None,
-        };
         resolve_path(
-            &path,
-            base_content,
-            local_content,
-            remote_content,
+            path,
+            base.get(path).cloned(),
+            local.get(path).cloned(),
+            remote.get(path).cloned(),
             &mut outcome,
         )?;
     }
@@ -859,7 +868,7 @@ fn merge_trees(
             .unwrap_or_default();
         let comment = Comment {
             author: "orbit".to_string(),
-            created_at: Utc::now(),
+            created_at: notice_time,
             body: notice.body,
         };
         let merged = comment::append_comment(&existing, &notice.task, &comment);
@@ -1001,4 +1010,197 @@ fn merge_comments(
         (a.created_at, &a.author, &a.body).cmp(&(b.created_at, &b.author, &b.body))
     });
     Ok(comment::render_comments_file(task_id, &comments))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tree(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
+        entries
+            .iter()
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect()
+    }
+
+    fn now() -> DateTime<Utc> {
+        "2026-01-01T00:00:00Z".parse().unwrap()
+    }
+
+    const TASK_PATH: &str = "tasks/orbit-test.md";
+
+    fn task_content(title: &str, priority: u8, status_and_claim: &str) -> String {
+        format!(
+            "---\ntitle: {title}\npriority: {priority}\n{status_and_claim}\ncreated_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\nTask body\n"
+        )
+    }
+
+    fn merge_tasks(base: &str, local: &str, host: &str, resolutions: &[String]) -> MergeOutcome {
+        merge_trees(
+            &tree(&[(TASK_PATH, base)]),
+            &tree(&[(TASK_PATH, local)]),
+            &tree(&[(TASK_PATH, host)]),
+            &parse_resolutions(resolutions).unwrap(),
+            now(),
+        )
+        .unwrap()
+    }
+
+    fn merged_task(outcome: &MergeOutcome) -> Task {
+        task::parse_task(
+            "orbit-test".to_string(),
+            outcome.files[TASK_PATH].as_deref().unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn different_fields_merge() {
+        let base = task_content("Original", 2, "status: todo");
+        let local = task_content("Local title", 2, "status: todo");
+        let host = task_content("Original", 3, "status: todo");
+        let merged = merge_tasks(&base, &local, &host, &[]);
+        assert!(merged.conflicts.is_empty());
+        let task = merged_task(&merged);
+        assert_eq!(task.front.title, "Local title");
+        assert_eq!(task.front.priority, 3);
+    }
+
+    #[test]
+    fn same_field_conflicts_until_resolved_to_either_side() {
+        let base = task_content("Original", 2, "status: todo");
+        let local = task_content("Local title", 2, "status: todo");
+        let host = task_content("Host title", 2, "status: todo");
+        let unresolved = merge_tasks(&base, &local, &host, &[]);
+        assert_eq!(unresolved.conflicts.len(), 1);
+        assert_eq!(unresolved.conflicts[0].field, "orbit-test.title");
+        for (side, title) in [("local", "Local title"), ("host", "Host title")] {
+            let merged = merge_tasks(&base, &local, &host, &[format!("orbit-test.title={side}")]);
+            assert!(merged.conflicts.is_empty());
+            assert_eq!(merged_task(&merged).front.title, title);
+            assert!(merged.used_resolutions.contains("orbit-test.title"));
+        }
+    }
+
+    #[test]
+    fn comments_union_deduplicates_and_orders_entries() {
+        let entry = |author: &str, day: &str, body: &str| Comment {
+            author: author.to_string(),
+            created_at: day.parse().unwrap(),
+            body: body.to_string(),
+        };
+        let shared = entry("shared", "2025-01-01T00:00:00Z", "shared note");
+        let early = entry("host", "2025-01-02T00:00:00Z", "host note");
+        let late = entry("local", "2025-01-03T00:00:00Z", "local note");
+        let render = |comments: &[Comment]| comment::render_comments_file("orbit-test", comments);
+        let base = render(std::slice::from_ref(&shared));
+        let local = render(&[late, shared.clone()]);
+        let host = render(&[early, shared]);
+        let path = "comments/orbit-test.md";
+        let merged = merge_trees(
+            &tree(&[(path, &base)]),
+            &tree(&[(path, &local)]),
+            &tree(&[(path, &host)]),
+            &BTreeMap::new(),
+            now(),
+        )
+        .unwrap();
+        assert!(merged.conflicts.is_empty());
+        let comments = comment::parse_comments(merged.files[path].as_deref().unwrap()).unwrap();
+        assert_eq!(
+            comments.iter().map(|c| c.body.as_str()).collect::<Vec<_>>(),
+            ["shared note", "host note", "local note"]
+        );
+    }
+
+    #[test]
+    fn earlier_claim_wins_and_loser_receives_a_comment() {
+        let base = task_content("Claimed", 2, "status: todo");
+        let local = task_content(
+            "Claimed",
+            2,
+            "status: in_progress\nclaimed_by: local\nclaimed_at: 2025-03-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z",
+        );
+        let host = task_content(
+            "Claimed",
+            2,
+            "status: in_progress\nclaimed_by: host\nclaimed_at: 2025-02-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z",
+        );
+        for (local, host) in [(&local, &host), (&host, &local)] {
+            let merged = merge_tasks(&base, local, host, &[]);
+            assert!(merged.conflicts.is_empty());
+            assert_eq!(merged_task(&merged).front.claim.unwrap().holder, "host");
+            assert_eq!(merged.notices.len(), 1);
+            let comments =
+                comment::parse_comments(merged.files["comments/orbit-test.md"].as_deref().unwrap())
+                    .unwrap();
+            assert_eq!(comments.len(), 1);
+            assert_eq!(comments[0].created_at, now());
+            assert!(comments[0].body.contains("won over local"));
+        }
+    }
+
+    #[test]
+    fn finished_task_drops_host_claim() {
+        let base = task_content(
+            "Finished",
+            2,
+            "status: in_progress\nclaimed_by: local\nclaimed_at: 2025-02-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z",
+        );
+        let local = task_content("Finished", 2, "status: done");
+        let host = base
+            .replace("claimed_by: local", "claimed_by: host")
+            .replace("2025-02-01", "2025-03-01");
+        let merged = merge_tasks(&base, &local, &host, &[]);
+        assert!(merged.conflicts.is_empty());
+        let task = merged_task(&merged);
+        assert_eq!(task.front.status, Status::Done);
+        assert!(task.front.claim.is_none());
+    }
+
+    #[test]
+    fn edit_delete_conflicts_and_can_choose_deletion() {
+        let base = tree(&[(TASK_PATH, "original")]);
+        let local = tree(&[(TASK_PATH, "edited")]);
+        let host = BTreeMap::new();
+        let merged = merge_trees(&base, &local, &host, &BTreeMap::new(), now()).unwrap();
+        assert_eq!(merged.conflicts.len(), 1);
+        assert_eq!(merged.conflicts[0].field, "orbit-test");
+        assert_eq!(merged.conflicts[0].host, "(deleted)");
+        let resolutions = parse_resolutions(&["orbit-test=host".to_string()]).unwrap();
+        let merged = merge_trees(&base, &local, &host, &resolutions, now()).unwrap();
+        assert!(merged.conflicts.is_empty());
+        assert_eq!(merged.files[TASK_PATH], None);
+        let both_deleted = merge_trees(&base, &host, &host, &BTreeMap::new(), now()).unwrap();
+        assert!(!both_deleted.files.contains_key(TASK_PATH));
+    }
+
+    #[test]
+    fn unparseable_task_conflicts_as_a_whole_task() {
+        let base = task_content("Original", 2, "status: todo");
+        let host = task_content("Host", 2, "status: todo");
+        let merged = merge_tasks(&base, "not a task", &host, &[]);
+        assert_eq!(merged.conflicts.len(), 1);
+        assert_eq!(merged.conflicts[0].field, "orbit-test");
+        let merged = merge_tasks(&base, "not a task", &host, &["orbit-test=host".to_string()]);
+        assert!(merged.conflicts.is_empty());
+        assert_eq!(merged.files[TASK_PATH].as_deref(), Some(host.as_str()));
+    }
+
+    #[test]
+    fn unrelated_trees_merge_different_tasks() {
+        let local = tree(&[("tasks/orbit-local.md", "local task")]);
+        let remote = tree(&[("tasks/orbit-host.md", "host task")]);
+        let merged =
+            merge_trees(&BTreeMap::new(), &local, &remote, &BTreeMap::new(), now()).unwrap();
+        assert!(merged.conflicts.is_empty());
+        assert_eq!(
+            merged.files["tasks/orbit-local.md"].as_deref(),
+            Some("local task")
+        );
+        assert_eq!(
+            merged.files["tasks/orbit-host.md"].as_deref(),
+            Some("host task")
+        );
+    }
 }

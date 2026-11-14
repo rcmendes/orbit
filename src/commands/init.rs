@@ -902,6 +902,10 @@ fn child_boards(anchor: &Path, board_root: &Path) -> Result<Vec<ChildBoard>> {
 /// `<anchor>/.orbit/backups/` so discovery routes their repositories to the
 /// merged Board.
 fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> Result<Vec<String>> {
+    let _lock = board.lock_exclusive()?;
+    let mut tasks = std::collections::BTreeMap::<PathBuf, Vec<u8>>::new();
+    let mut comments = std::collections::BTreeMap::new();
+    let mut config = crate::board::Config::load(&board.root)?;
     let mut notes = Vec::new();
     for child in children {
         let source = Board::at_root(child.board.clone(), Vec::new())?;
@@ -925,18 +929,6 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
             let content = std::fs::read(&source_path).map_err(|error| {
                 OrbitError::io(format!("read {}", source_path.display()), error)
             })?;
-            let target = board.tasks_dir().join(format!("{id}.md"));
-            if target.exists() {
-                let existing = std::fs::read(&target)
-                    .map_err(|error| OrbitError::io(format!("read {}", target.display()), error))?;
-                if existing != content {
-                    return Err(OrbitError::config(format!(
-                        "Task {id} exists in both the new Board and {}; resolve the collision before merging",
-                        child.board.display()
-                    )));
-                }
-                continue;
-            }
             let mut bytes = content;
             if let Some(name) = repo_name.as_deref()
                 && let Ok(text) = std::str::from_utf8(&bytes)
@@ -947,41 +939,48 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
                     bytes = crate::task::render_task(&task)?.into_bytes();
                 }
             }
-            crate::atomic::write_atomic(&target, &bytes, true)?;
+            let target = board.tasks_dir().join(format!("{id}.md"));
+            let existing = if let Some(bytes) = tasks.get(&target) {
+                Some(bytes.clone())
+            } else {
+                match std::fs::read(&target) {
+                    Ok(bytes) => Some(bytes),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => {
+                        return Err(OrbitError::io(format!("read {}", target.display()), error));
+                    }
+                }
+            };
+            if let Some(existing) = existing {
+                if existing != bytes {
+                    return Err(OrbitError::config(format!(
+                        "Task {id} exists in both the new Board and {}; resolve the collision before merging",
+                        child.board.display()
+                    )));
+                }
+                continue;
+            }
+            tasks.insert(target, bytes);
             imported += 1;
         }
         for id in source.comment_ids()? {
             let source_path = source.comment_path(&id);
             let target = board.comments_dir().join(format!("{id}.md"));
-            if target.exists() {
+            if target.exists() || comments.contains_key(&target) {
                 continue;
             }
             let bytes = std::fs::read(&source_path).map_err(|error| {
                 OrbitError::io(format!("read {}", source_path.display()), error)
             })?;
-            crate::atomic::write_atomic(&target, &bytes, true)?;
+            comments.insert(target, bytes);
         }
-        let source_config = source.config.clone();
-        board.save_config("orbit: merge child Board prefixes", move |config| {
-            for prefix in std::iter::once(source_config.id.prefix.as_str()).chain(
-                source_config
-                    .id
-                    .accepted_prefixes
-                    .iter()
-                    .map(String::as_str),
-            ) {
-                if prefix != config.id.prefix
-                    && !config
-                        .id
-                        .accepted_prefixes
-                        .iter()
-                        .any(|known| known == prefix)
-                {
-                    config.id.accepted_prefixes.push(prefix.to_string());
-                }
+        for prefix in
+            std::iter::once(&source.config.id.prefix).chain(&source.config.id.accepted_prefixes)
+        {
+            if prefix != &config.id.prefix && !config.id.accepted_prefixes.contains(prefix) {
+                config.id.accepted_prefixes.push(prefix.clone());
             }
-            Ok(())
-        })?;
+        }
         notes.push(format!(
             "merged {} into the Board ({} tasks imported)",
             child.board.display(),
@@ -989,6 +988,15 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
         ));
     }
 
+    config.validate()?;
+    // Preflight every child before publishing; a late collision must leave imports untouched.
+    for (path, bytes) in tasks.into_iter().chain(comments) {
+        crate::atomic::write_atomic(&path, &bytes, false)?;
+    }
+    board.save_config("orbit: merge child Board prefixes", |current| {
+        current.id.accepted_prefixes = config.id.accepted_prefixes;
+        Ok(())
+    })?;
     for child in children {
         relocate_child_board(anchor, child)?;
     }

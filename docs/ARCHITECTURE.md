@@ -165,6 +165,18 @@ tests retain end-to-end coverage of unrelated histories, CLI conflict resolution
 and preserving merge history, alongside host configuration and transport checks.
 This seam does not add to the Board host module's public interface.
 
+### Child-Board consolidation
+
+`src/commands/init.rs` holds the destination Board's exclusive lock while it
+preflights all child Boards into in-memory Task and Comment maps and merges
+accepted prefixes. Repository attribution is applied before comparing Task
+content, so retries accept unchanged previous imports. Collisions, read failures,
+and invalid merged configuration stop before import publication or backup moves.
+The destination Board itself may already have been created by init.
+Publication still uses atomic writes per file, followed by the prefix commit
+and child-Board backup moves; it does not promise rollback after I/O failure or
+interruption. Existing Tasks and Comments are never overwritten by import.
+
 ### Scoped access and execution modules
 
 `board::BoardAccess::open` keeps discovery policy and the Board lock in one scope.

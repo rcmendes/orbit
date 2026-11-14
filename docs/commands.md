@@ -220,8 +220,14 @@ repositories that anchored their own `.orbit` before the parent Board
 existed — init previews the merge, preserves every Task ID, records each
 imported Task's Repository, moves differing child ID prefixes to
 `id.accepted_prefixes`, and keeps the child Boards on disk under
-`<anchor>/.orbit/backups/`. An existing child Board or an unrecognized
-`.orbit` layout is reported instead of being shadowed or discarded. If a Board
+`<anchor>/.orbit/backups/`. Before importing, init reads and checks every child's
+Tasks, Comments, and merged prefix configuration. A Task collision returns
+`CONFIG_ERROR` before any imports are published or child Boards are relocated;
+a newly created anchor Board may remain. Retrying accepts an unchanged Task
+already imported with its Repository attribution and preserves existing Comments.
+An edited Task still conflicts. Publication is atomic per file, so an I/O failure
+or interruption can leave partial imports; fix the cause and rerun init.
+An existing child Board or an unrecognized `.orbit` layout is reported instead of being shadowed or discarded. If a Board
 already exists at the anchor, `orbit init <anchor>` reuses it.
 
 #### `orbit repo` — manage member Repositories

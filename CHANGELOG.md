@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.15 - 2026-11-14
+
 - Child-Board consolidation checks all imports before publishing, so a late Task collision leaves earlier imports untouched. Retrying accepts unchanged Tasks already imported with Repository attribution while preserving existing Comments and source Board backups.
 
 - `orbit batch --file PATH|-` applies many task operations under one lock in one commit, all or none, with `--dry-run`; references may use `key:<source key>`. The MCP tool `batch` does the same. See ADR 0020.

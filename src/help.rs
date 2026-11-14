@@ -85,8 +85,11 @@ boundary and need no `orbit repo add`. Repositories outside it can join with
 `orbit repo add`. When init runs on an anchor that contains child Boards, it
 previews and merges them: Task IDs are preserved, child prefixes move to
 id.accepted_prefixes, imported Tasks record their Repository, and the child
-Boards stay on disk as backups. An existing child Board or an unrecognized
-.orbit layout is reported; init does not shadow or discard it. A
+Boards stay on disk as backups. Before importing, init checks every child for
+Task collisions; a collision leaves imports untouched. Retrying accepts Tasks
+already imported with their Repository attribution. Publication is atomic per
+file; an interrupted import can leave partial results. An existing child Board
+or an unrecognized .orbit layout is reported; init does not shadow or discard it. A
 pre-ADR-0019 Board is refused with BOARD_NOT_MIGRATED; run `orbit migrate` to
 convert it.
 

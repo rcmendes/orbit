@@ -360,8 +360,15 @@ Repository automatically.
 When `orbit init` runs on an anchor that still contains child Boards, it
 previews and merges them: Task IDs are preserved, imported Tasks record their
 Repository, differing child ID prefixes move to `id.accepted_prefixes`, and the
-child Boards stay on disk under `<anchor>/.orbit/backups/`. An existing child
-Board or an unrecognized `.orbit` layout is reported rather than shadowed or
+child Boards stay on disk under `<anchor>/.orbit/backups/`. Before publishing
+imports, init preflights every child's Tasks, Comments, and merged prefix
+configuration under the destination Board's exclusive lock. A Task collision
+returns `CONFIG_ERROR` without publishing imports or relocating children; a
+newly created anchor Board may remain. Repository attribution is applied before
+Task comparison, so retries accept equivalent previous imports and reject real
+edits. Existing Comments are preserved. Publication remains atomic per file;
+I/O failure or interruption can leave partial imports for a retry. An existing
+child Board or an unrecognized `.orbit` layout is reported rather than shadowed or
 discarded.
 
 ### Remote Issue catalog
@@ -860,7 +867,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Orbit folder tests: a secondary worktree resolves the main checkout's `.orbit/board`; `init` there reuses it; commands run from `src/` resolve the root Board and `init` there refuses while that Board exists; `git clean -xdff` removes `DIR` and `doctor --fix` re-attaches it with every Task intact; `init` outside a repository creates an anchored Board; `~/.orbit` resolves only when it exists and `init` run in `~` creates `~/.orbit/board`.
 - Anchor tests (`tests/init_dir.rs`, `tests/discovery.rs`): `init <anchor>` creates `.orbit/board` plus `.orbit/cache` outside Git; the anchor and nested child Git directories resolve one Board without pointers; an outside Repository joins with `orbit repo add`; `--dir`/`ORBIT_DIR` accept the anchor or a Board directory; child-local Boards and unknown `.orbit` contents are reported without being overwritten; legacy direct `.orbit` Boards remain explicitly addressable.
 - Member Repository tests (`tests/repo.rs`): `orbit repo add` writes the link pointer and records explicit membership, `repo remove` clears both, `repo refresh` rebuilds `member-repositories.json` reporting additions and removals, a discovered child cannot be removed, and a shadowed local Board is reported.
-- Child Board merge and migration tests (`tests/migrate.rs`): `init` on an anchor previews and merges child Boards preserving Task IDs, moving child prefixes to `id.accepted_prefixes`, recording each imported Task's Repository, and keeping children as backups under `.orbit/backups`; dry-run is read-only.
+- Child Board merge and migration tests (`tests/discovery.rs`, `tests/migrate.rs`): `init` on an anchor previews and merges child Boards preserving Task IDs, moving child prefixes to `id.accepted_prefixes`, recording each imported Task's Repository, and keeping children as backups under `.orbit/backups`; dry-run is read-only.
 - Legacy layout tests: old `<git-common-dir>/orbit/board`, `.orbit`-as-Board, shared `<root>/board`, and worktree-backed targets resolve with `LEGACY_LAYOUT` and then fail commands with `BOARD_NOT_MIGRATED`; `orbit migrate` previews by default, `--apply` converts to the standalone layout preserving Tasks while rewriting `github:` links, `repo:*` labels, `[github]` config, and seeding `board.areas`, and a re-run is a no-op; an interrupted migration reports `AMBIGUOUS_BOARD`; an orphan worktree reports `ORPHAN_WORKTREE`; a leftover `board.storage` reports `STORAGE_MISMATCH`.
 - Remote port tests (`tests/remote.rs`, `tests/remote_surface.rs`): connect/disconnect/list manage Remote Projects, the Remote Issue catalog refreshes and archives, import/link/create/detach/reattach preview then apply, sync plans and resolves conflicts per field, and auto-push toggles `[remote] auto_push`.
 - Board host tests (`tests/board_host.rs`): `board host` shows/sets/clears the host, `board sync` fetches, merges Orbit-aware, and pushes, a same-field conflict waits for `--resolve FIELD=local|host`, and `board.host_sync = "auto"` syncs at `orbit prime` and after commits.

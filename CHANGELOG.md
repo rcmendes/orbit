@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Child-Board consolidation checks all imports before publishing, so a late Task collision leaves earlier imports untouched. Retrying accepts unchanged Tasks already imported with Repository attribution while preserving existing Comments and source Board backups.
+
 - `orbit batch --file PATH|-` applies many task operations under one lock in one commit, all or none, with `--dry-run`; references may use `key:<source key>`. The MCP tool `batch` does the same. See ADR 0020.
 - `orbit claim` by the current holder renews that holder's lease (live or stale) instead of failing with `ALREADY_CLAIMED`.
 - `orbit claim --worktree` claims a Task and creates `.worktrees/<id>` on branch `ticket/<id>` in the Task's Repository (falling back to the member Repository containing the current directory), replacing the manual worktree routine. The result carries `data.worktree` with `repository`, `path`, `branch`, and `created`. Branches checked out elsewhere are rejected before claiming; a later preparation failure returns `CLAIM_WORKTREE_FAILED` with the successful claim and underlying cause in error details, leaving the claim active for an explicit retry or release.

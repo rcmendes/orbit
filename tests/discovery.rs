@@ -610,6 +610,179 @@ fn workspace_init_merges_a_child_repository_board() {
 }
 
 #[test]
+fn child_board_collision_does_not_publish_earlier_imports() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let anchor = parent.path().join("acme");
+    let first = anchor.join("a");
+    let second = anchor.join("b");
+    init_child_repo(&repo, &first);
+    init_child_repo(&repo, &second);
+    repo.ok_json_in(&first, &["init", "--agents", "none", "--json"]);
+    let source = first.join(".orbit/board");
+    let added = repo.ok_json_in(
+        parent.path(),
+        &[
+            "--dir",
+            source.to_str().unwrap(),
+            "add",
+            "Original",
+            "--json",
+        ],
+    );
+    let id = added["data"]["id"].as_str().unwrap();
+    repo.ok_json_in(
+        parent.path(),
+        &[
+            "--dir",
+            source.to_str().unwrap(),
+            "comment",
+            "add",
+            id,
+            "--by",
+            "test",
+            "--body",
+            "Keep this comment",
+            "--json",
+        ],
+    );
+    std::fs::create_dir_all(second.join(".orbit")).unwrap();
+    let cloned = repo.git_in(
+        parent.path(),
+        &[
+            "clone",
+            source.to_str().unwrap(),
+            second.join(".orbit/board").to_str().unwrap(),
+        ],
+    );
+    assert!(cloned.status.success(), "{cloned:?}");
+    repo.ok_json_in(
+        parent.path(),
+        &[
+            "--dir",
+            second.join(".orbit/board").to_str().unwrap(),
+            "update",
+            id,
+            "--title",
+            "Conflicting",
+            "--json",
+        ],
+    );
+    let source_task = std::fs::read(source.join("tasks").join(format!("{id}.md"))).unwrap();
+    let args = [
+        "init",
+        anchor.to_str().unwrap(),
+        "--agents",
+        "none",
+        "--json",
+    ];
+    let (status, failure) = repo.json_in(parent.path(), &args);
+    assert_eq!(status, 1);
+    assert_eq!(failure["error"]["code"], "CONFIG_ERROR");
+    assert!(failure["error"]["message"].as_str().unwrap().contains(id));
+    let destination = anchor.join(".orbit/board");
+    assert!(
+        !destination.join("tasks").join(format!("{id}.md")).exists(),
+        "a later collision must not publish earlier Tasks"
+    );
+    assert!(
+        !destination
+            .join("comments")
+            .join(format!("{id}.md"))
+            .exists()
+    );
+    let config = std::fs::read_to_string(destination.join("config.toml")).unwrap();
+    assert!(!config.contains("accepted_prefixes"), "{config}");
+    assert_eq!(
+        std::fs::read(source.join("tasks").join(format!("{id}.md"))).unwrap(),
+        source_task
+    );
+    assert!(second.join(".orbit/board/config.toml").is_file());
+    assert!(!anchor.join(".orbit/backups").exists());
+    let (_, retry) = repo.json_in(parent.path(), &args);
+    assert_eq!(retry["error"]["message"], failure["error"]["message"]);
+}
+
+#[test]
+fn child_board_retry_accepts_previously_imported_repository_attribution() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let anchor = parent.path().join("acme");
+    let child = anchor.join("api");
+    init_child_repo(&repo, &child);
+    repo.ok_json_in(&child, &["init", "--agents", "none", "--json"]);
+    let source = child.join(".orbit/board");
+    let added = repo.ok_json_in(
+        parent.path(),
+        &[
+            "--dir",
+            source.to_str().unwrap(),
+            "add",
+            "Board-wide Task",
+            "--json",
+        ],
+    );
+    let id = added["data"]["id"].as_str().unwrap();
+    repo.ok_json_in(
+        parent.path(),
+        &[
+            "--dir",
+            source.to_str().unwrap(),
+            "comment",
+            "add",
+            id,
+            "--by",
+            "test",
+            "--body",
+            "Preserved on retry",
+            "--json",
+        ],
+    );
+    let args = [
+        "init",
+        anchor.to_str().unwrap(),
+        "--agents",
+        "none",
+        "--json",
+    ];
+    repo.ok_json_in(parent.path(), &args);
+    let destination = anchor.join(".orbit/board");
+    let task_path = destination.join("tasks").join(format!("{id}.md"));
+    let imported = std::fs::read(&task_path).unwrap();
+    assert!(String::from_utf8_lossy(&imported).contains("repo: api"));
+    let comments_path = destination.join("comments").join(format!("{id}.md"));
+    let comments = std::fs::read(&comments_path).unwrap();
+    // Restore the source Board as if publication finished but backup relocation did not.
+    std::fs::rename(anchor.join(".orbit/backups/api"), &source).unwrap();
+    repo.ok_json_in(parent.path(), &args);
+    assert_eq!(std::fs::read(&task_path).unwrap(), imported);
+    assert_eq!(std::fs::read(&comments_path).unwrap(), comments);
+    assert!(anchor.join(".orbit/backups/api/config.toml").is_file());
+    assert!(!source.exists());
+    let listed = repo.ok_json_in(&child, &["list", "--all", "--json"]);
+    assert_eq!(listed["data"]["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(destination.join("config.toml")).unwrap()).unwrap();
+    assert_eq!(
+        config["id"]["accepted_prefixes"].as_array().unwrap().len(),
+        1
+    );
+    // A retry must still reject an actual edit in the destination.
+    std::fs::rename(anchor.join(".orbit/backups/api"), &source).unwrap();
+    repo.ok_json_in(
+        &anchor,
+        &["update", id, "--title", "Keep my edit", "--json"],
+    );
+    let edited = std::fs::read(&task_path).unwrap();
+    let (status, failure) = repo.json_in(parent.path(), &args);
+    assert_eq!(status, 1);
+    assert_eq!(failure["error"]["code"], "CONFIG_ERROR");
+    assert_eq!(std::fs::read(&task_path).unwrap(), edited);
+    assert!(source.is_dir());
+}
+
+#[test]
 fn a_child_repository_under_the_anchor_is_a_member_repository() {
     let repo = TestRepo::new();
     let parent = tempfile::tempdir().unwrap();

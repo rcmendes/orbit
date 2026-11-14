@@ -1,0 +1,3 @@
+[mcp_servers.orbit]
+args = ["mcp"]
+command = "/Users/rodrigomendes/.cargo/bin/orbit"

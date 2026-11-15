@@ -719,6 +719,7 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "labels": task.front.labels,
         "depends_on": task.front.depends_on,
         "parent": task.front.parent,
+        "depth": graph.depth(&task.id),
         "subtasks": subtasks,
         "open_subtasks": open_subtasks,
         "subtask_count": subtask_count,

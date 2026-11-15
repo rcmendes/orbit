@@ -21,14 +21,6 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
     let areas = normalize_areas(board, &args.area)?;
     let excluded_areas = normalize_areas(board, &args.exclude_area)?;
     let scope = repository_scope(board, args.all)?;
-    if let Some(parent) = args.parent.as_deref() {
-        let parent_task = graph.get(parent)?;
-        if parent_task.front.parent.is_some() {
-            return Err(OrbitError::invalid_argument(format!(
-                "{parent} is a SubTask; `--parent` expects a Parent Task"
-            )));
-        }
-    }
 
     let mut tasks: Vec<&Task> = graph
         .tasks
@@ -130,14 +122,6 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
     let areas = normalize_areas(board, &args.area)?;
     let excluded_areas = normalize_areas(board, &args.exclude_area)?;
     let scope = repository_scope(board, args.all)?;
-    if let Some(parent) = args.parent.as_deref() {
-        let parent_task = graph.get(parent)?;
-        if parent_task.front.parent.is_some() {
-            return Err(OrbitError::invalid_argument(format!(
-                "{parent} is a SubTask; `--parent` expects a Parent Task"
-            )));
-        }
-    }
 
     let filters = ReadyFilters {
         parent: args.parent.as_deref(),
@@ -221,28 +205,47 @@ pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::C
 pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let root = graph.get(&args.id)?;
-    if root.front.parent.is_some() {
+    if root.front.parent.is_some() && graph.children(&root.id).is_empty() {
         return Err(OrbitError::invalid_argument(format!(
             "{} is a SubTask; `orbit tree` expects a Parent Task",
             root.id
         )));
     }
 
-    let children = graph.children(&root.id);
-    let mut tasks = Vec::with_capacity(children.len() + 1);
-    tasks.push(root.clone());
-    tasks.extend(children.into_iter().cloned());
+    // Depth-first preorder: the root, then every descendant level by level,
+    // each SubTask listed before its own SubTasks.
+    fn visit<'a>(
+        graph: &'a Graph,
+        task: &'a Task,
+        level: usize,
+        seen: &mut std::collections::HashSet<String>,
+        entries: &mut Vec<(&'a Task, usize)>,
+    ) {
+        entries.push((task, level));
+        for child in graph.children(&task.id) {
+            if seen.insert(child.id.clone()) {
+                visit(graph, child, level + 1, seen, entries);
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    let mut seen = std::collections::HashSet::from([root.id.clone()]);
+    visit(&graph, root, 0, &mut seen, &mut entries);
 
+    let tasks: Vec<&Task> = entries.iter().map(|(task, _)| *task).collect();
     let summaries: Vec<Value> = tasks
         .iter()
         .map(|task| graph::task_summary(&graph, task))
         .collect();
     let count = summaries.len();
 
-    let mut human = format_tree_line(root, &graph, true);
-    for child in &tasks[1..] {
-        human.push('\n');
-        human.push_str(&format_tree_line(child, &graph, false));
+    let mut human = String::new();
+    for (task, level) in &entries {
+        if !human.is_empty() {
+            human.push('\n');
+        }
+        human.push_str(&" ".repeat(level * 2));
+        human.push_str(&format_tree_line(task, &graph, *level == 0));
     }
 
     Ok(crate::output::CommandOutput::new(

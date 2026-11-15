@@ -175,3 +175,39 @@ fn export_of_an_empty_board_has_the_schema_envelope() {
     assert_eq!(value["data"]["board"]["comment_count"], 0);
     assert!(value["data"]["tasks"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn export_at_depth_two_keeps_the_nested_parent() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+    let parent = repo.add("Feature", &[]);
+    let child = repo.ok_json(&["add", "Part", "--parent", parent.as_str(), "--json"])["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let grandchild =
+        repo.ok_json(&["add", "Step", "--parent", child.as_str(), "--json"])["data"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+    let value = repo.ok_json(&["export", "--json"]);
+
+    assert_eq!(value["data"]["schema_version"], 3);
+    let child_json = exported(&value, &child);
+    assert_eq!(child_json["kind"], "subtask");
+    assert_eq!(child_json["parent"], parent.as_str());
+    assert_eq!(child_json["depth"], 1);
+    let grandchild_json = exported(&value, &grandchild);
+    assert_eq!(grandchild_json["kind"], "subtask");
+    assert_eq!(grandchild_json["parent"], child.as_str());
+    assert_eq!(grandchild_json["depth"], 2);
+    assert!(
+        exported(&value, &child)["subtasks"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(grandchild.as_str())),
+        "{value}"
+    );
+}

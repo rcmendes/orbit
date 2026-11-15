@@ -1162,3 +1162,104 @@ fn forced_cancel_of_a_terminal_parent_still_commits_its_cancelled_subtasks() {
         format!("orbit: cancel {parent}")
     );
 }
+
+#[test]
+fn a_board_written_by_the_previous_release_loads_everywhere() {
+    let repo = TestRepo::new();
+    repo.init();
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let loose = repo.add("Loose", &[]);
+
+    // A previous-release Board never wrote board.max_subtask_depth, and the
+    // current release still omits the key while the depth stays at the default.
+    let config = repo.read(".orbit/board/config.toml");
+    assert!(!config.contains("max_subtask_depth"), "{config}");
+
+    // Every command performs the same strict load and validation; doctor
+    // reports the Board healthy.
+    let (status, value) = repo.json(&["doctor", "--json"]);
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["healthy"], true, "{value}");
+
+    let list = repo.ok_json(&["list", "--json"]);
+    assert_eq!(list["data"]["count"], 3, "{list}");
+
+    let tree = repo.ok_json(&["tree", parent.as_str(), "--json"]);
+    assert_eq!(tree["data"]["count"], 2, "{tree}");
+    assert_eq!(tree["data"]["tasks"][0]["id"], parent.as_str());
+    assert_eq!(tree["data"]["tasks"][1]["id"], child.as_str());
+
+    let ready = repo.ok_json(&["ready", "--json"]);
+    let ids: Vec<&str> = ready["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert!(ids.contains(&child.as_str()), "{ids:?}");
+    assert!(ids.contains(&loose.as_str()), "{ids:?}");
+    assert!(!ids.contains(&parent.as_str()), "{ids:?}");
+
+    let export = repo.ok_json(&["export", "--json"]);
+    assert_eq!(export["data"]["schema_version"], 3, "{export}");
+    let exported = export["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == child.as_str())
+        .expect("child missing from export");
+    assert_eq!(exported["kind"], "subtask");
+    assert_eq!(exported["parent"], parent.as_str());
+}
+
+#[test]
+fn a_shared_board_at_depth_two_never_offers_holds_or_open_parents() {
+    let repo = TestRepo::new();
+    repo.init();
+    let (parent, child, grandchild) = nested_chain(&repo);
+
+    // Two agents share the Board: agent-a claims an unrelated Task while
+    // agent-b puts a hold label on the deepest SubTask.
+    let claimed = repo.add("Claimed elsewhere", &[]);
+    repo.ok_json(&["claim", claimed.as_str(), "--by", "agent-a", "--json"]);
+    repo.ok_json(&[
+        "label",
+        "add",
+        grandchild.as_str(),
+        "needs-triage",
+        "--json",
+    ]);
+
+    let ready = repo.ok_json(&["ready", "--all", "--json"]);
+    let ids: Vec<&str> = ready["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+
+    // The hold-labelled SubTask is never offered, and neither is any ancestor
+    // while a descendant stays open — at any configured depth.
+    assert!(!ids.contains(&grandchild.as_str()), "{ids:?}");
+    assert!(!ids.contains(&child.as_str()), "{ids:?}");
+    assert!(!ids.contains(&parent.as_str()), "{ids:?}");
+    assert!(!ids.contains(&claimed.as_str()), "{ids:?}");
+
+    // Removing the hold makes only the leaf claimable again.
+    repo.ok_json(&[
+        "label",
+        "remove",
+        grandchild.as_str(),
+        "needs-triage",
+        "--json",
+    ]);
+    let ready = repo.ok_json(&["ready", "--all", "--json"]);
+    let ids: Vec<&str> = ready["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert_eq!(ids, vec![grandchild.as_str()], "{ids:?}");
+}

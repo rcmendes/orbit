@@ -363,6 +363,19 @@ fn max_subtask_depth_two_allows_a_second_level() {
 }
 
 #[test]
+fn list_and_ready_reject_a_missing_parent_filter() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.add("Feature", &[]);
+
+    for command in ["list", "ready"] {
+        let (status, value) = repo.json(&[command, "--parent", "orb-missing", "--json"]);
+        assert_eq!(status, 1, "{command}");
+        assert_eq!(value["error"]["code"], "NOT_FOUND", "{command}");
+    }
+}
+
+#[test]
 fn parent_becomes_ready_only_after_subtasks_resolve() {
     let repo = TestRepo::new();
     repo.init();

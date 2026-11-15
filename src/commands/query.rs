@@ -12,6 +12,9 @@ use super::*;
 
 pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    if let Some(parent) = args.parent.as_deref() {
+        graph.get(parent)?;
+    }
     if let Some(priority) = args.priority {
         validate_priority(priority)?;
     }
@@ -116,6 +119,9 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
 
 pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    if let Some(parent) = args.parent.as_deref() {
+        graph.get(parent)?;
+    }
     let label_filters = normalize_labels(&args.label)?;
     let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;

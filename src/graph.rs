@@ -397,20 +397,7 @@ impl Graph {
     /// parent, 1 for its SubTask, and so on. A missing Task or a parent cycle
     /// reports the hops walked before stopping.
     pub fn depth(&self, id: &str) -> usize {
-        let mut depth = 0;
-        let mut seen = HashSet::from([id.to_string()]);
-        let mut current = id;
-        while let Some(task) = self.tasks.get(current) {
-            let Some(parent) = task.front.parent.as_deref() else {
-                break;
-            };
-            if !seen.insert(parent.to_string()) {
-                break;
-            }
-            depth += 1;
-            current = parent;
-        }
-        depth
+        self.ancestors(id).len()
     }
 
     /// Every ancestor of `id`, nearest parent first. Stops at a missing Task

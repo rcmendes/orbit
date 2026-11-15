@@ -452,17 +452,20 @@ fn default_max_subtask_depth() -> u8 {
     1
 }
 
-/// Deserializes loosely so a non-integer `max_subtask_depth` reports the
-/// `board.max_subtask_depth` key; the 1–4 range itself is checked by
-/// `Config::validate` alongside the other `board.*` values.
+/// Deserializes loosely so a bad `max_subtask_depth` reports the
+/// `board.max_subtask_depth` key: non-integers fail as non-integers and
+/// out-of-range integers fail with the 1–4 range `Config::validate` also
+/// enforces for programmatically built configs.
 fn deserialize_max_subtask_depth<'de, D>(deserializer: D) -> std::result::Result<u8, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = toml::Value::deserialize(deserializer).map_err(serde::de::Error::custom)?;
     match value {
-        toml::Value::Integer(number) => u8::try_from(number)
-            .map_err(|_| serde::de::Error::custom("board.max_subtask_depth must be an integer")),
+        toml::Value::Integer(number) if !(1..=4).contains(&number) => Err(
+            serde::de::Error::custom("board.max_subtask_depth must be between 1 and 4"),
+        ),
+        toml::Value::Integer(number) => Ok(number as u8),
         _ => Err(serde::de::Error::custom(
             "board.max_subtask_depth must be an integer",
         )),
@@ -2313,7 +2316,7 @@ mod tests {
         let config = Config::load(dir.path()).unwrap();
         assert_eq!(config.board.max_subtask_depth, 1);
 
-        for value in ["0", "5", "\"two\""] {
+        for value in ["0", "-1", "5"] {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(
                 dir.path().join("config.toml"),
@@ -2323,11 +2326,27 @@ mod tests {
             let error = Config::load(dir.path()).unwrap_err();
             assert_eq!(error.code, code::CONFIG_ERROR, "value {value}");
             assert!(
-                error.message.contains("board.max_subtask_depth"),
+                error.message.contains("board.max_subtask_depth")
+                    && error.message.contains("between 1 and 4"),
                 "value {value}: {}",
                 error.message
             );
         }
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[board]\nmax_subtask_depth = \"two\"\n",
+        )
+        .unwrap();
+        let error = Config::load(dir.path()).unwrap_err();
+        assert_eq!(error.code, code::CONFIG_ERROR);
+        assert!(
+            error.message.contains("board.max_subtask_depth")
+                && error.message.contains("must be an integer"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

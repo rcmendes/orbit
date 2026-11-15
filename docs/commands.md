@@ -850,8 +850,9 @@ orbit release orb-a7b2c9 --force
 ### `orbit done` — close completed work
 
 Moves the task to `done`. Unfinished dependencies always block completion. A
-Parent Task with open SubTasks is refused; `--force` cancels those SubTasks and
-then closes the parent, and also overrides a competing live claim. `--comment`
+Parent Task with open SubTasks is refused; `--force` cancels every open
+descendant SubTask and then closes the parent, and also overrides a competing
+live claim. `--comment`
 records the completion note in the same transaction as the status change.
 
 **Good fit:** the work is implemented and verified. This is the normal end of the
@@ -868,7 +869,7 @@ orbit done orb-a7b2c9 --force --comment "Deferred the remaining pieces"
 Cancels a task without completing it. Cancelled tasks count as resolved, so
 dependents can become ready. A live claim from another agent blocks cancellation
 unless `--force` is passed. A Parent Task with open SubTasks is refused; `--force`
-cancels those SubTasks too.
+cancels every open descendant SubTask too.
 
 **Good fit:** the work is no longer needed, is a duplicate, or is a wontfix. Add
 `--comment` to record the reason.
@@ -880,9 +881,10 @@ orbit cancel orb-a7b2c9 --force
 
 ### `orbit reopen` — undo a close
 
-Returns a done or cancelled task to `todo`. Reopening a SubTask of a done Parent
-Task reopens the parent too, so the feature is not left done with reopened work.
-A SubTask under a cancelled parent is refused until the parent is reopened. It
+Returns a done or cancelled task to `todo`. Reopening a SubTask reopens every
+done ancestor too, nearest first, so the feature is not left done with reopened
+work; the walk stops at an active ancestor. A SubTask under a cancelled ancestor
+is refused, naming that ancestor, until it is reopened. It
 also refuses when a dependent is already done, because that would leave completed
 work with an unfinished dependency; `--force` allows it and `doctor` reports the
 historical warning.

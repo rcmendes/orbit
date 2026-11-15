@@ -381,7 +381,7 @@ These rules live in `src/transition.rs`: a Task owns its transitions and returns
 | `in_progress` | `release` | `todo` | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. |
 | `todo` or `in_progress` | `done` | `done` | Every dependency must be `done` or `cancelled`, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields and `waiting_on`. |
 | `todo` or `in_progress` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields and `waiting_on`. Resolves dependents. |
-| `done` or `cancelled` | `reopen` | `todo` | Reopening a SubTask of a done parent reopens the parent too; a cancelled parent must be reopened first. Refuses when a dependent is already `done` unless `--force`. Clears claim fields and `waiting_on`. |
+| `done` or `cancelled` | `reopen` | `todo` | Reopening a SubTask reopens every done ancestor too, nearest first; a cancelled ancestor must be reopened first and an active ancestor ends the walk. Refuses when a dependent is already `done` unless `--force`. Clears claim fields and `waiting_on`. |
 | `done` | `done --comment` | `done` | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
 | `cancelled` | `cancel --comment` | `cancelled` | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
 | `done` | `cancel` | rejected | `INVALID_TRANSITION`; reopen first. |

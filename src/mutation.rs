@@ -251,13 +251,13 @@ pub fn execute_in(
     })
 }
 
-/// Reopens a Task and, when needed, its completed Parent Task in one scope.
+/// Reopens a Task and, when needed, its completed ancestor Tasks in one scope.
 pub fn reopen(board: &Board, id: &str, force: bool, now: DateTime<Utc>) -> Result<MutationResult> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
 
-    let reopened_parent = crate::ops::reopen(&mut graph, id, force, now)?;
-    if let Some(parent_id) = &reopened_parent {
-        write_task(board, graph.get(parent_id)?)?;
+    let reopened = crate::ops::reopen(&mut graph, id, force, now)?;
+    for ancestor_id in &reopened {
+        write_task(board, graph.get(ancestor_id)?)?;
     }
     let task = graph.get(id)?.clone();
     write_task(board, &task)?;
@@ -266,8 +266,8 @@ pub fn reopen(board: &Board, id: &str, force: bool, now: DateTime<Utc>) -> Resul
     if let Some(warning) = commit_warning(board.commit(&format!("orbit: reopen {id}"), false)?) {
         warnings.push(warning);
     }
-    if let Some(parent) = reopened_parent {
-        warnings.push(format!("reopened parent {parent}"));
+    for ancestor in reopened {
+        warnings.push(format!("reopened parent {ancestor}"));
     }
     Ok(MutationResult {
         graph,

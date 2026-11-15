@@ -1,0 +1,93 @@
+{
+  "operations": [
+    {
+      "op": "add",
+      "key": "agent-opt:epic",
+      "title": "Optimize Orbit tasks for AI agents",
+      "type": "epic",
+      "priority": 1,
+      "body": "Make Orbit tasks cheaper and safer for AI agents to claim, load, execute and hand off. Eight SubTasks, from a structured task contract through git-aware completion."
+    },
+    {
+      "op": "add",
+      "key": "agent-opt:implicit-lease",
+      "title": "Renew lease implicitly on mutating commands",
+      "priority": 1,
+      "parent": "key:agent-opt:epic",
+      "body": "Goal: agents never lose a claim because they forgot `heartbeat`.\n\nScope: checkpoint, comment add and update by the claim holder renew the lease. JSON output of claim/show/ready includes `lease_remaining_seconds`. Errors carry an optional `error.hint` with the suggested next command; error codes are documented and enumerable.\n\nNon-goals: a background daemon; `orbit run` wrapper (optional follow-up).\n\nAcceptance criteria:\n- [ ] checkpoint by the holder extends lease_until\n- [ ] comment add by the holder extends lease_until; by others does not\n- [ ] show/claim/ready --json include lease_remaining_seconds for claimed tasks\n- [ ] LOCKED, claim-conflict and stale-claim errors include error.hint\n- [ ] docs/commands.md lists all error codes",
+      "verification": "cargo test; manual: claim, wait, checkpoint, confirm lease_until moved"
+    },
+    {
+      "op": "add",
+      "key": "agent-opt:structured-contract",
+      "title": "Structured acceptance criteria and non-goals fields",
+      "priority": 1,
+      "parent": "key:agent-opt:epic",
+      "body": "Goal: the agent contract is parseable data, not a comment.\n\nScope: add `acceptance` (list of {id, text, check?}) and `non_goals` to the Task front matter, settable via add/update/batch and shown in `show --json` and export (bump schema_version). `done` accepts `--verified <ids>` and records them; `--run-verification` runs the task `verification` command when it is one.\n\nNon-goals: writing briefs automatically.\n\nAcceptance criteria:\n- [ ] add/update/batch accept acceptance and non_goals with validation limits\n- [ ] show --json and export expose them; schema_version bumped and documented\n- [ ] done --verified records ids; unknown ids are rejected\n- [ ] docs/agents/agent-brief.md updated to describe the fields",
+      "verification": "cargo test; orbit add with acceptance, then show --json"
+    },
+    {
+      "op": "add",
+      "key": "agent-opt:work-packet",
+      "title": "One-call work packet: --context on ready --claim and claim",
+      "priority": 1,
+      "parent": "key:agent-opt:epic",
+      "body": "Goal: claim and load context in a single round trip.\n\nScope: `--context` adds to the claim result the full task and brief, last checkpoint, recent comments, parent summary, dependency titles with their done-comments, and the worktree path. `--max-tokens N` truncates with explicit truncation markers.\n\nNon-goals: changing default claim output.\n\nAcceptance criteria:\n- [ ] ready --claim --context --json returns the packet in data.context\n- [ ] claim --context works for a specific id\n- [ ] --max-tokens truncates oldest comments first and sets truncated: true\n- [ ] default output is unchanged",
+      "verification": "cargo test; compare packet against show + comment list + tree",
+      "depends_on": [
+        "key:agent-opt:structured-contract"
+      ]
+    },
+    {
+      "op": "add",
+      "key": "agent-opt:compact-output",
+      "title": "Compact output, --fields, TTY-aware JSON default and schema command",
+      "priority": 2,
+      "parent": "key:agent-opt:epic",
+      "body": "Goal: agents pay only for the fields they use and can validate what they parse.\n\nScope: `--fields a,b` on list/ready/show; default to JSON envelope when stdout is not a TTY; `orbit schema [command]` prints the JSON schema of each command's data.\n\nAcceptance criteria:\n- [ ] --fields limits data keys and rejects unknown names with INVALID_ARGUMENT\n- [ ] piped output is JSON without --json; TTY output is unchanged\n- [ ] orbit schema ready prints a valid JSON schema matching real output (tested)",
+      "verification": "cargo test; orbit list | jq ."
+    },
+    {
+      "op": "add",
+      "key": "agent-opt:checkpoint-history",
+      "title": "Append-only checkpoint history with files_touched and commit",
+      "priority": 2,
+      "parent": "key:agent-opt:epic",
+      "body": "Goal: a successor sees the full handoff trail, not only the latest note.\n\nScope: keep prior checkpoints; `orbit checkpoint list <id>`; optional `--files`; when run in a task worktree, auto-fill files_touched (git diff --stat) and commit (HEAD). Latest checkpoint stays the one in show/ready.\n\nAcceptance criteria:\n- [ ] checkpoint no longer discards earlier entries\n- [ ] checkpoint list returns entries oldest first in --json\n- [ ] in a worktree, files_touched and commit are auto-filled\n- [ ] export and show remain backward compatible (latest checkpoint field unchanged)",
+      "verification": "cargo test; two checkpoints then checkpoint list"
+    },
+    {
+      "op": "add",
+      "key": "agent-opt:readiness-lint",
+      "title": "Readiness lint and ready --require-brief",
+      "priority": 1,
+      "parent": "key:agent-opt:epic",
+      "body": "Goal: agents do not start from vague tickets.\n\nScope: `orbit doctor` and `prime` flag ready tasks with an empty body, no acceptance, or no verification; add optional `size` (S/M/L) and flag L as too large; `ready --require-brief` skips tasks failing the lint.\n\nAcceptance criteria:\n- [ ] doctor reports each failing check by task id and code\n- [ ] ready --require-brief excludes failing tasks, including with --claim\n- [ ] size accepted by add/update; L tasks reported by prime\n- [ ] default ready behavior is unchanged",
+      "verification": "cargo test",
+      "depends_on": [
+        "key:agent-opt:structured-contract"
+      ]
+    },
+    {
+      "op": "add",
+      "key": "agent-opt:area-partition",
+      "title": "Area-aware ready for parallel agents",
+      "priority": 2,
+      "parent": "key:agent-opt:epic",
+      "body": "Goal: parallel agents do not collide on the same area.\n\nScope: `ready --area <a>` and `--avoid-area <a>` (repeatable); `ready --json` and `prime` show areas currently held by live claims.\n\nAcceptance criteria:\n- [ ] --area and --avoid-area filter, combine with AND, and apply to --claim\n- [ ] prime lists areas held by live claims\n- [ ] doc example for an orchestrator partitioning work",
+      "verification": "cargo test; two claims in different areas"
+    },
+    {
+      "op": "add",
+      "key": "agent-opt:git-aware-done",
+      "title": "Git-aware done: verify branch, record commit, draft comment from checkpoints",
+      "priority": 2,
+      "parent": "key:agent-opt:epic",
+      "body": "Goal: closing a task is tied to real work in git.\n\nScope: `done` in a ticket worktree checks ticket/<id> has commits and the worktree is clean (warn by default, `--strict` to fail); records head commit SHA on the task; `--comment-from-checkpoints` drafts the note from checkpoint history.\n\nNon-goals: auto-merging.\n\nAcceptance criteria:\n- [ ] dirty worktree warns, fails with --strict\n- [ ] done records commit in show --json\n- [ ] --comment-from-checkpoints composes the comment; explicit --comment wins\n- [ ] behavior outside worktrees is unchanged",
+      "verification": "cargo test; integration test with a temp repo",
+      "depends_on": [
+        "key:agent-opt:checkpoint-history"
+      ]
+    }
+  ]
+}

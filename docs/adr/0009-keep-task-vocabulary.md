@@ -1,5 +1,10 @@
 # 0009. Keep Task/SubTask vocabulary and translate Issue at the boundary
 
+> **Amended by [ADR 0021](./0021-nested-subtasks-behind-a-board-setting.md):**
+> Orbit still keeps Task, SubTask, and Parent Task and still introduces no new
+> kind; what changed is that nesting depth is a per-Board setting
+> (`board.max_subtask_depth`, default one level) rather than a fixed rule.
+
 - Status: Accepted
 - Date: 2026-10-24
 

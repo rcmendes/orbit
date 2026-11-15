@@ -1,5 +1,10 @@
 # Hierarchical IDs for Tasks and SubTasks
 
+> **Superseded in part by [ADR 0021](./0021-nested-subtasks-behind-a-board-setting.md):**
+> the "one level deep" rule is now the default (`board.max_subtask_depth = 1`);
+> a Board may raise it to nest SubTasks further, and the ID grammar gains
+> segments accordingly.
+
 A Task ID is `<prefix><rand>`, for example `orb-a0b1c2`. A SubTask ID is `<parent-id>.<rand>`, for example `orb-a0b1c2.d4b3df`. The `parent` field in a SubTask's frontmatter is authoritative; the ID is the human-facing label and must agree with it. SubTasks are one level deep: a SubTask cannot own SubTasks, and reparenting is not supported. Legacy IDs such as `orb-5q7bbn` remain valid Tasks and can parent SubTasks without migration. `id.prefix` is restricted to lowercase letters, digits, and dashes so a dot always marks a SubTask.
 
 Parentage is its own edge, not a copied Dependency. A Parent Task is Ready only when every SubTask is done or cancelled; `depends_on` remains reserved for real blockers between units of work.

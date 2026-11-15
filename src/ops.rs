@@ -83,9 +83,18 @@ pub fn add(
                     parent_task.front.status.as_str()
                 )));
             }
-            if parent_task.front.parent.is_some() {
+            if graph.depth(&parent_id) + 1 > usize::from(graph.max_subtask_depth) {
+                let rule = if graph.max_subtask_depth == 1 {
+                    "SubTasks are one level deep; raise board.max_subtask_depth to nest further"
+                        .to_string()
+                } else {
+                    format!(
+                        "SubTasks are limited to {} levels by board.max_subtask_depth",
+                        graph.max_subtask_depth
+                    )
+                };
                 return Err(OrbitError::invalid_argument(format!(
-                    "parent {parent_id} is a SubTask; SubTasks are one level deep"
+                    "parent {parent_id} is a SubTask; {rule}"
                 )));
             }
             Some(parent_id)

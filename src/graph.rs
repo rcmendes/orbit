@@ -279,17 +279,15 @@ impl Graph {
                         Some(&task.id),
                         format!("{} has missing parent {parent_id}", task.id),
                     ));
-                } else if self
-                    .tasks
-                    .get(parent_id)
-                    .is_some_and(|parent| parent.front.parent.is_some())
-                {
+                } else if self.depth(parent_id) + 1 > usize::from(self.max_subtask_depth) {
                     issues.push(Issue::new(
                         code::NESTED_SUBTASK,
                         Some(&task.id),
                         format!(
-                            "{} has parent {parent_id}, which is itself a SubTask; only one level is allowed",
-                            task.id
+                            "{} has parent {parent_id}; SubTask depth {} exceeds board.max_subtask_depth = {}",
+                            task.id,
+                            self.depth(parent_id) + 1,
+                            self.max_subtask_depth
                         ),
                     ));
                 }
@@ -886,6 +884,41 @@ mod tests {
                 .iter()
                 .any(|issue| issue.code == code::NESTED_SUBTASK)
         );
+    }
+
+    #[test]
+    fn validate_honours_max_subtask_depth() {
+        let mut graph = chain();
+        assert_eq!(graph.max_subtask_depth, 1);
+        let mut nested = nested_subtask_ids(&graph);
+        nested.sort();
+        assert_eq!(
+            nested,
+            vec![
+                "orb-bbbbbb.cccccc".to_string(),
+                "orb-bbbbbb.cccccc.dddddd".to_string()
+            ]
+        );
+
+        graph.max_subtask_depth = 2;
+        assert_eq!(
+            nested_subtask_ids(&graph),
+            vec!["orb-bbbbbb.cccccc.dddddd".to_string()]
+        );
+
+        graph.max_subtask_depth = 3;
+        assert!(nested_subtask_ids(&graph).is_empty());
+    }
+
+    fn nested_subtask_ids(graph: &Graph) -> Vec<String> {
+        let mut ids: Vec<String> = graph
+            .validate()
+            .into_iter()
+            .filter(|issue| issue.code == code::NESTED_SUBTASK)
+            .filter_map(|issue| issue.task)
+            .collect();
+        ids.sort();
+        ids
     }
 
     fn child_of(mut task: Task, parent: &str) -> Task {

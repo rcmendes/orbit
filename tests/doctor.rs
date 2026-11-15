@@ -175,6 +175,61 @@ fn doctor_fix_reattaches_a_legacy_orphan_at_its_original_path() {
     assert!(!repo.board_path().exists());
 }
 
+fn write_chain_task(repo: &TestRepo, id: &str, parent: Option<&str>) {
+    let parent_line = parent
+        .map(|parent| format!("parent: {parent}\n"))
+        .unwrap_or_default();
+    repo.write_task(
+        id,
+        &format!(
+            "---\ntitle: {id}\nstatus: todo\n{parent_line}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n"
+        ),
+    );
+}
+
+fn codes_and_tasks(value: &serde_json::Value, code: &str) -> Vec<String> {
+    value["data"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|issue| issue["code"] == code)
+        .filter_map(|issue| issue["task"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn doctor_checks_subtask_depth_against_max_subtask_depth() {
+    let repo = TestRepo::new();
+    repo.init();
+    write_chain_task(&repo, "orb-a0b1c2", None);
+    write_chain_task(&repo, "orb-a0b1c2.d4b3df", Some("orb-a0b1c2"));
+    write_chain_task(&repo, "orb-a0b1c2.d4b3df.e5f6g7", Some("orb-a0b1c2.d4b3df"));
+
+    // A default Board allows one level: the three-segment Task is nested too
+    // deep, but its ID still agrees with its parent.
+    let value = doctor_json(&repo, &["doctor", "--json"]);
+    assert_eq!(
+        codes_and_tasks(&value, "NESTED_SUBTASK"),
+        vec!["orb-a0b1c2.d4b3df.e5f6g7".to_string()]
+    );
+    assert!(codes_and_tasks(&value, "PARENT_MISMATCH").is_empty());
+
+    // With depth 2 the chain is clean; a fourth level is flagged again.
+    repo.set_max_subtask_depth(2);
+    write_chain_task(
+        &repo,
+        "orb-a0b1c2.d4b3df.e5f6g7.h8j9km",
+        Some("orb-a0b1c2.d4b3df.e5f6g7"),
+    );
+
+    let value = doctor_json(&repo, &["doctor", "--json"]);
+    assert_eq!(
+        codes_and_tasks(&value, "NESTED_SUBTASK"),
+        vec!["orb-a0b1c2.d4b3df.e5f6g7.h8j9km".to_string()]
+    );
+    assert!(codes_and_tasks(&value, "PARENT_MISMATCH").is_empty());
+}
+
 #[test]
 fn doctor_reports_storage_mismatch() {
     let repo = TestRepo::new();

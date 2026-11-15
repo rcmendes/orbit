@@ -303,12 +303,9 @@ fn add_parent_rejects_missing_nested_and_terminal_parents() {
     let (status, value) = repo.json(&["add", "Nested", "--parent", &child, "--json"]);
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
-    assert!(
-        value["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("one level")
-    );
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("one level"), "{message}");
+    assert!(message.contains("board.max_subtask_depth"), "{message}");
 
     let (status, value) = repo.json(&[
         "add",
@@ -338,6 +335,31 @@ fn add_parent_rejects_missing_nested_and_terminal_parents() {
             .unwrap()
             .contains("active")
     );
+}
+
+#[test]
+fn max_subtask_depth_two_allows_a_second_level() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let grandchild = subtask(&repo, &child, "Step");
+    assert!(
+        grandchild.starts_with(&format!("{child}.")),
+        "{parent} -> {child} -> {grandchild}"
+    );
+
+    let shown = repo.ok_json(&["show", &grandchild, "--json"]);
+    assert_eq!(shown["data"]["kind"], "subtask");
+    assert_eq!(shown["data"]["parent"], child.as_str());
+
+    let (status, value) = repo.json(&["add", "Too deep", "--parent", &grandchild, "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("board.max_subtask_depth"), "{message}");
 }
 
 #[test]

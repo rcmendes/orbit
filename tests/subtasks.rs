@@ -207,6 +207,40 @@ fn subtask_ids_encode_the_parent() {
 }
 
 #[test]
+fn three_segment_subtask_id_loads_lists_and_shows() {
+    let repo = TestRepo::new();
+    repo.init();
+
+    repo.write_task(
+        "orb-a0b1c2",
+        "---\ntitle: Release\nstatus: todo\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n",
+    );
+    repo.write_task(
+        "orb-a0b1c2.d4b3df.e5f6g7",
+        "---\ntitle: Nested step\nstatus: todo\nparent: orb-a0b1c2\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n",
+    );
+
+    let listed = repo.ok_json(&["list", "--all", "--json"]);
+    let ids: Vec<&str> = listed["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"orb-a0b1c2.d4b3df.e5f6g7"), "{listed}");
+
+    let shown = repo.ok_json(&["show", "orb-a0b1c2.d4b3df.e5f6g7", "--json"]);
+    assert_eq!(shown["data"]["id"], "orb-a0b1c2.d4b3df.e5f6g7");
+    assert_eq!(shown["data"]["kind"], "subtask");
+    assert_eq!(shown["data"]["parent"], "orb-a0b1c2");
+
+    let output = repo.orbit(&["show", "orb-a0b1c2.d4b3df.e5f6g7"]);
+    assert!(output.status.success());
+    let human = String::from_utf8_lossy(&output.stdout);
+    assert!(human.contains("orb-a0b1c2.d4b3df.e5f6g7"), "{human}");
+}
+
+#[test]
 fn doctor_reports_parent_id_mismatch() {
     let repo = TestRepo::new();
     repo.init();

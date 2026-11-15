@@ -395,6 +395,62 @@ impl Graph {
             .collect()
     }
 
+    /// Number of `parent` hops from a top-level Task: 0 for a Task with no
+    /// parent, 1 for its SubTask, and so on. A missing Task or a parent cycle
+    /// reports the hops walked before stopping.
+    pub fn depth(&self, id: &str) -> usize {
+        let mut depth = 0;
+        let mut seen = HashSet::from([id.to_string()]);
+        let mut current = id;
+        while let Some(task) = self.tasks.get(current) {
+            let Some(parent) = task.front.parent.as_deref() else {
+                break;
+            };
+            if !seen.insert(parent.to_string()) {
+                break;
+            }
+            depth += 1;
+            current = parent;
+        }
+        depth
+    }
+
+    /// Every ancestor of `id`, nearest parent first. Stops at a missing Task
+    /// or a parent cycle.
+    pub fn ancestors(&self, id: &str) -> Vec<String> {
+        let mut ancestors = Vec::new();
+        let mut seen = HashSet::from([id.to_string()]);
+        let mut current = id;
+        while let Some(task) = self.tasks.get(current) {
+            let Some(parent) = task.front.parent.as_deref() else {
+                break;
+            };
+            if !seen.insert(parent.to_string()) {
+                break;
+            }
+            ancestors.push(parent.to_string());
+            current = parent;
+        }
+        ancestors
+    }
+
+    /// Every descendant of `id` in depth-first order: each SubTask is listed
+    /// before its own SubTasks, and siblings keep `children` order.
+    pub fn descendants(&self, id: &str) -> Vec<String> {
+        fn visit(graph: &Graph, id: &str, seen: &mut HashSet<String>, out: &mut Vec<String>) {
+            for child in graph.children(id) {
+                if seen.insert(child.id.clone()) {
+                    out.push(child.id.clone());
+                    visit(graph, &child.id, seen, out);
+                }
+            }
+        }
+        let mut seen = HashSet::from([id.to_string()]);
+        let mut descendants = Vec::new();
+        visit(self, id, &mut seen, &mut descendants);
+        descendants
+    }
+
     pub fn eligible_for_close(&self, task: &Task) -> bool {
         if task.front.status.is_terminal() {
             return false;
@@ -830,6 +886,81 @@ mod tests {
                 .iter()
                 .any(|issue| issue.code == code::NESTED_SUBTASK)
         );
+    }
+
+    fn child_of(mut task: Task, parent: &str) -> Task {
+        task.front.parent = Some(parent.to_string());
+        task
+    }
+
+    fn chain() -> Graph {
+        Graph::from_tasks(vec![
+            task("orb-aaaaaa", Status::Todo, &[]),
+            child_of(task("orb-bbbbbb", Status::Todo, &[]), "orb-aaaaaa"),
+            child_of(task("orb-bbbbbb.cccccc", Status::Todo, &[]), "orb-bbbbbb"),
+            child_of(
+                task("orb-bbbbbb.cccccc.dddddd", Status::Todo, &[]),
+                "orb-bbbbbb.cccccc",
+            ),
+            child_of(task("orb-eeeeee", Status::Todo, &[]), "orb-aaaaaa"),
+        ])
+    }
+
+    #[test]
+    fn depth_counts_parent_hops() {
+        let graph = chain();
+        assert_eq!(graph.depth("orb-aaaaaa"), 0);
+        assert_eq!(graph.depth("orb-bbbbbb"), 1);
+        assert_eq!(graph.depth("orb-bbbbbb.cccccc"), 2);
+        assert_eq!(graph.depth("orb-bbbbbb.cccccc.dddddd"), 3);
+        assert_eq!(graph.depth("orb-missing"), 0);
+    }
+
+    #[test]
+    fn ancestors_walk_nearest_first() {
+        let graph = chain();
+        assert_eq!(
+            graph.ancestors("orb-bbbbbb.cccccc.dddddd"),
+            vec![
+                "orb-bbbbbb.cccccc".to_string(),
+                "orb-bbbbbb".to_string(),
+                "orb-aaaaaa".to_string()
+            ]
+        );
+        assert_eq!(graph.ancestors("orb-aaaaaa"), Vec::<String>::new());
+        assert_eq!(graph.ancestors("orb-missing"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn descendants_walk_depth_first() {
+        let graph = chain();
+        assert_eq!(
+            graph.descendants("orb-aaaaaa"),
+            vec![
+                "orb-bbbbbb".to_string(),
+                "orb-bbbbbb.cccccc".to_string(),
+                "orb-bbbbbb.cccccc.dddddd".to_string(),
+                "orb-eeeeee".to_string()
+            ]
+        );
+        assert_eq!(
+            graph.descendants("orb-bbbbbb.cccccc"),
+            vec!["orb-bbbbbb.cccccc.dddddd".to_string()]
+        );
+        assert_eq!(graph.descendants("orb-eeeeee"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn depth_and_ancestors_survive_a_parent_cycle() {
+        let mut first = task("orb-aaaaaa", Status::Todo, &[]);
+        first.front.parent = Some("orb-bbbbbb".to_string());
+        let mut second = task("orb-bbbbbb", Status::Todo, &[]);
+        second.front.parent = Some("orb-aaaaaa".to_string());
+        let graph = Graph::from_tasks(vec![first, second]);
+
+        assert!(graph.depth("orb-aaaaaa") <= 2);
+        assert!(graph.ancestors("orb-aaaaaa").len() <= 2);
+        assert!(graph.descendants("orb-aaaaaa").len() <= 2);
     }
 
     #[test]

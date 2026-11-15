@@ -670,34 +670,21 @@ pub fn is_valid_id(id: &str, prefix: &str) -> bool {
         return false;
     };
 
-    match rest.split_once('.') {
-        None => is_valid_rand(rest),
-        Some((parent, child)) => {
-            !parent.is_empty()
-                && !child.is_empty()
-                && !child.contains('.')
-                && is_valid_rand(parent)
-                && is_valid_rand(child)
-        }
-    }
+    rest.split('.').all(is_valid_rand)
 }
 
 fn is_valid_rand(value: &str) -> bool {
     (6..=8).contains(&value.len()) && value.bytes().all(|byte| ID_ALPHABET.contains(&byte))
 }
 
-/// Returns the Parent Task encoded in a SubTask ID, if the ID is valid.
+/// Returns the Parent Task encoded in a SubTask ID, if the ID is valid: the
+/// ID minus its last dot-separated segment, at any depth.
 pub fn parent_id_from_id(id: &str, prefix: &str) -> Option<String> {
-    let rest = id.strip_prefix(prefix)?;
-    let (parent, child) = rest.split_once('.')?;
-    if parent.is_empty()
-        || child.is_empty()
-        || child.contains('.')
-        || !is_valid_rand(parent)
-        || !is_valid_rand(child)
-    {
+    if !is_valid_id(id, prefix) {
         return None;
     }
+    let rest = id.strip_prefix(prefix)?;
+    let (parent, _) = rest.rsplit_once('.')?;
     Some(format!("{prefix}{parent}"))
 }
 
@@ -948,17 +935,21 @@ updated_at: 2026-10-23T12:00:00Z
         assert!(is_valid_id("orb-a7b2c9d", "orb-"));
         assert!(is_valid_id("orb-a7b2c9.d4b3df", "orb-"));
         assert!(is_valid_id("orb-5q7bbn.d4b3df", "orb-"));
+        assert!(is_valid_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"));
+        assert!(is_valid_id("orb-a7b2c9.d4b3df.e5f6a7.h8j9km", "orb-"));
         assert!(!is_valid_id("orb-a7b2c", "orb-"));
         assert!(!is_valid_id("orb-a7b2c9i", "orb-"));
         assert!(!is_valid_id("task-a7b2c9", "orb-"));
-        assert!(!is_valid_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"));
         assert!(!is_valid_id("orb-a7b2c9.", "orb-"));
         assert!(!is_valid_id("orb-.d4b3df", "orb-"));
         assert!(!is_valid_id("orb-a7b2c9..d4b3df", "orb-"));
+        assert!(!is_valid_id("orb-a7b2c9.d4b3df.", "orb-"));
+        assert!(!is_valid_id("orb-a7b2c9.d4b3df.e5f6a", "orb-"));
+        assert!(!is_valid_id("orb-a7b2c9.d4b3df.e5f6a7i", "orb-"));
     }
 
     #[test]
-    fn parent_id_from_id_reads_only_one_level() {
+    fn parent_id_from_id_drops_the_last_segment() {
         assert_eq!(
             parent_id_from_id("orb-a7b2c9.d4b3df", "orb-"),
             Some("orb-a7b2c9".to_string())
@@ -967,9 +958,23 @@ updated_at: 2026-10-23T12:00:00Z
             parent_id_from_id("orb-5q7bbn.d4b3df", "orb-"),
             Some("orb-5q7bbn".to_string())
         );
+        assert_eq!(
+            parent_id_from_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"),
+            Some("orb-a7b2c9.d4b3df".to_string())
+        );
+        assert_eq!(
+            parent_id_from_id("orb-a7b2c9.d4b3df.e5f6a7.h8j9km", "orb-"),
+            Some("orb-a7b2c9.d4b3df.e5f6a7".to_string())
+        );
+        assert_eq!(
+            parent_id_from_id("legacy-a7b2c9.d4b3df", "legacy-"),
+            Some("legacy-a7b2c9".to_string())
+        );
         assert_eq!(parent_id_from_id("orb-a7b2c9", "orb-"), None);
         assert_eq!(parent_id_from_id("orb-a7b2c9.", "orb-"), None);
-        assert_eq!(parent_id_from_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"), None);
+        assert_eq!(parent_id_from_id("orb-a7b2c9..d4b3df", "orb-"), None);
+        assert_eq!(parent_id_from_id("orb-a7b2c9.d4b3df.", "orb-"), None);
+        assert_eq!(parent_id_from_id("task-a7b2c9.d4b3df", "orb-"), None);
     }
 
     #[test]

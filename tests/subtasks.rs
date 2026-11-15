@@ -819,10 +819,12 @@ fn list_parent_filters_and_group_layout() {
     assert_eq!(filtered["data"]["count"], 1);
     assert_eq!(filtered["data"]["tasks"][0]["id"], child.as_str());
 
-    // `--parent` accepts any Task, including a SubTask; it still filters
-    // direct children only, so a SubTask without SubTasks lists nothing.
-    let empty = repo.ok_json(&["list", "--parent", &child, "--json"]);
-    assert_eq!(empty["data"]["count"], 0);
+    let (status, value) = repo.json(&["list", "--parent", &child, "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+    let (status, value) = repo.json(&["ready", "--parent", &child, "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
 
     let grouped = repo.ok_json(&["list", "--group", "--json"]);
     let ids: Vec<&str> = grouped["data"]["tasks"]

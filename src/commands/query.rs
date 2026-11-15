@@ -10,10 +10,23 @@ use crate::task::TaskType;
 use super::render::*;
 use super::*;
 
+/// `--parent` names a Task that must exist. A Board that allows only one
+/// SubTask level also keeps its historical rule that the filter names a
+/// Parent Task, never a SubTask.
+fn check_parent_filter(graph: &Graph, parent: &str) -> Result<()> {
+    let parent_task = graph.get(parent)?;
+    if graph.max_subtask_depth == 1 && parent_task.front.parent.is_some() {
+        return Err(OrbitError::invalid_argument(format!(
+            "{parent} is a SubTask; `--parent` expects a Parent Task"
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     if let Some(parent) = args.parent.as_deref() {
-        graph.get(parent)?;
+        check_parent_filter(&graph, parent)?;
     }
     if let Some(priority) = args.priority {
         validate_priority(priority)?;
@@ -120,7 +133,7 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
 pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     if let Some(parent) = args.parent.as_deref() {
-        graph.get(parent)?;
+        check_parent_filter(&graph, parent)?;
     }
     let label_filters = normalize_labels(&args.label)?;
     let repo_filter = normalize_repo_filter(args.repo.as_deref())?;

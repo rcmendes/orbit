@@ -94,6 +94,8 @@ pub struct Counts {
 pub struct Graph {
     pub tasks: HashMap<String, Task>,
     non_ready_labels: Vec<String>,
+    /// Maximum SubTask nesting depth from `board.max_subtask_depth` (1–4).
+    pub max_subtask_depth: u8,
 }
 
 impl Graph {
@@ -104,6 +106,7 @@ impl Graph {
                 .map(|task| (task.id.clone(), task))
                 .collect(),
             non_ready_labels: Vec::new(),
+            max_subtask_depth: 1,
         }
     }
 
@@ -114,6 +117,7 @@ impl Graph {
                 .map(|task| (task.id.clone(), task))
                 .collect(),
             non_ready_labels,
+            max_subtask_depth: 1,
         }
     }
 
@@ -190,6 +194,7 @@ impl Graph {
         let graph = Self {
             tasks,
             non_ready_labels: board.config.board.non_ready_labels.clone(),
+            max_subtask_depth: board.config.board.max_subtask_depth,
         };
         let validation = graph.validate();
         if mode == LoadMode::Strict && !validation.is_empty() {
@@ -881,5 +886,14 @@ mod tests {
         let graph = Graph::from_tasks(vec![low, high]);
         let ready = graph.ready_tasks();
         assert_eq!(ready[0].id, "orb-aaaaaa");
+    }
+
+    #[test]
+    fn max_subtask_depth_defaults_to_one() {
+        assert_eq!(Graph::from_tasks(vec![]).max_subtask_depth, 1);
+        assert_eq!(
+            Graph::from_tasks_with_holds(vec![], vec![]).max_subtask_depth,
+            1
+        );
     }
 }

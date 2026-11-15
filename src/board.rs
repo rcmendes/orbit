@@ -175,6 +175,11 @@ impl Config {
                 "board.default_priority must be between 0 and 3",
             ));
         }
+        if !(1..=4).contains(&self.board.max_subtask_depth) {
+            return Err(OrbitError::config(
+                "board.max_subtask_depth must be between 1 and 4",
+            ));
+        }
         for label in &self.board.non_ready_labels {
             if !task::is_valid_label(label) {
                 return Err(OrbitError::config(format!(
@@ -280,6 +285,14 @@ pub struct BoardConfig {
     pub default_priority: u8,
     #[serde(default = "default_non_ready_labels")]
     pub non_ready_labels: Vec<String>,
+    /// How many SubTask levels a Board allows: 1 keeps the historical
+    /// one-level rule, up to 4 permits nested SubTasks.
+    #[serde(
+        default = "default_max_subtask_depth",
+        deserialize_with = "deserialize_max_subtask_depth",
+        skip_serializing_if = "is_default_max_subtask_depth"
+    )]
+    pub max_subtask_depth: u8,
     #[serde(default = "default_true")]
     pub auto_commit: bool,
     #[serde(default = "default_lock_timeout")]
@@ -328,6 +341,7 @@ impl Default for BoardConfig {
             lease_minutes: default_lease(),
             default_priority: task::default_priority(),
             non_ready_labels: default_non_ready_labels(),
+            max_subtask_depth: default_max_subtask_depth(),
             auto_commit: true,
             lock_timeout_ms: default_lock_timeout(),
             host: None,
@@ -432,6 +446,31 @@ fn default_non_ready_labels() -> Vec<String> {
         "needs-info".to_string(),
         "ready-for-human".to_string(),
     ]
+}
+
+fn default_max_subtask_depth() -> u8 {
+    1
+}
+
+/// Deserializes loosely so a non-integer `max_subtask_depth` reports the
+/// `board.max_subtask_depth` key; the 1–4 range itself is checked by
+/// `Config::validate` alongside the other `board.*` values.
+fn deserialize_max_subtask_depth<'de, D>(deserializer: D) -> std::result::Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer).map_err(serde::de::Error::custom)?;
+    match value {
+        toml::Value::Integer(number) => u8::try_from(number)
+            .map_err(|_| serde::de::Error::custom("board.max_subtask_depth must be an integer")),
+        _ => Err(serde::de::Error::custom(
+            "board.max_subtask_depth must be an integer",
+        )),
+    }
+}
+
+fn is_default_max_subtask_depth(value: &u8) -> bool {
+    *value == default_max_subtask_depth()
 }
 
 fn default_true() -> bool {
@@ -2256,5 +2295,50 @@ mod tests {
 
         config.id.accepted_prefixes.push("legacy-".to_string());
         assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
+    }
+
+    #[test]
+    fn max_subtask_depth_loads_and_validates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[board]\nmax_subtask_depth = 2\n",
+        )
+        .unwrap();
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.board.max_subtask_depth, 2);
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.board.max_subtask_depth, 1);
+
+        for value in ["0", "5", "\"two\""] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("config.toml"),
+                format!("[board]\nmax_subtask_depth = {value}\n"),
+            )
+            .unwrap();
+            let error = Config::load(dir.path()).unwrap_err();
+            assert_eq!(error.code, code::CONFIG_ERROR, "value {value}");
+            assert!(
+                error.message.contains("board.max_subtask_depth"),
+                "value {value}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn max_subtask_depth_one_is_not_serialized() {
+        let mut config = Config::default();
+        assert_eq!(config.board.max_subtask_depth, 1);
+        let toml = config.to_toml().unwrap();
+        assert!(!toml.contains("max_subtask_depth"));
+
+        config.board.max_subtask_depth = 3;
+        let toml = config.to_toml().unwrap();
+        assert!(toml.contains("max_subtask_depth = 3"));
     }
 }

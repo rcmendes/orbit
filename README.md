@@ -394,7 +394,7 @@ updated_at: 2026-10-23T12:00:00Z
 Body text, acceptance criteria, and notes.
 ```
 
-The filename is the ID. There is no `id` field in frontmatter. A SubTask ID is the parent ID, a dot, and a fresh suffix (`orb-a7b2c9.d4b3df`). One dot, one level. A claimed Task may also carry one `checkpoint` block with `by`, `at`, `progress`, and optional `next` and `blocker`; Orbit replaces it in place and it never changes readiness.
+The filename is the ID. There is no `id` field in frontmatter. A SubTask ID is the parent ID, a dot, and a fresh suffix (`orb-a7b2c9.d4b3df`), with one dot per level. A claimed Task may also carry one `checkpoint` block with `by`, `at`, `progress`, and optional `next` and `blocker`; Orbit replaces it in place and it never changes readiness.
 
 ### Why a separate repository?
 
@@ -568,7 +568,7 @@ orbit list --parent orb-a7b2c9 --json
 orbit done orb-a7b2c9 --by coordinator --comment "SSO shipped"
 ```
 
-SubTasks are one level deep. If a ticket needs its own breakdown, flatten it into sibling tickets with `--depends-on` instead of nesting further.
+SubTasks are one level deep by default; set `board.max_subtask_depth` (1–4) in `config.toml` to let a SubTask own SubTasks. On a default Board, if a ticket needs its own breakdown, flatten it into sibling tickets with `--depends-on` instead of nesting further.
 
 > **Warning:** `orbit done --force` or `orbit cancel --force` on a parent with open SubTasks cancels every open child. Use it when the remaining pieces are genuinely abandoned, not as a shortcut.
 

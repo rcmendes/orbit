@@ -61,3 +61,6 @@ rather than a kind.
   or escape dots.
 - `orbit export` `schema_version` stays 3 and no readable field changes;
   new JSON fields are additive.
+- Remote sync needs no depth logic: each Orbit `parent` edge becomes one
+  sub-issue edge between the two linked Remote Issues, so a nested chain
+  syncs level by level (verified against the fixture provider).

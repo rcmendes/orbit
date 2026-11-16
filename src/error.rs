@@ -87,6 +87,7 @@ pub mod code {
     pub const VERSION_CONFLICT: &str = "VERSION_CONFLICT";
     pub const INVALID_IDEMPOTENCY_KEY: &str = "INVALID_IDEMPOTENCY_KEY";
     pub const POLICY_VIOLATION: &str = "POLICY_VIOLATION";
+    pub const ASK_OPEN: &str = "ASK_OPEN";
 }
 
 #[derive(Debug, Clone)]

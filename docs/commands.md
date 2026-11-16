@@ -1562,6 +1562,10 @@ orbit sync              # commit anything left uncommitted
 | `orbit cancel` | `finish` | write |
 | `orbit reopen` | `reopen` | write |
 | `orbit transition` | `transition` | write |
+| `orbit submit` | `submit` | write |
+| `orbit review` | `review` | write |
+| `orbit ask` | `ask` | write |
+| `orbit answer` | `answer` | write |
 | `orbit update` | `update` | write, idempotent |
 | `orbit label add` | `label` | write |
 | `orbit label remove` | `label` | write |

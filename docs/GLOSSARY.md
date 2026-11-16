@@ -324,6 +324,22 @@ target Status, Issue type, labels, and applied profiles; a violation fails the
 operation with `POLICY_VIOLATION`.
 _Avoid_: Guard clause, hook, validator function
 
+**In Review**:
+The `active`-category Status the `submit` transition lands on in the shipped `standard` and `agentic` Workflows. Work sits there until `orbit review` records an `approve` (closing the Task) or `request-changes` (returning it to the author) verdict.
+_Avoid_: Pending review, QA
+
+**Review evidence**:
+The structured proof `orbit submit` records on the `evidence` Property: commands with their exit code, the verified commit, touched files, and an optional note, each stamped with the submitter. `[policy]` `require_properties` rules can demand it before work enters review.
+_Avoid_: Test output dump, logs
+
+**Ask**:
+An open question recorded on the `orbit` Property's `ask` entry by `orbit ask`, carrying the question, asker, and the Status to return to. An unanswered Ask blocks readiness, `claim`, `done`, and every transition except `answer` (`ASK_OPEN`) until `orbit answer` records the reply; when the Workflow's `ask` edge allows, the Task also moves to the `needs_human` hold.
+_Avoid_: Comment, blocker
+
+**Escalation**:
+Routing a Task to a hold Status for human attention: `orbit ask` moves it to `needs_human` (or the Workflow's `ask` target), an agent's `escalate` transition lands on `needs_decision` in the `agentic` template, and a `request_changes` verdict whose only `[policy]` violations are `max_attempts` reroutes through `escalate` and records `orbit.escalation`.
+_Avoid_: Blocked (a derived waiting condition), priority change
+
 **Capability**:
 A named feature an Orbit binary provides — `workflow`, `issue-types`,
 `hierarchy`, `priorities`, `links`, `components`, `properties`, `external-id`,

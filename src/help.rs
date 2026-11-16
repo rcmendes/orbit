@@ -706,6 +706,68 @@ Examples:
   # Inspect which transitions a task allows first
   orbit show orb-a7b2c9 --json";
 
+pub const SUBMIT_LONG: &str = "\
+Submits a task for review: runs the workflow's `submit` transition into the
+In Review status and records structured evidence — commands with their exit
+code, the verified commit, touched files, and an optional note — on the
+`evidence` Property. At least one evidence flag is required. `[policy]`
+rules on the `submit` transition enforce after the evidence lands, so a
+Board can require evidence before work enters review.";
+
+pub const SUBMIT_EXAMPLES: &str = "\
+Examples:
+  # Submit with the verification that proves the work
+  orbit submit orb-a7b2c9 --by devin --command 'cargo test' --exit-code 0 \
+    --commit abc1234 --file src/lib.rs
+
+  # Submit with a note only
+  orbit submit orb-a7b2c9 --note 'manual QA passed on staging'";
+
+pub const REVIEW_LONG: &str = "\
+Records a review verdict on a task in the In Review status. `approve` runs
+the workflow's `approve` edge and closes the task; `request-changes` runs
+`request_changes` and sends the task back to its author, and requires
+--reason. While `[policy]` validates, the reviewer stands in as the
+assignee, so `distinct_from` rules compare the reviewer against the author
+(`author` resolves to the last submitter, the reporter otherwise). When the
+only violations are `max_attempts` and the workflow defines an `escalate`
+edge, the task escalates — to `needs_human` in the shipped templates —
+instead of failing.";
+
+pub const REVIEW_EXAMPLES: &str = "\
+Examples:
+  # Approve the submitted work
+  orbit review orb-a7b2c9 --verdict approve --by alice --kind human
+
+  # Send it back with a reason
+  orbit review orb-a7b2c9 --verdict request-changes --by alice \
+    --reason 'missing regression test for the lease path'";
+
+pub const ASK_LONG: &str = "\
+Records an open Ask on a task and, when the workflow defines an `ask` edge
+from the current status, moves it to the escalation hold (`needs_human` in
+the shipped templates). The pre-ask status is kept as `return_to`. An open
+Ask blocks readiness, `orbit claim`, `orbit done`, and every transition
+except `answer` until `orbit answer` records the reply.";
+
+pub const ASK_EXAMPLES: &str = "\
+Examples:
+  # Block the task on a question
+  orbit ask orb-a7b2c9 'which environment should the migration target?'
+
+  # Then resume work once someone answers
+  orbit answer orb-a7b2c9 'staging first, then production' --by alice";
+
+pub const ANSWER_LONG: &str = "\
+Answers a task's open Ask: the reply is recorded on `orbit.ask`, the block
+lifts, and the task returns to the status recorded when the Ask was raised
+— or to the workflow's `answer`/Ready status when that status is gone.
+Answering a task with no open Ask is an error.";
+
+pub const ANSWER_EXAMPLES: &str = "\
+Examples:
+  orbit answer orb-a7b2c9 'staging first, then production' --by alice";
+
 pub const UPDATE_LONG: &str = "\
 Edits a task without changing its lifecycle. Use --title, --body/--body-file,
 --priority, --type, --component/--clear-component, --repository/--clear-repository,
@@ -735,7 +797,8 @@ against an in-memory snapshot, and nothing is written until all succeed. A
 failure names the operation's index and op in error.details.
 
 Operations: add, update, label, depend, undepend, link, unlink, claim, assign,
-heartbeat, release, done, cancel, reopen, transition, comment, property. Each
+heartbeat, release, done, cancel, reopen, transition, submit, review, ask,
+answer, comment, property. Each
 takes the fields and follows the rules of its command. A reference (id, on,
 parent, depends_on) is a Task ID or
 `key:` followed by a Source Key added earlier in the Batch or already on the

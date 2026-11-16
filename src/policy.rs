@@ -112,8 +112,9 @@ pub struct PolicyRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_attempts: Option<u32>,
     /// The post-transition assignee must not equal any of these names.
-    /// `reporter` resolves to the Task's reporter; any other entry is a
-    /// literal name — use it for reviewer-not-author rules.
+    /// `reporter` resolves to the Task's reporter, `author` to the last
+    /// `orbit submit`ter (the reporter when never submitted), and any other
+    /// entry is a literal name — use it for reviewer-not-author rules.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub distinct_from: Vec<String>,
     /// Readiness lint: the rule's field and property checks also gate
@@ -481,6 +482,9 @@ impl Policy {
                 .iter()
                 .map(|entry| match entry.as_str() {
                     "reporter" => task.front.reporter.clone().unwrap_or_default(),
+                    // The author is the last `orbit submit`ter, falling back
+                    // to the reporter when the work was never submitted.
+                    "author" => crate::review::author_name(task).unwrap_or_default(),
                     literal => literal.to_string(),
                 })
                 .filter(|name| !name.is_empty())

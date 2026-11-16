@@ -140,14 +140,19 @@ The canonical vocabulary lives in `docs/GLOSSARY.md`. In short:
 The lifecycle is a **Workflow** defined by the Board, not a fixed enum. `config.toml` selects a shipped template — `minimal`, `standard` (the default), or `agentic` — or defines `[workflow]` `statuses`, `transitions`, and `initial` directly. Every Status has a name and a category (`todo`, `active`, `done`, `canceled`); exactly one Status is flagged `ready`. The standard template:
 
 ```text
-statuses:    ready (todo, ready) · todo (todo) · in_progress (active)
+statuses:    ready (todo, ready) · todo (todo) · needs_human (todo)
+             · in_progress (active) · in_review (active)
              · done (done) · cancelled (canceled)
 initial:     ready
-transitions: claim · release · promote · defer · done · cancel · reopen
+transitions: claim · release · promote · defer · submit · approve
+             · request_changes · ask · escalate · answer
+             · done · cancel · reopen
 ```
 ```
 
-`minimal` drops the `todo` backlog and its `promote`/`defer` edges; `agentic` adds `blocked` and review-oriented statuses. Custom workflows may add statuses such as `In Review` and transitions such as `submit`; validation requires unique status and transition names, valid categories, exactly one ready Status, an initial Status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and no resolutions on transitions into open statuses.
+`minimal` drops the `todo` backlog, `needs_human`, `in_review`, and their edges. `agentic` adds `blocked` and `needs_decision` hold statuses on top of the review loop: `escalate` lands on `needs_decision`, while `ask` and attempt-limit escalations land on `needs_human`. Custom workflows may define their own review and escalation statuses and edges; validation requires unique status and transition names, valid categories, exactly one ready Status, an initial Status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and no resolutions on transitions into open statuses.
+
+The review loop is declarative: `submit` moves `in_progress` work into `in_review` and records structured evidence (commands with exit codes, the verified commit, touched files, and a note) plus the submitter on the `evidence`/`orbit` Properties; `approve` closes the Issue with the `completed` resolution; `request_changes` sends it back to `in_progress` and reassigns it to the recorded submitter. `ask` records an open question on `orbit.ask` — which blocks readiness, `claim`, `done`, and every transition except `answer` — and moves the Issue to `needs_human` when the edge allows; `orbit answer` records the reply and restores the status captured at ask time. When a `request_changes` verdict hits only `max_attempts` policy violations and the workflow's `escalate` edge is allowed, the Issue reroutes through `escalate` to the hold status instead of failing, recording `orbit.escalation`. All of it runs in `src/ops.rs`, so CLI, `orbit batch`, and MCP enforce identically.
 
 The built-in commands drive named Workflow edges:
 
@@ -164,6 +169,11 @@ The built-in commands drive named Workflow edges:
 | open | `cancel` | `cancel` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live lease requires the assignee unless `--force`. Clears assignee and lease and `waiting_on`; records the transition's resolution. Resolves dependents. |
 | closed | `reopen` | `reopen` | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively leased ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears assignee and lease, `waiting_on`, and the resolution. |
 | any | `transition <name>` | any defined edge | Runs one named Workflow transition directly, honoring the assignee check where the edge requires it. An unknown name or an edge that does not start from the current Status fails with `INVALID_TRANSITION` naming the valid transitions. |
+| `active` | `submit` | `submit` | Moves the Task into the In Review status and records structured evidence — at least one of `--command` (repeatable), `--exit-code`, `--commit`, `--file` (repeatable), or `--note` — on the `evidence` Property, plus the submitter and round count on `orbit.review`. |
+| `in_review` | `review --verdict approve` | `approve` | Records the verdict on `orbit.review` and closes the Task with the transition's resolution. |
+| `in_review` | `review --verdict request-changes --reason TEXT` | `request_changes` | Records the verdict and reason, returns the Task to `in_progress`, and reassigns it to the recorded submitter (unassigned when the work never went through `submit`). `--reason` is required. |
+| open | `ask QUESTION` | `ask` | Records an open Ask on `orbit.ask` with the current status as `return_to`, and moves to `needs_human` when the `ask` edge allows. An open Ask blocks readiness, `claim`, `done`, and every transition except `answer` (`ASK_OPEN`). A second open Ask is refused. |
+| open | `answer ANSWER` | `answer` (fallback) | Records the reply on `orbit.ask`, lifting the block, and restores `return_to` when it is still an open status; otherwise the `answer` edge runs, or the Ready status as last resort. Answering a Task with no open Ask is an error. |
 | any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live lease requires the assignee unless `--force`. With dependents or SubTasks, requires `--force`, which first removes edges from dependents and deletes the whole SubTask subtree. |
 
 Closed categories (`done`, `canceled`) resolve dependents; `reopen`-style transitions return a Task to an open Status; `cancel` is not `delete`. `orbit show` reports `status_category`, `resolution`, and `allowed_transitions` — the Workflow edges valid from the current Status. Waiting, hold labels, and dependency edges are gates on readiness and claims, not Statuses. The full transition table and readiness gate are in [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md).
@@ -343,8 +353,8 @@ Validators run against the Task as it will be stored after the transition lands;
 | `require_fields` | Frontmatter fields the Task must have once the transition lands — the same vocabulary `[[board.types]].required` uses (`title`, `body`, `verification`, `properties`, `checkpoint`, `parent`, `component`, `repository`, `links`, ...). |
 | `require_properties` | Property owners (`orbit property set <id> <owner> '<json>'`) that must be present — the evidence hook (`evidence`, `proof`, ...). |
 | `wip_limit` | `{ status = "..." }` or `{ category = "..." }` plus `max`: refuse the transition when the target already holds `max` other Tasks. |
-| `max_attempts` | Refuse once the rule has governed `max` successful transitions of this Task; attempts are counted per rule in the reserved `orbit` property's `attempts` map. |
-| `distinct_from` | The post-transition assignee must not equal any listed name; `reporter` resolves to the Task's reporter, any other entry is a literal — use it for reviewer-not-author rules. |
+| `max_attempts` | Refuse once the rule has governed `max` successful transitions of this Task; attempts are counted per rule in the reserved `orbit` property's `attempts` map. On `request_changes`, a violation made only of `max_attempts` checks escalates the Task through the workflow's `escalate` edge to the hold status instead of failing. |
+| `distinct_from` | The post-transition assignee must not equal any listed name; `reporter` resolves to the Task's reporter, `author` to the last `orbit submit`ter (the reporter when never submitted), and any other entry is a literal — the reviewer-not-author rule for `orbit review`. |
 | `lint = true` | The rule's field and property checks also gate `Graph::is_ready` (the `orbit ready` queue) and `orbit claim`, on top of guarding the transition into its `to` status, which must name the workflow's Ready status. This replaces the old hard-coded ready-brief check: readiness requirements are declarative per Board. |
 | `add_labels`, `set_properties` | Post-functions run after a governed transition succeeds: labels are added and Properties (each value a JSON object) are set on the stored Task. |
 

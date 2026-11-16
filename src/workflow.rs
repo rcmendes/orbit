@@ -136,6 +136,19 @@ pub const TRANSITION_RELEASE: &str = "release";
 pub const TRANSITION_DONE: &str = "done";
 pub const TRANSITION_CANCEL: &str = "cancel";
 pub const TRANSITION_REOPEN: &str = "reopen";
+/// Review lifecycle (ADR 0022): `submit` moves work into the In Review
+/// status, `approve` and `request_changes` are the reviewer verdicts, `ask`
+/// escalates a question to `needs_human`, and `escalate` is the generic
+/// escalation edge attempt limits and other policy guards reuse.
+pub const TRANSITION_SUBMIT: &str = "submit";
+pub const TRANSITION_APPROVE: &str = "approve";
+pub const TRANSITION_REQUEST_CHANGES: &str = "request_changes";
+pub const TRANSITION_ASK: &str = "ask";
+pub const TRANSITION_ESCALATE: &str = "escalate";
+/// Fallback edge out of the escalation hold; `orbit answer` prefers
+/// restoring the Ask's recorded `return_to` status and only uses this
+/// transition when that status is gone.
+pub const TRANSITION_ANSWER: &str = "answer";
 
 /// Status names the shipped templates and remote adapters prefer when a
 /// category has several candidates.
@@ -207,13 +220,16 @@ impl Workflow {
     }
 
     /// The default workflow: minimal plus a `todo` backlog status Tasks can
-    /// be parked in and promoted back from.
+    /// be parked in and promoted back from, an `in_review` status for the
+    /// submit/review loop, and a `needs_human` hold `ask`/`escalate` land on.
     pub fn standard() -> Self {
         Self::new(
             vec![
                 status("ready", StatusCategory::Todo, true),
                 status("todo", StatusCategory::Todo, false),
+                status("needs_human", StatusCategory::Todo, false),
                 status("in_progress", StatusCategory::Active, false),
+                status("in_review", StatusCategory::Active, false),
                 status("done", StatusCategory::Done, false),
                 status("cancelled", StatusCategory::Canceled, false),
             ],
@@ -222,15 +238,41 @@ impl Workflow {
                 transition("release", &["in_progress"], "ready", None),
                 transition("promote", &["todo"], "ready", None),
                 transition("defer", &["ready"], "todo", None),
+                transition("submit", &["in_progress"], "in_review", None),
+                transition(
+                    TRANSITION_APPROVE,
+                    &["in_review"],
+                    "done",
+                    Some("completed"),
+                ),
+                transition(
+                    TRANSITION_REQUEST_CHANGES,
+                    &["in_review"],
+                    "in_progress",
+                    None,
+                ),
+                transition(
+                    TRANSITION_ASK,
+                    &["in_progress", "in_review"],
+                    "needs_human",
+                    None,
+                ),
+                transition(
+                    TRANSITION_ESCALATE,
+                    &["in_progress", "in_review"],
+                    "needs_human",
+                    None,
+                ),
+                transition(TRANSITION_ANSWER, &["needs_human"], "ready", None),
                 transition(
                     "done",
-                    &["ready", "todo", "in_progress"],
+                    &["ready", "todo", "in_progress", "in_review", "needs_human"],
                     "done",
                     Some("completed"),
                 ),
                 transition(
                     "cancel",
-                    &["ready", "todo", "in_progress"],
+                    &["ready", "todo", "in_progress", "in_review", "needs_human"],
                     "cancelled",
                     Some("cancelled"),
                 ),
@@ -242,6 +284,8 @@ impl Workflow {
 
     /// The agent-oriented workflow: standard plus `blocked` and
     /// `needs_decision` hold statuses an agent can flag and resume from.
+    /// `needs_decision` stays the agent's `escalate` target; `ask` and the
+    /// attempt-limit path land on `needs_human`, answered by `orbit answer`.
     pub fn agentic() -> Self {
         Self::new(
             vec![
@@ -249,7 +293,9 @@ impl Workflow {
                 status("todo", StatusCategory::Todo, false),
                 status("blocked", StatusCategory::Todo, false),
                 status("needs_decision", StatusCategory::Todo, false),
+                status("needs_human", StatusCategory::Todo, false),
                 status("in_progress", StatusCategory::Active, false),
+                status("in_review", StatusCategory::Active, false),
                 status("done", StatusCategory::Done, false),
                 status("cancelled", StatusCategory::Canceled, false),
             ],
@@ -259,22 +305,63 @@ impl Workflow {
                 transition("promote", &["todo"], "ready", None),
                 transition("defer", &["ready"], "todo", None),
                 transition("block", &["in_progress"], "blocked", None),
-                transition("escalate", &["in_progress"], "needs_decision", None),
+                transition(
+                    "escalate",
+                    &["in_progress", "in_review"],
+                    "needs_decision",
+                    None,
+                ),
                 transition(
                     "resume",
                     &["blocked", "needs_decision"],
                     "in_progress",
                     None,
                 ),
+                transition("submit", &["in_progress"], "in_review", None),
+                transition(
+                    TRANSITION_APPROVE,
+                    &["in_review"],
+                    "done",
+                    Some("completed"),
+                ),
+                transition(
+                    TRANSITION_REQUEST_CHANGES,
+                    &["in_review"],
+                    "in_progress",
+                    None,
+                ),
+                transition(
+                    TRANSITION_ASK,
+                    &["in_progress", "in_review", "blocked", "needs_decision"],
+                    "needs_human",
+                    None,
+                ),
+                transition(TRANSITION_ANSWER, &["needs_human"], "ready", None),
                 transition(
                     "done",
-                    &["ready", "todo", "blocked", "needs_decision", "in_progress"],
+                    &[
+                        "ready",
+                        "todo",
+                        "blocked",
+                        "needs_decision",
+                        "needs_human",
+                        "in_progress",
+                        "in_review",
+                    ],
                     "done",
                     Some("completed"),
                 ),
                 transition(
                     "cancel",
-                    &["ready", "todo", "blocked", "needs_decision", "in_progress"],
+                    &[
+                        "ready",
+                        "todo",
+                        "blocked",
+                        "needs_decision",
+                        "needs_human",
+                        "in_progress",
+                        "in_review",
+                    ],
                     "cancelled",
                     Some("cancelled"),
                 ),

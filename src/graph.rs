@@ -543,14 +543,16 @@ impl Graph {
 
     /// Ready means the Task sits in the workflow's Ready status, the
     /// derived conditions hold — unassigned, not waiting, no hold labels,
-    /// no open blocking dependencies, and no open SubTasks — and the
-    /// Board's readiness lint (`[policy]` rules with `lint = true`) passes.
+    /// no open blocking dependencies, no open SubTasks, and no unanswered
+    /// Ask — and the Board's readiness lint (`[policy]` rules with
+    /// `lint = true`) passes.
     pub fn is_ready(&self, task: &Task) -> bool {
         self.workflow.is_ready_status(&task.front.status)
             && task.front.assignee.is_none()
             && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
             && self.open_descendants(&task.id).is_empty()
+            && !crate::review::has_open_ask(task)
             && self.policy.passes_lint(task)
     }
 

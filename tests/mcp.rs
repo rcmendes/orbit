@@ -294,7 +294,8 @@ fn subtasks_are_available_over_mcp() {
     );
     let child = tool_envelope(&child);
     let child_id = child["data"]["id"].as_str().unwrap().to_string();
-    assert!(child_id.starts_with(&format!("{parent_id}.")));
+    // IDs are flat; the parent edge lives in `parent` (ADR 0022).
+    assert!(!child_id.contains('.'), "{child_id}");
     assert_eq!(child["data"]["parent"], parent_id.as_str());
 
     let ready = client.call(72, "ready", json!({ "parent": parent_id.clone() }));
@@ -360,9 +361,9 @@ fn type_is_available_over_mcp() {
     assert_eq!(ready["data"]["count"], 1);
     assert_eq!(ready["data"]["tasks"][0]["id"], task_id.as_str());
 
-    let updated = client.call(84, "update", json!({ "id": task_id, "type": "spike" }));
+    let updated = client.call(84, "update", json!({ "id": task_id, "type": "bug" }));
     let updated = tool_envelope(&updated);
-    assert_eq!(updated["data"]["type"], "spike");
+    assert_eq!(updated["data"]["type"], "bug");
 
     let nested = client.call(
         85,

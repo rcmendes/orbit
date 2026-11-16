@@ -408,22 +408,22 @@ orbit add "Filed by ops" --reporter alice
 # Break a feature into a SubTask (run inside the api member Repository, or set
 # it afterwards with `orbit update <id> --repository api`)
 orbit add "API: add the endpoint" --parent orb-a7b2c9
-# created orb-a7b2c9.b3c4d5  medium  API: add the endpoint  (subtask of orb-a7b2c9)
-```
+# created orb-x7k2pq  medium  API: add the endpoint  (subtask of orb-a7b2c9)
 
 `--reporter` records who created the Task. It defaults to `ORBIT_AGENT`, then
 `USER`, and is never changed afterwards.
 
-`--parent` creates a SubTask under an existing Parent Task. The SubTask ID is the
-parent ID, a dot, and a fresh suffix (`orb-a7b2c9.b3c4d5`); the `parent` field
-stores the same parent. SubTasks are one level deep by default — raise
-`board.max_subtask_depth` in `config.toml` to nest further — and can still have
-real dependencies. The Parent Task becomes Ready only when every SubTask is
+`--parent` creates a SubTask under an existing Parent Task. The `parent` field
+stores the edge; IDs are flat and never encode the parent. The Board's
+`board.hierarchy` decides which types may parent which (default `epic` >
+`story`/`task`/`bug` > `sub-task`), and a child can still have real
+dependencies. The Parent Task becomes Ready only when every descendant is
 done or cancelled.
 
-`--type` sets the work shape: `task` (default), `epic`, `spike`, `chore`, or
-`decision`. Type is metadata and does not affect readiness. `epic` is refused on a
-SubTask. `bug` and `enhancement` remain labels, not Types.
+`--type` sets the Issue type from the Board's `board.types` vocabulary
+(`epic`, `story`, `task`, `bug`, `sub-task` by default; `board.default_type`
+picks the default). The type decides where in the hierarchy the Issue may sit.
+`bug` and `enhancement` remain labels, not Types.
 
 `-p`/`--priority` takes a Priority name from the Board's `board.priorities`
 list — `highest`, `high`, `medium`, `low` by default, ordered most important
@@ -435,10 +435,10 @@ A spec or epic is a top-level Task with `type: epic`; its tickets are SubTasks.
 This is also the compatibility mapping for Beads and Matt Pocock's skills:
 **Issue** = Task, **Sub-issue** = SubTask, **Epic** = top-level Task with
 `type: epic`. Put the spec in the parent body, publish tickets with `--parent`,
-and use `orbit ready --parent <id>` as the frontier. Nesting is one level deep
-by default; a Board that sets `board.max_subtask_depth` to 2 or more can put
-SubTasks under SubTasks, up to 4 levels of parentage. On a default Board,
-flatten a ticket's own breakdown into sibling tickets with `--depends-on`.
+and use `orbit ready --parent <id>` as the frontier. The hierarchy depth is
+whatever `board.hierarchy` configures; the default reaches `epic` > working
+types > `sub-task`. To nest deeper, extend `board.types` and
+`board.hierarchy` in `config.toml`.
 Never
 use `done --force` or `cancel --force` on a spec parent with open tickets: it
 cancels them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md) and
@@ -459,14 +459,14 @@ commands for agents; shared project defaults live in
 ### `orbit update` — edit a ticket in place
 
 Changes the title, body, priority, type, component, repository, external id, verification, or external blocker
-without touching status, assignments, labels, or dependencies. `--type epic` is refused on a SubTask.
-
+without touching status, assignments, labels, or dependencies. `--type` must
+keep the Issue's parent and children edges valid under `board.hierarchy`.
 **Good fit:** scope changed after triage, a spec needs refinement, or an external
 blocker was resolved.
 
 ```bash
 orbit update orb-a7b2c9 --priority highest
-orbit update orb-a7b2c9 --type spike
+orbit update orb-a7b2c9 --type bug
 orbit update orb-a7b2c9 --body-file refined-spec.md
 orbit update orb-a7b2c9 --clear-waiting
 orbit update orb-a7b2c9 --component mcp --verification "cargo test --test mcp"
@@ -1405,15 +1405,15 @@ orbit sync              # commit anything left uncommitted
 | `NOT_CLAIM_HOLDER` | Use the assignee's `--by`, or `--force` where the command allows it. |
 | `SUBTASKS_OPEN` | Finish or cancel the IDs in `error.details.subtasks`, or pass `--force` to `done` or `cancel`. |
 | `SUBTASKS_EXIST` | The Parent Task still has SubTasks. Use `delete --force` to remove the whole subtree, or delete the SubTasks first. |
-| `PARENT_MISMATCH` | The SubTask ID and its `parent` field disagree. Rename the file or fix the frontmatter so the ID encodes the same parent. |
+| `PARENT_CYCLE` | The `parent` chain loops back on itself. Break the cycle by reparenting or clearing `parent`. |
 | `INVALID_SLUG` | `--slug` and `slug migrate` take a bare 1–20 character lowercase word with alphanumeric ends and no `--`; use the normalized suggestion in the error. |
 | `SLUG_LOCKED` | The Board has tasks. Run `orbit slug migrate <slug>` to rewrite every ID, or keep the current prefix. |
 | `MIGRATION_BLOCKED` | Migration refused because of live claims, an unhealthy Board, a dirty Board, or a concurrent Board move. Read `error.details.reason`; run `orbit doctor`, then retry with `--force` only for live claims. |
 | `PREFIX_COLLISION` | Two old IDs would become the same new ID. No files were changed; choose another slug. |
 | `PREFIX_MISMATCH` | `id.prefix` and the task filenames disagree. Restore the configured prefix first; migration refuses an inconsistent Board. |
 | `DANGLING_PARENT` | Run `doctor`; the parent ID is missing. Recreate the parent or fix the SubTask's frontmatter. |
-| `NESTED_SUBTASK` | A SubTask points to itself or nests past `board.max_subtask_depth` (1–4, default 1). |
-| `INVALID_TYPE` | `epic` was used on a SubTask. Epic is top-level only; use `task`, `spike`, `chore`, or `decision` for a child. |
+| `INVALID_TYPE` | The Issue type is not in `board.types`, or the `parent` edge violates `board.hierarchy` (the child's type must sit strictly below the parent's). |
+| `MISSING_REQUIRED_FIELD` | The Issue type's `required` list in `board.types` names fields the Task lacks. |
 | `ALREADY_INITIALIZED` | A Board already resolves for this working tree. Use it, run `orbit repo remove` to drop an explicit membership, move or migrate an ancestor/main/legacy Board, or pass a `DIR` outside every working tree. |
 | `BOARD_NOT_FOUND` | Run `orbit init`, pass `--dir`/`ORBIT_DIR`, or `orbit repo add` an existing Board. |
 | `CONFIG_ERROR` | The target `DIR` is not empty (apart from `.git`), or a configuration value is invalid. Use a fresh directory for a new standalone Board. |

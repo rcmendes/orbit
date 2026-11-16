@@ -68,9 +68,11 @@ tracker terms rather than inventing a second model:
   `orbit add "..." --type epic`. Put the scope, decisions, and acceptance
   criteria in its body.
 
-`kind` is structural (`task` or `subtask`). `type` is the work shape (`task`,
-`epic`, `spike`, `chore`, or `decision`) and is metadata only. `epic` is refused
-on a SubTask. See [ADR 0010](../adr/0010-structural-type-field.md).
+`kind` is structural (`task` or `subtask`). `type` is the Issue type from the
+Board's `board.types` (`epic`, `story`, `task`, `bug`, `sub-task` by default)
+and decides where in `board.hierarchy` the Issue may sit: a child must be on a
+strictly deeper level than its parent. See [ADR 0010](../adr/0010-structural-type-field.md)
+and [ADR 0022](../adr/0022-issue-model-and-platform-architecture.md).
 
 The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
 `--exclude-label epic` still works on older boards. New work should use
@@ -93,8 +95,8 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
   presentation only; parse `--json` in automation. `orbit ready` and `orbit
   tree` use compact summary lines for the same reason.
 - Break a feature into SubTasks with `orbit add "<title>" --parent <parent-id>`.
-  SubTasks are one level deep by default; raise `board.max_subtask_depth` to
-  nest further. Use `--depends-on` only for real blockers between
+  SubTasks nest as deep as `board.hierarchy` allows. Use `--depends-on` only
+  for real blockers between
   units of work; the Parent Task waits for its SubTasks automatically.
 - Use `orbit ready --parent <id>` as the frontier for one epic or spec. A Parent
   Task is not Ready while any SubTask is open.
@@ -177,8 +179,8 @@ ticket. To add a blocking edge later:
 orbit depend <dependent-id> <blocker-id>
 ```
 
-Orbit has no label registry. Parentage is one level deep by default — raise
-`board.max_subtask_depth` to nest further: create a SubTask with
+Orbit has no label registry. Parentage follows the Board's `board.hierarchy`
+(default `epic` > `story`/`task`/`bug` > `sub-task`): create a SubTask with
 `orbit add --parent <id>`, and use `--depends-on` only for real blockers. Labels
 are free-form strings, comments are per-task threads, and blocking edges are
 `--depends-on`. Put parent context and acceptance criteria in the body; use labels

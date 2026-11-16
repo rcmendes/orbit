@@ -385,10 +385,6 @@ fn diagnose_tasks(
     let (graph, mut load_issues) = Graph::load(board, LoadMode::Lenient)?;
     issues.append(&mut load_issues);
 
-    let prefix_mismatch = issues
-        .iter()
-        .any(|issue| issue.code == code::PREFIX_MISMATCH);
-
     if let Err(error) = crate::health::comment_files(board, &graph, false, issues) {
         issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message));
     }
@@ -454,7 +450,7 @@ fn diagnose_tasks(
                     unfinished.join(", ")
                 ));
             }
-            let open_subtasks = graph.open_children(&task.id);
+            let open_subtasks = graph.open_descendants(&task.id);
             if !open_subtasks.is_empty() {
                 warnings.push(format!(
                     "{} is done but has open SubTasks: {}",
@@ -463,12 +459,6 @@ fn diagnose_tasks(
                 ));
             }
         }
-    }
-
-    // A prefix mismatch means the IDs use the observed prefix; comparing them
-    // with the configured prefix would flag every SubTask.
-    if !prefix_mismatch {
-        crate::health::parent_id_agreement(board, &graph, issues);
     }
 
     match crate::git::status_porcelain(&board.root) {

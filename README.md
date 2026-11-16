@@ -268,7 +268,7 @@ Orbit keeps the vocabulary small on purpose. Everything else is derived.
 | **SubTask** | A Task with a `parent`. It is claimable and completable in its own right, not a checklist item. |
 | **Parent Task** | A Task that groups SubTasks. Its completion waits for its children. |
 | **Kind** | Structural and derived: `task` or `subtask`. |
-| **Type** | Work shape: `task` (default), `epic`, `spike`, `chore`, or `decision`. Metadata only; it never changes readiness. `epic` is top-level only. |
+| **Type** | Issue type from the Board's `board.types` (`epic`, `story`, `task`, `bug`, `sub-task` by default). It decides where in `board.hierarchy` the Issue may sit. |
 | **Status** | Stored lifecycle position: a name from the Board's workflow, bucketed into a category (`todo`, `active`, `done`, `canceled`). |
 | **Priority** | `P0` (highest) through `P3` (lowest), stored as `0`–`3`. |
 | **Label** | A lowercase string for filtering and workflow state. |
@@ -571,7 +571,7 @@ orbit list --parent orb-a7b2c9 --json
 orbit done orb-a7b2c9 --by coordinator --comment "SSO shipped"
 ```
 
-SubTasks are one level deep by default; set `board.max_subtask_depth` (1–4) in `config.toml` to let a SubTask own SubTasks. On a default Board, if a ticket needs its own breakdown, flatten it into sibling tickets with `--depends-on` instead of nesting further.
+SubTasks nest as deep as the Board's `board.hierarchy` allows — `epic` > `story`/`task`/`bug` > `sub-task` by default. To go deeper, extend `board.types` and `board.hierarchy` in `config.toml`.
 
 > **Warning:** `orbit done --force` or `orbit cancel --force` on a parent with open SubTasks cancels every open child. Use it when the remaining pieces are genuinely abandoned, not as a shortcut.
 
@@ -977,7 +977,7 @@ External trackers and skills use different words. Orbit translates at the bounda
 - **Sub-issue** = SubTask, created with `--parent`
 - **Epic** or **spec** = top-level Task with `type: epic`
 
-`kind` is structural (`task` or `subtask`). `type` is the work shape (`task`, `epic`, `spike`, `chore`, or `decision`) and is metadata only. `epic` is refused on a SubTask. `bug` and `enhancement` remain triage labels, not Types.
+`kind` is structural (`task` or `subtask`). `type` is the Board-configured Issue type (`epic`, `story`, `task`, `bug`, `sub-task` by default) and decides where in `board.hierarchy` the Issue may sit. `bug` and `enhancement` remain triage labels, not Types.
 
 The `epic` label is legacy. Orbit does not infer `type: epic` from it, and `--exclude-label epic` still works on boards created before the Type field. New work should use `--type epic` and `--exclude-type epic`.
 

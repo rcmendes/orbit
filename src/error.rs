@@ -7,8 +7,6 @@ pub mod code {
     pub const CORRUPT_TASK: &str = "CORRUPT_TASK";
     pub const DANGLING_DEP: &str = "DANGLING_DEP";
     pub const DANGLING_PARENT: &str = "DANGLING_PARENT";
-    pub const NESTED_SUBTASK: &str = "NESTED_SUBTASK";
-    pub const PARENT_MISMATCH: &str = "PARENT_MISMATCH";
     pub const CYCLE_DETECTED: &str = "CYCLE_DETECTED";
     pub const DEPENDENCY_BLOCKED: &str = "DEPENDENCY_BLOCKED";
     pub const SUBTASKS_OPEN: &str = "SUBTASKS_OPEN";
@@ -26,6 +24,8 @@ pub mod code {
     pub const PREFIX_COLLISION: &str = "PREFIX_COLLISION";
     pub const PREFIX_MISMATCH: &str = "PREFIX_MISMATCH";
     pub const INVALID_TYPE: &str = "INVALID_TYPE";
+    pub const MISSING_REQUIRED_FIELD: &str = "MISSING_REQUIRED_FIELD";
+    pub const PARENT_CYCLE: &str = "PARENT_CYCLE";
     pub const INVALID_COMPONENT: &str = "INVALID_COMPONENT";
     pub const INVALID_LABEL: &str = "INVALID_LABEL";
     pub const INVALID_PROPERTY: &str = "INVALID_PROPERTY";

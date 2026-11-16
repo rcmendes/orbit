@@ -708,9 +708,9 @@ fn merge_task(
         outcome,
     );
     let task_type = pick(
-        base_front.map(|f| f.task_type),
-        local.front.task_type,
-        remote.front.task_type,
+        base_front.map(|f| f.task_type.clone()),
+        local.front.task_type.clone(),
+        remote.front.task_type.clone(),
         &key("type"),
         outcome,
     );

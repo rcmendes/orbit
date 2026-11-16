@@ -2335,7 +2335,7 @@ fn create_imported_task(
                 Status::Done => "completed".to_string(),
                 _ => "cancelled".to_string(),
             }),
-            task_type: crate::task::TaskType::Task,
+            task_type: "task".to_string(),
             priority: board.config.board.default_priority.clone(),
             labels,
             links: Vec::new(),

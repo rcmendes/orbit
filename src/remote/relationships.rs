@@ -181,7 +181,7 @@ fn same_project(link: &RemoteLinkView, other: &RemoteLinkView) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{TaskFrontmatter, TaskType, default_priority};
+    use crate::task::{TaskFrontmatter, default_priority};
     use chrono::TimeZone;
     use std::collections::BTreeMap;
 
@@ -206,7 +206,7 @@ mod tests {
                 title: id.to_string(),
                 status: "todo".to_string(),
                 resolution: None,
-                task_type: TaskType::Task,
+                task_type: "task".to_string(),
                 priority: default_priority(),
                 labels: Vec::new(),
                 links: Vec::new(),

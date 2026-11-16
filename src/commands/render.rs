@@ -2,7 +2,6 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::comment::Comment;
-use crate::task::TaskType;
 
 use super::*;
 
@@ -99,7 +98,7 @@ fn task_cells(task: &Task, remote: bool) -> Vec<String> {
         task.id.to_string(),
         task.front.status.as_str().to_string(),
         task.front.priority.clone(),
-        task.front.task_type.as_str().to_string(),
+        task.front.task_type.clone(),
     ];
     if remote {
         cells.push(issue_cell(task));
@@ -177,7 +176,7 @@ pub(super) fn format_grouped_table(groups: &[ListGroup], remote: bool) -> String
 
 fn group_meta(task: &Task) -> String {
     let mut parts = vec![
-        task.front.task_type.as_str().to_string(),
+        task.front.task_type.clone(),
         task.front.status.as_str().to_string(),
         task.front.priority.clone(),
     ];
@@ -251,11 +250,11 @@ pub(super) fn push_summary_checkpoint(human: &mut String, task: &Value) {
     }
 }
 
-pub(super) fn format_summary(task: &Task) -> String {
-    format_summary_with_parent(task, true)
+pub(super) fn format_summary(task: &Task, graph: &Graph) -> String {
+    format_summary_with_parent(task, true, graph)
 }
 
-fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
+fn format_summary_with_parent(task: &Task, include_parent: bool, graph: &Graph) -> String {
     let claim = task
         .assignee_name()
         .map(|name| format!("  assigned to {name}"))
@@ -265,10 +264,10 @@ fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
     } else {
         format!("  [{}]", task.front.labels.join(", "))
     };
-    let type_prefix = if task.front.task_type == TaskType::Task {
+    let type_prefix = if task.front.task_type == graph.hierarchy.default_type() {
         String::new()
     } else {
-        format!("{}  ", task.front.task_type.as_str())
+        format!("{}  ", task.front.task_type)
     };
     let parent = if include_parent {
         task.front
@@ -293,7 +292,7 @@ fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
 }
 
 pub(super) fn format_tree_line(task: &Task, graph: &Graph, root: bool) -> String {
-    let mut line = format_summary_with_parent(task, false);
+    let mut line = format_summary_with_parent(task, false, graph);
     if root {
         let subtask_count = graph.children(&task.id).len();
         if subtask_count > 0 {
@@ -344,7 +343,7 @@ pub(super) fn format_detail(
         lines.push(format!("allowed_transitions: {}", allowed.join(", ")));
     }
     lines.push(format!("kind: {}", task.kind()));
-    lines.push(format!("type: {}", task.front.task_type.as_str()));
+    lines.push(format!("type: {}", task.front.task_type));
     if remote {
         lines.push(match crate::remote::link::link_view(task) {
             Some(link) if link.tracker == "github" && link.active => {

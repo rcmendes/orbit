@@ -14,29 +14,12 @@ pub const MAX_LABEL_LENGTH: usize = 32;
 pub const MAX_VERIFICATION_LENGTH: usize = 2000;
 pub const MAX_REPOSITORY_LENGTH: usize = 128;
 
-/// Structural shape of a Task. `kind` remains derived (`task` or `subtask`);
-/// `type` is metadata and does not affect readiness or lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum TaskType {
-    #[default]
-    Task,
-    Epic,
-    Spike,
-    Chore,
-    Decision,
-}
-
-impl TaskType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TaskType::Task => "task",
-            TaskType::Epic => "epic",
-            TaskType::Spike => "spike",
-            TaskType::Chore => "chore",
-            TaskType::Decision => "decision",
-        }
-    }
+/// The Issue type assumed when a file has no `type:` key. Boards configure
+/// the real vocabulary through `board.types`; `task` is only the fallback a
+/// pre-types file parses to, and `board.default_type` decides what `add`
+/// writes (ADR 0022).
+pub fn default_task_type() -> String {
+    "task".to_string()
 }
 
 /// The Board's default Priority name when `board.default_priority` is absent.
@@ -492,8 +475,8 @@ struct RawFrontmatter {
     status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resolution: Option<String>,
-    #[serde(default, rename = "type")]
-    task_type: TaskType,
+    #[serde(default = "default_task_type", rename = "type")]
+    task_type: String,
     #[serde(default = "default_priority")]
     priority: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -686,7 +669,10 @@ pub struct TaskFrontmatter {
     /// The resolution recorded by the closing transition that set `status`;
     /// cleared when the Task reopens or transitions to an open status.
     pub resolution: Option<String>,
-    pub task_type: TaskType,
+    /// The Board-configured Issue type name (`epic`, `story`, `task`, `bug`,
+    /// `sub-task`, or a custom `board.types` entry). Stored as a string so the
+    /// vocabulary is per-Board; membership is checked by `Graph::validate`.
+    pub task_type: String,
     /// A Priority name from the Board's `board.priorities` list; Tasks sort
     /// by the name's ordinal in that list, not by the name itself.
     pub priority: String,
@@ -745,8 +731,9 @@ impl Task {
         if self.is_subtask() { "subtask" } else { "task" }
     }
 
-    pub fn task_type(&self) -> TaskType {
-        self.front.task_type
+    /// The Task's configured Issue type name.
+    pub fn task_type(&self) -> &str {
+        &self.front.task_type
     }
 
     pub fn github_link(&self) -> Option<&GitHubLink> {
@@ -918,6 +905,13 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
         return Err(OrbitError::corrupt_task(format!(
             "task {id} has invalid priority `{}`",
             front.priority
+        )));
+    }
+    front.task_type = front.task_type.trim().to_lowercase();
+    if !is_valid_label(&front.task_type) {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has invalid type `{}`",
+            front.task_type
         )));
     }
     for link in &mut front.links {
@@ -1098,22 +1092,13 @@ pub fn is_valid_id(id: &str, prefix: &str) -> bool {
         return false;
     };
 
+    // Dotted IDs remain readable for Boards written before IDs decoupled
+    // from `parent` (ADR 0022); `orbit slug migrate` rewrites them flat.
     rest.split('.').all(is_valid_rand)
 }
 
 fn is_valid_rand(value: &str) -> bool {
     (6..=8).contains(&value.len()) && value.bytes().all(|byte| ID_ALPHABET.contains(&byte))
-}
-
-/// Returns the Parent Task encoded in a SubTask ID, if the ID is valid: the
-/// ID minus its last dot-separated segment, at any depth.
-pub fn parent_id_from_id(id: &str, prefix: &str) -> Option<String> {
-    if !is_valid_id(id, prefix) {
-        return None;
-    }
-    let rest = id.strip_prefix(prefix)?;
-    let (parent, _) = rest.rsplit_once('.')?;
-    Some(format!("{prefix}{parent}"))
 }
 
 /// A Task's Component: a short lowercase slug. Boards that configure
@@ -1202,10 +1187,6 @@ pub fn generate_id(prefix: &str, len: usize) -> String {
     format!("{prefix}{}", generate_rand(len))
 }
 
-pub fn generate_subtask_id(parent_id: &str, len: usize) -> String {
-    format!("{parent_id}.{}", generate_rand(len))
-}
-
 fn generate_rand(len: usize) -> String {
     let mut rng = rand::rng();
     let mut id = String::with_capacity(len);
@@ -1232,7 +1213,7 @@ mod tests {
                 title: "Build the CLI router".to_string(),
                 status: "todo".to_string(),
                 resolution: None,
-                task_type: TaskType::Task,
+                task_type: "task".to_string(),
                 priority: "high".to_string(),
                 labels: Vec::new(),
                 links: vec![Link::dependency("orb-f14c02")],
@@ -1381,42 +1362,12 @@ updated_at: 2026-10-23T12:00:00Z
     }
 
     #[test]
-    fn parent_id_from_id_drops_the_last_segment() {
-        assert_eq!(
-            parent_id_from_id("orb-a7b2c9.d4b3df", "orb-"),
-            Some("orb-a7b2c9".to_string())
-        );
-        assert_eq!(
-            parent_id_from_id("orb-5q7bbn.d4b3df", "orb-"),
-            Some("orb-5q7bbn".to_string())
-        );
-        assert_eq!(
-            parent_id_from_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"),
-            Some("orb-a7b2c9.d4b3df".to_string())
-        );
-        assert_eq!(
-            parent_id_from_id("orb-a7b2c9.d4b3df.e5f6a7.h8j9km", "orb-"),
-            Some("orb-a7b2c9.d4b3df.e5f6a7".to_string())
-        );
-        assert_eq!(
-            parent_id_from_id("legacy-a7b2c9.d4b3df", "legacy-"),
-            Some("legacy-a7b2c9".to_string())
-        );
-        assert_eq!(parent_id_from_id("orb-a7b2c9", "orb-"), None);
-        assert_eq!(parent_id_from_id("orb-a7b2c9.", "orb-"), None);
-        assert_eq!(parent_id_from_id("orb-a7b2c9..d4b3df", "orb-"), None);
-        assert_eq!(parent_id_from_id("orb-a7b2c9.d4b3df.", "orb-"), None);
-        assert_eq!(parent_id_from_id("task-a7b2c9.d4b3df", "orb-"), None);
-    }
-
-    #[test]
     fn generated_ids_use_the_alphabet() {
         for _ in 0..100 {
             let id = generate_id("orb-", 6);
             assert!(is_valid_id(&id, "orb-"), "{id}");
-            let child = generate_subtask_id(&id, 6);
-            assert!(child.starts_with(&format!("{id}.")), "{child}");
-            assert!(is_valid_id(&child, "orb-"), "{child}");
+            // IDs never encode the parent (ADR 0022): generated IDs are flat.
+            assert!(!id.contains('.'));
         }
     }
 

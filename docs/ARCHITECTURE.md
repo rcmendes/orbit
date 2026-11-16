@@ -250,7 +250,7 @@ The pointer lives in the Git common directory, not in a worktree — `orbit repo
 
 ### Domain relationships
 
-A Task is the unit of work. Its claim fields are a single time-bounded claim, and its comments live in a sidecar file keyed by the same ID. Dependency edges are IDs stored in frontmatter, so they can point across the whole Board, including Tasks owned by different member Repositories. A SubTask is a Task whose `parent` names another Task; parentage is capped by `board.max_subtask_depth` (1–4, default 1) and is not a Dependency. A Task also has a metadata-only Type (`task`, `epic`, `spike`, `chore`, or `decision`); `epic` is top-level only.
+A Task is the unit of work. Its claim fields are a single time-bounded claim, and its comments live in a sidecar file keyed by the same ID. Dependency edges are IDs stored in frontmatter, so they can point across the whole Board, including Tasks owned by different member Repositories. A SubTask is a Task whose `parent` names another Task; parentage follows the Board's configured Issue hierarchy (`board.hierarchy`, default `epic` > `story`/`task`/`bug` > `sub-task`) and is not a Dependency. A Task's Issue type comes from `board.types` (default `epic`, `story`, `task`, `bug`, `sub-task`) and decides where in the hierarchy it may sit.
 
 ```mermaid
 classDiagram
@@ -383,7 +383,7 @@ These rules live in `src/transition.rs`, which stays pure: every method takes th
 
 | From | Command | Transition | To | Rules |
 | --- | --- | --- | --- | --- |
-| none | `add` | — | initial Status | Creates `tasks/ID.md`. Type defaults to `task`; priority defaults to `board.default_priority`; dependencies must exist. `--parent` must name an existing, non-terminal Task whose depth stays within `board.max_subtask_depth`, and cannot be combined with `--type epic`. |
+| none | `add` | — | initial Status | Creates `tasks/ID.md`. Type defaults to `board.default_type`; priority defaults to `board.default_priority`; dependencies must exist. `--parent` must name an existing, non-terminal Task whose type sits strictly below the parent's type in `board.hierarchy`. |
 | Ready Status | `claim` or `ready --claim` | `claim` | `in_progress` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
 | `active` | `heartbeat` | — | `active` | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
 | `active` | `checkpoint` | — | `active` | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a closed task or a task with no claim. |
@@ -395,7 +395,6 @@ These rules live in `src/transition.rs`, which stays pure: every method takes th
 | any | `transition <name>` | named edge | edge target | Runs one Workflow transition directly, honoring the claim-holder check where the edge requires it. |
 | closed | `done --comment` / `cancel --comment` | — | unchanged | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
 | closed | opposite terminal command | — | rejected | `INVALID_TRANSITION`; reopen first. |
-| any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live claim requires the holder unless `--force`. With dependents or SubTasks, requires `--force`, which first removes edges from dependents and deletes the whole SubTask subtree. |
 | any | `update`, `label`, `comment`, `depend`, `undepend` | — | unchanged | Metadata only. `update`, `label`, and `comment` also work on terminal tasks. `depend` refuses terminal tasks, cycles, and parent/child edges; `undepend` is idempotent. |
 
 ### The readiness gate
@@ -915,7 +914,7 @@ sequenceDiagram
 | Half-moved or duplicated layout | `doctor` reports `AMBIGUOUS_BOARD`; `orbit migrate` resolves the pair. |
 | Legacy Board layout | Commands fail with `BOARD_NOT_MIGRATED`; `orbit migrate` converts the Board to the standalone layout. |
 | Storage key leftover | `doctor` reports `STORAGE_MISMATCH`; `orbit migrate` drops the retired `board.storage` key. |
-| Corrupt task, comment, or graph | `doctor` reports `CORRUPT_TASK`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `DANGLING_DEP`, `DANGLING_PARENT`, `NESTED_SUBTASK`, `PARENT_MISMATCH`, or `CYCLE_DETECTED`. `doctor --fix` removes stale temp files and re-attaches an orphan worktree; it does not rewrite tasks or comments. |
+| Corrupt task, comment, or graph | `doctor` reports `CORRUPT_TASK`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `DANGLING_DEP`, `DANGLING_PARENT`, `PARENT_CYCLE`, `INVALID_TYPE`, `MISSING_REQUIRED_FIELD`, or `CYCLE_DETECTED`. `doctor --fix` removes stale temp files and re-attaches an orphan worktree; it does not rewrite tasks or comments. |
 | Forced reopen of a done dependency | A done dependent can keep an unfinished dependency as a historical fact. `doctor` warns; the next `done` of that dependent still enforces its dependencies. |
 
 ## 8. Where to change what
@@ -938,7 +937,7 @@ sequenceDiagram
 - Readers take the shared lock for a consistent snapshot. Writers take the exclusive lock for the read-modify-write.
 - Each file is published with a temp file, `fsync`, and rename. A crash cannot truncate a task.
 - Ready and blocked are derived on every command. They are never stored in frontmatter.
-- Parentage is capped by `board.max_subtask_depth` and is not a Dependency. A Parent Task is Ready only when every SubTask is in a closed Status Category.
+- Parentage follows `board.hierarchy` and is not a Dependency. A Parent Task is Ready only when every descendant is in a closed Status Category.
 - Statuses in the `done` and `canceled` categories both resolve dependents. `delete` is not a status; it removes the task and its comments, and `--force` removes a SubTask subtree.
 - Comments are append-only and immutable. A correction is a new comment.
 - Meaningful mutations auto-commit to the `orbit` branch. Heartbeats wait for the next mutation or `sync`. The branch is pushed only to a configured Board host, with `orbit board sync` or `board.host_sync = auto`; Remote Issue auto-push is a separate opt-in per Board.
@@ -946,3 +945,6 @@ sequenceDiagram
 - Human output is presentation only. `list` tables may truncate titles or change column widths; `--json` carries the complete, stable shape.
 - MCP does not bypass the CLI. Every tool call reuses the same lock, atomic-write, auto-commit, and error envelope.
 - Agent configuration is written with managed markers or key-level merges so `setup --remove` deletes only Orbit-managed content. Generated configs record the Orbit binary but not the Board path.
+
+- Parentage follows `board.hierarchy` and is not a Dependency. A Parent Task is Ready only when every descendant is in a closed Status Category.
+- Statuses in the `done` and `canceled` categories both resolve dependents. `delete` is not a status; it removes the task and its comments, and `--force` removes a SubTask subtree.

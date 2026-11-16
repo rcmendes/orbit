@@ -866,7 +866,7 @@ mod tests {
                 title: "t".to_string(),
                 status: status.to_string(),
                 resolution: None,
-                task_type: crate::task::TaskType::Task,
+                task_type: "task".to_string(),
                 priority: "medium".to_string(),
                 labels: Vec::new(),
                 links: vec![crate::task::Link::waiting_on("vendor")],

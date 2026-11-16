@@ -32,10 +32,11 @@ How many `parent` hops a Task sits below a top-level Task: a top-level Task is
 depth 0, its SubTask depth 1, that SubTask's SubTask depth 2.
 _Avoid_: Level, nesting
 
-**Max SubTask Depth**:
-The Board setting `board.max_subtask_depth`: the deepest a SubTask may sit,
-from 1 (SubTasks cannot own SubTasks, the default) to 4. Omitting the setting
-keeps the one-level default.
+**Issue Hierarchy**:
+The Board setting `board.hierarchy`: the ordered levels of Issue types a
+`parent` edge may cross. A child's type must sit on a strictly deeper level
+than its parent's; the number of levels bounds the depth. Default:
+`epic` > `story`/`task`/`bug` > `sub-task`.
 _Avoid_: Max depth, nesting limit
 
 **Close Candidate**:
@@ -48,12 +49,15 @@ The structural position of a Task: `task` or `subtask`. Kind is derived from `pa
 _Avoid_: Category, issue type
 
 **Type**:
-The work shape of a Task: `task`, `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness. `epic` is allowed only on a top-level Task.
+The Issue type of a Task, configured per Board under `board.types` (`epic`,
+`story`, `task`, `bug`, `sub-task` by default; `board.default_type` picks the
+default). The type decides where in the Issue Hierarchy the Task may sit; it
+is not the same as Kind.
 _Avoid_: Kind, category, label
 
-**Area**:
-An optional, single classification of where work primarily lands. Each Board defines its own Areas; a Board that defines none accepts any short lowercase name. Area is shared metadata for filtering and agent routing; it is not personal or session-local state.
-_Avoid_: Label, component tag, free-form tag
+**Component**:
+An optional, single classification of where work primarily lands. Each Board defines its own Components; a Board that defines none accepts any short lowercase name. Component is shared metadata for filtering and agent routing; it is not personal or session-local state.
+_Avoid_: Label, area tag, free-form tag
 
 **Verification**:
 Optional, concise checks or commands agents should run for a Task, stored separately from narrative acceptance criteria in the body. Project-wide defaults live in [`docs/agents/project-guidance.md`](./agents/project-guidance.md); Task-level `verification` adds to or narrows those defaults.
@@ -67,8 +71,8 @@ _Avoid_: Transaction, script, bulk edit
 An optional caller-chosen string that names a Task in the system that asked for it. It is unique per Board; adding a Task with a Source Key that already exists returns that Task instead of creating another, so a retried add creates no duplicate.
 _Avoid_: External ID, idempotency token, alias
 
-**Annotation**:
-Structured data that one tool attaches to a Task under the tool's name, its owner. Orbit stores, returns, and shows it but never interprets it: an Annotation never affects Ready, Blocked, Claim eligibility, or Status, and it is never synchronized with a Remote Tracker.
+**Property**:
+Structured data that one tool attaches to a Task under the tool's name, its owner. Orbit stores, returns, and shows it but never interprets it: a Property never affects Ready, Blocked, Claim eligibility, or Status, and it is never synchronized with a Remote Tracker.
 _Avoid_: Metadata, custom field, namespace, extra
 
 **Status**:
@@ -112,7 +116,8 @@ Another Task in a closed Status Category (`done` or `canceled`) is required befo
 _Avoid_: Blocker, prerequisite, parent
 
 **Ready**:
-A condition of a Task sitting in the Workflow's Ready Status — the one Status marked `ready` — with no Assignee, not Waiting, no Hold Label, no open Dependency, and no open SubTask. Ready is derived, never stored.
+
+A condition of a Task sitting in the Workflow's Ready Status — the one Status marked `ready` — with no Assignee, not Waiting, no Hold Label, no open Dependency, and no open descendant. Ready is derived, never stored.
 _Avoid_: Unblocked, available, actionable
 
 **Blocked**:

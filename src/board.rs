@@ -199,11 +199,9 @@ impl Config {
                 self.board.default_priority
             )));
         }
-        if !(1..=4).contains(&self.board.max_subtask_depth) {
-            return Err(OrbitError::config(
-                "board.max_subtask_depth must be between 1 and 4",
-            ));
-        }
+        // The Issue model must agree with itself: known default type, every
+        // type placed on exactly one hierarchy level.
+        crate::hierarchy::Hierarchy::from_config(&self.board)?;
         for label in &self.board.non_ready_labels {
             if !task::is_valid_label(label) {
                 return Err(OrbitError::config(format!(
@@ -315,14 +313,29 @@ pub struct BoardConfig {
     pub priorities: Vec<String>,
     #[serde(default = "default_non_ready_labels")]
     pub non_ready_labels: Vec<String>,
-    /// How many SubTask levels a Board allows: 1 keeps the historical
-    /// one-level rule, up to 4 permits nested SubTasks.
+    /// The Board's Issue type vocabulary (`[[board.types]]`). Each entry may
+    /// declare `required` frontmatter fields the type demands.
     #[serde(
-        default = "default_max_subtask_depth",
-        deserialize_with = "deserialize_max_subtask_depth",
-        skip_serializing_if = "is_default_max_subtask_depth"
+        default = "crate::hierarchy::default_issue_types",
+        skip_serializing_if = "issue_types_are_default"
     )]
-    pub max_subtask_depth: u8,
+    pub types: Vec<crate::hierarchy::IssueTypeConfig>,
+    /// The Issue type `orbit add` uses when neither `--type` nor `--parent`
+    /// applies.
+    #[serde(
+        default = "crate::hierarchy::default_issue_type",
+        skip_serializing_if = "is_default_issue_type"
+    )]
+    pub default_type: String,
+    /// The ordered Issue hierarchy (`[[board.hierarchy]]`), top level first.
+    /// A Task's `parent` is allowed only when its type sits on a strictly
+    /// deeper level than the parent's type; the level count is the maximum
+    /// depth. Replaces the retired `board.max_subtask_depth` integer (ADR 0022).
+    #[serde(
+        default = "crate::hierarchy::default_hierarchy",
+        skip_serializing_if = "hierarchy_is_default"
+    )]
+    pub hierarchy: Vec<crate::hierarchy::HierarchyLevelConfig>,
     #[serde(default = "default_true")]
     pub auto_commit: bool,
     #[serde(default = "default_lock_timeout")]
@@ -372,7 +385,9 @@ impl Default for BoardConfig {
             default_priority: task::default_priority(),
             priorities: task::default_priorities(),
             non_ready_labels: default_non_ready_labels(),
-            max_subtask_depth: default_max_subtask_depth(),
+            types: crate::hierarchy::default_issue_types(),
+            default_type: crate::hierarchy::default_issue_type(),
+            hierarchy: crate::hierarchy::default_hierarchy(),
             auto_commit: true,
             lock_timeout_ms: default_lock_timeout(),
             host: None,
@@ -427,11 +442,6 @@ impl IdConfig {
             .chain(self.accepted_prefixes.iter().map(String::as_str))
             .find(|prefix| task::is_valid_id(id, prefix))
     }
-
-    pub fn parent_id(&self, id: &str) -> Option<String> {
-        self.prefix_for_id(id)
-            .and_then(|prefix| task::parent_id_from_id(id, prefix))
-    }
 }
 
 fn validate_id_prefix(prefix: &str) -> Result<()> {
@@ -479,32 +489,16 @@ fn default_non_ready_labels() -> Vec<String> {
     ]
 }
 
-fn default_max_subtask_depth() -> u8 {
-    1
+fn issue_types_are_default(types: &[crate::hierarchy::IssueTypeConfig]) -> bool {
+    types == crate::hierarchy::default_issue_types()
 }
 
-/// Deserializes loosely so a bad `max_subtask_depth` reports the
-/// `board.max_subtask_depth` key: non-integers fail as non-integers and
-/// out-of-range integers fail with the 1–4 range `Config::validate` also
-/// enforces for programmatically built configs.
-fn deserialize_max_subtask_depth<'de, D>(deserializer: D) -> std::result::Result<u8, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = toml::Value::deserialize(deserializer).map_err(serde::de::Error::custom)?;
-    match value {
-        toml::Value::Integer(number) if !(1..=4).contains(&number) => Err(
-            serde::de::Error::custom("board.max_subtask_depth must be between 1 and 4"),
-        ),
-        toml::Value::Integer(number) => Ok(number as u8),
-        _ => Err(serde::de::Error::custom(
-            "board.max_subtask_depth must be an integer",
-        )),
-    }
+fn is_default_issue_type(value: &str) -> bool {
+    value == crate::hierarchy::default_issue_type()
 }
 
-fn is_default_max_subtask_depth(value: &u8) -> bool {
-    *value == default_max_subtask_depth()
+fn hierarchy_is_default(levels: &[crate::hierarchy::HierarchyLevelConfig]) -> bool {
+    levels == crate::hierarchy::default_hierarchy()
 }
 
 fn default_true() -> bool {
@@ -2329,10 +2323,6 @@ mod tests {
         config.id.accepted_prefixes = vec!["legacy-".to_string()];
         config.validate().unwrap();
         assert!(config.id.is_valid_task_id("legacy-a7b2c9"));
-        assert_eq!(
-            config.id.parent_id("legacy-a7b2c9.d4b3df"),
-            Some("legacy-a7b2c9".to_string())
-        );
 
         let serialized = config.to_toml().unwrap();
         let restored: Config = toml::from_str(&serialized).unwrap();
@@ -2343,63 +2333,84 @@ mod tests {
     }
 
     #[test]
-    fn max_subtask_depth_loads_and_validates() {
+    fn issue_model_loads_and_validates() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("config.toml"),
-            "[board]\nmax_subtask_depth = 2\n",
+            "[board]\ndefault_type = \"bug\"\n\n[[board.types]]\nname = \"epic\"\n\n[[board.types]]\nname = \"bug\"\nrequired = [\"area\"]\n\n[[board.hierarchy]]\ntypes = [\"epic\"]\n\n[[board.hierarchy]]\ntypes = [\"bug\"]\n",
         )
         .unwrap();
         let config = Config::load(dir.path()).unwrap();
-        assert_eq!(config.board.max_subtask_depth, 2);
+        assert_eq!(config.board.default_type, "bug");
+        assert_eq!(config.board.types.len(), 2);
+        assert_eq!(config.board.hierarchy.len(), 2);
+        assert_eq!(config.board.types[1].required, vec!["area".to_string()]);
 
+        // Defaults apply when the sections are absent.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.toml"), "").unwrap();
         let config = Config::load(dir.path()).unwrap();
-        assert_eq!(config.board.max_subtask_depth, 1);
+        assert_eq!(config.board.default_type, "task");
+        assert_eq!(config.board.types.len(), 5);
+        assert_eq!(config.board.hierarchy.len(), 3);
+    }
 
-        for value in ["0", "-1", "5"] {
-            let dir = tempfile::tempdir().unwrap();
-            std::fs::write(
-                dir.path().join("config.toml"),
-                format!("[board]\nmax_subtask_depth = {value}\n"),
-            )
-            .unwrap();
-            let error = Config::load(dir.path()).unwrap_err();
-            assert_eq!(error.code, code::CONFIG_ERROR, "value {value}");
-            assert!(
-                error.message.contains("board.max_subtask_depth")
-                    && error.message.contains("between 1 and 4"),
-                "value {value}: {}",
-                error.message
-            );
-        }
-
+    #[test]
+    fn issue_model_rejects_inconsistent_config() {
+        // default_type naming an unconfigured type.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("config.toml"),
-            "[board]\nmax_subtask_depth = \"two\"\n",
+            "[board]\ndefault_type = \"mystery\"\n",
         )
         .unwrap();
         let error = Config::load(dir.path()).unwrap_err();
         assert_eq!(error.code, code::CONFIG_ERROR);
         assert!(
-            error.message.contains("board.max_subtask_depth")
-                && error.message.contains("must be an integer"),
+            error.message.contains("board.default_type"),
             "{}",
             error.message
         );
+
+        // A type placed on two levels.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[[board.hierarchy]]\ntypes = [\"task\"]\n\n[[board.hierarchy]]\ntypes = [\"task\", \"sub-task\"]\n\n[[board.hierarchy]]\ntypes = [\"epic\", \"story\", \"bug\"]\n",
+        )
+        .unwrap();
+        let error = Config::load(dir.path()).unwrap_err();
+        assert_eq!(error.code, code::CONFIG_ERROR);
+        assert!(
+            error.message.contains("more than one level"),
+            "{}",
+            error.message
+        );
+
+        // A level naming an unknown type.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[[board.hierarchy]]\ntypes = [\"mystery\"]\n",
+        )
+        .unwrap();
+        let error = Config::load(dir.path()).unwrap_err();
+        assert_eq!(error.code, code::CONFIG_ERROR);
+        assert!(error.message.contains("unknown type"), "{}", error.message);
     }
 
     #[test]
-    fn max_subtask_depth_one_is_not_serialized() {
-        let mut config = Config::default();
-        assert_eq!(config.board.max_subtask_depth, 1);
+    fn default_issue_model_is_not_serialized() {
+        let config = Config::default();
         let toml = config.to_toml().unwrap();
         assert!(!toml.contains("max_subtask_depth"));
+        assert!(!toml.contains("default_type"));
+        assert!(!toml.contains("[[board.types]]"));
+        assert!(!toml.contains("[[board.hierarchy]]"));
 
-        config.board.max_subtask_depth = 3;
+        let mut config = Config::default();
+        config.board.default_type = "bug".to_string();
         let toml = config.to_toml().unwrap();
-        assert!(toml.contains("max_subtask_depth = 3"));
+        assert!(toml.contains("default_type = \"bug\""));
     }
 }

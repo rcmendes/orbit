@@ -6,7 +6,8 @@ use serde::Serialize;
 use crate::board::Board;
 use crate::comment::Comment;
 use crate::error::{OrbitError, Result, code};
-use crate::task::{self, Task, TaskType};
+use crate::hierarchy::Hierarchy;
+use crate::task::{self, Task};
 use crate::workflow::{StatusCategory, Workflow};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -95,8 +96,9 @@ pub struct Counts {
 pub struct Graph {
     pub tasks: HashMap<String, Task>,
     non_ready_labels: Vec<String>,
-    /// Maximum SubTask nesting depth from `board.max_subtask_depth` (1–4).
-    pub max_subtask_depth: u8,
+    /// The Board's Issue model: type vocabulary, required fields, and the
+    /// ordered parent hierarchy (ADR 0022).
+    pub hierarchy: Hierarchy,
     /// The Board's declarative workflow: status categories, the Ready status,
     /// and the named transitions `allowed_transitions` reports.
     pub workflow: Workflow,
@@ -131,7 +133,7 @@ impl Graph {
                 .map(|task| (task.id.clone(), task))
                 .collect(),
             non_ready_labels,
-            max_subtask_depth: 1,
+            hierarchy: Hierarchy::default(),
             workflow,
             priorities: task::default_priorities(),
         }
@@ -220,7 +222,7 @@ impl Graph {
         let graph = Self {
             tasks,
             non_ready_labels: board.config.board.non_ready_labels.clone(),
-            max_subtask_depth: board.config.board.max_subtask_depth,
+            hierarchy: Hierarchy::from_config(&board.config.board)?,
             workflow,
             priorities: board.config.board.priorities.clone(),
         };
@@ -299,43 +301,64 @@ impl Graph {
                 }
             }
 
-            if task.front.task_type == TaskType::Epic && task.front.parent.is_some() {
+            if !self.hierarchy.is_known_type(&task.front.task_type) {
                 issues.push(Issue::new(
                     code::INVALID_TYPE,
                     Some(&task.id),
                     format!(
-                        "{} is a SubTask and cannot have type epic; epic is top-level only",
-                        task.id
+                        "{} has unknown type `{}`; the Board configures: {}",
+                        task.id,
+                        task.front.task_type,
+                        self.hierarchy.type_names().join(", ")
+                    ),
+                ));
+            }
+            let missing = self.hierarchy.missing_required_fields(task);
+            if !missing.is_empty() {
+                issues.push(Issue::new(
+                    code::MISSING_REQUIRED_FIELD,
+                    Some(&task.id),
+                    format!(
+                        "{} is missing required field(s): {}",
+                        task.id,
+                        missing.join(", ")
                     ),
                 ));
             }
 
             if let Some(parent_id) = &task.front.parent {
+                // Self-parents and longer parent cycles are reported once by
+                // `find_parent_cycle` below.
                 if parent_id == &task.id {
-                    issues.push(Issue::new(
-                        code::NESTED_SUBTASK,
-                        Some(&task.id),
-                        format!("{} is its own parent", task.id),
-                    ));
+                    // covered by find_parent_cycle
                 } else if !self.tasks.contains_key(parent_id) {
                     issues.push(Issue::new(
                         code::DANGLING_PARENT,
                         Some(&task.id),
                         format!("{} has missing parent {parent_id}", task.id),
                     ));
-                } else if self.depth(parent_id) + 1 > usize::from(self.max_subtask_depth) {
-                    issues.push(Issue::new(
-                        code::NESTED_SUBTASK,
-                        Some(&task.id),
-                        format!(
-                            "{} has parent {parent_id}; SubTask depth {} exceeds board.max_subtask_depth = {}",
-                            task.id,
-                            self.depth(parent_id) + 1,
-                            self.max_subtask_depth
-                        ),
-                    ));
+                } else {
+                    let parent_type = &self.tasks[parent_id].front.task_type;
+                    if let Some(reason) = self
+                        .hierarchy
+                        .parent_rule_violation(&task.front.task_type, parent_type)
+                    {
+                        issues.push(Issue::new(
+                            code::INVALID_TYPE,
+                            Some(&task.id),
+                            format!("{} has parent {parent_id}: {reason}", task.id),
+                        ));
+                    }
                 }
             }
+        }
+
+        if let Some(cycle) = self.find_parent_cycle() {
+            issues.push(Issue::new(
+                code::PARENT_CYCLE,
+                cycle.first().map(String::as_str),
+                format!("parent cycle: {}", cycle.join(" -> ")),
+            ));
         }
 
         if let Some(cycle) = self.find_cycle() {
@@ -422,7 +445,7 @@ impl Graph {
             && task.front.assignee.is_none()
             && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
-            && self.open_children(&task.id).is_empty()
+            && self.open_descendants(&task.id).is_empty()
     }
 
     pub fn hold_labels(&self, task: &Task) -> Vec<String> {
@@ -519,6 +542,19 @@ impl Graph {
             .collect()
     }
 
+    /// Every non-terminal descendant of `id`, at any depth: a Parent Task is
+    /// ready or closable only once its whole subtree is resolved (ADR 0022).
+    pub fn open_descendants(&self, id: &str) -> Vec<String> {
+        self.descendants(id)
+            .into_iter()
+            .filter(|descendant| {
+                self.tasks
+                    .get(descendant)
+                    .is_some_and(|task| !self.workflow.is_terminal(&task.front.status))
+            })
+            .collect()
+    }
+
     /// Number of `parent` hops from a top-level Task: 0 for a Task with no
     /// parent, 1 for its SubTask, and so on. A missing Task or a parent cycle
     /// reports the hops walked before stopping.
@@ -562,15 +598,19 @@ impl Graph {
         descendants
     }
 
+    /// A Parent Task is closable once it has descendants and every one of
+    /// them — at any depth — is terminal.
     pub fn eligible_for_close(&self, task: &Task) -> bool {
         if self.workflow.is_terminal(&task.front.status) {
             return false;
         }
-        let children = self.children(&task.id);
-        !children.is_empty()
-            && children
-                .iter()
-                .all(|child| self.workflow.is_terminal(&child.front.status))
+        let descendants = self.descendants(&task.id);
+        !descendants.is_empty()
+            && descendants.iter().all(|descendant| {
+                self.tasks
+                    .get(descendant)
+                    .is_some_and(|task| self.workflow.is_terminal(&task.front.status))
+            })
     }
 
     pub fn close_candidates(&self) -> Vec<&Task> {
@@ -650,6 +690,37 @@ impl Graph {
         }
     }
 
+    /// The first `parent` cycle found, as the path of Task IDs that loops.
+    /// Each Task has at most one parent, so following the chain from any
+    /// member reaches the cycle; IDs are visited in sorted order for a
+    /// deterministic report.
+    pub fn find_parent_cycle(&self) -> Option<Vec<String>> {
+        let mut ids: Vec<&String> = self.tasks.keys().collect();
+        ids.sort();
+        for start in ids {
+            let mut position: HashMap<String, usize> = HashMap::new();
+            let mut path: Vec<String> = Vec::new();
+            let mut current = start.clone();
+            loop {
+                if let Some(&pos) = position.get(&current) {
+                    let mut cycle = path[pos..].to_vec();
+                    cycle.push(current.clone());
+                    return Some(cycle);
+                }
+                let Some(task) = self.tasks.get(&current) else {
+                    break;
+                };
+                let Some(parent) = task.front.parent.clone() else {
+                    break;
+                };
+                position.insert(current.clone(), path.len());
+                path.push(current.clone());
+                current = parent;
+            }
+        }
+        None
+    }
+
     pub fn find_cycle(&self) -> Option<Vec<String>> {
         let mut state: HashMap<String, u8> = HashMap::new();
         let mut stack = Vec::new();
@@ -707,7 +778,8 @@ impl Graph {
                 counts.waiting += 1;
             }
             if !self.workflow.is_terminal(&task.front.status)
-                && (!self.blocking_ids(task).is_empty() || !self.open_children(&task.id).is_empty())
+                && (!self.blocking_ids(task).is_empty()
+                    || !self.open_descendants(&task.id).is_empty())
             {
                 counts.blocked += 1;
             }
@@ -834,12 +906,10 @@ fn inferred_prefix(id: &str) -> Option<String> {
 }
 
 pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
-    let subtasks: Vec<String> = graph
-        .children(&task.id)
-        .iter()
-        .map(|child| child.id.clone())
-        .collect();
-    let open_subtasks = graph.open_children(&task.id);
+    // `subtasks` covers the whole subtree at any depth; `children` remains
+    // the direct-children view used by `tree`, `delete`, and grouping.
+    let subtasks: Vec<String> = graph.descendants(&task.id);
+    let open_subtasks = graph.open_descendants(&task.id);
     let subtask_count = subtasks.len();
     let open_subtask_count = open_subtasks.len();
     let resolved_subtask_count = subtask_count.saturating_sub(open_subtask_count);
@@ -953,7 +1023,7 @@ mod tests {
                 title: id.to_string(),
                 status: status.to_string(),
                 resolution: None,
-                task_type: TaskType::Task,
+                task_type: "task".to_string(),
                 priority: default_priority(),
                 labels: Vec::new(),
                 links: deps
@@ -1034,7 +1104,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_parent_and_nested_subtasks_are_issues() {
+    fn missing_parent_and_disallowed_parent_types_are_issues() {
         let mut orphan = task("orb-aaaaaa", "todo", &[]);
         orphan.front.parent = Some("orb-missing".to_string());
         let graph = Graph::from_tasks(vec![orphan]);
@@ -1045,6 +1115,8 @@ mod tests {
                 .any(|issue| issue.code == code::DANGLING_PARENT)
         );
 
+        // A `task` may not parent another `task`: both sit on the same
+        // hierarchy level.
         let mut parent = task("orb-aaaaaa", "todo", &[]);
         parent.front.parent = Some("orb-cccccc".to_string());
         let mut child = task("orb-bbbbbb", "todo", &[]);
@@ -1054,43 +1126,140 @@ mod tests {
             graph
                 .validate()
                 .iter()
-                .any(|issue| issue.code == code::NESTED_SUBTASK)
+                .any(|issue| issue.code == code::INVALID_TYPE)
+        );
+
+        // An `epic` cannot sit under anything: it is the top level.
+        let mut epic = task("orb-aaaaaa", "todo", &[]);
+        epic.front.task_type = "epic".to_string();
+        epic.front.parent = Some("orb-cccccc".to_string());
+        let graph = Graph::from_tasks(vec![task("orb-cccccc", "todo", &[]), epic]);
+        assert!(
+            graph
+                .validate()
+                .iter()
+                .any(|issue| issue.code == code::INVALID_TYPE)
         );
     }
 
     #[test]
-    fn validate_honours_max_subtask_depth() {
-        let mut graph = chain();
-        assert_eq!(graph.max_subtask_depth, 1);
-        let mut nested = nested_subtask_ids(&graph);
-        nested.sort();
-        assert_eq!(
-            nested,
-            vec![
-                "orb-bbbbbb.cccccc".to_string(),
-                "orb-bbbbbb.cccccc.dddddd".to_string()
-            ]
-        );
-
-        graph.max_subtask_depth = 2;
-        assert_eq!(
-            nested_subtask_ids(&graph),
-            vec!["orb-bbbbbb.cccccc.dddddd".to_string()]
-        );
-
-        graph.max_subtask_depth = 3;
-        assert!(nested_subtask_ids(&graph).is_empty());
+    fn parent_cycles_are_reported_once() {
+        let mut first = task("orb-aaaaaa", "todo", &[]);
+        first.front.task_type = "task".to_string();
+        first.front.parent = Some("orb-bbbbbb".to_string());
+        let mut second = task("orb-bbbbbb", "todo", &[]);
+        second.front.task_type = "sub-task".to_string();
+        second.front.parent = Some("orb-aaaaaa".to_string());
+        let graph = Graph::from_tasks(vec![first, second]);
+        let issues = graph.validate();
+        let cycles: Vec<_> = issues
+            .iter()
+            .filter(|issue| issue.code == code::PARENT_CYCLE)
+            .collect();
+        assert_eq!(cycles.len(), 1, "{cycles:?}");
     }
 
-    fn nested_subtask_ids(graph: &Graph) -> Vec<String> {
-        let mut ids: Vec<String> = graph
-            .validate()
-            .into_iter()
-            .filter(|issue| issue.code == code::NESTED_SUBTASK)
-            .filter_map(|issue| issue.task)
-            .collect();
-        ids.sort();
-        ids
+    #[test]
+    fn hierarchy_permits_three_levels_and_rejects_a_fourth() {
+        // epic > task > sub-task is the default three-level model.
+        let mut epic = task("orb-aaaaaa", "todo", &[]);
+        epic.front.task_type = "epic".to_string();
+        let mut middle = task("orb-bbbbbb", "todo", &[]);
+        middle.front.task_type = "task".to_string();
+        middle.front.parent = Some("orb-aaaaaa".to_string());
+        let mut leaf = task("orb-cccccc", "todo", &[]);
+        leaf.front.task_type = "sub-task".to_string();
+        leaf.front.parent = Some("orb-bbbbbb".to_string());
+        let graph = Graph::from_tasks(vec![epic, middle, leaf]);
+        assert!(
+            graph
+                .validate()
+                .iter()
+                .all(|issue| issue.code != code::INVALID_TYPE),
+            "{:?}",
+            graph.validate()
+        );
+        assert_eq!(graph.depth("orb-cccccc"), 2);
+
+        // A fourth level does not exist: `sub-task` cannot parent anything.
+        let mut too_deep = task("orb-dddddd", "todo", &[]);
+        too_deep.front.task_type = "sub-task".to_string();
+        too_deep.front.parent = Some("orb-cccccc".to_string());
+        let mut graph = graph;
+        graph.insert(too_deep);
+        assert!(
+            graph
+                .validate()
+                .iter()
+                .any(|issue| issue.code == code::INVALID_TYPE)
+        );
+    }
+
+    #[test]
+    fn unknown_types_and_missing_required_fields_are_issues() {
+        let mut weird = task("orb-aaaaaa", "todo", &[]);
+        weird.front.task_type = "mystery".to_string();
+        let graph = Graph::from_tasks(vec![weird]);
+        assert!(
+            graph
+                .validate()
+                .iter()
+                .any(|issue| issue.code == code::INVALID_TYPE)
+        );
+
+        let mut types = crate::hierarchy::default_issue_types();
+        types
+            .iter_mut()
+            .find(|t| t.name == "epic")
+            .unwrap()
+            .required = vec!["area".to_string()];
+        let levels = crate::hierarchy::default_hierarchy();
+        let mut graph = Graph::from_tasks(vec![task("orb-aaaaaa", "todo", &[])]);
+        graph.hierarchy = Hierarchy::from_parts(types, "task".to_string(), levels).unwrap();
+        graph.get_mut("orb-aaaaaa").unwrap().front.task_type = "epic".to_string();
+        assert!(
+            graph
+                .validate()
+                .iter()
+                .any(|issue| issue.code == code::MISSING_REQUIRED_FIELD)
+        );
+    }
+
+    #[test]
+    fn readiness_waits_for_descendants_at_every_depth() {
+        // epic > task > sub-task: the epic stays unready until the leaf
+        // resolves, even though its direct child is already done.
+        let mut epic = task("orb-aaaaaa", "ready", &[]);
+        epic.front.task_type = "epic".to_string();
+        let mut middle = task("orb-bbbbbb", "done", &[]);
+        middle.front.task_type = "task".to_string();
+        middle.front.parent = Some("orb-aaaaaa".to_string());
+        let mut leaf = task("orb-cccccc", "todo", &[]);
+        leaf.front.task_type = "sub-task".to_string();
+        leaf.front.parent = Some("orb-bbbbbb".to_string());
+        let graph = Graph::from_tasks(vec![epic, middle, leaf]);
+
+        let epic_task = graph.get("orb-aaaaaa").unwrap();
+        assert!(!graph.is_ready(epic_task));
+        assert_eq!(
+            graph.open_descendants("orb-aaaaaa"),
+            vec!["orb-cccccc".to_string()]
+        );
+        assert!(!graph.eligible_for_close(epic_task));
+
+        let mut resolved_leaf = task("orb-cccccc", "done", &[]);
+        resolved_leaf.front.task_type = "sub-task".to_string();
+        resolved_leaf.front.parent = Some("orb-bbbbbb".to_string());
+        let mut epic = task("orb-aaaaaa", "ready", &[]);
+        epic.front.task_type = "epic".to_string();
+        let mut middle = task("orb-bbbbbb", "done", &[]);
+        middle.front.task_type = "task".to_string();
+        middle.front.parent = Some("orb-aaaaaa".to_string());
+        let graph = Graph::from_tasks(vec![epic, middle, resolved_leaf]);
+
+        let epic_task = graph.get("orb-aaaaaa").unwrap();
+        assert!(graph.is_ready(epic_task));
+        assert!(graph.eligible_for_close(epic_task));
     }
 
     fn child_of(mut task: Task, parent: &str) -> Task {
@@ -1098,16 +1267,24 @@ mod tests {
         task
     }
 
+    fn typed(mut task: Task, ty: &str) -> Task {
+        task.front.task_type = ty.to_string();
+        task
+    }
+
     fn chain() -> Graph {
         Graph::from_tasks(vec![
-            task("orb-aaaaaa", "todo", &[]),
-            child_of(task("orb-bbbbbb", "todo", &[]), "orb-aaaaaa"),
-            child_of(task("orb-bbbbbb.cccccc", "todo", &[]), "orb-bbbbbb"),
-            child_of(
-                task("orb-bbbbbb.cccccc.dddddd", "todo", &[]),
-                "orb-bbbbbb.cccccc",
+            typed(task("orb-aaaaaa", "todo", &[]), "epic"),
+            typed(
+                child_of(task("orb-bbbbbb", "todo", &[]), "orb-aaaaaa"),
+                "task",
             ),
-            child_of(task("orb-eeeeee", "todo", &[]), "orb-aaaaaa"),
+            typed(
+                child_of(task("orb-bbbbbb.cccccc", "todo", &[]), "orb-bbbbbb"),
+                "sub-task",
+            ),
+            child_of(task("orb-eeeeee", "todo", &[]), "orb-bbbbbb.cccccc"),
+            child_of(task("orb-fffffff", "todo", &[]), "orb-aaaaaa"),
         ])
     }
 
@@ -1117,7 +1294,7 @@ mod tests {
         assert_eq!(graph.depth("orb-aaaaaa"), 0);
         assert_eq!(graph.depth("orb-bbbbbb"), 1);
         assert_eq!(graph.depth("orb-bbbbbb.cccccc"), 2);
-        assert_eq!(graph.depth("orb-bbbbbb.cccccc.dddddd"), 3);
+        assert_eq!(graph.depth("orb-eeeeee"), 3);
         assert_eq!(graph.depth("orb-missing"), 0);
     }
 
@@ -1125,7 +1302,7 @@ mod tests {
     fn ancestors_walk_nearest_first() {
         let graph = chain();
         assert_eq!(
-            graph.ancestors("orb-bbbbbb.cccccc.dddddd"),
+            graph.ancestors("orb-eeeeee"),
             vec![
                 "orb-bbbbbb.cccccc".to_string(),
                 "orb-bbbbbb".to_string(),
@@ -1144,15 +1321,15 @@ mod tests {
             vec![
                 "orb-bbbbbb".to_string(),
                 "orb-bbbbbb.cccccc".to_string(),
-                "orb-bbbbbb.cccccc.dddddd".to_string(),
-                "orb-eeeeee".to_string()
+                "orb-eeeeee".to_string(),
+                "orb-fffffff".to_string()
             ]
         );
         assert_eq!(
             graph.descendants("orb-bbbbbb.cccccc"),
-            vec!["orb-bbbbbb.cccccc.dddddd".to_string()]
+            vec!["orb-eeeeee".to_string()]
         );
-        assert_eq!(graph.descendants("orb-eeeeee"), Vec::<String>::new());
+        assert_eq!(graph.descendants("orb-fffffff"), Vec::<String>::new());
     }
 
     #[test]
@@ -1242,11 +1419,13 @@ mod tests {
     }
 
     #[test]
-    fn max_subtask_depth_defaults_to_one() {
-        assert_eq!(Graph::from_tasks(vec![]).max_subtask_depth, 1);
+    fn default_hierarchy_has_three_levels() {
+        assert_eq!(Graph::from_tasks(vec![]).hierarchy.max_depth(), 3);
         assert_eq!(
-            Graph::from_tasks_with_holds(vec![], vec![]).max_subtask_depth,
-            1
+            Graph::from_tasks_with_holds(vec![], vec![])
+                .hierarchy
+                .max_depth(),
+            3
         );
     }
 }

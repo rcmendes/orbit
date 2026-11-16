@@ -26,12 +26,14 @@ pub mod code {
     pub const INVALID_TYPE: &str = "INVALID_TYPE";
     pub const MISSING_REQUIRED_FIELD: &str = "MISSING_REQUIRED_FIELD";
     pub const PARENT_CYCLE: &str = "PARENT_CYCLE";
-    pub const INVALID_AREA: &str = "INVALID_AREA";
+    pub const INVALID_COMPONENT: &str = "INVALID_COMPONENT";
     pub const INVALID_LABEL: &str = "INVALID_LABEL";
-    pub const INVALID_ANNOTATION: &str = "INVALID_ANNOTATION";
+    pub const INVALID_PROPERTY: &str = "INVALID_PROPERTY";
     pub const INVALID_BATCH: &str = "INVALID_BATCH";
     pub const INVALID_SOURCE_KEY: &str = "INVALID_SOURCE_KEY";
     pub const DUPLICATE_SOURCE_KEY: &str = "DUPLICATE_SOURCE_KEY";
+    pub const INVALID_EXTERNAL_ID: &str = "INVALID_EXTERNAL_ID";
+    pub const DUPLICATE_EXTERNAL_ID: &str = "DUPLICATE_EXTERNAL_ID";
     pub const LABEL_BLOCKED: &str = "LABEL_BLOCKED";
     pub const CORRUPT_COMMENT: &str = "CORRUPT_COMMENT";
     pub const ORPHAN_COMMENT: &str = "ORPHAN_COMMENT";

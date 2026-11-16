@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use clap::ValueEnum;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -12,32 +11,7 @@ pub const DEFAULT_PREFIX: &str = "orb-";
 pub const DEFAULT_ID_LENGTH: usize = 6;
 pub const MAX_LABEL_LENGTH: usize = 32;
 pub const MAX_VERIFICATION_LENGTH: usize = 2000;
-pub const MAX_REPO_LENGTH: usize = 128;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum Status {
-    Todo,
-    #[value(name = "in_progress", alias = "in-progress")]
-    InProgress,
-    Done,
-    Cancelled,
-}
-
-impl Status {
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Status::Done | Status::Cancelled)
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Status::Todo => "todo",
-            Status::InProgress => "in_progress",
-            Status::Done => "done",
-            Status::Cancelled => "cancelled",
-        }
-    }
-}
+pub const MAX_REPOSITORY_LENGTH: usize = 128;
 
 /// The Issue type assumed when a file has no `type:` key. Boards configure
 /// the real vocabulary through `board.types`; `task` is only the fallback a
@@ -178,16 +152,15 @@ impl RemoteLink {
     }
 }
 
-/// Largest serialized size of one owner's Annotation, in bytes.
-pub const ANNOTATION_MAX_BYTES: usize = 8192;
-const ANNOTATION_OWNER_MAX: usize = 40;
+/// Largest serialized size of one owner's Property, in bytes.
+pub const PROPERTY_MAX_BYTES: usize = 8192;
+const PROPERTY_OWNER_MAX: usize = 40;
 
-/// Checks one Annotation: a lowercase-slug owner and a JSON object of bounded size.
-pub fn validate_annotation(owner: &str, value: &serde_json::Value) -> Result<()> {
-    let invalid =
-        |message: String| OrbitError::new(crate::error::code::INVALID_ANNOTATION, message);
+/// Checks one Property: a lowercase-slug owner and a JSON object of bounded size.
+pub fn validate_property(owner: &str, value: &serde_json::Value) -> Result<()> {
+    let invalid = |message: String| OrbitError::new(crate::error::code::INVALID_PROPERTY, message);
     let slug = !owner.is_empty()
-        && owner.len() <= ANNOTATION_OWNER_MAX
+        && owner.len() <= PROPERTY_OWNER_MAX
         && owner
             .bytes()
             .next()
@@ -197,20 +170,18 @@ pub fn validate_annotation(owner: &str, value: &serde_json::Value) -> Result<()>
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
     if !slug {
         return Err(invalid(format!(
-            "annotation owner '{owner}' must be a lowercase slug of at most {ANNOTATION_OWNER_MAX} characters"
+            "property owner '{owner}' must be a lowercase slug of at most {PROPERTY_OWNER_MAX} characters"
         )));
     }
     if !value.is_object() {
-        return Err(invalid(format!(
-            "annotation '{owner}' must be a JSON object"
-        )));
+        return Err(invalid(format!("property '{owner}' must be a JSON object")));
     }
     let size = serde_json::to_string(value)
         .map(|text| text.len())
         .unwrap_or(usize::MAX);
-    if size > ANNOTATION_MAX_BYTES {
+    if size > PROPERTY_MAX_BYTES {
         return Err(invalid(format!(
-            "annotation '{owner}' is {size} bytes; the limit is {ANNOTATION_MAX_BYTES}"
+            "property '{owner}' is {size} bytes; the limit is {PROPERTY_MAX_BYTES}"
         )));
     }
     Ok(())
@@ -431,6 +402,23 @@ pub fn normalize_link_kind(input: &str) -> Result<String> {
     Ok(kind)
 }
 
+/// Longest External ID, in characters.
+pub const EXTERNAL_ID_MAX: usize = 200;
+
+/// Checks an External ID: the Task's identity in an external system, unique
+/// per Board. Same shape rules as a Source Key.
+pub fn validate_external_id(id: &str) -> Result<()> {
+    if id.is_empty() || id.len() > EXTERNAL_ID_MAX || !id.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(OrbitError::new(
+            crate::error::code::INVALID_EXTERNAL_ID,
+            format!(
+                "external id must be 1 to {EXTERNAL_ID_MAX} printable ASCII characters without spaces"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Checks a Source Key: 1 to 200 printable, non-whitespace ASCII characters.
 pub fn validate_source_key(key: &str) -> Result<()> {
     if key.is_empty() || key.len() > SOURCE_KEY_MAX || !key.bytes().all(|b| b.is_ascii_graphic()) {
@@ -448,7 +436,9 @@ pub fn validate_source_key(key: &str) -> Result<()> {
 #[derive(Serialize, Deserialize)]
 struct RawFrontmatter {
     title: String,
-    status: Status,
+    status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolution: Option<String>,
     #[serde(default = "default_task_type", rename = "type")]
     task_type: String,
     #[serde(default = "default_priority")]
@@ -469,7 +459,7 @@ struct RawFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     checkpoint: Option<Checkpoint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    area: Option<String>,
+    component: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     verification: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -477,7 +467,9 @@ struct RawFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     remote: Option<RemoteLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    repo: Option<String>,
+    repository: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -487,7 +479,7 @@ struct RawFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_key: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    annotations: BTreeMap<String, serde_json::Value>,
+    properties: BTreeMap<String, serde_json::Value>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     #[serde(flatten)]
@@ -528,21 +520,23 @@ impl From<RawFrontmatter> for TaskFrontmatter {
         Self {
             title: raw.title,
             status: raw.status,
+            resolution: raw.resolution,
             task_type: raw.task_type,
             priority: raw.priority,
             labels: raw.labels,
             links,
             parent: raw.parent,
             checkpoint: raw.checkpoint,
-            area: raw.area,
+            component: raw.component,
             verification: raw.verification,
             github: raw.github,
             remote: raw.remote,
-            repo: raw.repo,
+            repository: raw.repository,
+            external_id: raw.external_id,
             claim,
             stray_claim_times,
             source_key: raw.source_key,
-            annotations: raw.annotations,
+            properties: raw.properties,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
             extra: raw.extra,
@@ -560,6 +554,7 @@ impl From<TaskFrontmatter> for RawFrontmatter {
         Self {
             title: front.title,
             status: front.status,
+            resolution: front.resolution,
             task_type: front.task_type,
             priority: front.priority,
             labels: front.labels,
@@ -568,16 +563,17 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             links: front.links,
             parent: front.parent,
             checkpoint: front.checkpoint,
-            area: front.area,
+            component: front.component,
             verification: front.verification.clone(),
             github: front.github,
             remote: front.remote,
-            repo: front.repo,
+            repository: front.repository,
+            external_id: front.external_id,
             claimed_by,
             claimed_at,
             lease_until,
             source_key: front.source_key,
-            annotations: front.annotations,
+            properties: front.properties,
             created_at: front.created_at,
             updated_at: front.updated_at,
             extra: front.extra,
@@ -589,7 +585,12 @@ impl From<TaskFrontmatter> for RawFrontmatter {
 #[serde(from = "RawFrontmatter", into = "RawFrontmatter")]
 pub struct TaskFrontmatter {
     pub title: String,
-    pub status: Status,
+    /// The workflow status name; resolved against the Board's
+    /// [`crate::workflow::Workflow`] for its category.
+    pub status: String,
+    /// The resolution recorded by the closing transition that set `status`;
+    /// cleared when the Task reopens or transitions to an open status.
+    pub resolution: Option<String>,
     /// The Board-configured Issue type name (`epic`, `story`, `task`, `bug`,
     /// `sub-task`, or a custom `board.types` entry). Stored as a string so the
     /// vocabulary is per-Board; membership is checked by `Graph::validate`.
@@ -602,21 +603,25 @@ pub struct TaskFrontmatter {
     pub links: Vec<Link>,
     pub parent: Option<String>,
     pub checkpoint: Option<Checkpoint>,
-    /// Optional work-area slug; each Board restricts it through `board.areas`.
-    pub area: Option<String>,
+    /// Optional work Component slug; each Board restricts it through
+    /// `board.components`.
+    pub component: Option<String>,
     pub verification: Option<String>,
     /// Legacy GitHub Issue link; `orbit migrate` rewrites it to `remote`.
     pub github: Option<GitHubLink>,
     /// Provider-neutral Remote Issue link (ADR 0018).
     pub remote: Option<RemoteLink>,
     /// The member Repository this Task belongs to; absent means Board-wide.
-    pub repo: Option<String>,
+    pub repository: Option<String>,
+    /// The Task's identity in an external system; unique per Board.
+    pub external_id: Option<String>,
     pub claim: Option<Claim>,
     pub stray_claim_times: Option<StrayClaimTimes>,
     /// Caller-chosen identity that makes `add` retry-safe; unique per Board.
     pub source_key: Option<String>,
-    /// Tool-owned data keyed by owner slug; Orbit stores it but never interprets it.
-    pub annotations: BTreeMap<String, serde_json::Value>,
+    /// Tool-owned data namespaced by owner slug; Orbit stores it but never
+    /// interprets it.
+    pub properties: BTreeMap<String, serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub extra: BTreeMap<String, serde_yaml_ng::Value>,
@@ -806,6 +811,11 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             "task {id} has an empty title"
         )));
     }
+    if front.status.trim().is_empty() {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an empty status"
+        )));
+    }
     front.priority = front.priority.trim().to_lowercase();
     if !is_valid_label(&front.priority) {
         return Err(OrbitError::corrupt_task(format!(
@@ -857,18 +867,18 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             "task {id} has an invalid remote link: {reason}"
         )));
     }
-    if let Some(repo) = &front.repo
-        && !is_valid_repo(repo)
+    if let Some(repository) = &front.repository
+        && !is_valid_repository(repository)
     {
         return Err(OrbitError::corrupt_task(format!(
-            "task {id} has an invalid repo `{repo}`"
+            "task {id} has an invalid repository `{repository}`"
         )));
     }
-    if let Some(area) = &front.area
-        && !is_valid_area(area)
+    if let Some(component) = &front.component
+        && !is_valid_component(component)
     {
         return Err(OrbitError::corrupt_task(format!(
-            "task {id} has an invalid area `{area}`"
+            "task {id} has an invalid component `{component}`"
         )));
     }
 
@@ -914,9 +924,9 @@ fn validate_link(link: &Link) -> std::result::Result<(), String> {
     let attributes_size = serde_yaml_ng::to_string(&link.attributes)
         .map(|text| text.len())
         .unwrap_or(usize::MAX);
-    if attributes_size > ANNOTATION_MAX_BYTES {
+    if attributes_size > PROPERTY_MAX_BYTES {
         return Err(format!(
-            "link attributes are {attributes_size} bytes; the limit is {ANNOTATION_MAX_BYTES}"
+            "link attributes are {attributes_size} bytes; the limit is {PROPERTY_MAX_BYTES}"
         ));
     }
     Ok(())
@@ -993,54 +1003,55 @@ fn is_valid_rand(value: &str) -> bool {
     (6..=8).contains(&value.len()) && value.bytes().all(|byte| ID_ALPHABET.contains(&byte))
 }
 
-/// A per-Board Area name: a short lowercase slug. Boards that configure
-/// `board.areas` restrict values to that list; others accept any valid name.
-pub fn is_valid_area(area: &str) -> bool {
-    !area.is_empty()
-        && area.len() <= MAX_LABEL_LENGTH
-        && area
+/// A Task's Component: a short lowercase slug. Boards that configure
+/// `board.components` restrict values to that list; others accept any valid
+/// name.
+pub fn is_valid_component(component: &str) -> bool {
+    !component.is_empty()
+        && component.len() <= MAX_LABEL_LENGTH
+        && component
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && area
+        && component
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphanumeric())
 }
 
-/// Normalizes an Area value to its lowercase slug and validates it against
-/// the Board's `board.areas` list. An empty `allowed` list means the Board
-/// defines no Areas, so any short lowercase slug is accepted.
-pub fn normalize_area(input: &str, allowed: &[String]) -> Result<String> {
-    let area = input.trim().to_ascii_lowercase();
-    if !is_valid_area(&area) {
+/// Normalizes a Component value to its lowercase slug and validates it against
+/// the Board's `board.components` list. An empty `allowed` list means the
+/// Board defines no Components, so any short lowercase slug is accepted.
+pub fn normalize_component(input: &str, allowed: &[String]) -> Result<String> {
+    let component = input.trim().to_ascii_lowercase();
+    if !is_valid_component(&component) {
         return Err(OrbitError::new(
-            crate::error::code::INVALID_AREA,
+            crate::error::code::INVALID_COMPONENT,
             format!(
-                "invalid area `{input}`; use a short lowercase slug of letters, digits, and `-`"
+                "invalid component `{input}`; use a short lowercase slug of letters, digits, and `-`"
             ),
         ));
     }
-    if !allowed.is_empty() && !allowed.iter().any(|candidate| candidate == &area) {
+    if !allowed.is_empty() && !allowed.iter().any(|candidate| candidate == &component) {
         return Err(OrbitError::new(
-            crate::error::code::INVALID_AREA,
+            crate::error::code::INVALID_COMPONENT,
             format!(
-                "unknown area `{area}`; expected one of: {}",
+                "unknown component `{component}`; expected one of: {}",
                 allowed.join(", ")
             ),
         ));
     }
-    Ok(area)
+    Ok(component)
 }
 
 /// A Task's member Repository: a short name or `owner/name` identity. Kept
 /// permissive so local folder names and remote `owner/repo` forms both fit.
-pub fn is_valid_repo(repo: &str) -> bool {
-    !repo.is_empty()
-        && repo.len() <= MAX_REPO_LENGTH
-        && repo
+pub fn is_valid_repository(repository: &str) -> bool {
+    !repository.is_empty()
+        && repository.len() <= MAX_REPOSITORY_LENGTH
+        && repository
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
-        && repo
+        && repository
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphanumeric())
@@ -1102,24 +1113,26 @@ mod tests {
             id: "orb-a7b2c9".to_string(),
             front: TaskFrontmatter {
                 title: "Build the CLI router".to_string(),
-                status: Status::Todo,
+                status: "todo".to_string(),
+                resolution: None,
                 task_type: "task".to_string(),
                 priority: "high".to_string(),
                 labels: Vec::new(),
                 links: vec![Link::dependency("orb-f14c02")],
                 parent: None,
                 checkpoint: None,
-                area: None,
+                component: None,
                 verification: None,
                 github: None,
                 remote: None,
-                repo: None,
+                repository: None,
+                external_id: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: now(),
                 updated_at: now(),
                 source_key: None,
-                annotations: BTreeMap::new(),
+                properties: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: "Body line.\n\n---\n\nA horizontal rule is not a delimiter.".to_string(),

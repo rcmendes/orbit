@@ -8,12 +8,14 @@ use chrono::Utc;
 
 use crate::error::{OrbitError, Result};
 use crate::remote::RemoteProject;
+use crate::remote::Status;
 use crate::remote::link::RemoteLinkView;
 use crate::remote::model::{
     MappedFields, RemoteIssue, SyncBaseline, SyncConflict, SyncDirection, SyncPlan,
 };
 use crate::remote::port::RemoteAdapter;
-use crate::task::{self, Status, Task};
+use crate::task::{self, Task};
+use crate::workflow::Workflow;
 
 pub struct OrbitSyncView<'a> {
     pub task: &'a Task,
@@ -26,6 +28,7 @@ pub fn plan_sync(
     view: OrbitSyncView<'_>,
     issue: &RemoteIssue,
     direction: SyncDirection,
+    workflow: &Workflow,
 ) -> SyncPlan {
     let project = RemoteProject {
         tracker: view.link.tracker.clone(),
@@ -61,9 +64,11 @@ pub fn plan_sync(
     let orbit_title = view.task.front.title.clone();
     let orbit_body = view.task.body.clone();
     let orbit_labels = view.task.front.labels.clone();
-    let orbit_area = view.task.front.area.clone();
+    let orbit_area = view.task.front.component.clone();
     let orbit_verification = view.task.front.verification.clone();
-    let orbit_status = view.task.front.status;
+    // The Task stores a workflow status name; the sync vocabulary is the
+    // canonical bucket it belongs to.
+    let orbit_status = Status::for_workflow_status(workflow, &view.task.front.status);
 
     if mapped.title {
         plan_scalar(
@@ -120,7 +125,9 @@ pub fn plan_sync(
             direction,
         );
     }
-    if mapped.status {
+    if mapped.status
+        && let Some(orbit_status) = orbit_status
+    {
         plan_status(&mut plan, baseline, orbit_status, issue, direction, adapter);
     }
 
@@ -129,7 +136,7 @@ pub fn plan_sync(
 
 /// The baseline recorded after a successful sync: remote field values plus
 /// the Orbit status on both sides, so the next plan sees who moved.
-pub fn baseline_from(task: &Task, issue: &RemoteIssue) -> SyncBaseline {
+pub fn baseline_from(task: &Task, issue: &RemoteIssue, workflow: &Workflow) -> SyncBaseline {
     SyncBaseline {
         at: Utc::now(),
         remote_updated_at: issue.updated_at,
@@ -137,9 +144,9 @@ pub fn baseline_from(task: &Task, issue: &RemoteIssue) -> SyncBaseline {
         title: issue.title.clone(),
         body: issue.body.clone(),
         labels: issue.labels.clone(),
-        area: task.front.area.clone(),
+        area: task.front.component.clone(),
         verification: task.front.verification.clone(),
-        status: Some(task.front.status),
+        status: Status::for_workflow_status(workflow, &task.front.status),
         remote_status: Some(issue.status),
         subtasks: issue.relations.blocking.clone(),
         blocked_by: issue.relations.blocked_by.clone(),
@@ -302,7 +309,7 @@ pub fn reject_unmapped_metadata(
 ) -> Result<()> {
     let mapped = adapter.mapped_fields(project);
     let present: Vec<&str> = [
-        ("area", task.front.area.is_some()),
+        ("area", task.front.component.is_some()),
         ("verification", task.front.verification.is_some()),
     ]
     .into_iter()
@@ -390,7 +397,8 @@ mod tests {
             id: "orb-aaaaaa".into(),
             front: TaskFrontmatter {
                 title: title.into(),
-                status,
+                status: status.as_str().to_string(),
+                resolution: None,
                 task_type: "task".to_string(),
                 priority: default_priority(),
                 labels: vec!["bug".into()],
@@ -401,7 +409,7 @@ mod tests {
                 stray_claim_times: None,
                 created_at: now,
                 updated_at: now,
-                area: Some("cli".into()),
+                component: Some("cli".into()),
                 verification: Some("cargo test".into()),
                 github: None,
                 remote: Some(crate::task::RemoteLink {
@@ -412,9 +420,10 @@ mod tests {
                     active: true,
                     baseline: None,
                 }),
-                repo: None,
+                repository: None,
+                external_id: None,
                 source_key: None,
-                annotations: BTreeMap::new(),
+                properties: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: body.into(),
@@ -472,6 +481,7 @@ mod tests {
             view(&linked, &link),
             &issue,
             SyncDirection::Both,
+            &Workflow::standard(),
         );
         assert!(plan.has_conflicts());
         assert!(
@@ -509,6 +519,7 @@ mod tests {
             view(&task, &link),
             &issue,
             SyncDirection::Both,
+            &Workflow::standard(),
         );
 
         assert!(!plan.has_conflicts(), "{:?}", plan.conflicts);
@@ -544,6 +555,7 @@ mod tests {
             view(&task, &link),
             &issue,
             SyncDirection::Both,
+            &Workflow::standard(),
         );
 
         assert_eq!(plan.apply_status, Some(Status::Cancelled));
@@ -561,6 +573,7 @@ mod tests {
             view(&task, &link),
             &issue,
             SyncDirection::Pull,
+            &Workflow::standard(),
         );
         assert!(!plan.has_conflicts());
         assert_eq!(plan.apply_title.as_deref(), Some("Remote title"));

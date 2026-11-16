@@ -1,5 +1,5 @@
 use crate::github::model::{IssueState, IssueStateReason};
-use crate::task::Status;
+use crate::remote::Status;
 
 /// Label that projects an `in_progress` Status onto a GitHub Issue. It is
 /// managed outside the user Label field and never read back as a Status.

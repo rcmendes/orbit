@@ -57,8 +57,9 @@ Git and at `./.orbit/board` inside a repository. See
 | Hand work back | `orbit release` |
 | Finish or abandon work | `orbit done`, `orbit cancel` |
 | Undo a close or remove a mistake | `orbit reopen`, `orbit delete` |
+| Run a Board-defined workflow transition | `orbit transition` |
 | Add context to a ticket | `orbit comment add`, `orbit update` |
-| Attach a tool's own data to a Task | `orbit annotation set/remove` |
+| Attach a tool's own data to a Task | `orbit property set/remove` |
 | Apply many changes at once, all or none | `orbit batch` |
 | Read the board | `orbit list`, `orbit show`, `orbit tree`, `orbit prime` |
 | Collect or archive the board | `orbit export` |
@@ -241,7 +242,7 @@ orbit repo refresh [--json]               # rebuild the member inventory
 
 `orbit repo add PATH` writes the target repository's Orbit link pointer so
 Board discovery resolves this Board from inside it, records explicit
-membership, fills new Tasks' `repo` field from the current Repository, and
+membership, fills new Tasks' `repository` field from the current Repository, and
 refreshes managed agent configuration. `orbit repo remove NAME` drops
 explicit membership and clears the link pointer when it points back to this
 Board, then refreshes agent configuration again. Repositories discovered
@@ -351,10 +352,12 @@ update and remove normally.
 
 Runs the Model Context Protocol server over stdio with 14 tools and the
 `orbit://tasks/{id}` resource. Editors launch it from their MCP configuration.
-`create` accepts `parent`, `repo`, and `type`; `update` accepts `type`;
-`checkpoint` records the claim holder's handoff; `list` and `ready` accept
-`parent`, `repo`, `labels`, `exclude_labels`, `types`, `exclude_types`, and
-work `areas` to scope a feature, repository, or area.
+`create` accepts `parent`, `type`, `component`, `external_id`, `verification`,
+and `body`; `update` accepts `type`, `component`, `repository`, `external_id`,
+and `verification`; `checkpoint` records the claim holder's handoff; `list` and
+`ready` accept `parent`, `repository`, `components`, `exclude_components`,
+`labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature,
+repository, or component.
 
 **Good fit:** an editor or agent that speaks MCP should read and update the Board
 directly instead of shelling out to the CLI.
@@ -368,7 +371,7 @@ orbit mcp                          # normally launched by the editor
 
 ### `orbit add` — file a ticket
 
-Creates a task in `todo` and prints its ID, which you need for dependents,
+Creates a task in the workflow's initial status (`ready` in the shipped templates) and prints its ID, which you need for dependents,
 labels, and comments.
 
 **Good fit:** a bug report, a feature, a follow-up from a review, or a ticket
@@ -398,10 +401,10 @@ orbit add "Ship the API" -p high --depends-on orb-f14c02 --label ready-for-agent
 # returns the first Task (meta.matched: true) instead of creating another
 orbit add "Step 3" --source-key planner:plan-7:step-3
 
-# Break a feature into a SubTask
-orbit add "API: add the endpoint" --parent orb-a7b2c9 --label repo:api
+# Break a feature into a SubTask (run inside the api member Repository, or set
+# it afterwards with `orbit update <id> --repository api`)
+orbit add "API: add the endpoint" --parent orb-a7b2c9
 # created orb-x7k2pq  medium  API: add the endpoint  (subtask of orb-a7b2c9)
-```
 
 `--parent` creates a SubTask under an existing Parent Task. The `parent` field
 stores the edge; IDs are flat and never encode the parent. The Board's
@@ -434,20 +437,23 @@ use `done --force` or `cancel --force` on a spec parent with open tickets: it
 cancels them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md) and
 [ADR 0010](./adr/0010-structural-type-field.md).
 
-`--area` sets an optional work-area slug (`cli`, `payments`, `mobile-api`, ...).
-Each Board may restrict values through `board.areas` in `config.toml`; when the
-list is empty any short lowercase slug is accepted. Filter with
-`orbit list --area cli` or `orbit ready --exclude-area docs`.
+`--component` sets an optional Component slug (`cli`, `payments`, `mobile-api`,
+...). Each Board may restrict values through `board.components` in `config.toml`;
+when the list is empty any short lowercase slug is accepted. `--repository`
+sets the owning member Repository (filled automatically inside one) and
+`--external-id` records the Task's identity in an external system, unique per
+Board. Filter with `orbit list --component cli` or
+`orbit ready --exclude-component docs`; `--repository NAME` filters on the
+`repository` field.
 `--verification` stores concise checks or
 commands for agents; shared project defaults live in
 [`docs/agents/project-guidance.md`](./agents/project-guidance.md).
 
 ### `orbit update` — edit a ticket in place
 
-Changes the title, body, priority, type, area, verification, or external blocker
+Changes the title, body, priority, type, component, repository, external id, verification, or external blocker
 without touching status, claims, labels, or dependencies. `--type` must keep
 the Issue's parent and children edges valid under `board.hierarchy`.
-
 **Good fit:** scope changed after triage, a spec needs refinement, or an external
 blocker was resolved.
 
@@ -456,8 +462,8 @@ orbit update orb-a7b2c9 --priority highest
 orbit update orb-a7b2c9 --type bug
 orbit update orb-a7b2c9 --body-file refined-spec.md
 orbit update orb-a7b2c9 --clear-waiting
-orbit update orb-a7b2c9 --area mcp --verification "cargo test --test mcp"
-orbit update orb-a7b2c9 --clear-area --clear-verification
+orbit update orb-a7b2c9 --component mcp --verification "cargo test --test mcp"
+orbit update orb-a7b2c9 --clear-component --clear-verification
 ```
 
 ### `orbit link` — typed relations and external references
@@ -538,24 +544,25 @@ cargo test 2>&1 | orbit comment add orb-a7b2c9 --by claude --body-file -
 orbit comment list orb-a7b2c9
 ```
 
-### `orbit annotation` — attach tool-owned data
+### `orbit property` — attach tool-owned data
 
-An Annotation is a JSON object that one tool keeps on a Task under its own name,
-the owner (a lowercase slug such as `ci`). Orbit stores and shows it but never
-reads it: Annotations do not affect readiness, claims, or status, and they are
-never synchronized with a Remote Tracker. `set` replaces the owner's whole
-object (at most 8192 bytes); `remove` deletes it. Other owners are untouched.
+A Property is a JSON object that one tool keeps on a Task under its own name,
+the owner — the property's namespace (a lowercase slug such as `ci`). Orbit
+stores and shows it but never reads it: Properties do not affect readiness,
+claims, or status, and they are never synchronized with a Remote Tracker.
+`set` replaces the owner's whole object (at most 8192 bytes); `remove` deletes
+it. Other owners are untouched.
 
 **Good fit:** a CI result, another tool's bookkeeping, or a link that no Remote
 Tracker covers. Put prose for people in comments or the body instead.
 
 ```bash
-orbit annotation set orb-a7b2c9 ci --value '{"passed":true,"run":412}'
-orbit show orb-a7b2c9 --json | jq '.data.annotations'
-orbit annotation remove orb-a7b2c9 ci
+orbit property set orb-a7b2c9 ci --value '{"passed":true,"run":412}'
+orbit show orb-a7b2c9 --json | jq '.data.properties'
+orbit property remove orb-a7b2c9 ci
 ```
 
-The MCP tool `annotate` takes `id`, `owner`, and `value` (an object, or null to
+The MCP tool `property` takes `id`, `owner`, and `value` (an object, or null to
 remove).
 
 ### `orbit batch` — apply many changes at once
@@ -565,7 +572,7 @@ commit. Either every operation applies or none does: a failure writes nothing
 and names the failing operation's `index` and `op` in `error.details`.
 Operations are `add`, `update`, `label`, `depend`, `undepend`, `link`,
 `unlink`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`,
-`comment`, and `annotate`,
+`comment`, and `property`,
 each with its command's fields (see [SPEC.md](./SPEC.md#batch)). A reference is a
 Task ID or `key:` plus a Source Key, so later operations can point at Tasks the
 same Batch creates.
@@ -597,7 +604,7 @@ orbit batch --file plan.json --json | jq '.data.keys'
 Lists tasks with combinable filters. Done and cancelled tasks are hidden by
 default; pass `--include-closed`, or name a terminal status with `--status`, to
 include them. Inside a member Repository or one of its worktrees the list is
-scoped to that Repository's Tasks plus Board-wide Tasks (tasks with no `repo`);
+scoped to that Repository's Tasks plus Board-wide Tasks (tasks with no `repository`);
 `--all` widens it to the whole Board, and at the Board's root there is no
 scoping. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`,
 `TITLE`, `LABELS`, and `CLAIMED BY` columns; titles longer than 60 characters
@@ -620,8 +627,8 @@ orbit list
 orbit list --linked                               # only Tasks linked to a Remote Issue
 orbit list --local                                # only Tasks without an active link
 orbit list --label needs-triage
-orbit list --label repo:api --label ready-for-agent   # every label must match
-orbit list --repo api                               # repo field api or legacy repo:api label
+orbit list --label sso --label ready-for-agent       # every label must match
+orbit list --repository api                          # repository field api
 orbit list --status in_progress --claimed-by claude
 orbit list --status done            # closed work, without --include-closed
 orbit list --unlabeled
@@ -641,9 +648,9 @@ Human output with `--group` looks like this:
 ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ orb-a7b2c9  Spec: SSO login across api, web, infra                                   epic · todo · high · ready-for-agent │
 ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9.z21c2w │ todo   │ highest  │ task │ #12   │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
-│ orb-a7b2c9.hxdmqt │ todo   │ high     │ task │ -     │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
-│ orb-a7b2c9.c5qmed │ todo   │ medium   │ task │ -     │ web: login redirect         │ ready-for-agent, repo:web   │            │
+│ orb-a7b2c9.z21c2w │ todo   │ highest  │ task │ #12   │ infra: register OIDC client │ ready-for-agent │            │
+│ orb-a7b2c9.hxdmqt │ todo   │ high     │ task │ -     │ api: OIDC callback          │ ready-for-agent   │            │
+│ orb-a7b2c9.c5qmed │ todo   │ medium   │ task │ -     │ web: login redirect         │ ready-for-agent   │            │
 ╰───────────────────┴────────┴──────────┴──────┴───────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
@@ -658,11 +665,11 @@ exclusive. The `ISSUE` column and both flags appear in human output and
 are hidden but still accepted. `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
 any listed shape. `--label` is repeatable and every label must match;
 `--exclude-label` is repeatable and hides a task carrying any of the named labels.
-`--repo NAME` matches the Task's exact `repo` field or its legacy `repo:NAME` label
-(case-insensitive, as with label normalization);
-explicit `--label` filters remain additional requirements. This applies to
+`--repository NAME` matches the Task's `repository` field case-insensitively;
+`--component` and `--exclude-component` filter on the `component` field.
+Explicit `--label` filters remain additional requirements. This applies to
 `list`, `ready` (including `--claim`), and `prime`. Prime reports the Repository
-filter separately as `repo` in JSON and `repository:` in human output; its
+filter separately as `repository` in JSON and `repository:` in human output; its
 `labels` contains only explicit label filters. Parent groups follow the
 parent's priority; SubTasks inside a group follow their own priority. Tasks with
 no parent appear in the final `No parent` section. JSON always carries `kind`,
@@ -675,9 +682,10 @@ work, including blocked tasks.
 
 ### `orbit ready` — the agent queue
 
-Shows tasks that are `todo`, unclaimed, not waiting on an external blocker, carry
-no hold label, and have all dependencies done or cancelled. A Parent Task is not
-Ready while any SubTask is open. Results are ordered by priority, then creation
+Shows tasks sitting in the workflow's ready status, unclaimed, not waiting on an
+external blocker, carrying no hold label, and with every dependency and SubTask
+in a closed status category. A Parent Task is not Ready while any SubTask is
+open. Results are ordered by priority, then creation
 time.
 
 With `--claim`, the first task is claimed atomically in the same command and
@@ -696,13 +704,13 @@ a worker wants to take exactly one task without racing another agent.
 orbit ready --limit 5
 orbit ready --claim --by claude --json
 orbit ready --parent orb-a7b2c9 --claim --by claude   # one feature only
-orbit ready --repo api --claim --by claude            # one repository only
+orbit ready --repository api --claim --by claude          # one repository only
 orbit ready --exclude-type epic --claim --by claude   # skip spec containers
 orbit ready --json              # NO_READY_TASKS means wait and retry
 ```
 
-`--parent`, `--repo`, repeatable `--label`, `--type`, and `--exclude-label`
-combine with AND. `--type` matches any listed shape; `--exclude-type` hides any
+`--parent`, `--repository`, `--component`, `--exclude-component`, repeatable
+`--label`, `--type`, and `--exclude-label` combine with AND. `--type` matches any listed shape; `--exclude-type` hides any
 listed shape. `--exclude-label` remains for legacy label-only boards. A released
 task can still carry the previous claimant's checkpoint; `--json` includes it so
 the next claim starts with the handoff context.
@@ -755,11 +763,11 @@ health view of what is ready and what was abandoned.
 
 ```bash
 orbit prime --by claude
-orbit prime --by claude --repo api   # scope counts and the queue to one repository
+orbit prime --by claude --repository api # scope counts and the queue to one repository
 orbit prime --json
 ```
 
-`--repo` and repeatable `--label` scope the counts, ready tasks, close
+`--repository` and repeatable `--label` scope the counts, ready tasks, close
 candidates, and stale claims to a repository or label set. A close candidate is
 a non-terminal Parent Task with at least one SubTask and no open SubTasks; Orbit
 never closes it automatically. Task summaries in `--json` include a checkpoint
@@ -810,7 +818,7 @@ unfinished dependencies still block the claim.
 
 `--worktree` claims and creates the Task's worktree in one step:
 `.worktrees/<id>` on branch `ticket/<id>` inside the Task's Repository (its
-`repo` field), falling back to the member Repository containing the current
+`repository` field), falling back to the member Repository containing the current
 directory when the Task names none. A new branch starts from the Repository's
 local default branch (the local branch named by `origin/HEAD`, else `main`,
 `master`, or the currently checked-out branch); no fetch is performed. An
@@ -878,7 +886,7 @@ orbit release orb-a7b2c9 --by claude
 
 ### `orbit release` — hand work back
 
-Clears the claim and returns the task to `todo`. The holder can release; `--force`
+Clears the claim and returns the task to the workflow's release target (the ready status in the shipped templates). The holder can release; `--force`
 releases someone else's claim. Terminal tasks cannot be released. The latest
 checkpoint is kept for the next claimant.
 
@@ -924,7 +932,7 @@ orbit cancel orb-a7b2c9 --force
 
 ### `orbit reopen` — undo a close
 
-Returns a done or cancelled task to `todo`. Reopening a SubTask reopens every
+Returns a done or cancelled task to the workflow's reopen target (the ready status in the shipped templates) and clears its resolution. Reopening a SubTask reopens every
 done ancestor too, nearest first, so the feature is not left done with reopened
 work; the walk stops at an active ancestor. A SubTask under a cancelled ancestor
 is refused, naming that ancestor, until it is reopened. It
@@ -938,6 +946,26 @@ idea is back in scope.
 ```bash
 orbit reopen orb-a7b2c9
 orbit reopen orb-a7b2c9 --force
+```
+
+### `orbit transition` — run a named workflow transition
+
+Runs one named edge from the Board's workflow — the same edges `orbit show`
+lists under `allowed_transitions`. The shipped `standard` template adds
+`promote` (backlog `todo` to `ready`) and `defer` (`ready` to `todo`) on top of
+the lifecycle edges; custom `[workflow]` definitions can add statuses such as
+`In Review` and transitions such as `submit`. A transition into a done or
+cancelled status records its resolution on the task; a transition back to an
+open status clears it. An unknown name or an edge that does not start from the
+current status fails with `INVALID_TRANSITION` naming the valid transitions.
+
+**Good fit:** moving work through Board-defined statuses that have no dedicated
+command, such as promoting deferred work or submitting for review.
+
+```bash
+orbit transition orb-a7b2c9 promote
+orbit transition orb-a7b2c9 submit --by claude
+orbit show orb-a7b2c9 --json   # allowed_transitions lists the valid edges
 ```
 
 ### `orbit delete` — remove a mistake
@@ -968,9 +996,9 @@ canonical `.orbit/board` hidden Board — or a visible Board folder anchored by
 the `.orbit/board` pointer file — with `.orbit/cache` beside it.
 
 The same run rewrites task frontmatter `github:` links to `remote:`, moves
-`repo:*` labels into the `repo` field, converts `[github]` configuration into
-remote project entries, drops `board.storage`, and seeds `board.areas` from the
-Area values Tasks already use. Board commands refuse legacy layouts with
+`repo:*` labels into the `repository` field, converts `[github]` configuration
+into remote project entries, drops `board.storage`, and seeds `board.components`
+from the Component values Tasks already use. Board commands refuse legacy layouts with
 `BOARD_NOT_MIGRATED` until this runs; `orbit doctor` reports the same finding
 with `LEGACY_LAYOUT`.
 
@@ -1119,7 +1147,7 @@ Toggle it with `orbit remote auto-push on` or `orbit remote auto-push off`; the
 command writes the Board config and commits it, reports the previous value, and
 warns when no single repository can receive newly created Issues. It is
 push-only: `orbit add` creates an Issue when exactly one repository is
-available, title/body/label/status/`area`/`verification` changes are pushed, and
+available, title/body/label/status/`component`/`verification` changes are pushed, and
 `orbit:in-progress` tracks claims. It never pulls, never overwrites a remote
 conflict, and never creates an Issue for an existing Local Task. `done` closes
 with `state_reason: completed`; `cancelled` with `not_planned`. Priority, type,
@@ -1248,13 +1276,14 @@ in the same order.
 orbit add "SSO login across api, web, infra" --body-file feature.md
 # created orb-a7b2c9  medium  SSO login across api, web, infra
 
-# one SubTask per repository
-orbit add "api: OIDC callback" --parent orb-a7b2c9 --label repo:api
-orbit add "web: login redirect" --parent orb-a7b2c9 --label repo:web
-orbit add "infra: register client" --parent orb-a7b2c9 --label repo:infra
+# one SubTask per repository — run each add inside its member Repository so
+# `repository` fills in, or set it afterwards with `orbit update <id> --repository NAME`
+orbit add "api: OIDC callback" --parent orb-a7b2c9
+orbit add "web: login redirect" --parent orb-a7b2c9
+orbit add "infra: register client" --parent orb-a7b2c9
 
 # an agent in the api repository picks its piece
-orbit list --parent orb-a7b2c9 --label repo:api --json
+orbit list --parent orb-a7b2c9 --repository api --json
 orbit claim orb-a7b2c9.b3c4d5 --by api-agent
 
 # when every piece is done or cancelled, close the feature explicitly

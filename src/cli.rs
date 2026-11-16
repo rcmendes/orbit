@@ -4,7 +4,6 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
-use crate::task::Status;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -52,7 +51,8 @@ pub enum Command {
     /// into its own Git repository on branch `orbit` under `.orbit/board`
     /// (or a visible folder anchored by `.orbit`), rewriting `github:` links
     /// to `remote:`, `[github]` to remote project entries, `repo:*` labels to
-    /// the `repo` field, and seeding `board.areas` — all in one commit.
+    /// the `repository` field, and seeding `board.components` — all in one
+    /// commit.
     #[command(long_about = help::BOARD_MIGRATE_LONG, after_long_help = help::BOARD_MIGRATE_EXAMPLES)]
     Migrate(BoardMigrateArgs),
 
@@ -109,6 +109,10 @@ pub enum Command {
     #[command(long_about = help::REOPEN_LONG, after_long_help = help::REOPEN_EXAMPLES)]
     Reopen(ReopenArgs),
 
+    /// Run a named workflow transition on a task.
+    #[command(long_about = help::TRANSITION_LONG, after_long_help = help::TRANSITION_EXAMPLES)]
+    Transition(TransitionArgs),
+
     /// Edit a task's title, body, priority, or external blocker.
     #[command(long_about = help::UPDATE_LONG, after_long_help = help::UPDATE_EXAMPLES)]
     Update(UpdateArgs),
@@ -121,9 +125,9 @@ pub enum Command {
     #[command(long_about = help::BATCH_LONG, after_long_help = help::BATCH_EXAMPLES)]
     Batch(BatchArgs),
 
-    /// Set or remove a tool's Annotation on a task.
-    #[command(long_about = help::ANNOTATION_LONG, after_long_help = help::ANNOTATION_EXAMPLES)]
-    Annotation(AnnotationArgs),
+    /// Set or remove a tool's Property on a task.
+    #[command(long_about = help::PROPERTY_LONG, after_long_help = help::PROPERTY_EXAMPLES)]
+    Property(PropertyArgs),
 
     /// Add to or read a task's comment thread.
     #[command(long_about = help::COMMENT_LONG, after_long_help = help::COMMENT_EXAMPLES)]
@@ -368,10 +372,14 @@ pub struct AddArgs {
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
 
-    /// Optional work-area slug. Restricted to the Board's `board.areas` when
-    /// the Board configures them; any lowercase slug otherwise.
-    #[arg(long, value_name = "AREA")]
-    pub area: Option<String>,
+    /// Optional Component slug. Restricted to the Board's `board.components`
+    /// when the Board configures them; any lowercase slug otherwise.
+    #[arg(long, value_name = "COMPONENT")]
+    pub component: Option<String>,
+
+    /// The Task's identity in an external system; unique per Board.
+    #[arg(long = "external-id", value_name = "ID")]
+    pub external_id: Option<String>,
 
     /// Concise verification checks or commands for agents.
     #[arg(long, value_name = "TEXT")]
@@ -392,9 +400,10 @@ pub struct AddArgs {
 
 #[derive(Debug, Args)]
 pub struct ListArgs {
-    /// Filter by status. Requesting done or cancelled includes closed work.
-    #[arg(long, value_enum)]
-    pub status: Option<Status>,
+    /// Filter by workflow status name. Requesting a closed status includes
+    /// closed work.
+    #[arg(long, value_name = "STATUS")]
+    pub status: Option<String>,
 
     /// Filter by priority name.
     #[arg(long, value_name = "NAME")]
@@ -416,13 +425,13 @@ pub struct ListArgs {
     #[arg(long = "exclude-type", value_name = "TYPE", action = clap::ArgAction::Append)]
     pub exclude_type: Vec<String>,
 
-    /// Filter by work area slug. Repeatable; matches any listed area.
-    #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
-    pub area: Vec<String>,
+    /// Filter by Component slug. Repeatable; matches any listed component.
+    #[arg(long, value_name = "COMPONENT", action = clap::ArgAction::Append)]
+    pub component: Vec<String>,
 
-    /// Exclude tasks with any listed area.
-    #[arg(long = "exclude-area", value_name = "AREA", action = clap::ArgAction::Append)]
-    pub exclude_area: Vec<String>,
+    /// Exclude tasks with any listed component.
+    #[arg(long = "exclude-component", value_name = "COMPONENT", action = clap::ArgAction::Append)]
+    pub exclude_component: Vec<String>,
 
     /// Filter by label. Repeatable; every label must match.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -432,12 +441,12 @@ pub struct ListArgs {
     #[arg(long = "exclude-label", value_name = "LABEL", action = clap::ArgAction::Append)]
     pub exclude_label: Vec<String>,
 
-    /// Filter by repository label. Filter by Repository field or legacy repo:NAME label.
+    /// Filter by member Repository. Matches the `repository` field.
     #[arg(long, value_name = "NAME")]
-    pub repo: Option<String>,
+    pub repository: Option<String>,
 
     /// Only tasks with no labels.
-    #[arg(long, conflicts_with_all = ["label", "repo"])]
+    #[arg(long, conflicts_with_all = ["label", "repository"])]
     pub unlabeled: bool,
 
     /// Filter to direct children of this parent Task.
@@ -477,9 +486,9 @@ pub struct ReadyArgs {
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
-    /// Only Ready tasks with this repository label. Filter by Repository field or legacy repo:NAME label.
+    /// Only Ready tasks with this member Repository. Matches the `repository` field.
     #[arg(long, value_name = "NAME")]
-    pub repo: Option<String>,
+    pub repository: Option<String>,
 
     /// Include Ready tasks from every Repository. Inside a member Repository
     /// or its worktree the queue is scoped to that Repository plus Board-wide
@@ -495,13 +504,13 @@ pub struct ReadyArgs {
     #[arg(long = "exclude-type", value_name = "TYPE", action = clap::ArgAction::Append)]
     pub exclude_type: Vec<String>,
 
-    /// Only Ready tasks with any listed work area. Repeatable.
-    #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
-    pub area: Vec<String>,
+    /// Only Ready tasks with any listed Component. Repeatable.
+    #[arg(long, value_name = "COMPONENT", action = clap::ArgAction::Append)]
+    pub component: Vec<String>,
 
-    /// Exclude Ready tasks with any listed work area. Repeatable.
-    #[arg(long = "exclude-area", value_name = "AREA", action = clap::ArgAction::Append)]
-    pub exclude_area: Vec<String>,
+    /// Exclude Ready tasks with any listed Component. Repeatable.
+    #[arg(long = "exclude-component", value_name = "COMPONENT", action = clap::ArgAction::Append)]
+    pub exclude_component: Vec<String>,
 
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -659,6 +668,23 @@ pub struct ReopenArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct TransitionArgs {
+    /// Task ID, for example orb-a7b2c9.
+    pub id: String,
+
+    /// Workflow transition name, for example promote or block.
+    pub name: String,
+
+    /// Caller identity for Claim-holder checks.
+    #[arg(long)]
+    pub by: Option<String>,
+
+    /// Run even when another holder's live Claim blocks the transition.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct UpdateArgs {
     /// Task ID, for example orb-a7b2c9.
     pub id: String,
@@ -695,14 +721,34 @@ pub struct UpdateArgs {
     #[arg(long = "clear-waiting")]
     pub clear_waiting: bool,
 
-    /// New work area slug. Restricted to the Board's `board.areas` when the
-    /// Board configures them; any lowercase slug otherwise.
-    #[arg(long, value_name = "AREA", conflicts_with = "clear_area")]
-    pub area: Option<String>,
+    /// New Component slug. Restricted to the Board's `board.components` when
+    /// the Board configures them; any lowercase slug otherwise.
+    #[arg(long, value_name = "COMPONENT", conflicts_with = "clear_component")]
+    pub component: Option<String>,
 
-    /// Remove the work area classification.
-    #[arg(long = "clear-area")]
-    pub clear_area: bool,
+    /// Remove the Component classification.
+    #[arg(long = "clear-component")]
+    pub clear_component: bool,
+
+    /// New member Repository name. Absent means Board-wide.
+    #[arg(long, value_name = "NAME", conflicts_with = "clear_repository")]
+    pub repository: Option<String>,
+
+    /// Remove the member Repository classification.
+    #[arg(long = "clear-repository")]
+    pub clear_repository: bool,
+
+    /// New External ID; unique per Board.
+    #[arg(
+        long = "external-id",
+        value_name = "ID",
+        conflicts_with = "clear_external_id"
+    )]
+    pub external_id: Option<String>,
+
+    /// Remove the External ID.
+    #[arg(long = "clear-external-id")]
+    pub clear_external_id: bool,
 
     /// New verification checks or commands for agents.
     #[arg(long, value_name = "TEXT", conflicts_with = "clear_verification")]
@@ -900,41 +946,41 @@ pub struct BatchArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct AnnotationArgs {
+pub struct PropertyArgs {
     #[command(subcommand)]
-    pub command: AnnotationCommand,
+    pub command: PropertyCommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum AnnotationCommand {
-    /// Replace one owner's Annotation with a JSON object.
-    #[command(after_long_help = help::ANNOTATION_SET_EXAMPLES)]
-    Set(AnnotationSetArgs),
+pub enum PropertyCommand {
+    /// Replace one owner's Property with a JSON object.
+    #[command(after_long_help = help::PROPERTY_SET_EXAMPLES)]
+    Set(PropertySetArgs),
 
-    /// Remove one owner's Annotation.
-    #[command(after_long_help = help::ANNOTATION_REMOVE_EXAMPLES)]
-    Remove(AnnotationRemoveArgs),
+    /// Remove one owner's Property.
+    #[command(after_long_help = help::PROPERTY_REMOVE_EXAMPLES)]
+    Remove(PropertyRemoveArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct AnnotationSetArgs {
+pub struct PropertySetArgs {
     /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
     /// Owner: the lowercase slug naming the tool, for example ci.
     pub owner: String,
 
-    /// The Annotation, a JSON object of at most 8192 bytes.
+    /// The Property, a JSON object of at most 8192 bytes.
     #[arg(long, value_name = "JSON")]
     pub value: String,
 }
 
 #[derive(Debug, Args)]
-pub struct AnnotationRemoveArgs {
+pub struct PropertyRemoveArgs {
     /// Task ID, for example orb-a7b2c9.
     pub id: String,
 
-    /// Owner whose Annotation is removed.
+    /// Owner whose Property is removed.
     pub owner: String,
 }
 
@@ -1002,9 +1048,9 @@ pub struct PrimeArgs {
     #[arg(long, value_name = "NAME")]
     pub by: Option<String>,
 
-    /// Only Ready tasks with this repository label. Filter by Repository field or legacy repo:NAME label.
+    /// Only Ready tasks with this member Repository. Matches the `repository` field.
     #[arg(long, value_name = "NAME")]
-    pub repo: Option<String>,
+    pub repository: Option<String>,
 
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]

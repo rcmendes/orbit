@@ -147,7 +147,7 @@ flowchart LR
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, and expose the same operations over MCP. |
 | Application | `src/commands/`, `src/migrate.rs`, `src/board_migrate.rs`, `src/repository.rs`, `src/board_host.rs`, `src/board_sync.rs`, `src/health.rs`, `src/github/`, `src/remote/`, `src/workspace.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. `src/remote/` owns the provider-neutral Remote Tracker port — sync engine, baselines, auto-push, relationships, link persistence, and the Remote Issue catalog seam — while `src/github/` is the built-in GitHub adapter. `src/repository.rs` owns Board membership (discovered child Repositories plus explicit `[repositories]` entries) and the rebuildable inventory cache; `src/board_host.rs`/`src/board_sync.rs` own host configuration and the Orbit-aware merge used by `orbit board sync`. `src/workspace.rs` is a compatibility shim that still stores the `[workspace]` config block and the Board-anchor lookup. `doctor` adds read-only repository/cache, migration, link, and managed-agent diagnostics. Prefix migration rewrites one Board's IDs; `orbit migrate` converts a legacy layout and `init` merges child Boards on an anchor. |
-| Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, lifecycle transition rules, dependency validation, readiness, counts, and comments. |
+| Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/workflow.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, the Board-defined Workflow (statuses, categories, transitions, templates), lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Execution | `src/mutation.rs`, `src/remote/execution.rs` | Board mutation execution (lifecycle, terminal, reopen, shared Task persistence and commit warnings) and provider-neutral Remote Tracker execution (`synchronize`, `create_and_link`, `apply_plan`) behind a resolved `RemoteAdapter`; both run inside the caller's Board access scope. |
 | Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
@@ -274,7 +274,8 @@ classDiagram
     class Task {
         +String id
         +String title
-        +Status status
+        +String status
+        +Option resolution
         +String priority
         +Vec labels
         +Vec links
@@ -302,6 +303,7 @@ classDiagram
 
     class Graph {
         +Map tasks
+        +Workflow workflow
         +is_ready(task)
         +blocking_ids(task)
         +children(id)
@@ -312,6 +314,7 @@ classDiagram
     }
 
     Board "1" *-- "1" Config : loads
+    Board "1" *-- "1" Workflow : resolves from config
     Board "1" o-- "0..*" Task : stores
     Graph "1" o-- "0..*" Task : indexes
     Task "1" *-- "0..1" Claim : stored as flat claimed_by, claimed_at, lease_until keys
@@ -322,74 +325,77 @@ classDiagram
 
 ## 2. Task state machine
 
-Only four values are **stored** in `status`: `todo`, `in_progress`, `done`, and `cancelled`. Ready, blocked, waiting, stale, and held are **derived** from other fields, so they are not states and cannot be written as one.
+The lifecycle is a **Workflow** resolved from Board config (`src/workflow.rs`): named Statuses, each with a Status Category (`todo`, `active`, `done`, `canceled`), named Transitions between them, the initial Status, and exactly one Status flagged `ready`. Boards select a shipped template — `minimal`, `standard` (default), or `agentic` — or define `[workflow]` `statuses`/`transitions`/`initial` in `config.toml`. Commands read the category, never the status name, for terminal and closable checks; `Graph` carries the resolved `Workflow` so readiness, counts, and `allowed_transitions` share one definition. Ready, blocked, waiting, stale, and held are **derived** from other fields, so they are not states and cannot be written as one.
+
+The standard template's graph:
 
 ```mermaid
 stateDiagram-v2
     direction LR
 
-    [*] --> todo: add
+    [*] --> ready: add
 
-    todo --> in_progress: claim or ready --claim
+    ready --> in_progress: claim or ready --claim
+    ready --> done: done
+    ready --> cancelled: cancel
+    ready --> todo: defer
+    todo --> ready: promote
     todo --> done: done
     todo --> cancelled: cancel
 
-    in_progress --> todo: release
+    in_progress --> ready: release
     in_progress --> in_progress: heartbeat
     in_progress --> in_progress: checkpoint
     in_progress --> in_progress: claim --steal
     in_progress --> done: done
     in_progress --> cancelled: cancel
 
-    done --> todo: reopen
-    cancelled --> todo: reopen
-
-    done --> done: done --comment
-    cancelled --> cancelled: cancel --comment
+    done --> ready: reopen
+    cancelled --> ready: reopen
 
     note right of in_progress
         Stale is derived, not a Status:
-        in_progress with lease_until <= now.
+        active category with lease_until <= now.
         Release it or take it over with
         claim --steal.
     end note
 
-    note left of todo
+    note left of ready
         Ready is derived, not a Status:
-        todo, no claim, no blocking link
-        to an open Task or external reference,
-        no hold label, and every blocking
-        dependency done or cancelled.
+        the workflow's ready status, no claim,
+        no blocking link to an open Task or
+        external reference, no hold label, and
+        every SubTask in a closed category.
     end note
 
     note right of done
-        done and cancelled both resolve
+        done and canceled categories both resolve
         dependents. cancel is not delete:
         delete removes the task file.
     end note
 ```
 
+`minimal` drops the `todo` backlog status and the `promote`/`defer` edges; `agentic` adds `blocked` and review statuses. A custom `[workflow]` may add statuses such as `In Review` and transitions such as `submit`; `Workflow::from_config` validates unique names, valid categories, exactly one ready Status, an existing initial Status, transitions that reference defined statuses, and resolution placement (resolutions only on transitions into closed categories).
+
 ### Transition rules
 
-These rules live in `src/transition.rs`: a Task owns its transitions and returns a typed `TransitionError`. Command handlers only load, call one transition, persist and print.
+These rules live in `src/transition.rs`, which stays pure: every method takes the resolved `&Workflow` and returns a typed `TransitionError`. Command handlers only load, call one transition, persist and print. `orbit show` reports `status_category`, `resolution`, and `allowed_transitions` — the Workflow edges valid from the current Status; an `INVALID_TRANSITION` error names the transitions valid from the Task's current Status (or every defined transition for an unknown name).
 
-| From | Command | To | Rules |
-| --- | --- | --- | --- |
-| none | `add` | `todo` | Creates `tasks/ID.md`. Type defaults to `board.default_type`; priority defaults to `board.default_priority`; dependencies must exist. `--parent` must name an existing, non-terminal Task and the child's type must sit strictly below the parent's type in `board.hierarchy`. |
-| `todo` | `claim` or `ready --claim` | `in_progress` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
-| `in_progress` | `heartbeat` | `in_progress` | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
-| `in_progress` | `checkpoint` | `in_progress` | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a terminal task or a task with no claim. |
-| `in_progress` | `claim --steal` | `in_progress` | Replaces the holder and resets `claimed_at` and `lease_until`, preserving the latest checkpoint. `--steal` does not bypass hold labels or dependencies. |
-| `in_progress` | `release` | `todo` | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. |
-| `todo` or `in_progress` | `done` | `done` | Every dependency must be `done` or `cancelled`, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields; links are untouched. |
-| `todo` or `in_progress` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields; links are untouched. Resolves dependents. |
-| `done` or `cancelled` | `reopen` | `todo` | Reopening a SubTask reopens every done ancestor too, nearest first; a cancelled ancestor must be reopened first and an active ancestor ends the walk. Refuses when a dependent is already `done` unless `--force`. Clears claim fields; links are untouched. |
-| `done` | `done --comment` | `done` | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
-| `cancelled` | `cancel --comment` | `cancelled` | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
-| `done` | `cancel` | rejected | `INVALID_TRANSITION`; reopen first. |
-| `cancelled` | `done` | rejected | `INVALID_TRANSITION`; reopen first. |
-| any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live claim requires the holder unless `--force`. With dependents or SubTasks, requires `--force`, which first removes edges from dependents and deletes the whole SubTask subtree. |
-| any | `update`, `label`, `comment`, `depend`, `undepend` | unchanged | Metadata only. `update`, `label`, and `comment` also work on terminal tasks. `depend` refuses terminal tasks, cycles, and parent/child edges; `undepend` is idempotent. |
+| From | Command | Transition | To | Rules |
+| --- | --- | --- | --- | --- |
+| none | `add` | — | initial Status | Creates `tasks/ID.md`. Type defaults to `board.default_type`; priority defaults to `board.default_priority`; dependencies must exist. `--parent` must name an existing, non-terminal Task whose type sits strictly below the parent's type in `board.hierarchy`. |
+| Ready Status | `claim` or `ready --claim` | `claim` | `in_progress` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
+| `active` | `heartbeat` | — | `active` | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
+| `active` | `checkpoint` | — | `active` | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a closed task or a task with no claim. |
+| `active` | `claim --steal` | `claim` | `active` | Replaces the holder and resets `claimed_at` and `lease_until`, preserving the latest checkpoint. `--steal` does not bypass hold labels or dependencies. |
+| `active` | `release` | `release` | Ready Status | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. Links are untouched. |
+| `active` | `done` | `done` | `done` | Every dependency must be in a closed category, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields; links are untouched. Records the transition's resolution. |
+| `active` | `cancel` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields; links are untouched. Records the transition's resolution. Resolves dependents. |
+| closed | `reopen` | `reopen` | Ready Status | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively claimed ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears claim fields; links are untouched; clears the resolution. |
+| any | `transition <name>` | named edge | edge target | Runs one Workflow transition directly, honoring the claim-holder check where the edge requires it. |
+| closed | `done --comment` / `cancel --comment` | — | unchanged | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
+| closed | opposite terminal command | — | rejected | `INVALID_TRANSITION`; reopen first. |
+| any | `update`, `label`, `comment`, `depend`, `undepend` | — | unchanged | Metadata only. `update`, `label`, and `comment` also work on terminal tasks. `depend` refuses terminal tasks, cycles, and parent/child edges; `undepend` is idempotent. |
 
 ### The readiness gate
 
@@ -397,7 +403,7 @@ These rules live in `src/transition.rs`: a Task owns its transitions and returns
 
 ```mermaid
 flowchart TD
-    TASK["Task candidate"] --> STATUS{"status is todo?"}
+    TASK["Task candidate"] --> STATUS{"status is the workflow's ready status?"}
     STATUS -->|no| NOTREADY["not ready"]
     STATUS -->|yes| CLAIMED{"claimed_by is null?"}
     CLAIMED -->|no| NOTREADY
@@ -405,20 +411,21 @@ flowchart TD
     WAITING -->|no| NOTREADY
     WAITING -->|yes| HELD{"any hold label?"}
     HELD -->|yes| NOTREADY
-    HELD -->|no| DEPS{"every dependency done or cancelled?"}
+    HELD -->|no| DEPS{"every dependency in a closed category?"}
     DEPS -->|no| BLOCKED["not ready<br/>blocked by dependencies"]
-    DEPS -->|yes| SUBTASKS{"every SubTask done or cancelled?"}
+    DEPS -->|yes| SUBTASKS{"every SubTask in a closed category?"}
     SUBTASKS -->|no| SUBTASKSOPEN["not ready<br/>open SubTasks"]
     SUBTASKS -->|yes| READY["ready<br/>eligible for ready and claim"]
 ```
 
-The failure codes follow the gate: `WAITING_EXTERNAL` for an external blocking link, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open SubTasks, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate.
+The failure codes follow the gate: `WAITING_EXTERNAL` for an external blocking link, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open SubTasks, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate. `graph::is_ready`, `ready_tasks`, `counts`, `prime`, and the MCP `ready` tool all share this one definition.
 
 ### Stored versus derived
 
 | Concept | Stored? | Source |
 | --- | --- | --- |
-| Status | yes | `status` in frontmatter |
+| Status | yes | `status` in frontmatter, a Workflow status name |
+| Resolution | yes | `resolution` in frontmatter, set by closing Transitions |
 | Priority | yes | `priority`, a name from `board.priorities` |
 | Labels | yes | `labels`, normalized, sorted, deduplicated |
 | Links | yes | `links`: type, target (Task ID or external ref), blocking, attributes |
@@ -427,9 +434,10 @@ The failure codes follow the gate: `WAITING_EXTERNAL` for an external blocking l
 | Claim and lease | yes | `claimed_by`, `claimed_at`, `lease_until` |
 | Checkpoint | yes | `checkpoint` with `by`, `at`, `progress`, `next`, `blocker` |
 | Comments | yes, separately | `comments/ID.md` |
+| Workflow | yes, in config | `[workflow]` in `config.toml` or a shipped template |
 | Ready | no | `Graph::is_ready` |
 | Blocked | no | `Graph::blocking_ids` and `Graph::open_children` |
-| Stale | no | `in_progress` with `lease_until <= now` |
+| Stale | no | `active` category with `lease_until <= now` |
 | Held | no | labels intersect `non_ready_labels` |
 
 ## 3. Command flow
@@ -488,7 +496,7 @@ flowchart TB
     MIGRATECMD -->|converts legacy Board| ADD
     REPOCMD -->|joins a member Repository| ADD
     SETUP -->|wires harnesses| ADD
-    ADD -->|creates todo| READY
+    ADD -->|creates initial status| READY
     UPDATE -->|changes metadata| READY
     LABEL -->|hold labels gate| READY
     DEPEND -->|dependency edges gate| READY
@@ -500,7 +508,7 @@ flowchart TB
     PRIME -.->|prints context| READY
     EXPORT -.->|snapshots| READY
     READY -->|lists candidates| CLAIM
-    CLAIM -->|in_progress and lease| HEART
+    CLAIM -->|active status and lease| HEART
     HEART -->|extends lease| DONE
     HEART -->|extends lease| CANCEL
     CLAIM -->|records progress| CHECKPOINT
@@ -520,7 +528,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | Bootstrap | `init`, `migrate`, `setup`, `repo add`/`remove` | Create or convert the Board; optionally wire harness files and MCP entries, or register a member Repository on a multi-Repository Board. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
 | Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `remote status`, `remote create`/`sync` preview, `repo list` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. Sync and create previews do not write; only `--apply` changes Board state or GitHub. |
-| Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
+| Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen`, `transition` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
 | Maintenance | `doctor`, `sync`, `remote`, `repo`, `board`, `slug`, `mcp` | Check Board and configured Remote Tracker health, commit heartbeat-only changes, explicitly create or synchronize Remote Issues or push mapped changes when auto-push is enabled, manage member Repositories and the rebuildable repository catalog, configure and synchronize the Board host, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Board layouts and initialization
@@ -703,14 +711,14 @@ flowchart TD
     K --> V
     C --> V
     V -->|failure| X["stop; old layout still readable"]
-    V -->|success| R["one commit: layout + content conversion<br/>github: to remote:, repo:* to repo,<br/>[github] to remote projects, board.areas"]
+    V -->|success| R["one commit: layout + content conversion<br/>github: to remote:, repo:* to repository,<br/>[github] to remote projects, board.components"]
     X --> A["doctor reports AMBIGUOUS_BOARD or LEGACY_LAYOUT<br/>rerun orbit migrate"]
 ```
 
 The conversion also rewrites task frontmatter `github:` links to `remote:`,
-moves `repo:*` labels into the `repo` field, converts `[github]` configuration
-into remote project entries, drops `board.storage`, and seeds `board.areas`
-from the Area values Tasks already use — all in the same commit. Re-running
+moves `repo:*` labels into the `repository` field, converts `[github]` configuration
+into remote project entries, drops `board.storage`, and seeds `board.components`
+from the Component values Tasks already use — all in the same commit. Re-running
 after `--apply` is a no-op.
 
 A forced `git clean -xdff` that removes `DIR` leaves the `orbit` branch and a stale worktree record. `doctor` reports `ORPHAN_WORKTREE`; `doctor --fix` or `init` prunes the record and re-attaches `DIR` without task loss.
@@ -764,7 +772,7 @@ sequenceDiagram
     CLI->>BRD: discover
     BRD->>LCK: acquire exclusive
     CLI->>FS: read all tasks, hydrate graph
-    CLI->>FS: atomic write new todo
+    CLI->>FS: atomic write new task in the initial status
     CLI->>GIT: commit orbit: add ID
     CLI-->>Agent: JSON task detail
 
@@ -777,7 +785,7 @@ sequenceDiagram
         CLI-->>Agent: ok true, data null, meta.reason NO_READY_TASKS
     else first ready task
         CLI->>CLI: check waiting, hold labels, dependencies, claim
-        CLI->>FS: atomic write in_progress plus lease
+        CLI->>FS: atomic write the active status plus lease
         CLI->>GIT: commit orbit: claim ID
         CLI-->>Agent: JSON detail, meta.claimed true
     end
@@ -787,7 +795,7 @@ sequenceDiagram
     CLI->>BRD: discover
     BRD->>LCK: acquire exclusive
     CLI->>FS: read all tasks
-    CLI->>CLI: verify in_progress and holder
+    CLI->>CLI: verify the active claim and holder
     CLI->>FS: atomic write new lease_until
     Note right of GIT: no commit until orbit sync
     CLI-->>Agent: lease_until, meta.committed false
@@ -819,7 +827,7 @@ sequenceDiagram
     Note over CLI,LCK: Every writer can return LOCKED after lock_timeout_ms. The caller retries with backoff.
 ```
 
-`done` refuses unfinished dependencies and cancelled tasks. A live claim requires the holder unless `--force`; a stale claim does not. If a completion comment fails after the status write, the task is still done and the result carries `COMMENT_FAILED` with exit code `1`.
+`done` refuses unfinished dependencies and tasks already in a closed category. A live claim requires the holder unless `--force`; a stale claim does not. If a completion comment fails after the status write, the task is still done and the result carries `COMMENT_FAILED` with exit code `1`.
 
 A checkpoint is optional and independent of the lease: the holder can record progress, the next action, and a blocker at any point, then release or let the lease expire. `claim --steal`, `release`, and `reopen` preserve the record; terminal transitions keep it as archived history while the active queue stops exposing it.
 
@@ -929,11 +937,14 @@ sequenceDiagram
 - Readers take the shared lock for a consistent snapshot. Writers take the exclusive lock for the read-modify-write.
 - Each file is published with a temp file, `fsync`, and rename. A crash cannot truncate a task.
 - Ready and blocked are derived on every command. They are never stored in frontmatter.
-- Parentage follows `board.hierarchy` and is not a Dependency. A Parent Task is Ready only when every descendant is `done` or `cancelled`.
-- `done` and `cancelled` both resolve dependents. `delete` is not a status; it removes the task and its comments, and `--force` removes a SubTask subtree.
+- Parentage follows `board.hierarchy` and is not a Dependency. A Parent Task is Ready only when every descendant is in a closed Status Category.
+- Statuses in the `done` and `canceled` categories both resolve dependents. `delete` is not a status; it removes the task and its comments, and `--force` removes a SubTask subtree.
 - Comments are append-only and immutable. A correction is a new comment.
 - Meaningful mutations auto-commit to the `orbit` branch. Heartbeats wait for the next mutation or `sync`. The branch is pushed only to a configured Board host, with `orbit board sync` or `board.host_sync = auto`; Remote Issue auto-push is a separate opt-in per Board.
 - `export` takes the shared lock and writes nothing. Its snapshot is sorted by task ID and contains no timestamps or machine-local paths.
 - Human output is presentation only. `list` tables may truncate titles or change column widths; `--json` carries the complete, stable shape.
 - MCP does not bypass the CLI. Every tool call reuses the same lock, atomic-write, auto-commit, and error envelope.
 - Agent configuration is written with managed markers or key-level merges so `setup --remove` deletes only Orbit-managed content. Generated configs record the Orbit binary but not the Board path.
+
+- Parentage follows `board.hierarchy` and is not a Dependency. A Parent Task is Ready only when every descendant is in a closed Status Category.
+- Statuses in the `done` and `canceled` categories both resolve dependents. `delete` is not a status; it removes the task and its comments, and `--force` removes a SubTask subtree.

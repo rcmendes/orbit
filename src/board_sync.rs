@@ -16,7 +16,8 @@ use crate::board_host;
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
-use crate::task::{self, Claim, Status, StrayClaimTimes, Task, TaskFrontmatter};
+use crate::task::{self, Claim, StrayClaimTimes, Task, TaskFrontmatter};
+use crate::workflow::Workflow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeSide {
@@ -227,6 +228,7 @@ fn reconcile(
         &remote_tree,
         resolutions,
         Utc::now(),
+        &board.workflow()?,
     )?;
     if !outcome.conflicts.is_empty() {
         return Err(OrbitError::new(
@@ -572,13 +574,14 @@ fn claim_notice(task: &str, winner: &Claim, loser: Option<&Claim>) -> ClaimNotic
 /// merged status is terminal keeps no Claim.
 fn merge_claim(
     id: &str,
-    status: Status,
+    status: &str,
+    workflow: &Workflow,
     base: &ClaimSide,
     local: &ClaimSide,
     remote: &ClaimSide,
     outcome: &mut MergeOutcome,
 ) -> ClaimSide {
-    if status.is_terminal() {
+    if workflow.is_terminal(status) {
         return ClaimSide {
             claim: None,
             stray: later_stray(&local.stray, &remote.stray),
@@ -646,6 +649,7 @@ fn merge_task(
     base: Option<Task>,
     local: Task,
     remote: Task,
+    workflow: &Workflow,
     outcome: &mut MergeOutcome,
 ) -> Result<String> {
     let base_front = base.as_ref().map(|task| &task.front);
@@ -659,9 +663,9 @@ fn merge_task(
         outcome,
     );
     let status = pick(
-        base_front.map(|f| f.status),
-        local.front.status,
-        remote.front.status,
+        base_front.map(|f| f.status.clone()),
+        local.front.status.clone(),
+        remote.front.status.clone(),
         &key("status"),
         outcome,
     );
@@ -707,11 +711,11 @@ fn merge_task(
         &key("checkpoint"),
         outcome,
     );
-    let area = pick(
-        base_front.map(|f| f.area.clone()),
-        local.front.area.clone(),
-        remote.front.area.clone(),
-        &key("area"),
+    let component = pick(
+        base_front.map(|f| f.component.clone()),
+        local.front.component.clone(),
+        remote.front.component.clone(),
+        &key("component"),
         outcome,
     );
     let verification = pick(
@@ -735,11 +739,18 @@ fn merge_task(
         &key("remote"),
         outcome,
     );
-    let repo = pick(
-        base_front.map(|f| f.repo.clone()),
-        local.front.repo.clone(),
-        remote.front.repo.clone(),
-        &key("repo"),
+    let repository = pick(
+        base_front.map(|f| f.repository.clone()),
+        local.front.repository.clone(),
+        remote.front.repository.clone(),
+        &key("repository"),
+        outcome,
+    );
+    let external_id = pick(
+        base_front.map(|f| f.external_id.clone()),
+        local.front.external_id.clone(),
+        remote.front.external_id.clone(),
+        &key("external_id"),
         outcome,
     );
     let created_at = pick(
@@ -758,9 +769,17 @@ fn merge_task(
         outcome,
     );
 
+    let resolution = pick(
+        base_front.map(|f| f.resolution.clone()),
+        local.front.resolution.clone(),
+        remote.front.resolution.clone(),
+        &key("resolution"),
+        outcome,
+    );
     let claim = merge_claim(
         id,
-        status,
+        &status,
+        workflow,
         &ClaimSide::of(base_front),
         &ClaimSide::of(Some(&local.front)),
         &ClaimSide::of(Some(&remote.front)),
@@ -803,31 +822,31 @@ fn merge_task(
         &key("source_key"),
         outcome,
     );
-    // Annotations merge per owner, like unknown keys.
+    // Properties merge per owner, like unknown keys.
     let mut owners: BTreeSet<String> = BTreeSet::new();
     for source in [
-        base_front.map(|f| f.annotations.keys()),
-        Some(local.front.annotations.keys()),
-        Some(remote.front.annotations.keys()),
+        base_front.map(|f| f.properties.keys()),
+        Some(local.front.properties.keys()),
+        Some(remote.front.properties.keys()),
     ]
     .into_iter()
     .flatten()
     {
         owners.extend(source.cloned());
     }
-    let mut annotations = BTreeMap::new();
+    let mut properties = BTreeMap::new();
     for owner in owners {
-        let base_value = base_front.map(|f| f.annotations.get(&owner).cloned());
-        let local_value = local.front.annotations.get(&owner).cloned();
-        let remote_value = remote.front.annotations.get(&owner).cloned();
+        let base_value = base_front.map(|f| f.properties.get(&owner).cloned());
+        let local_value = local.front.properties.get(&owner).cloned();
+        let remote_value = remote.front.properties.get(&owner).cloned();
         if let Some(value) = pick(
             base_value,
             local_value,
             remote_value,
-            &key(&format!("annotations.{owner}")),
+            &key(&format!("properties.{owner}")),
             outcome,
         ) {
-            annotations.insert(owner, value);
+            properties.insert(owner, value);
         }
     }
 
@@ -836,21 +855,23 @@ fn merge_task(
         front: task::TaskFrontmatter {
             title,
             status,
+            resolution,
             task_type,
             priority,
             labels,
             links,
             parent,
             checkpoint,
-            area,
+            component,
             verification,
             github,
             remote: remote_link,
-            repo,
+            repository,
+            external_id,
             claim: claim.claim,
             stray_claim_times: claim.stray,
             source_key,
-            annotations,
+            properties,
             created_at,
             updated_at,
             extra,
@@ -881,6 +902,7 @@ fn merge_trees(
     remote: &BTreeMap<String, String>,
     resolutions: &BTreeMap<String, MergeSide>,
     notice_time: DateTime<Utc>,
+    workflow: &Workflow,
 ) -> Result<MergeOutcome> {
     let mut outcome = MergeOutcome {
         files: BTreeMap::new(),
@@ -897,6 +919,7 @@ fn merge_trees(
             base.get(path).cloned(),
             local.get(path).cloned(),
             remote.get(path).cloned(),
+            workflow,
             &mut outcome,
         )?;
     }
@@ -931,6 +954,7 @@ fn resolve_path(
     base: Option<String>,
     local: Option<String>,
     remote: Option<String>,
+    workflow: &Workflow,
     outcome: &mut MergeOutcome,
 ) -> Result<()> {
     if local == remote {
@@ -970,7 +994,8 @@ fn resolve_path(
                 .and_then(|c| task::parse_task(id.clone(), c).ok());
             match (local_task, remote_task) {
                 (Some(local_task), Some(remote_task)) => {
-                    let content = merge_task(&id, base_task, local_task, remote_task, outcome)?;
+                    let content =
+                        merge_task(&id, base_task, local_task, remote_task, workflow, outcome)?;
                     outcome.files.insert(path.to_string(), Some(content));
                 }
                 _ => {
@@ -1089,6 +1114,7 @@ mod tests {
             &tree(&[(TASK_PATH, host)]),
             &parse_resolutions(resolutions).unwrap(),
             now(),
+            &Workflow::standard(),
         )
         .unwrap()
     }
@@ -1129,9 +1155,9 @@ mod tests {
         }
     }
 
-    fn task_with(annotations: &str) -> Task {
+    fn task_with(properties: &str) -> Task {
         let content = format!(
-            "---\ntitle: T\nstatus: todo\n{annotations}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\nbody\n"
+            "---\ntitle: T\nstatus: todo\n{properties}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\nbody\n"
         );
         task::parse_task("orb-aaaaaa".to_string(), &content).unwrap()
     }
@@ -1167,6 +1193,7 @@ mod tests {
             &tree(&[(path, &host)]),
             &BTreeMap::new(),
             now(),
+            &Workflow::standard(),
         )
         .unwrap();
         assert!(merged.conflicts.is_empty());
@@ -1218,7 +1245,7 @@ mod tests {
         let merged = merge_tasks(&base, &local, &host, &[]);
         assert!(merged.conflicts.is_empty());
         let task = merged_task(&merged);
-        assert_eq!(task.front.status, Status::Done);
+        assert_eq!(task.front.status, "done");
         assert!(task.front.claim.is_none());
     }
 
@@ -1227,15 +1254,39 @@ mod tests {
         let base = tree(&[(TASK_PATH, "original")]);
         let local = tree(&[(TASK_PATH, "edited")]);
         let host = BTreeMap::new();
-        let merged = merge_trees(&base, &local, &host, &BTreeMap::new(), now()).unwrap();
+        let merged = merge_trees(
+            &base,
+            &local,
+            &host,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+        )
+        .unwrap();
         assert_eq!(merged.conflicts.len(), 1);
         assert_eq!(merged.conflicts[0].field, "orbit-test");
         assert_eq!(merged.conflicts[0].host, "(deleted)");
         let resolutions = parse_resolutions(&["orbit-test=host".to_string()]).unwrap();
-        let merged = merge_trees(&base, &local, &host, &resolutions, now()).unwrap();
+        let merged = merge_trees(
+            &base,
+            &local,
+            &host,
+            &resolutions,
+            now(),
+            &Workflow::standard(),
+        )
+        .unwrap();
         assert!(merged.conflicts.is_empty());
         assert_eq!(merged.files[TASK_PATH], None);
-        let both_deleted = merge_trees(&base, &host, &host, &BTreeMap::new(), now()).unwrap();
+        let both_deleted = merge_trees(
+            &base,
+            &host,
+            &host,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+        )
+        .unwrap();
         assert!(!both_deleted.files.contains_key(TASK_PATH));
     }
 
@@ -1255,8 +1306,15 @@ mod tests {
     fn unrelated_trees_merge_different_tasks() {
         let local = tree(&[("tasks/orbit-local.md", "local task")]);
         let remote = tree(&[("tasks/orbit-host.md", "host task")]);
-        let merged =
-            merge_trees(&BTreeMap::new(), &local, &remote, &BTreeMap::new(), now()).unwrap();
+        let merged = merge_trees(
+            &BTreeMap::new(),
+            &local,
+            &remote,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+        )
+        .unwrap();
         assert!(merged.conflicts.is_empty());
         assert_eq!(
             merged.files["tasks/orbit-local.md"].as_deref(),
@@ -1269,15 +1327,23 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_annotations_from_both_sides() {
+    fn merge_keeps_properties_from_both_sides() {
         let base = task_with("");
-        let local = task_with("annotations:\n  ci:\n    passed: true\n");
-        let remote = task_with("annotations:\n  planner:\n    order: 1\n");
+        let local = task_with("properties:\n  ci:\n    passed: true\n");
+        let remote = task_with("properties:\n  planner:\n    order: 1\n");
         let mut outcome = outcome();
-        let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
+        let merged = merge_task(
+            "orb-aaaaaa",
+            Some(base),
+            local,
+            remote,
+            &Workflow::standard(),
+            &mut outcome,
+        )
+        .unwrap();
         let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
         assert_eq!(
-            serde_json::to_value(&parsed.front.annotations).unwrap(),
+            serde_json::to_value(&parsed.front.properties).unwrap(),
             serde_json::json!({"ci": {"passed": true}, "planner": {"order": 1}})
         );
         assert!(outcome.conflicts.is_empty());
@@ -1289,7 +1355,15 @@ mod tests {
         let local = task_with("source_key: planner:plan-7:step-1\n");
         let remote = task_with("");
         let mut outcome = outcome();
-        let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
+        let merged = merge_task(
+            "orb-aaaaaa",
+            Some(base),
+            local,
+            remote,
+            &Workflow::standard(),
+            &mut outcome,
+        )
+        .unwrap();
         let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
         assert_eq!(
             parsed.front.source_key.as_deref(),

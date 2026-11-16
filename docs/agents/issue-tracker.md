@@ -68,9 +68,11 @@ tracker terms rather than inventing a second model:
   `orbit add "..." --type epic`. Put the scope, decisions, and acceptance
   criteria in its body.
 
-`kind` is structural (`task` or `subtask`). `type` is the work shape (`task`,
-`epic`, `spike`, `chore`, or `decision`) and is metadata only. `epic` is refused
-on a SubTask. See [ADR 0010](../adr/0010-structural-type-field.md).
+`kind` is structural (`task` or `subtask`). `type` is the Issue type from the
+Board's `board.types` (`epic`, `story`, `task`, `bug`, `sub-task` by default)
+and decides where in `board.hierarchy` the Issue may sit: a child must be on a
+strictly deeper level than its parent. See [ADR 0010](../adr/0010-structural-type-field.md)
+and [ADR 0022](../adr/0022-issue-model-and-platform-architecture.md).
 
 The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
 `--exclude-label epic` still works on older boards. New work should use
@@ -85,7 +87,7 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
 - `orbit ready --json` returns `data.tasks`, each with `id`, `title`, `priority`,
   `labels`, `blocking`, and claim fields.
 - `orbit show <ID> --json` returns the full task, including `body`, `labels`,
-  `kind`, `type`, `area`, `verification`, `parent`, `subtasks`, `dependents`, and `comments`.
+  `kind`, `type`, `component`, `verification`, `parent`, `subtasks`, `dependents`, and `comments`.
 - `orbit list` prints an aligned table for humans. When the Board has remote
   material, an `ISSUE` column shows `-` for a Local Task, `#N` for a Linked
   Task, and `~#N` for detached provenance; use `--linked` or `--local` to
@@ -93,8 +95,8 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
   presentation only; parse `--json` in automation. `orbit ready` and `orbit
   tree` use compact summary lines for the same reason.
 - Break a feature into SubTasks with `orbit add "<title>" --parent <parent-id>`.
-  SubTasks are one level deep by default; raise `board.max_subtask_depth` to
-  nest further. Use `--depends-on` only for real blockers between
+  SubTasks nest as deep as `board.hierarchy` allows. Use `--depends-on` only
+  for real blockers between
   units of work; the Parent Task waits for its SubTasks automatically.
 - Use `orbit ready --parent <id>` as the frontier for one epic or spec. A Parent
   Task is not Ready while any SubTask is open.
@@ -177,8 +179,8 @@ ticket. To add a blocking edge later:
 orbit depend <dependent-id> <blocker-id>
 ```
 
-Orbit has no label registry. Parentage is one level deep by default — raise
-`board.max_subtask_depth` to nest further: create a SubTask with
+Orbit has no label registry. Parentage follows the Board's `board.hierarchy`
+(default `epic` > `story`/`task`/`bug` > `sub-task`): create a SubTask with
 `orbit add --parent <id>`, and use `--depends-on` only for real blockers. Labels
 are free-form strings, comments are per-task threads, and blocking edges are
 `--depends-on`. Put parent context and acceptance criteria in the body; use labels
@@ -191,7 +193,7 @@ machine: gathering context, verifying the claim, grilling, writing the agent
 brief, and maintaining `.out-of-scope/`.
 
 `orbit triage` is a deterministic metadata primitive for any Task, Local or
-Linked. It sets `area`, task-level `verification`, and the canonical labels in
+Linked. It sets `component`, task-level `verification`, and the canonical labels in
 [`triage-labels.md`](./triage-labels.md). It does not verify a claim, grill,
 write a brief, or update `.out-of-scope/`. The commands are in
 [`triage-workflow.md`](./triage-workflow.md).
@@ -229,8 +231,8 @@ orbit show <ID> --json
 
 Use `orbit list --all --include-closed --json` to inspect the whole board.
 `orbit ready --json` lists only
-unclaimed tasks whose dependencies are done or cancelled and which carry no hold
-label.
+unclaimed tasks in the workflow's ready status whose dependencies are in a
+closed status category and which carry no hold label.
 
 ## Claiming and completing work
 
@@ -286,7 +288,7 @@ Blocking edges stay `--depends-on` / `orbit depend`. Resolution stays
 
 - **Dependency**: `--depends-on <dependency-id>` at creation or
   `orbit depend <task-id> <dependency-id>` later creates a real Dependency: the
-  first Task cannot become Ready until the second is `done` or `cancelled`. Use it
+  first Task cannot become Ready until the second is in a closed status category. Use it
   only when one child must wait for another. Never use `depend` to record
   parentage; `--parent` does that, and the map waits for its SubTasks
   automatically.
@@ -310,5 +312,5 @@ Blocking edges stay `--depends-on` / `orbit depend`. Resolution stays
   ```
 
 - **Resolve**: `orbit done <id> --by <agent>` or `orbit cancel <id> --by <agent>`
-  each SubTask as its work lands. The map becomes Ready when every SubTask is
-  done or cancelled, and `orbit done` closes it.
+  each SubTask as its work lands. The map becomes Ready when every SubTask is in a closed
+  status category, and `orbit done` closes it.

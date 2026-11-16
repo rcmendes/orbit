@@ -282,7 +282,7 @@ fn remote_connect_and_link_use_fixture_client() {
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["github"]["repo"], "acme/widget");
     assert_eq!(show["data"]["title"], "Imported issue");
-    assert_eq!(show["data"]["area"], "cli");
+    assert_eq!(show["data"]["component"], "cli");
 }
 
 #[test]
@@ -594,7 +594,7 @@ fn basic_mode_rejects_create_when_task_has_structured_metadata() {
     write_basic_github_config(&repo);
     let id = repo.add(
         "Personal issue",
-        &["--area", "cli", "--verification", "cargo test"],
+        &["--component", "cli", "--verification", "cargo test"],
     );
 
     let (status, value) = repo.json_with_env(
@@ -703,7 +703,7 @@ fn basic_mode_adopts_and_syncs_without_importing_issue_fields() {
     assert!(adopted["data"]["issue"]["area"].is_null());
     assert!(adopted["data"]["issue"]["verification"].is_null());
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert!(show["data"]["area"].is_null());
+    assert!(show["data"]["component"].is_null());
     assert!(show["data"]["verification"].is_null());
 
     let sync = repo.ok_json_with_env(
@@ -717,7 +717,7 @@ fn basic_mode_adopts_and_syncs_without_importing_issue_fields() {
     repo.ok_json(&[
         "update",
         id.as_str(),
-        "--area",
+        "--component",
         "cli",
         "--verification",
         "cargo test",
@@ -1024,7 +1024,7 @@ fn github_sync_human_dry_run_lists_push_changes() {
     let fixture = write_fixture(&fixture_dir);
     let repo = TestRepo::new();
     let id = adopt_fixture_task(&repo, &fixture, "Local title");
-    set_task_frontmatter(&repo, &id, "area", "setup");
+    set_task_frontmatter(&repo, &id, "component", "setup");
     set_task_frontmatter(&repo, &id, "updated_at", "2026-10-24T14:00:00Z");
 
     let output = repo.orbit_with_env(
@@ -1115,7 +1115,7 @@ fn linked_task_status_labels_and_metadata_push_from_orbit() {
     set_task_frontmatter(&repo, &id, "status", "done");
     repo.ok_json(&["label", "remove", id.as_str(), "bug", "--json"]);
     repo.ok_json(&["label", "add", id.as_str(), "feature", "--json"]);
-    set_task_frontmatter(&repo, &id, "area", "setup");
+    set_task_frontmatter(&repo, &id, "component", "setup");
     set_task_frontmatter(&repo, &id, "verification", "\"cargo test sync\"");
     set_task_frontmatter(&repo, &id, "updated_at", "2026-10-25T14:00:00Z");
 
@@ -1189,7 +1189,7 @@ fn remote_only_label_and_metadata_changes_pull_when_orbit_is_unchanged() {
     );
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["labels"], serde_json::json!(["remote-label"]));
-    assert_eq!(show["data"]["area"], "setup");
+    assert_eq!(show["data"]["component"], "setup");
     assert_eq!(show["data"]["verification"], "cargo test remote");
 }
 
@@ -1754,7 +1754,7 @@ fn github_create_previews_issue_without_writing_until_apply() {
         "Preview issue",
         "Description for GitHub",
         "Labels: bug",
-        "Task status: todo",
+        "Task status: ready",
         "Remote Issue state: open",
         "Apply with --apply",
     ] {
@@ -1814,7 +1814,7 @@ fn github_create_includes_configured_issue_fields_in_the_created_issue() {
     set_configured_issue_field_ids(&repo);
     let id = repo.add(
         "Issue with fields",
-        &["--area", "cli", "--verification", "cargo test"],
+        &["--component", "cli", "--verification", "cargo test"],
     );
 
     let result = repo.ok_json_with_env(
@@ -2107,7 +2107,7 @@ fn github_status_reports_conflicts_and_doctor_reports_configuration_problems() {
     let id = adopt_fixture_task(&repo, &fixture, "Imported issue");
     set_configured_issue_field_ids(&repo);
     set_task_frontmatter(&repo, &id, "title", "\"Orbit edit\"");
-    set_task_frontmatter(&repo, &id, "area", "setup");
+    set_task_frontmatter(&repo, &id, "component", "setup");
     set_task_frontmatter(&repo, &id, "updated_at", "2026-11-28T15:00:00Z");
     set_fixture_issue_field(&fixture, "title", serde_json::json!("GitHub edit"));
     set_fixture_issue_field(
@@ -2547,7 +2547,7 @@ fn injected_sync_rejects_issue_fields_in_basic_mode() {
         &["remote", "link", &id, "personal/widget#42", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    repo.ok_json(&["update", &id, "--area", "cli", "--json"]);
+    repo.ok_json(&["update", &id, "--component", "cli", "--json"]);
     let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
     let resolver = fixture_resolver(&board, &fixture);
     let _lock = board.lock_exclusive().unwrap();
@@ -2848,7 +2848,10 @@ fn auto_push_basic_mode_keeps_area_and_verification_local() {
     let (_fixture_dir, fixture) = auto_push_fixture();
     let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
 
-    let add = repo.ok_json_with_env(&["add", "Metadata task", "--area", "cli", "--json"], &env);
+    let add = repo.ok_json_with_env(
+        &["add", "Metadata task", "--component", "cli", "--json"],
+        &env,
+    );
     let warnings = add["meta"]["warnings"].as_array().unwrap();
     assert!(
         warnings

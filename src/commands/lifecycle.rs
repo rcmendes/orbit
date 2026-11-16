@@ -3,6 +3,7 @@ use serde_json::json;
 
 use crate::cli::{
     CancelArgs, CheckpointArgs, ClaimArgs, DoneArgs, HeartbeatArgs, ReleaseArgs, ReopenArgs,
+    TransitionArgs,
 };
 use crate::comment;
 use crate::transition::{CheckpointUpdate, FieldUpdate};
@@ -95,7 +96,7 @@ struct WorktreePlan {
 fn plan_worktree(board: &Board, id: &str) -> Result<WorktreePlan> {
     let (graph, _) = crate::graph::Graph::load(board, crate::graph::LoadMode::Strict)?;
     let task = graph.get(id)?;
-    let member = match task.front.repo.as_deref() {
+    let member = match task.front.repository.as_deref() {
         Some(name) => crate::repository::members(board)?
             .into_iter()
             .find(|member| member.name == name)
@@ -320,6 +321,33 @@ fn terminal_command(
 pub(super) fn cmd_reopen(board: &Board, args: ReopenArgs) -> Result<crate::output::CommandOutput> {
     let result = crate::mutation::reopen(board, &args.id, args.force, Utc::now())?;
     Ok(mutation_output(result, format!("reopened {}", args.id)))
+}
+
+pub(super) fn cmd_transition(
+    board: &Board,
+    args: TransitionArgs,
+) -> Result<crate::output::CommandOutput> {
+    let caller = optional_agent(args.by);
+    let result = crate::mutation::execute(
+        board,
+        &args.id,
+        crate::mutation::Lifecycle::Transition {
+            name: &args.name,
+            caller: caller.as_deref(),
+            force: args.force,
+        },
+        Utc::now(),
+    )?;
+    if !result.changed {
+        return Ok(crate::output::CommandOutput::new(
+            json!({"id": args.id, "transition": args.name, "changed": false}),
+            format!("{} was already at the `{}` target", args.id, args.name),
+        ));
+    }
+    Ok(mutation_output(
+        result,
+        format!("transitioned {} via `{}`", args.id, args.name),
+    ))
 }
 
 fn resolve_optional_comment(

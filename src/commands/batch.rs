@@ -39,12 +39,13 @@ enum Operation {
         depends_on: Vec<String>,
         body: Option<String>,
         priority: Option<String>,
-        repo: Option<String>,
+        repository: Option<String>,
         waiting_on: Option<String>,
-        area: Option<String>,
+        component: Option<String>,
         verification: Option<String>,
+        external_id: Option<String>,
         #[serde(default)]
-        annotations: BTreeMap<String, Value>,
+        properties: BTreeMap<String, Value>,
     },
     Update {
         id: String,
@@ -56,12 +57,18 @@ enum Operation {
         waiting_on: Option<String>,
         #[serde(default)]
         clear_waiting: bool,
-        area: Option<String>,
+        component: Option<String>,
         #[serde(default)]
-        clear_area: bool,
+        clear_component: bool,
         verification: Option<String>,
         #[serde(default)]
         clear_verification: bool,
+        repository: Option<String>,
+        #[serde(default)]
+        clear_repository: bool,
+        external_id: Option<String>,
+        #[serde(default)]
+        clear_external_id: bool,
     },
     Label {
         id: String,
@@ -132,12 +139,19 @@ enum Operation {
         #[serde(default)]
         force: bool,
     },
+    Transition {
+        id: String,
+        name: String,
+        by: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
     Comment {
         id: String,
         by: Option<String>,
         body: String,
     },
-    Annotate {
+    Property {
         id: String,
         owner: String,
         value: Option<Value>,
@@ -160,8 +174,9 @@ impl Operation {
             Operation::Done { .. } => "done",
             Operation::Cancel { .. } => "cancel",
             Operation::Reopen { .. } => "reopen",
+            Operation::Transition { .. } => "transition",
             Operation::Comment { .. } => "comment",
-            Operation::Annotate { .. } => "annotate",
+            Operation::Property { .. } => "property",
         }
     }
 }
@@ -218,19 +233,20 @@ impl Applier<'_> {
                 depends_on,
                 body,
                 priority,
-                repo,
+                repository,
                 waiting_on,
-                area,
+                component,
                 verification,
-                annotations,
+                external_id,
+                properties,
             } => {
                 let parent = parent.map(|p| self.resolve(&p)).transpose()?;
                 let depends_on = depends_on
                     .iter()
                     .map(|dep| self.resolve(dep))
                     .collect::<Result<Vec<_>>>()?;
-                let repo = match repo {
-                    Some(repo) => Some(repo),
+                let repository = match repository {
+                    Some(repository) => Some(repository),
                     None => crate::repository::current_member_name(self.board)?,
                 };
                 let new = NewTask {
@@ -241,12 +257,13 @@ impl Applier<'_> {
                     depends_on,
                     parent,
                     waiting_on,
-                    area,
+                    component,
                     verification,
-                    repo,
+                    repository,
+                    external_id,
                     body: body.unwrap_or_default(),
                     source_key: key.clone(),
-                    annotations,
+                    properties,
                 };
                 let outcome = crate::ops::add(&mut self.graph, self.board, new, now)?;
                 if let Some(key) = key {
@@ -265,10 +282,14 @@ impl Applier<'_> {
                 task_type,
                 waiting_on,
                 clear_waiting,
-                area,
-                clear_area,
+                component,
+                clear_component,
                 verification,
                 clear_verification,
+                repository,
+                clear_repository,
+                external_id,
+                clear_external_id,
             } => {
                 let id = self.resolve(&id)?;
                 let field = |value: Option<String>, clear: bool| {
@@ -284,8 +305,10 @@ impl Applier<'_> {
                     priority,
                     task_type,
                     waiting_on: field(waiting_on, clear_waiting),
-                    area: field(area, clear_area),
+                    component: field(component, clear_component),
                     verification: field(verification, clear_verification),
+                    repository: field(repository, clear_repository),
+                    external_id: field(external_id, clear_external_id),
                 };
                 let changed = crate::ops::update(&mut self.graph, self.board, &id, change, now)?;
                 Ok((id, changed, false))
@@ -390,11 +413,33 @@ impl Applier<'_> {
             Operation::Reopen { id, force } => {
                 let id = self.resolve(&id)?;
                 // An open Task is already where reopen leads; a re-run must not fail on it.
-                if !self.graph.get(&id)?.front.status.is_terminal() {
+                if !self
+                    .graph
+                    .workflow
+                    .is_terminal(&self.graph.get(&id)?.front.status)
+                {
                     return Ok((id, false, false));
                 }
                 crate::ops::reopen(&mut self.graph, &id, force, now)?;
                 Ok((id, true, false))
+            }
+            Operation::Transition {
+                id,
+                name,
+                by,
+                force,
+            } => {
+                let id = self.resolve(&id)?;
+                let caller = self.optional(by);
+                let outcome = crate::ops::transition(
+                    &mut self.graph,
+                    &id,
+                    &name,
+                    caller.as_deref(),
+                    force,
+                    now,
+                )?;
+                Ok((id, outcome == crate::transition::Outcome::Changed, false))
             }
             Operation::Comment { id, by, body } => {
                 let id = self.resolve(&id)?;
@@ -403,9 +448,9 @@ impl Applier<'_> {
                 self.queue_comment(&id, author, body)?;
                 Ok((id, true, false))
             }
-            Operation::Annotate { id, owner, value } => {
+            Operation::Property { id, owner, value } => {
                 let id = self.resolve(&id)?;
-                let changed = crate::ops::annotate(&mut self.graph, &id, &owner, value, now)?;
+                let changed = crate::ops::property(&mut self.graph, &id, &owner, value, now)?;
                 Ok((id, changed, false))
             }
         }
@@ -571,7 +616,7 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{Status, Task, TaskFrontmatter};
+    use crate::task::{Task, TaskFrontmatter};
 
     fn task(id: &str) -> Task {
         let now = Utc::now();
@@ -579,22 +624,24 @@ mod tests {
             id: id.to_string(),
             front: TaskFrontmatter {
                 title: id.to_string(),
-                status: Status::Todo,
+                status: "todo".to_string(),
+                resolution: None,
                 task_type: "task".to_string(),
                 priority: "medium".to_string(),
                 labels: Vec::new(),
                 links: Vec::new(),
                 parent: None,
                 checkpoint: None,
-                area: None,
+                component: None,
                 verification: None,
                 github: None,
                 remote: None,
-                repo: None,
+                repository: None,
+                external_id: None,
                 claim: None,
                 stray_claim_times: None,
                 source_key: None,
-                annotations: BTreeMap::new(),
+                properties: BTreeMap::new(),
                 created_at: now,
                 updated_at: now,
                 extra: BTreeMap::new(),

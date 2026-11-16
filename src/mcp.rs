@@ -142,13 +142,13 @@ fn tool_definitions() -> Vec<Value> {
                 "by": { "type": "string", "description": "Agent identity for the claim." },
                 "limit": { "type": "integer", "minimum": 1, "description": "Maximum tasks to list." },
                 "parent": { "type": "string", "description": "Only Ready SubTasks of this Parent Task." },
-                "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
+                "repository": { "type": "string", "description": "Only tasks with this member Repository; matches the `repository` field." },
                 "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
                 "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
                 "types": { "type": "array", "items": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"] }, "description": "Only tasks with any of these Issue types." },
                 "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"] }, "description": "Exclude tasks with any of these Issue types." },
-                "areas": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these work-area slugs; restricted to the Board's configured areas when set." },
-                "exclude_areas": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these work-area slugs." },
+                "components": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these Component slugs; restricted to the Board's configured components when set." },
+                "exclude_components": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these Component slugs." },
                 "all": { "type": "boolean", "description": "Include Ready tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." }
             }),
             &[],
@@ -157,20 +157,20 @@ fn tool_definitions() -> Vec<Value> {
             "list",
             "List tasks with filters. Terminal tasks are hidden unless include_closed=true; all=true widens Repository scope.",
             json!({
-                "status": { "type": "string", "enum": ["todo", "in_progress", "done", "cancelled"] },
+                "status": { "type": "string", "description": "Workflow status name; `orbit show` lists each task's status and allowed transitions." },
                 "priority": { "type": "string", "description": "Priority name from the Board's configured list (default: highest, high, medium, low)." },
                 "claimed_by": { "type": "string" },
                 "waiting": { "type": "boolean", "description": "Only tasks with an external blocker." },
                 "label": { "type": "string", "description": "Filter by label." },
                 "unlabeled": { "type": "boolean", "description": "Only tasks with no labels." },
                 "parent": { "type": "string", "description": "Only SubTasks of this Parent Task." },
-                "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
+                "repository": { "type": "string", "description": "Only tasks with this member Repository; matches the `repository` field." },
                 "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
                 "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
                 "types": { "type": "array", "items": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"] }, "description": "Only tasks with any of these Issue types." },
                 "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"] }, "description": "Exclude tasks with any of these Issue types." },
-                "areas": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these work-area slugs; restricted to the Board's configured areas when set." },
-                "exclude_areas": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these work-area slugs." },
+                "components": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these Component slugs; restricted to the Board's configured components when set." },
+                "exclude_components": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these Component slugs." },
                 "all": { "type": "boolean", "description": "Include tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." },
                 "include_closed": { "type": "boolean", "description": "Include done and cancelled tasks." },
                 "linked": { "type": "boolean", "description": "Only Tasks with an active Remote Issue link." },
@@ -195,7 +195,8 @@ fn tool_definitions() -> Vec<Value> {
                 "depends_on": { "type": "array", "items": { "type": "string" } },
                 "parent": { "type": "string", "description": "Create a SubTask under this Parent Task." },
                 "waiting_on": { "type": "string", "description": "External blocker." },
-                "area": { "type": "string", "description": "Optional work-area slug; restricted to the Board's configured areas when set." },
+                "component": { "type": "string", "description": "Optional Component slug; restricted to the Board's configured components when set." },
+                "external_id": { "type": "string", "description": "The task's identity in an external system; unique per Board." },
                 "verification": { "type": "string", "description": "Concise checks or commands for agents." },
                 "body": { "type": "string", "description": "Markdown body and acceptance criteria." }
             }),
@@ -203,7 +204,7 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "update",
-            "Change a task's title, body, priority, area, verification, or external wait. Does not change status.",
+            "Change a task's title, body, priority, component, repository, external id, verification, or external wait. Does not change status.",
             json!({
                 "id": { "type": "string" },
                 "title": { "type": "string" },
@@ -212,8 +213,12 @@ fn tool_definitions() -> Vec<Value> {
                 "priority": { "type": "string", "description": "Priority name from the Board's configured list (default: highest, high, medium, low)." },
                 "waiting_on": { "type": "string" },
                 "clear_waiting": { "type": "boolean" },
-                "area": { "type": "string", "description": "New work-area slug; restricted to the Board's configured areas when set." },
-                "clear_area": { "type": "boolean" },
+                "component": { "type": "string", "description": "New Component slug; restricted to the Board's configured components when set." },
+                "clear_component": { "type": "boolean" },
+                "repository": { "type": "string", "description": "New member Repository name; absent means Board-wide." },
+                "clear_repository": { "type": "boolean" },
+                "external_id": { "type": "string", "description": "New External ID; unique per Board." },
+                "clear_external_id": { "type": "boolean" },
                 "verification": { "type": "string" },
                 "clear_verification": { "type": "boolean" }
             }),
@@ -275,6 +280,17 @@ fn tool_definitions() -> Vec<Value> {
             &["id", "status"],
         ),
         tool(
+            "transition",
+            "Run a named workflow transition on a task; `get` reports each task's allowed_transitions.",
+            json!({
+                "id": { "type": "string" },
+                "name": { "type": "string", "description": "Workflow transition name, for example promote, block, or defer." },
+                "by": { "type": "string", "description": "Caller identity for Claim-holder checks." },
+                "force": { "type": "boolean", "description": "Run even when another holder's live Claim blocks the transition." }
+            }),
+            &["id", "name"],
+        ),
+        tool(
             "link",
             "Add, remove, or list typed links. Without `type`/`external`, add/remove manage the blocking `blocks` link between two tasks (depend/undepend).",
             json!({
@@ -320,8 +336,8 @@ fn tool_definitions() -> Vec<Value> {
             &["operations"],
         ),
         tool(
-            "annotate",
-            "Set a tool's Annotation (a JSON object) on a task, or remove it with value null.",
+            "property",
+            "Set a tool's Property (a JSON object, namespaced by owner) on a task, or remove it with value null.",
             json!({
                 "id": { "type": "string" },
                 "owner": { "type": "string" },
@@ -411,18 +427,11 @@ fn dispatch_tool(
             return tool_invalid("`limit` must be at least 1");
         }
     }
-    if let Some(status) = optional_str(arguments, "status") {
-        if name == "list"
-            && !matches!(
-                status.as_str(),
-                "todo" | "in_progress" | "done" | "cancelled"
-            )
-        {
-            return tool_invalid("`status` must be todo, in_progress, done, or cancelled");
-        }
-        if name == "finish" && !matches!(status.as_str(), "done" | "cancelled") {
-            return tool_invalid("`status` must be `done` or `cancelled`");
-        }
+    if let Some(status) = optional_str(arguments, "status")
+        && name == "finish"
+        && !matches!(status.as_str(), "done" | "cancelled")
+    {
+        return tool_invalid("`status` must be `done` or `cancelled`");
     }
     if name == "update"
         && arguments.get("waiting_on").is_some()
@@ -438,8 +447,23 @@ fn dispatch_tool(
             return tool_invalid("`blocker` and `clear_blocker` are mutually exclusive");
         }
     }
-    if name == "update" && arguments.get("area").is_some() && bool_arg(arguments, "clear_area") {
-        return tool_invalid("`area` and `clear_area` are mutually exclusive");
+    if name == "update"
+        && arguments.get("component").is_some()
+        && bool_arg(arguments, "clear_component")
+    {
+        return tool_invalid("`component` and `clear_component` are mutually exclusive");
+    }
+    if name == "update"
+        && arguments.get("repository").is_some()
+        && bool_arg(arguments, "clear_repository")
+    {
+        return tool_invalid("`repository` and `clear_repository` are mutually exclusive");
+    }
+    if name == "update"
+        && arguments.get("external_id").is_some()
+        && bool_arg(arguments, "clear_external_id")
+    {
+        return tool_invalid("`external_id` and `clear_external_id` are mutually exclusive");
     }
     if name == "update"
         && arguments.get("verification").is_some()
@@ -472,10 +496,10 @@ fn dispatch_tool(
         return tool_invalid("`parent` must be a task id string");
     }
     if arguments
-        .get("repo")
+        .get("repository")
         .is_some_and(|value| !value.is_string())
     {
-        return tool_invalid("`repo` must be a string");
+        return tool_invalid("`repository` must be a string");
     }
     if arguments
         .get("labels")
@@ -489,7 +513,7 @@ fn dispatch_tool(
     {
         return tool_invalid("`exclude_labels` must be an array of strings");
     }
-    for key in ["types", "exclude_types", "areas", "exclude_areas"] {
+    for key in ["types", "exclude_types", "components", "exclude_components"] {
         if arguments.get(key).is_some_and(|value| !value.is_array()) {
             return tool_invalid(format!("`{key}` must be an array of strings"));
         }
@@ -517,9 +541,9 @@ fn dispatch_tool(
                 args.push("--parent".to_string());
                 args.push(parent);
             }
-            if let Some(repo) = optional_str(arguments, "repo") {
-                args.push("--repo".to_string());
-                args.push(repo);
+            if let Some(repository) = optional_str(arguments, "repository") {
+                args.push("--repository".to_string());
+                args.push(repository);
             }
             if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
                 for label in labels {
@@ -557,22 +581,25 @@ fn dispatch_tool(
                     args.push(task_type.to_string());
                 }
             }
-            if let Some(areas) = arguments.get("areas").and_then(Value::as_array) {
-                for area in areas {
-                    let Some(area) = area.as_str() else {
-                        return tool_invalid("`areas` must be an array of strings");
+            if let Some(components) = arguments.get("components").and_then(Value::as_array) {
+                for component in components {
+                    let Some(component) = component.as_str() else {
+                        return tool_invalid("`components` must be an array of strings");
                     };
-                    args.push("--area".to_string());
-                    args.push(area.to_string());
+                    args.push("--component".to_string());
+                    args.push(component.to_string());
                 }
             }
-            if let Some(areas) = arguments.get("exclude_areas").and_then(Value::as_array) {
-                for area in areas {
-                    let Some(area) = area.as_str() else {
-                        return tool_invalid("`exclude_areas` must be an array of strings");
+            if let Some(components) = arguments
+                .get("exclude_components")
+                .and_then(Value::as_array)
+            {
+                for component in components {
+                    let Some(component) = component.as_str() else {
+                        return tool_invalid("`exclude_components` must be an array of strings");
                     };
-                    args.push("--exclude-area".to_string());
-                    args.push(area.to_string());
+                    args.push("--exclude-component".to_string());
+                    args.push(component.to_string());
                 }
             }
             if bool_arg(arguments, "all") {
@@ -604,9 +631,9 @@ fn dispatch_tool(
                 args.push("--parent".to_string());
                 args.push(parent);
             }
-            if let Some(repo) = optional_str(arguments, "repo") {
-                args.push("--repo".to_string());
-                args.push(repo);
+            if let Some(repository) = optional_str(arguments, "repository") {
+                args.push("--repository".to_string());
+                args.push(repository);
             }
             if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
                 for label in labels {
@@ -644,22 +671,25 @@ fn dispatch_tool(
                     args.push(task_type.to_string());
                 }
             }
-            if let Some(areas) = arguments.get("areas").and_then(Value::as_array) {
-                for area in areas {
-                    let Some(area) = area.as_str() else {
-                        return tool_invalid("`areas` must be an array of strings");
+            if let Some(components) = arguments.get("components").and_then(Value::as_array) {
+                for component in components {
+                    let Some(component) = component.as_str() else {
+                        return tool_invalid("`components` must be an array of strings");
                     };
-                    args.push("--area".to_string());
-                    args.push(area.to_string());
+                    args.push("--component".to_string());
+                    args.push(component.to_string());
                 }
             }
-            if let Some(areas) = arguments.get("exclude_areas").and_then(Value::as_array) {
-                for area in areas {
-                    let Some(area) = area.as_str() else {
-                        return tool_invalid("`exclude_areas` must be an array of strings");
+            if let Some(components) = arguments
+                .get("exclude_components")
+                .and_then(Value::as_array)
+            {
+                for component in components {
+                    let Some(component) = component.as_str() else {
+                        return tool_invalid("`exclude_components` must be an array of strings");
                     };
-                    args.push("--exclude-area".to_string());
-                    args.push(area.to_string());
+                    args.push("--exclude-component".to_string());
+                    args.push(component.to_string());
                 }
             }
             if bool_arg(arguments, "waiting") {
@@ -725,9 +755,13 @@ fn dispatch_tool(
                 args.push("--waiting-on".to_string());
                 args.push(waiting_on);
             }
-            if let Some(area) = optional_str(arguments, "area") {
-                args.push("--area".to_string());
-                args.push(area);
+            if let Some(component) = optional_str(arguments, "component") {
+                args.push("--component".to_string());
+                args.push(component);
+            }
+            if let Some(external_id) = optional_str(arguments, "external_id") {
+                args.push("--external-id".to_string());
+                args.push(external_id);
             }
             if let Some(verification) = optional_str(arguments, "verification") {
                 args.push("--verification".to_string());
@@ -767,12 +801,26 @@ fn dispatch_tool(
             if bool_arg(arguments, "clear_waiting") {
                 args.push("--clear-waiting".to_string());
             }
-            if let Some(area) = optional_str(arguments, "area") {
-                args.push("--area".to_string());
-                args.push(area);
+            if let Some(component) = optional_str(arguments, "component") {
+                args.push("--component".to_string());
+                args.push(component);
             }
-            if bool_arg(arguments, "clear_area") {
-                args.push("--clear-area".to_string());
+            if bool_arg(arguments, "clear_component") {
+                args.push("--clear-component".to_string());
+            }
+            if let Some(repository) = optional_str(arguments, "repository") {
+                args.push("--repository".to_string());
+                args.push(repository);
+            }
+            if bool_arg(arguments, "clear_repository") {
+                args.push("--clear-repository".to_string());
+            }
+            if let Some(external_id) = optional_str(arguments, "external_id") {
+                args.push("--external-id".to_string());
+                args.push(external_id);
+            }
+            if bool_arg(arguments, "clear_external_id") {
+                args.push("--clear-external-id".to_string());
             }
             if let Some(verification) = optional_str(arguments, "verification") {
                 args.push("--verification".to_string());
@@ -874,6 +922,24 @@ fn dispatch_tool(
             if let Some(comment) = optional_str(arguments, "comment") {
                 args.push("--comment".to_string());
                 args.push(comment);
+            }
+        }
+        "transition" => {
+            let Some(id) = required_str(arguments, "id") else {
+                return tool_invalid("missing or invalid `id`");
+            };
+            let Some(name) = required_str(arguments, "name") else {
+                return tool_invalid("missing or invalid `name`");
+            };
+            args.push("transition".to_string());
+            args.push(id);
+            args.push(name);
+            if let Some(by) = optional_str(arguments, "by") {
+                args.push("--by".to_string());
+                args.push(by);
+            }
+            if bool_arg(arguments, "force") {
+                args.push("--force".to_string());
             }
         }
         "link" => {
@@ -1035,16 +1101,16 @@ fn dispatch_tool(
                 args.push(by);
             }
         }
-        "annotate" => {
+        "property" => {
             let Some(id) = required_str(arguments, "id") else {
                 return tool_invalid("missing or invalid `id`");
             };
             let Some(owner) = required_str(arguments, "owner") else {
                 return tool_invalid("missing or invalid `owner`");
             };
-            args.push("annotation".to_string());
+            args.push("property".to_string());
             match arguments.get("value") {
-                None => return tool_invalid("missing `value`; pass null to remove the Annotation"),
+                None => return tool_invalid("missing `value`; pass null to remove the Property"),
                 Some(Value::Null) => {
                     args.extend(["remove".to_string(), id, owner]);
                 }
@@ -1277,7 +1343,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 17);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -1293,11 +1359,12 @@ mod tests {
             "heartbeat",
             "checkpoint",
             "finish",
+            "transition",
             "link",
             "delete",
             "label",
             "comment",
-            "annotate",
+            "property",
             "batch",
         ] {
             assert!(names.contains(&expected), "{expected}");

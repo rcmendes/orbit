@@ -119,62 +119,50 @@ The detailed module map, board-resolution flow, domain relationships, state mach
 
 The canonical vocabulary lives in `docs/GLOSSARY.md`. In short:
 
-- A Task has one stored **Status**: `todo`, `in_progress`, `done`, or `cancelled`.
+- A Task has one stored **Status**: a name defined by the Board's **Workflow**. Every Status belongs to a **Status Category** — `todo`, `active`, `done`, or `canceled` — and the shipped templates (`minimal`, `standard`, `agentic`) or a custom `[workflow]` section in `config.toml` define the names, Transitions, and the single Ready Status.
 - A **Parent Task** groups its descendants, and its completion depends on them. A **SubTask** is a Task with a `parent`; it is claimable and completable in its own right. Parentage follows the Board's configured Issue hierarchy (`board.hierarchy`; default `epic` > `story`/`task`/`bug` > `sub-task`) and is not a Dependency.
 - **Kind** is structural and derived: `task` or `subtask`.
 - **Type** is the stored Issue type, configured per Board under `board.types` (default `epic`, `story`, `task`, `bug`, `sub-task`; `board.default_type` picks the default, `task`). The type decides where in the hierarchy an Issue may sit: a child must be on a strictly deeper level than its parent. An **Epic** or **spec** is a top-level Issue with `type: epic`. External trackers call the unit an Issue and a child a Sub-issue; see [`docs/GLOSSARY.md`](./GLOSSARY.md), [ADR 0009](./adr/0009-keep-task-vocabulary.md), [ADR 0010](./adr/0010-structural-type-field.md), and [ADR 0022](./adr/0022-issue-model-and-platform-architecture.md).
-- **Ready** is derived: `todo`, no Claim (including no Stale Claim), not Waiting, no Hold Label, every Dependency is `done` or `cancelled`, and every SubTask is `done` or `cancelled`.
-- **Blocked** is derived: at least one Dependency is not `done` or `cancelled`, or a Parent Task has at least one open SubTask.
-- **Waiting** is an external blocker recorded as a blocking Link to an external reference; it is not a Status.
+- **Ready** is derived: the Task sits in the Workflow's Ready Status (the one Status flagged `ready`), has no Claim (including no Stale Claim), is not Waiting, carries no Hold Label, has no open Dependency (a blocking Link to a Task not in a closed Status Category), and has no open descendant.
+- **Blocked** is derived: at least one Dependency is not in a closed Status Category, or a Parent Task has at least one open descendant.
 - A **Claim** is exclusive, time-bounded responsibility for a Task. The time window is a **Lease**. An expired, unreleased Claim is **Stale**: the Task is not Ready, but it can be released or stolen.
 - A **Checkpoint** is the claim holder's latest handoff note: progress, the next useful action, and any blocker. It is stored on the Task, survives release and takeover, and never affects readiness or claim eligibility.
-- **Done** and **Cancelled** both resolve dependents. Cancelled exists so abandoned work does not have to lie with `done` or destroy history with `delete`.
+- **Done** and **Cancelled** Statuses (the `done` and `canceled` categories) both resolve dependents. Cancelled exists so abandoned work does not have to lie with `done` or destroy history with `delete`. A closing Transition records its **Resolution** on the Task; returning to an open Status clears it.
 - **Priority** is a name from the Board's ordered `board.priorities` list — `highest`, `high`, `medium`, `low` by default, most important first. Tasks store the name and sort by its ordinal in that list, so a Board can rename or reorder priorities; a stored name outside the list sorts after every configured name.
 - **Label** is a short lowercase string attached to a Task for filtering or workflow state. **Hold Labels** are configured labels that suspend readiness; the defaults are `needs-triage`, `needs-info`, and `ready-for-human`. `ready-for-agent`, `bug`, and `enhancement` are neutral.
 - **Comment** is an append-only, authored, timestamped note on a Task. Comments do not affect Status or readiness.
 
 ### 3.1 Status state machine
 
-Only four values are stored in `status`:
+The lifecycle is a **Workflow** defined by the Board, not a fixed enum. `config.toml` selects a shipped template — `minimal`, `standard` (the default), or `agentic` — or defines `[workflow]` `statuses`, `transitions`, and `initial` directly. Every Status has a name and a category (`todo`, `active`, `done`, `canceled`); exactly one Status is flagged `ready`. The standard template:
 
-```mermaid
-stateDiagram-v2
-    direction LR
-
-    [*] --> todo: add
-
-    todo --> in_progress: claim or ready --claim
-    todo --> done: done
-    todo --> cancelled: cancel
-
-    in_progress --> todo: release
-    in_progress --> in_progress: heartbeat
-    in_progress --> in_progress: checkpoint
-    in_progress --> in_progress: claim --steal
-    in_progress --> done: done
-    in_progress --> cancelled: cancel
-
-    done --> todo: reopen
-    cancelled --> todo: reopen
-
-    done --> done: done --comment
-    cancelled --> cancelled: cancel --comment
-
-    note right of in_progress
-        Stale is derived:
-        in_progress with lease_until <= now.
-    end note
-
-    note left of todo
-        Ready is derived:
-        todo, no claim, no blocking link,
-        no hold label, every blocking
-        dependency done or cancelled, and every
-        SubTask done or cancelled.
-    end note
+```text
+statuses:    ready (todo, ready) · todo (todo) · in_progress (active)
+             · done (done) · cancelled (canceled)
+initial:     ready
+transitions: claim · release · promote · defer · done · cancel · reopen
+```
 ```
 
-`done` and `cancelled` both resolve dependents. `reopen` returns a terminal Task to `todo`; `release` returns an active claim to `todo`; `cancel` is not `delete`. Waiting, hold labels, and dependency edges are gates on readiness and claims, not Statuses. The full transition table and readiness gate are in [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md).
+`minimal` drops the `todo` backlog and its `promote`/`defer` edges; `agentic` adds `blocked` and review-oriented statuses. Custom workflows may add statuses such as `In Review` and transitions such as `submit`; validation requires unique status and transition names, valid categories, exactly one ready Status, an initial Status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and no resolutions on transitions into open statuses.
+
+The built-in commands drive named Workflow edges:
+
+| From category | Command | Transition | Effect |
+| --- | --- | --- | --- |
+| any | `add` | — | Creates `tasks/ID.md` in the initial Status. |
+| ready Status | `claim`, `ready --claim` | `claim` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
+| `active` | `heartbeat` | — | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
+| `active` | `checkpoint` | — | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a closed Status or a task with no claim. |
+| `active` | `claim --steal` | `claim` | Replaces the holder and resets `claimed_at` and `lease_until`, preserving the latest checkpoint. `--steal` does not bypass hold labels or dependencies. |
+| `active` | `release` | `release` | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. |
+| open | `done` | `done` | Every Dependency must be in a closed category, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields and `waiting_on`; records the transition's resolution. |
+| open | `cancel` | `cancel` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields and `waiting_on`; records the transition's resolution. Resolves dependents. |
+| closed | `reopen` | `reopen` | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively claimed ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears claim fields, `waiting_on`, and the resolution. |
+| any | `transition <name>` | any defined edge | Runs one named Workflow transition directly, honoring the claim-holder check where the edge requires it. An unknown name or an edge that does not start from the current Status fails with `INVALID_TRANSITION` naming the valid transitions. |
+| any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live claim requires the holder unless `--force`. With dependents or SubTasks, requires `--force`, which first removes edges from dependents and deletes the whole SubTask subtree. |
+
+Closed categories (`done`, `canceled`) resolve dependents; `reopen`-style transitions return a Task to an open Status; `cancel` is not `delete`. `orbit show` reports `status_category`, `resolution`, and `allowed_transitions` — the Workflow edges valid from the current Status. Waiting, hold labels, and dependency edges are gates on readiness and claims, not Statuses. The full transition table and readiness gate are in [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ## 4. Task file
 
@@ -220,7 +208,7 @@ The example below is a SubTask file, `tasks/orb-f14c02.d4b3df.md`.
 ```yaml
 ---
 title: Build the CLI router
-status: todo
+status: in_progress
 type: task
 priority: medium
 labels:
@@ -243,7 +231,7 @@ checkpoint:
 claimed_by: claude-1
 claimed_at: 2026-10-23T12:00:00Z
 lease_until: 2026-10-23T12:30:00Z
-annotations:
+properties:
   ci:
     passed: true
 created_at: 2026-10-23T11:00:00Z
@@ -253,9 +241,8 @@ updated_at: 2026-10-23T12:00:00Z
 Body text, acceptance criteria, notes.
 ```
 
-Required: `title`, `status`, `created_at`, `updated_at`. Optional: `type` (default `board.default_type`, `task`; one of the Board's `board.types`; always written on save), `priority` (a name from `board.priorities`; defaults to `board.default_priority`, `medium` unless the Board changes it), `labels` (default empty, normalized, sorted, deduplicated), `links` (default empty; typed relations to other Tasks or external references — see Links below), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `checkpoint`, `area` (optional; a short lowercase slug, restricted to `board.areas` when the Board configures them), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `repo` (optional; the member Repository that owns the Task, filled from the current Repository by `orbit add`), `remote` (optional provider-neutral link — `tracker`, `project`, `id`, optional `url`, `active`, and an opaque `baseline` — or inactive provenance when a Remote Tracker provider is enabled), `github` (optional legacy GitHub link kept for backward compatibility; new writes use `remote`), `source_key` (optional; a caller-chosen Source Key of 1 to 200 printable ASCII characters without spaces, unique per Board; `add --source-key` returns the existing Task instead of creating a duplicate, and `doctor` reports a key on two Tasks as `DUPLICATE_SOURCE_KEY`), `annotations` (optional; a map from owner to a JSON object, see Annotations below). A link with no `active` field is active; detach writes `active: false` while retaining the stable identity and sync baseline. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task whose type sits on a strictly shallower level of `board.hierarchy` than the child's type; parent cycles are rejected. The ID never encodes the parent. `doctor` reports a disallowed edge or unknown type as `INVALID_TYPE`, a missing required field as `MISSING_REQUIRED_FIELD`, and a parent cycle as `PARENT_CYCLE`.
-
-**Annotations.** An Annotation is structured data that one tool attaches to a Task under the tool's name, its owner. An owner is a lowercase slug (`[a-z0-9][a-z0-9-]*`, at most 40 characters); a value is a JSON object of at most 8192 bytes serialized compactly. Orbit stores, returns, and shows Annotations but never interprets them: they never affect Ready, Blocked, Claim eligibility, or Status, and they are never pushed to or pulled from a Remote Tracker. Board host sync merges them per owner. `show`, `list`, and `export` return `annotations` (an empty object when none); human `show` prints one `annotation <owner>: <json>` line per owner. `doctor` reports a malformed Annotation as `INVALID_ANNOTATION`.
+Required: `title`, `status`, `created_at`, `updated_at`. `status` names a Status from the Board's Workflow; `resolution` (optional) records the outcome a closing Transition set and is cleared on reopen. Optional: `type` (default `board.default_type`, `task`; one of the Board's `board.types`; always written on save), `priority` (a name from `board.priorities`; defaults to `board.default_priority`, `medium` unless the Board changes it), `labels` (default empty, normalized, sorted, deduplicated), `links` (default empty; typed relations to other Tasks or external references — see Links below; `depends_on` and `waiting_on` remain as compatibility views), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `checkpoint`, `component` (optional; a short lowercase slug, restricted to `board.components` when the Board configures them), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `repository` (optional; the member Repository that owns the Task, filled from the current Repository by `orbit add`), `external_id` (optional; the Task's identity in an external system, unique per Board; `doctor` reports a duplicate as `DUPLICATE_EXTERNAL_ID`), `remote` (optional provider-neutral link — `tracker`, `project`, `id`, optional `url`, `active`, and an opaque `baseline` — or inactive provenance when a Remote Tracker provider is enabled), `github` (optional legacy GitHub link kept for backward compatibility; new writes use `remote`), `source_key` (optional; a caller-chosen Source Key of 1 to 200 printable ASCII characters without spaces, unique per Board; `add --source-key` returns the existing Task instead of creating a duplicate, and `doctor` reports a key on two Tasks as `DUPLICATE_SOURCE_KEY`), `properties` (optional; a map from owner to a JSON object, see Properties below). A link with no `active` field is active; detach writes `active: false` while retaining the stable identity and sync baseline. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task whose type sits on a strictly shallower level of `board.hierarchy` than the child's type; parent cycles are rejected, and the Task ID never encodes the parent. `doctor` reports a disallowed edge or unknown type as `INVALID_TYPE`, a missing required field as `MISSING_REQUIRED_FIELD`, and a parent cycle as `PARENT_CYCLE`.
+**Properties.** A Property is structured data that one tool attaches to a Task under the tool's name, its owner — the owner is the property's namespace. An owner is a lowercase slug (`[a-z0-9][a-z0-9-]*`, at most 40 characters); a value is a JSON object of at most 8192 bytes serialized compactly. Orbit stores, returns, and shows Properties but never interprets them: they never affect Ready, Blocked, Claim eligibility, or Status, and they are never pushed to or pulled from a Remote Tracker. Board host sync merges them per owner. `show`, `list`, and `export` return `properties` (an empty object when none); human `show` prints one `property <owner>: <json>` line per owner. `doctor` reports a malformed Property as `INVALID_PROPERTY`.
 
 **Links.** A Link is a typed relation stored on the Task: `type` names the relation the *target* has toward the owner (`blocks` on Task T targeting D reads "D blocks T"), `target` is either an Orbit Task ID (a bare string) or an external reference (`{system, id, url?}`, for example `jira:PROJ-123`), `blocking` optionally overrides the type's default, and `attributes` is an optional map of arbitrary key/value data. Built-in types are `blocks`, `relates-to`, `duplicates`, and `discovered-from`; `blocks` defaults to blocking and every other type to non-blocking, and any other lowercase slug is a custom type. Blocking links drive readiness — the Task is not Ready while a blocking link names an open Task or an external reference — and only blocking links take part in cycle checks; non-blocking links may form cycles freely. `orbit link add|remove|list` manages links; `orbit depend`/`undepend` and `add --depends-on` are shorthand for a blocking `blocks` link between two Tasks, and `add --waiting-on` records a blocking `waiting-on` link to an external reference. `show`/`list`/`export` return `links` (each entry carries `type`, `target`, the resolved `blocking` flag, `inward`/`outward` names, and `attributes`) plus the derived `depends_on` (open blocking Task targets) and `waiting_on` (external blocking targets) views. Legacy `depends_on`/`waiting_on` frontmatter keys are read once into `links` on load and never written back.
 
@@ -300,10 +287,17 @@ lock_timeout_ms = 2000
 [id]
 length = 6
 prefix = "orb-"
+
+# Optional: pick a shipped workflow template (minimal, standard, agentic;
+# standard is the default) or define a custom one. Omitted, the Board uses
+# the standard template.
+# [workflow]
+# template = "agentic"
 ```
 
-`board.storage` is retired (ADR 0019): every Board is a standalone repository, so the key is neither written nor honored; a config that still carries it marks a legacy Board for `orbit migrate`. `board.priorities` is the ordered Priority vocabulary, most important first; each entry is a lowercase name and `board.default_priority` must name one of them. Tasks store a Priority name and sort by its position in the list, so renaming or reordering the list reorders every Task without rewriting files. `board.types` declares the Issue type vocabulary (`[[board.types]]` entries with `name` and optional `required` frontmatter fields), `board.hierarchy` orders the types into levels (`[[board.hierarchy]]` entries with a `types` list, top level first; a child must sit strictly deeper than its parent), and `board.default_type` names the type `orbit add` uses when neither `--type` nor `--parent` applies. All three are omitted from `config.toml` while they match the defaults (`epic`, `story`, `task`, `bug`, `sub-task`; `epic` > `story`/`task`/`bug` > `sub-task`; `task`); a legacy `board.max_subtask_depth` key is ignored. `id.prefix` must contain only lowercase letters, digits, and dashes; a dot remains valid in legacy IDs but new IDs never contain one. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`. Optional `id.accepted_prefixes` lists additional valid Task-ID prefixes retained when Boards with different slugs are consolidated; new Task IDs still use `id.prefix`.
+`[workflow]` selects the Board's lifecycle. `template` names a shipped workflow — `minimal`, `standard` (the default), or `agentic`. Setting `statuses`, `transitions`, or `initial` instead defines a custom workflow; validation requires unique status and transition names, valid categories (`todo`, `active`, `done`, `canceled`), exactly one status flagged `ready`, an `initial` status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and none on transitions into open statuses. See §3.1 for the shipped templates.
 
+`board.storage` is retired (ADR 0019): every Board is a standalone repository, so the key is neither written nor honored; a config that still carries it marks a legacy Board for `orbit migrate`. `board.priorities` is the ordered Priority vocabulary, most important first; each entry is a lowercase name and `board.default_priority` must name one of them. Tasks store a Priority name and sort by its position in the list, so renaming or reordering the list reorders every Task without rewriting files. `board.types` declares the Issue type vocabulary (`[[board.types]]` entries with `name` and optional `required` frontmatter fields), `board.hierarchy` orders the types into levels (`[[board.hierarchy]]` entries with a `types` list, top level first; a child must sit strictly deeper than its parent), and `board.default_type` names the type `orbit add` uses when neither `--type` nor `--parent` applies. All three are omitted from `config.toml` while they match the defaults (`epic`, `story`, `task`, `bug`, `sub-task`; `epic` > `story`/`task`/`bug` > `sub-task`; `task`); a legacy `board.max_subtask_depth` key is ignored. `id.prefix` must contain only lowercase letters, digits, and dashes; a dot remains valid in legacy IDs but new IDs never contain one. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`. Optional `id.accepted_prefixes` lists additional valid Task-ID prefixes retained when Boards with different slugs are consolidated; new Task IDs still use `id.prefix`.
 ## 5. Board lifecycle
 
 A Board lives in a Board folder, `DIR`, which is always a standalone Git repository on branch `orbit`. In a Git working tree, the default is `./.orbit/board` — the hidden Board inside the repository's Orbit folder, with `cache/` beside it (or the main checkout's from a linked worktree). A `DIR` that is itself a Git working-tree root, including `.`, means "initialize that checkout" and resolves to its `./.orbit/board` (the main checkout's from a linked worktree); the repository root's own `.orbit` anchors it. Any other `DIR` inside a repository is a visible Board folder anchored by the repository's `.orbit/board` pointer file and hidden through `.git/info/exclude`. Outside Git, `orbit init` at an anchor folder creates `<anchor>/.orbit/board`; any other directory becomes a visible Board folder anchored by a sibling `.orbit`. `--dir` and `ORBIT_DIR` accept an anchor or a Board directory.
@@ -363,7 +357,7 @@ membership comes from the folder layout. The rebuildable inventory is cached at
 `<anchor>/.orbit/cache/member-repositories.json`; `orbit repo list` reports
 discovered and explicit members, and `orbit repo refresh` reports which
 Repositories joined or left. Tasks record their owning Repository in the
-optional `repo` frontmatter field; `orbit add` fills it from the current
+optional `repository` frontmatter field; `orbit add` fills it from the current
 Repository automatically.
 
 When `orbit init` runs on an anchor that still contains child Boards, it
@@ -505,7 +499,7 @@ Board directly at `<anchor>/.orbit` is a legacy layout and `orbit init
 
 Before ADR 0019, a local Board lived at `<git-common-dir>/orbit/board` with its lock at `<git-common-dir>/orbit/lock`, a worktree-backed Board lived at `.orbit` as a worktree of the code repository, and a shared Board lived at `<workspace>/board` or an arbitrary `--board` path. Those Boards still resolve through discovery or a legacy link target with a `LEGACY_LAYOUT` warning, but every Board command then fails with `BOARD_NOT_MIGRATED` until the Board is converted.
 
-`orbit migrate [--apply|--dry-run]` is the explicit conversion (preview by default). It turns the resolved legacy Board into a standalone repository on branch `orbit` at the canonical location — the hidden `.orbit/board` inside the repository's or anchor's Orbit folder, or a visible Board folder anchored by the `.orbit/board` pointer file — moves `<git-common-dir>/orbit/board` content onto that branch, removes the old worktree record, writes the `.git/info/exclude` entries, and reserves `.orbit/cache`. In the same commit it rewrites task frontmatter `github:` links to `remote:`, moves `repo:*` labels into the `repo` field, converts `[github]` configuration into remote project entries, drops `board.storage`, and seeds `board.areas` from the Area values Tasks already use. Re-running after `--apply` is a no-op. Other repositories that shared the old Board may need to run `orbit repo add DIR` again. A legacy Board directly at an anchor's `.orbit` remains available through an explicit `--dir` path; `orbit init <anchor>` reports it and will not shadow it.
+`orbit migrate [--apply|--dry-run]` is the explicit conversion (preview by default). It turns the resolved legacy Board into a standalone repository on branch `orbit` at the canonical location — the hidden `.orbit/board` inside the repository's or anchor's Orbit folder, or a visible Board folder anchored by the `.orbit/board` pointer file — moves `<git-common-dir>/orbit/board` content onto that branch, removes the old worktree record, writes the `.git/info/exclude` entries, and reserves `.orbit/cache`. In the same commit it rewrites task frontmatter `github:` links to `remote:`, moves `repo:*` labels into the `repository` field, converts `[github]` configuration into remote project entries, drops `board.storage`, and seeds `board.components` from the Component values Tasks already use. Re-running after `--apply` is a no-op. Other repositories that shared the old Board may need to run `orbit repo add DIR` again. A legacy Board directly at an anchor's `.orbit` remains available through an explicit `--dir` path; `orbit init <anchor>` reports it and will not shadow it.
 
 ### Agent configuration
 
@@ -535,8 +529,8 @@ orbit repo <add|remove|list|refresh>
 orbit slug show
 orbit slug migrate <SLUG> [--dry-run] [--force]
 orbit add <TITLE> [-p N] [--type TYPE] [--depends-on ID]... [--parent ID] [--waiting-on TEXT] [--label LABEL]... [--body TEXT|--body-file PATH|-]
-orbit list [--status S] [--priority NAME] [--claimed-by NAME] [--waiting] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--repo NAME|--unlabeled] [--linked|--local] [--parent ID] [--group] [--all] [--include-closed]
-orbit ready [--limit N] [--parent ID] [--repo NAME] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--all] [--claim] [--by NAME]
+orbit list [--status S] [--priority NAME] [--claimed-by NAME] [--waiting] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--repository NAME|--unlabeled] [--linked|--local] [--parent ID] [--group] [--all] [--include-closed]
+orbit ready [--limit N] [--parent ID] [--repository NAME] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--all] [--claim] [--by NAME]
 orbit show <id>
 orbit tree <id>
 orbit claim <id> [--by NAME] [--steal] [--worktree]
@@ -546,14 +540,15 @@ orbit checkpoint <id> [--progress TEXT] [--next TEXT|--clear-next] [--blocker TE
 orbit done <id> [--by NAME] [--force] [--comment TEXT | --comment-file PATH]
 orbit cancel <id> [--by NAME] [--force] [--comment TEXT | --comment-file PATH]
 orbit reopen <id> [--force]
+orbit transition <id> <name> [--by NAME] [--force]
 orbit update <id> [--title TEXT] [--body TEXT|--body-file PATH] [--priority NAME] [--type TYPE] [--waiting-on TEXT|--clear-waiting]
 orbit label add <id> <label>...
 orbit label remove <id> <label>...
 orbit label list
 orbit comment add <id> [--body TEXT|--body-file PATH|-] [--by NAME]
 orbit comment list <id>
-orbit annotation set <id> <owner> --value JSON
-orbit annotation remove <id> <owner>
+orbit property set <id> <owner> --value JSON
+orbit property remove <id> <owner>
 orbit batch --file PATH|- [--dry-run] [--by NAME]
 orbit link add <id> [--type TYPE] (--to ID|--external SYSTEM:ID) [--url URL] [--blocking|--no-blocking] [--attribute KEY=VALUE]...
 orbit link remove <id> [--type TYPE] (--to ID|--external SYSTEM:ID)
@@ -561,7 +556,7 @@ orbit link list <id>
 orbit depend <id> <dep-id>
 orbit undepend <id> <dep-id>
 orbit delete <id> [--by NAME] [--force]
-orbit prime [--hook-json] [--repo NAME] [--label LABEL]... [--by NAME]
+orbit prime [--hook-json] [--repository NAME] [--label LABEL]... [--by NAME]
 orbit export
 orbit setup <claude|cursor|codex|opencode|devin|mattpocock|all> [--scope project|user] [--hooks] [--no-mcp] [--portable-mcp] [--mcp-bin PATH] [--print] [--check] [--remove]
 orbit mcp
@@ -613,7 +608,7 @@ value, and never creates an Issue for an existing Local Task. The Board lock is
 held for the complete push. `--no-sync` and `ORBIT_NO_AUTO_SYNC=1` suppress it;
 explicit `orbit remote sync` is never suppressed.
 
-The trigger is a change to title, body, labels, status, `area`, or
+The trigger is a change to title, body, labels, status, `component`, or
 `verification`. Priority, type, links, claims, checkpoints, comments, and
 Remote Issue relationships do not trigger a remote write. The command wrapper
 snapshots `tasks/*.md` before and after a task write command and pushes every
@@ -660,8 +655,7 @@ creating duplicate links. See [ADR 0015](./adr/0015-github-projects-downstream.m
 
 `--agents` accepts `none`, `all`, or a comma-separated list of client names. Without it, `init` asks in a TTY and otherwise writes no agent files while explaining the `orbit setup` hint in its report; `--print` never prompts. `--agents none` is the non-interactive "Board only" choice.
 
-`TYPE` is one of the Board's configured Issue types (`epic`, `story`, `task`, `bug`, `sub-task` by default). `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repo NAME` matches the Task's `repo` field or a legacy `repo:NAME` label. `--linked` and `--local` are mutually exclusive filters on `list`; `--local` includes Tasks whose Remote identity is retained as inactive provenance.
-
+`TYPE` is one of the Board's configured Issue types (`epic`, `story`, `task`, `bug`, `sub-task` by default). `--type` and `--exclude-type` are repeatable on `list` and `ready`; `--label` is repeatable on `list`, `ready`, and `prime`; `--exclude-label` is repeatable on `list` and `ready`; `--repository NAME` matches the Task's `repository` field case-insensitively. `--component`/`--exclude-component` filter on the `component` field and are validated against `board.components` when the Board configures them. `--linked` and `--local` are mutually exclusive filters on `list`; `--local` includes Tasks whose Remote identity is retained as inactive provenance.
 ### Milestones
 
 Entries record what each release delivered. Some name commands that were later retired or renamed; [CHANGELOG.md](../CHANGELOG.md) maps each retired command to its replacement.
@@ -672,7 +666,7 @@ Entries record what each release delivered. Some name commands that were later r
 - M3: packaging and release automation. Implemented.
 - M4: labels, comments, hold labels, and triage integration. Implemented.
 - M5: one-command onboarding. `init` creates the Board and reconciles detected harnesses idempotently; `orbit repo add`/`remove` share one Board across repositories; hooks record the absolute binary; `setup --check` reports drift. Implemented.
-- M6: multi-Repository Boards, SubTasks, dot-hierarchical IDs, repo/label-scoped queues, and deterministic export. Implemented.
+- M6: multi-Repository Boards, SubTasks, flat IDs with parent frontmatter, repo/label-scoped queues, and deterministic export. Implemented.
 - v0.5.0: metadata-only `type`, `tree`, close candidates, parent progress fields, and label/type exclusions. Implemented.
 - v0.6.0: aligned human `list` table with `--group` and parent-first ordering, `--tree` removal, and per-board Task-ID slugs. Presentation and identity changes; the JSON contract is unchanged.
 - v0.7.0: `orbit slug show` for read-only identity reporting and `orbit slug migrate` for an explicit, atomic prefix rewrite on populated Boards. The one-prefix invariant is preserved; task bodies, checkpoint text, comment text, Git history, and external links are not rewritten.
@@ -691,9 +685,9 @@ Entries record what each release delivered. Some name commands that were later r
 
 ### Command rules
 
-- `list` hides `done` and `cancelled` unless `--include-closed`. Inside a member Repository or one of its worktrees `list` and `ready` are scoped to that Repository's Tasks plus Board-wide Tasks (no `repo`); `--all` widens the scope to the whole Board, and at the Board's root there is no scoping. `--type` is repeatable and matches any listed Type; `--exclude-type` hides any listed Type. `--label` is repeatable and every label must match; `--exclude-label` is repeatable and hides a Task carrying any named label. `--repo NAME` matches the Task's `repo` field or a legacy `repo:NAME` label. `--unlabeled` conflicts with `--label` and `--repo`. `--linked` and `--local` are mutually exclusive and filter by active Remote Issue link; `--local` includes detached provenance.
+- `list` hides `done` and `cancelled` unless `--include-closed`. Inside a member Repository or one of its worktrees `list` and `ready` are scoped to that Repository's Tasks plus Board-wide Tasks (no `repository`); `--all` widens the scope to the whole Board, and at the Board's root there is no scoping. `--type` is repeatable and matches any listed Type; `--exclude-type` hides any listed Type. `--label` is repeatable and every label must match; `--exclude-label` is repeatable and hides a Task carrying any named label. `--repository NAME` matches the Task's `repository` field case-insensitively. `--unlabeled` conflicts with `--label` and `--repository`. `--linked` and `--local` are mutually exclusive and filter by active Remote Issue link; `--local` includes detached provenance.
 - Human `list` output is an aligned table with `ID`, `STATUS`, `PRIORITY`, `TYPE`, `ISSUE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns. `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Root Tasks sort by priority, then creation time, then ID; each Parent Task is followed by its SubTasks, sorted by priority, then creation time, then ID. `--group` renders one outlined table with a banner for each Parent Task, its SubTasks underneath, and a final `No parent` section; parent groups follow the parent's priority and SubTasks follow their own priority. Titles longer than 60 characters are truncated with an ellipsis. The table is presentation only; `--json` carries the full title and every field and is the contract for scripts and agents.
-- `ready` and `prime` accept the same `--repo` and repeatable `--label` filters. `ready` also accepts `--parent`, `--type`, `--exclude-type`, and `--exclude-label`; `prime` reports `close_candidates` for non-terminal Parent Tasks with at least one SubTask and no open SubTasks. All filters combine with AND.
+- `ready` and `prime` accept the same `--repository` and repeatable `--label` filters, plus `--component`/`--exclude-component`. `ready` also accepts `--parent`, `--type`, `--exclude-type`, and `--exclude-label`; `prime` reports `close_candidates` for non-terminal Parent Tasks with at least one SubTask and no open SubTasks. All filters combine with AND.
 - `add --type epic` and `update --type epic` are refused when the Task has a `parent`; epic is top-level only. `type` defaults to `task` and is written explicitly on every save.
 - `init` accepts `--slug` as a bare word. Explicit invalid input returns `INVALID_SLUG` with a normalized suggestion. Re-runs preserve the stored prefix; an empty Board can change it, a populated Board returns `SLUG_LOCKED` naming `orbit slug migrate <slug>`; `--print` previews the same prefix without writing.
 - `init` derives the slug from `DIR`: the parent folder name when `DIR` is named `.orbit`, otherwise `DIR`'s own name. Boards anchored at `~/.orbit` use `orb` with a warning. Explicit `--slug` wins.
@@ -702,7 +696,7 @@ Entries record what each release delivered. Some name commands that were later r
 - `slug show` is read-only and reports the slug, literal prefix, task/SubTask counts, and comment-file count. `slug migrate` is the explicit rewrite path described in [Migrating the slug](#migrating-the-slug); it is not exposed as an MCP tool.
 - `slug migrate` validates the target like `--slug`. The current slug is a no-op with no commit. Applying with live claims requires `--force`; dry-run reports them without refusing. An unhealthy Board returns `MIGRATION_BLOCKED`; a target collision returns `PREFIX_COLLISION`. `--dry-run` writes nothing.
 - A hand-edited `id.prefix` that matches no task file returns one `PREFIX_MISMATCH` from strict loads and `doctor`. Migration refuses this state; restore the configured prefix first.
-- `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `3` (3 added `annotations`); `data.board.prefix` is the literal Task-ID prefix.
+- `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `4` (4 renamed Annotations to namespaced Properties and promoted `area`/`repo` to `component`/`repository` plus `external_id`); `data.board.prefix` is the literal Task-ID prefix.
 - `done` never bypasses unfinished dependencies. `--force` overrides a competing live claim and, on a Parent Task, cancels open SubTasks before closing it.
 - A forced `reopen` can leave an already-done dependent with an unfinished dependency. That is a historical fact, not corruption: `doctor` reports it as a warning, and the next `done` of that dependent still enforces its dependencies.
 - `reopen` refuses when a done dependent exists unless `--force`. Reopening a SubTask of a done parent reopens the parent too.
@@ -762,11 +756,11 @@ Error:
 
 ### Batch
 
-`orbit batch --file PATH|-` reads `{"operations": [...]}`. Each operation has an `op` (`add`, `update`, `label`, `depend`, `undepend`, `link`, `unlink`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`, `comment`, `annotate`) and the fields of its command: `add` takes `key` (Source Key), `title`, `type`, `parent`, `labels`, `depends_on`, `body`, `priority`, `repo`, `waiting_on`, `area`, `verification`, `annotations`; `update` takes `id` plus `title`, `body`, `priority`, `type`, `waiting_on`/`clear_waiting`, `area`/`clear_area`, `verification`/`clear_verification`; `label` takes `id`, `add`, `remove`; `depend`/`undepend` take `id`, `on`; `link` takes `id`, `type` (optional, default `relates-to`), `to` or `external` (exactly one), optional `url`, `blocking`, and `attributes` (an object); `unlink` takes `id`, optional `type`, and `to` or `external`; `claim` takes `id`, `by`, `steal`; `heartbeat` takes `id`, `by`; `release`, `done`, and `cancel` take `id`, `by`, `force` (and `comment` for `done`/`cancel`); `reopen` takes `id`, `force`; `comment` takes `id`, `by`, `body`; `annotate` takes `id`, `owner`, `value` (an object, or null to remove). Unknown fields fail with `INVALID_BATCH`.
+`orbit batch --file PATH|-` reads `{"operations": [...]}`. Each operation has an `op` (`add`, `update`, `label`, `depend`, `undepend`, `link`, `unlink`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`, `transition`, `comment`, `property`) and the fields of its command: `add` takes `key` (Source Key), `title`, `type`, `parent`, `labels`, `depends_on`, `body`, `priority`, `repository`, `waiting_on`, `component`, `verification`, `external_id`, `properties`; `update` takes `id` plus `title`, `body`, `priority`, `type`, `waiting_on`/`clear_waiting`, `component`/`clear_component`, `verification`/`clear_verification`, `repository`/`clear_repository`, `external_id`/`clear_external_id`; `label` takes `id`, `add`, `remove`; `depend`/`undepend` take `id`, `on`; `link` takes `id`, `type` (optional, default `relates-to`), `to` or `external` (exactly one), optional `url`, `blocking`, and `attributes` (an object); `unlink` takes `id`, optional `type`, and `to` or `external`; `claim` takes `id`, `by`, `steal`; `heartbeat` takes `id`, `by`; `release`, `done`, and `cancel` take `id`, `by`, `force` (and `comment` for `done`/`cancel`); `reopen` takes `id`, `force`; `transition` takes `id`, `name`, `by`, `force`; `comment` takes `id`, `by`, `body`; `property` takes `id`, `owner`, `value` (an object, or null to remove). Unknown fields fail with `INVALID_BATCH`.
 
 A reference (`id`, `on`, `parent`, `depends_on` entries) is a Task ID or `key:` plus a Source Key added earlier in the Batch or already on the Board. `by` defaults to `--by`, then `ORBIT_AGENT`, then `USER`.
 
-Operations run in order on one in-memory snapshot under the exclusive lock. On the first failure nothing is written and the error carries the operation's own code with `details.index` and `details.op`. On success Orbit writes changed Task files, appends comments, and makes one commit, unless every operation is a `heartbeat`. `data` is `{"keys": {SOURCE_KEY: ID}, "results": [{"index", "op", "id", "changed", "matched"}], "committed": bool, "dry_run": bool}`. `--dry-run` validates under the shared lock and writes nothing. New Tasks are written in the order the Batch created them, before other changed Tasks, so a crash between writes leaves a consistent Board, and a re-run commits files a crashed run left uncommitted. Re-running converges for `add` with a Source Key, `update`, `label`, `depend`, `undepend`, `annotate`, a `claim` by the current holder, `heartbeat`, `release`, `done` or `cancel` of a terminal Task, and `reopen` of an open Task. It does not converge for `comment` (or `done`/`cancel` with a `comment`), which appends again, or for an operation whose precondition a later operation in the same Batch removed, such as `claim` followed by `done` of the same Task. The MCP tool `batch` takes `operations`, `dry_run`, and `by`.
+Operations run in order on one in-memory snapshot under the exclusive lock. On the first failure nothing is written and the error carries the operation's own code with `details.index` and `details.op`. On success Orbit writes changed Task files, appends comments, and makes one commit, unless every operation is a `heartbeat`. `data` is `{"keys": {SOURCE_KEY: ID}, "results": [{"index", "op", "id", "changed", "matched"}], "committed": bool, "dry_run": bool}`. `--dry-run` validates under the shared lock and writes nothing. New Tasks are written in the order the Batch created them, before other changed Tasks, so a crash between writes leaves a consistent Board, and a re-run commits files a crashed run left uncommitted. Re-running converges for `add` with a Source Key, `update`, `label`, `depend`, `undepend`, `property`, a `claim` by the current holder, `heartbeat`, `release`, `done` or `cancel` of a terminal Task, and `reopen` of an open Task. It does not converge for `comment` (or `done`/`cancel` with a `comment`), which appends again, or for an operation whose precondition a later operation in the same Batch removed, such as `claim` followed by `done` of the same Task. The MCP tool `batch` takes `operations`, `dry_run`, and `by`.
 
 ### Export snapshot
 
@@ -781,7 +775,10 @@ Operations run in order on one in-memory snapshot under the exclusive lock. On t
       "id": "orb-a7b2c9",
       "kind": "task",
       "title": "Build the CLI router",
-      "status": "todo",
+      "status": "ready",
+      "status_category": "todo",
+      "resolution": null,
+      "allowed_transitions": ["claim", "defer", "done", "cancel"],
       "type": "task",
       "priority": "medium",
       "labels": ["ready-for-agent"],
@@ -841,7 +838,7 @@ CLI + `orbit prime` is the primary interface. `prime` prints ~1k tokens: workflo
 
 `orbit init` creates the Board only; it writes harness files when the TTY prompt is accepted or `--agents` names clients. `orbit setup` writes one harness explicitly. Project scope (`--scope project`, the default) writes repository-level files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and Devin (`.devin/rules/orbit.md`, `.devin/skills/orbit/SKILL.md`, optional SessionStart hook in `.devin/hooks.v1.json`, `.devin/mcp_config.json`). Matt Pocock (`docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`) remains an explicit compatibility setup path, not an init harness. User scope (`--scope user`) writes the same managed content at the harness's user-level locations. `init` selects harnesses by detection or `--agents`; `setup` selects one explicitly named client. Orbit-managed sections and files use markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries. Generated configs record the Orbit binary but not the Board path, so moving `DIR` does not stale them; a managed config that still contains an absolute Board path is reported by `doctor` as `ABSOLUTE_BOARD_PATH`. MCP entries use an absolute binary path by default, or the portable `orbit` command with `--portable-mcp`; the portable form requires the editor's `PATH`. Hand-written Matt Pocock guides without the marker are reported as `skipped` and left untouched.
 
-MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 14 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `checkpoint`, `finish`, `link`, `delete`, `label`, `comment`. `create` accepts `parent` to make a SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint` records the claim holder's handoff; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature or repository. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
+MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 14 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `checkpoint`, `finish`, `link`, `delete`, `label`, `comment`, `property`. `create` accepts `parent` to make a SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint` records the claim holder's handoff; `list` and `ready` accept `parent`, `repository`, `components`, `exclude_components`, `labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature or component. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
 
 ## 10. Milestones
 
@@ -857,7 +854,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **M5 — one-command onboarding.** Idempotent `init`, harness detection and selection, shared-Board membership via `orbit repo add`, absolute-binary hooks, and `setup --check`. Implemented; v0.8.1 makes `init` pure and moves wiring behind the prompt or `setup`.
 
-**M6 — multi-Repository Boards, SubTasks, export, and Remote Issues.** A Board anchored over several repositories shares one graph; `orbit repo add` joins Repositories from outside the anchor, and the retired `orbit link`/`orbit workspace` commands are gone. `orbit remote issues`/`import`/`detach`/`reattach` refresh, browse, or explicitly import selected records from the separate Remote Issue catalog. Dot-hierarchical IDs, `add --parent`, scoped queues, deterministic `export`, and one-level hierarchy are implemented.
+**M6 — multi-Repository Boards, SubTasks, export, and Remote Issues.** A Board anchored over several repositories shares one graph; `orbit repo add` joins Repositories from outside the anchor, and the retired `orbit link`/`orbit workspace` commands are gone. `orbit remote issues`/`import`/`detach`/`reattach` refresh, browse, or explicitly import selected records from the separate Remote Issue catalog. `add --parent`, scoped queues, deterministic `export`, and the configurable Issue hierarchy are implemented.
 
 **v0.5.0 — structural Type.** Metadata-only `type`, `tree` family view, close candidates, parent progress fields, and label/type exclusions. Implemented.
 
@@ -867,7 +864,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 
 **v0.8.0–v0.10.0 — Orbit folder, GitHub provider, and Remote Issue catalog.** `init` creates the Orbit folder, `link` shares it (later replaced by member Repositories), and `doctor` diagnoses and migrates legacy layouts. The GitHub Issue provider adds explicit adopt/create/sync with conflict detection. The Remote Issue catalog adds refresh/list/show plus import/detach/reattach and Workspace-aware diagnostics.
 
-**Unreleased — local-first revamp.** Every Board folder is its own Git repository on branch `orbit` (ADR 0019): `orbit migrate` converts legacy layouts, `orbit link`/`unlink`/`workspace`/`github` are retired, a Board has member Repositories (`orbit repo add|remove|list|refresh`), `init` merges child Boards on an anchor, and an optional Board host (`orbit board host|sync`, `board.host_sync`) stores history remotely with an Orbit-aware merge. Remote Trackers sit behind a provider-neutral port (ADR 0018): `orbit remote` covers connect/disconnect/list/issues/import/link/create/detach/reattach/sync/auto-push, `remote:` links replace `github:`, `[remote]`/`[[remote.projects]]`/`[remote.github]` replace `[github]`, and `repo:*` labels move to the `repo` field. Task Areas are free-form slugs from `board.areas`, and `list`/`ready` scope to the current member Repository plus Board-wide Tasks (`--all` widens, `--include-closed` shows closed work).
+**Unreleased — local-first revamp.** Every Board folder is its own Git repository on branch `orbit` (ADR 0019): `orbit migrate` converts legacy layouts, `orbit link`/`unlink`/`workspace`/`github` are retired, a Board has member Repositories (`orbit repo add|remove|list|refresh`), `init` merges child Boards on an anchor, and an optional Board host (`orbit board host|sync`, `board.host_sync`) stores history remotely with an Orbit-aware merge. Remote Trackers sit behind a provider-neutral port (ADR 0018): `orbit remote` covers connect/disconnect/list/issues/import/link/create/detach/reattach/sync/auto-push, `remote:` links replace `github:`, `[remote]`/`[[remote.projects]]`/`[remote.github]` replace `[github]`, and `repo:*` labels move to the `repository` field. Task Components are free-form slugs from `board.components`, `repository` and `component` are first-class filterable fields, `annotations` became owner-namespaced `properties`, and `external_id` records an external identity unique per Board; `list`/`ready` scope to the current member Repository plus Board-wide Tasks (`--all` widens, `--include-closed` shows closed work).
 
 ## 11. Testing
 
@@ -882,7 +879,7 @@ MCP complements the CLI and is installed by default for clients that support it;
 - Anchor tests (`tests/init_dir.rs`, `tests/discovery.rs`): `init <anchor>` creates `.orbit/board` plus `.orbit/cache` outside Git; the anchor and nested child Git directories resolve one Board without pointers; an outside Repository joins with `orbit repo add`; `--dir`/`ORBIT_DIR` accept the anchor or a Board directory; child-local Boards and unknown `.orbit` contents are reported without being overwritten; legacy direct `.orbit` Boards remain explicitly addressable.
 - Member Repository tests (`tests/repo.rs`): `orbit repo add` writes the link pointer and records explicit membership, `repo remove` clears both, `repo refresh` rebuilds `member-repositories.json` reporting additions and removals, a discovered child cannot be removed, and a shadowed local Board is reported.
 - Child Board merge and migration tests (`tests/discovery.rs`, `tests/migrate.rs`): `init` on an anchor previews and merges child Boards preserving Task IDs, moving child prefixes to `id.accepted_prefixes`, recording each imported Task's Repository, and keeping children as backups under `.orbit/backups`; dry-run is read-only.
-- Legacy layout tests: old `<git-common-dir>/orbit/board`, `.orbit`-as-Board, shared `<root>/board`, and worktree-backed targets resolve with `LEGACY_LAYOUT` and then fail commands with `BOARD_NOT_MIGRATED`; `orbit migrate` previews by default, `--apply` converts to the standalone layout preserving Tasks while rewriting `github:` links, `repo:*` labels, `[github]` config, and seeding `board.areas`, and a re-run is a no-op; an interrupted migration reports `AMBIGUOUS_BOARD`; an orphan worktree reports `ORPHAN_WORKTREE`; a leftover `board.storage` reports `STORAGE_MISMATCH`.
+- Legacy layout tests: old `<git-common-dir>/orbit/board`, `.orbit`-as-Board, shared `<root>/board`, and worktree-backed targets resolve with `LEGACY_LAYOUT` and then fail commands with `BOARD_NOT_MIGRATED`; `orbit migrate` previews by default, `--apply` converts to the standalone layout preserving Tasks while rewriting `github:` links, `repo:*` labels, `[github]` config, and seeding `board.components`, and a re-run is a no-op; an interrupted migration reports `AMBIGUOUS_BOARD`; an orphan worktree reports `ORPHAN_WORKTREE`; a leftover `board.storage` reports `STORAGE_MISMATCH`.
 - Remote port tests (`tests/remote.rs`, `tests/remote_surface.rs`): connect/disconnect/list manage Remote Projects, the Remote Issue catalog refreshes and archives, import/link/create/detach/reattach preview then apply, sync plans and resolves conflicts per field, and auto-push toggles `[remote] auto_push`.
 - Board host tests (`tests/board_host.rs`): `board host` shows/sets/clears the host, `board sync` fetches, merges Orbit-aware, and pushes, a same-field conflict waits for `--resolve FIELD=local|host`, and `board.host_sync = "auto"` syncs at `orbit prime` and after commits.
 - Setup recipe tests: managed sections, idempotence, hook merge/removal, conflict refusal, `--remove` preserving user content, project versus user scope, and TTY versus non-TTY `init` behavior.

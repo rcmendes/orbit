@@ -29,7 +29,7 @@ fn plan() -> Value {
         {"op": "add", "key": "planner:plan-7:epic", "title": "Plan 7", "type": "epic"},
         {"op": "add", "key": "planner:plan-7:step-1", "title": "Step 1",
          "parent": "key:planner:plan-7:epic", "labels": ["needs-triage"],
-         "annotations": {"planner": {"order": 1}}},
+         "properties": {"planner": {"order": 1}}},
         {"op": "add", "key": "planner:plan-7:step-2", "title": "Step 2",
          "parent": "key:planner:plan-7:epic", "depends_on": ["key:planner:plan-7:step-1"]}
     ]})
@@ -63,7 +63,7 @@ fn batch_creates_parent_subtasks_and_dependencies_in_one_commit() {
     assert_eq!(show["data"]["depends_on"], json!([step1]));
     let step1_show = repo.ok_json(&["show", step1, "--json"]);
     assert_eq!(
-        step1_show["data"]["annotations"],
+        step1_show["data"]["properties"],
         json!({"planner": {"order": 1}})
     );
     assert_eq!(step1_show["data"]["source_key"], "planner:plan-7:step-1");
@@ -162,7 +162,7 @@ fn batch_rerun_after_partial_apply_converges() {
          "parent": "key:planner:plan-7:epic", "labels": ["needs-triage"]},
         {"op": "label", "id": "key:planner:plan-7:step-1", "remove": ["needs-triage"]},
         {"op": "claim", "id": "key:planner:plan-7:step-1", "by": "planner-7"},
-        {"op": "annotate", "id": "key:planner:plan-7:step-1", "owner": "planner", "value": {"order": 1}}
+        {"op": "property", "id": "key:planner:plan-7:step-1", "owner": "planner", "value": {"order": 1}}
     ]});
     let first = ok_batch(&repo, input.clone());
     assert_eq!(first["data"]["keys"]["planner:plan-7:epic"], epic);
@@ -179,10 +179,7 @@ fn batch_rerun_after_partial_apply_converges() {
     let show = repo.ok_json(&["show", step, "--json"]);
     assert_eq!(show["data"]["claimed_by"], "planner-7");
     assert_eq!(show["data"]["labels"], json!([]));
-    assert_eq!(
-        show["data"]["annotations"],
-        json!({"planner": {"order": 1}})
-    );
+    assert_eq!(show["data"]["properties"], json!({"planner": {"order": 1}}));
     assert_eq!(task_files(&repo).len(), after_first.len());
 }
 
@@ -239,12 +236,12 @@ fn batch_comment_and_done_with_comment() {
 }
 
 #[test]
-fn batch_add_rejects_an_invalid_repo() {
+fn batch_add_rejects_an_invalid_repository() {
     let repo = TestRepo::new();
     repo.init();
     let (status, value) = batch(
         &repo,
-        json!({"operations": [{"op": "add", "title": "R", "repo": "Bad Repo!"}]}),
+        json!({"operations": [{"op": "add", "title": "R", "repository": "Bad Repo!"}]}),
         &[],
     );
     assert_ne!(status, 0);

@@ -1,9 +1,9 @@
-mod annotation;
 mod batch;
 mod board;
 mod crud;
 mod init;
 mod lifecycle;
+mod property;
 mod query;
 mod relations;
 mod render;
@@ -20,13 +20,14 @@ use crate::error::{OrbitError, Result, code};
 use crate::graph::{self, Graph};
 use crate::task::{self, Task};
 
-use annotation::cmd_annotation;
 use batch::cmd_batch;
 use crud::{cmd_add, cmd_delete, cmd_update};
 use init::cmd_init;
 use lifecycle::{
     cmd_cancel, cmd_checkpoint, cmd_claim, cmd_done, cmd_heartbeat, cmd_release, cmd_reopen,
+    cmd_transition,
 };
+use property::cmd_property;
 use query::{cmd_export, cmd_list, cmd_prime, cmd_ready, cmd_show, cmd_sync, cmd_tree};
 use relations::{cmd_comment, cmd_depend, cmd_label, cmd_link, cmd_undepend};
 use repo::run as cmd_repo;
@@ -85,6 +86,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Reopen(args) => {
             with_task_board(dir.as_deref(), true, |board| cmd_reopen(board, args))
         }
+        Command::Transition(args) => {
+            with_task_board(dir.as_deref(), true, |board| cmd_transition(board, args))
+        }
         Command::Update(args) => {
             with_task_board(dir.as_deref(), true, |board| cmd_update(board, args))
         }
@@ -96,8 +100,8 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             let exclusive = !args.dry_run;
             with_task_board(dir.as_deref(), exclusive, |board| cmd_batch(board, args))
         }
-        Command::Annotation(args) => {
-            with_task_board(dir.as_deref(), true, |board| cmd_annotation(board, args))
+        Command::Property(args) => {
+            with_task_board(dir.as_deref(), true, |board| cmd_property(board, args))
         }
         Command::Comment(args) => {
             let exclusive = matches!(args.command, CommentCommand::Add(_));
@@ -342,28 +346,31 @@ pub(crate) fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {
     Ok(normalized)
 }
 
-fn normalize_repo_filter(repo: Option<&str>) -> Result<Option<String>> {
-    repo.map(|repo| {
-        let repo = repo.trim();
-        if repo.is_empty() {
-            return Err(OrbitError::invalid_argument("--repo must not be empty"));
-        }
-        // Keep the same validation as legacy repo labels, without turning
-        // the Repository field filter into a required label.
-        task::normalize_label(&format!("repo:{repo}"))?;
-        Ok(repo.to_string())
-    })
-    .transpose()
+fn normalize_repository_filter(repository: Option<&str>) -> Result<Option<String>> {
+    repository
+        .map(|repository| {
+            let repository = repository.trim();
+            if repository.is_empty() {
+                return Err(OrbitError::invalid_argument(
+                    "--repository must not be empty",
+                ));
+            }
+            if !task::is_valid_repository(repository) {
+                return Err(OrbitError::invalid_argument(format!(
+                    "repository `{repository}` is not a valid Repository name"
+                )));
+            }
+            Ok(repository.to_string())
+        })
+        .transpose()
 }
 
-fn matches_repo(task: &Task, repo: Option<&str>) -> bool {
-    repo.is_none_or(|repo| {
-        task.front.repo.as_deref() == Some(repo)
-            || task
-                .front
-                .labels
-                .iter()
-                .any(|label| label.eq_ignore_ascii_case(&format!("repo:{repo}")))
+fn matches_repository(task: &Task, repository: Option<&str>) -> bool {
+    repository.is_none_or(|repository| {
+        task.front
+            .repository
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case(repository))
     })
 }
 
@@ -382,25 +389,28 @@ pub(crate) fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<Str
     }
 }
 
-pub(crate) fn parse_area_option(board: &Board, area: Option<String>) -> Result<Option<String>> {
-    match area {
+pub(crate) fn parse_component_option(
+    board: &Board,
+    component: Option<String>,
+) -> Result<Option<String>> {
+    match component {
         None => Ok(None),
-        Some(value) => Ok(Some(parse_area_value(board, &value)?)),
+        Some(value) => Ok(Some(parse_component_value(board, &value)?)),
     }
 }
 
-/// Normalizes one Area filter value and validates it against the Board's
-/// `board.areas` list; `task::normalize_area` treats an empty list as
-/// unrestricted.
-fn parse_area_value(board: &Board, value: &str) -> Result<String> {
-    task::normalize_area(value, &board.config.board.areas)
+/// Normalizes one Component filter value and validates it against the
+/// Board's `board.components` list; `task::normalize_component` treats an
+/// empty list as unrestricted.
+fn parse_component_value(board: &Board, value: &str) -> Result<String> {
+    task::normalize_component(value, &board.config.board.components)
 }
 
-/// Normalizes repeatable Area filter flags the same way as `--area`.
-fn normalize_areas(board: &Board, areas: &[String]) -> Result<Vec<String>> {
-    areas
+/// Normalizes repeatable Component filter flags the same way as `--component`.
+fn normalize_components(board: &Board, components: &[String]) -> Result<Vec<String>> {
+    components
         .iter()
-        .map(|area| parse_area_value(board, area))
+        .map(|component| parse_component_value(board, component))
         .collect()
 }
 

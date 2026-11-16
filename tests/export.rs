@@ -49,7 +49,7 @@ fn export_is_deterministic_and_includes_edges_comments_and_terminal_work() {
     let second = repo.ok_json(&["export", "--json"]);
 
     assert_eq!(first["data"], second["data"]);
-    assert_eq!(first["data"]["schema_version"], 3);
+    assert_eq!(first["data"]["schema_version"], 4);
     assert_eq!(first["data"]["board"]["branch"], "orbit");
     assert_eq!(first["data"]["board"]["task_count"], 4);
     assert_eq!(first["data"]["board"]["comment_count"], 1);
@@ -85,21 +85,21 @@ fn export_is_deterministic_and_includes_edges_comments_and_terminal_work() {
 }
 
 #[test]
-fn repo_and_label_filters_scope_list_ready_and_prime() {
+fn repository_and_label_filters_scope_list_ready_and_prime() {
     let repo = TestRepo::new();
     repo.init();
     let api = repo.add(
         "API task",
-        &["--label", "repo:api", "--label", "ready-for-agent"],
+        &["--label", "backend", "--label", "ready-for-agent"],
     );
-    let web = repo.add(
-        "Web task",
-        &["--label", "repo:web", "--label", "ready-for-agent"],
-    );
+    repo.ok_json(&["update", &api, "--repository", "api", "--json"]);
+    let web = repo.add("Web task", &["--label", "ready-for-agent"]);
+    repo.ok_json(&["update", &web, "--repository", "web", "--json"]);
     let plain = repo.add("Plain task", &[]);
-    let bug = repo.add("API bug", &["--label", "repo:api", "--label", "bug"]);
+    let bug = repo.add("API bug", &["--label", "backend", "--label", "bug"]);
+    repo.ok_json(&["update", &bug, "--repository", "api", "--json"]);
 
-    let list = repo.ok_json(&["list", "--repo", "api", "--json"]);
+    let list = repo.ok_json(&["list", "--repository", "api", "--json"]);
     assert_eq!(list["data"]["count"], 2);
     let listed = ids(&list["data"]["tasks"]);
     assert!(listed.contains(&api.as_str()));
@@ -110,7 +110,7 @@ fn repo_and_label_filters_scope_list_ready_and_prime() {
     let list = repo.ok_json(&[
         "list",
         "--label",
-        "repo:api",
+        "backend",
         "--label",
         "ready-for-agent",
         "--json",
@@ -118,12 +118,10 @@ fn repo_and_label_filters_scope_list_ready_and_prime() {
     assert_eq!(list["data"]["count"], 1);
     assert_eq!(list["data"]["tasks"][0]["id"], api.as_str());
 
-    let list = repo.ok_json(&[
-        "list", "--label", "repo:api", "--label", "missing", "--json",
-    ]);
+    let list = repo.ok_json(&["list", "--label", "backend", "--label", "missing", "--json"]);
     assert_eq!(list["data"]["count"], 0);
 
-    let ready = repo.ok_json(&["ready", "--repo", "api", "--json"]);
+    let ready = repo.ok_json(&["ready", "--repository", "api", "--json"]);
     assert_eq!(ready["data"]["count"], 2);
     let ready_ids = ids(&ready["data"]["tasks"]);
     assert!(ready_ids.contains(&api.as_str()));
@@ -138,7 +136,7 @@ fn repo_and_label_filters_scope_list_ready_and_prime() {
     let ready = repo.ok_json(&[
         "ready",
         "--label",
-        "repo:api",
+        "backend",
         "--label",
         "ready-for-agent",
         "--json",
@@ -146,9 +144,9 @@ fn repo_and_label_filters_scope_list_ready_and_prime() {
     assert_eq!(ready["data"]["count"], 1);
     assert_eq!(ready["data"]["tasks"][0]["id"], api.as_str());
 
-    let prime = repo.ok_json(&["prime", "--repo", "api", "--json"]);
+    let prime = repo.ok_json(&["prime", "--repository", "api", "--json"]);
     assert_eq!(prime["data"]["labels"], serde_json::json!([]));
-    assert_eq!(prime["data"]["repo"], "api");
+    assert_eq!(prime["data"]["repository"], "api");
     assert_eq!(prime["data"]["counts"]["total"], 2);
     assert_eq!(prime["data"]["counts"]["ready"], 2);
     let prime_ids = ids(&prime["data"]["ready"]);
@@ -157,8 +155,8 @@ fn repo_and_label_filters_scope_list_ready_and_prime() {
     assert!(!prime_ids.contains(&web.as_str()));
     assert!(!prime_ids.contains(&plain.as_str()));
 
-    let prime = repo.ok_json(&["prime", "--label", "repo:api", "--json"]);
-    assert_eq!(prime["data"]["labels"], serde_json::json!(["repo:api"]));
+    let prime = repo.ok_json(&["prime", "--label", "backend", "--json"]);
+    assert_eq!(prime["data"]["labels"], serde_json::json!(["backend"]));
     assert_eq!(prime["data"]["counts"]["total"], 2);
 }
 
@@ -169,7 +167,7 @@ fn export_of_an_empty_board_has_the_schema_envelope() {
 
     let value = repo.ok_json(&["export", "--json"]);
 
-    assert_eq!(value["data"]["schema_version"], 3);
+    assert_eq!(value["data"]["schema_version"], 4);
     assert_eq!(value["data"]["board"]["branch"], "orbit");
     assert_eq!(value["data"]["board"]["task_count"], 0);
     assert_eq!(value["data"]["board"]["comment_count"], 0);
@@ -202,7 +200,7 @@ fn export_at_depth_two_keeps_the_nested_parent() {
 
     let value = repo.ok_json(&["export", "--json"]);
 
-    assert_eq!(value["data"]["schema_version"], 3);
+    assert_eq!(value["data"]["schema_version"], 4);
     let child_json = exported(&value, &child);
     assert_eq!(child_json["kind"], "subtask");
     assert_eq!(child_json["parent"], parent.as_str());

@@ -45,7 +45,7 @@ fn cmd_add(board: &Board, args: RepoAddArgs) -> Result<CommandOutput> {
         ));
     }
     let name = args.name.clone().unwrap_or_else(|| repository_name(&main));
-    if name.trim().is_empty() || !task::is_valid_repo(&name) {
+    if name.trim().is_empty() || !task::is_valid_repository(&name) {
         return Err(OrbitError::invalid_argument(format!(
             "`{name}` is not a valid Repository name"
         )));

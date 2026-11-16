@@ -278,12 +278,18 @@ fn required_field_present(task: &Task, field: &str) -> bool {
         "title" => !front.title.trim().is_empty(),
         "status" | "created_at" | "updated_at" | "type" => true,
         "priority" => !front.priority.trim().is_empty(),
-        "area" => front.area.as_deref().is_some_and(|v| !v.trim().is_empty()),
+        "component" => front
+            .component
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty()),
         "verification" => front
             .verification
             .as_deref()
             .is_some_and(|v| !v.trim().is_empty()),
-        "repo" => front.repo.as_deref().is_some_and(|v| !v.trim().is_empty()),
+        "repository" => front
+            .repository
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty()),
         "labels" => !front.labels.is_empty(),
         "links" => !front.links.is_empty(),
         "parent" => front.parent.is_some(),
@@ -292,7 +298,11 @@ fn required_field_present(task: &Task, field: &str) -> bool {
         "source_key" => front.source_key.is_some(),
         "remote" => front.remote.is_some(),
         "github" => front.github.is_some(),
-        "annotations" => !front.annotations.is_empty(),
+        "properties" => !front.properties.is_empty(),
+        "external_id" => front
+            .external_id
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty()),
         "body" => !task.body.trim().is_empty(),
         other => front.extra.get(other).is_some_and(|value| match value {
             serde_yaml_ng::Value::Null => false,
@@ -330,7 +340,7 @@ pub fn missing_field_error(id: &str, fields: &[String]) -> OrbitError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{Status, TaskFrontmatter, default_priority};
+    use crate::task::{TaskFrontmatter, default_priority};
     use chrono::{TimeZone, Utc};
     use std::collections::BTreeMap;
 
@@ -340,22 +350,24 @@ mod tests {
             id: id.to_string(),
             front: TaskFrontmatter {
                 title: id.to_string(),
-                status: Status::Todo,
+                status: "todo".to_string(),
+                resolution: None,
                 task_type: ty.to_string(),
                 priority: default_priority(),
                 labels: Vec::new(),
                 links: Vec::new(),
                 parent: None,
                 checkpoint: None,
-                area: None,
+                component: None,
                 verification: None,
                 github: None,
                 remote: None,
-                repo: None,
+                repository: None,
+                external_id: None,
                 claim: None,
                 stray_claim_times: None,
                 source_key: None,
-                annotations: BTreeMap::new(),
+                properties: BTreeMap::new(),
                 created_at: now,
                 updated_at: now,
                 extra: BTreeMap::new(),
@@ -417,7 +429,7 @@ mod tests {
     fn required_fields_cover_known_and_extra_names() {
         let types = vec![IssueTypeConfig {
             name: "task".to_string(),
-            required: vec!["area".to_string(), "cycle".to_string()],
+            required: vec!["component".to_string(), "cycle".to_string()],
         }];
         let levels = vec![HierarchyLevelConfig {
             types: vec!["task".to_string()],
@@ -427,10 +439,10 @@ mod tests {
         let mut task = task("orb-aaaaaa", "task");
         assert_eq!(
             hierarchy.missing_required_fields(&task),
-            vec!["area".to_string(), "cycle".to_string()]
+            vec!["component".to_string(), "cycle".to_string()]
         );
 
-        task.front.area = Some("backend".to_string());
+        task.front.component = Some("backend".to_string());
         task.front.extra.insert(
             "cycle".to_string(),
             serde_yaml_ng::Value::String("Q3".to_string()),

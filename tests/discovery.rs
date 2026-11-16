@@ -594,7 +594,7 @@ fn workspace_init_merges_a_child_repository_board() {
     assert_eq!(tasks[0]["id"], child_task);
     let content =
         std::fs::read_to_string(board.join("tasks").join(format!("{child_task}.md"))).unwrap();
-    assert!(content.contains("repo: api"), "{content}");
+    assert!(content.contains("repository: api"), "{content}");
 
     // The child repository now discovers the merged Board and is a member.
     let members = repo.ok_json_in(&workspace, &["repo", "list", "--json"]);
@@ -749,7 +749,7 @@ fn child_board_retry_accepts_previously_imported_repository_attribution() {
     let destination = anchor.join(".orbit/board");
     let task_path = destination.join("tasks").join(format!("{id}.md"));
     let imported = std::fs::read(&task_path).unwrap();
-    assert!(String::from_utf8_lossy(&imported).contains("repo: api"));
+    assert!(String::from_utf8_lossy(&imported).contains("repository: api"));
     let comments_path = destination.join("comments").join(format!("{id}.md"));
     let comments = std::fs::read(&comments_path).unwrap();
     // Restore the source Board as if publication finished but backup relocation did not.
@@ -825,7 +825,7 @@ fn a_child_repository_under_the_anchor_is_a_member_repository() {
             .join(format!("{id}.md")),
     )
     .unwrap();
-    assert!(content.contains("repo: api"), "{content}");
+    assert!(content.contains("repository: api"), "{content}");
 }
 
 #[test]

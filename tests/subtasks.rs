@@ -420,7 +420,7 @@ fn done_force_does_not_cancel_subtasks_when_a_dependency_is_unfinished() {
 
     assert_eq!(code, 1);
     assert_eq!(value["error"]["code"], "DEPENDENCY_BLOCKED");
-    assert_eq!(status(&repo, &child), "todo");
+    assert_eq!(status(&repo, &child), "ready");
 }
 
 #[test]
@@ -513,8 +513,8 @@ fn reopen_subtask_reopens_done_parent() {
 
     let value = repo.ok_json(&["reopen", &child, "--json"]);
 
-    assert_eq!(status(&repo, &parent), "todo");
-    assert_eq!(status(&repo, &child), "todo");
+    assert_eq!(status(&repo, &parent), "ready");
+    assert_eq!(status(&repo, &child), "ready");
     let warnings = value["meta"]["warnings"].as_array().unwrap();
     assert!(
         warnings
@@ -651,8 +651,8 @@ fn nested_done_force_still_respects_unfinished_dependencies() {
 
     assert_eq!(code, 1);
     assert_eq!(value["error"]["code"], "DEPENDENCY_BLOCKED");
-    assert_eq!(status(&repo, &child), "todo");
-    assert_eq!(status(&repo, &grandchild), "todo");
+    assert_eq!(status(&repo, &child), "ready");
+    assert_eq!(status(&repo, &grandchild), "ready");
 }
 
 #[test]
@@ -667,9 +667,9 @@ fn reopen_walks_done_ancestors_nearest_first() {
 
     let value = repo.ok_json(&["reopen", &grandchild, "--json"]);
 
-    assert_eq!(status(&repo, &grandchild), "todo");
-    assert_eq!(status(&repo, &child), "todo");
-    assert_eq!(status(&repo, &parent), "todo");
+    assert_eq!(status(&repo, &grandchild), "ready");
+    assert_eq!(status(&repo, &child), "ready");
+    assert_eq!(status(&repo, &parent), "ready");
     let warnings = value["meta"]["warnings"].as_array().unwrap();
     let reopened: Vec<String> = warnings
         .iter()
@@ -694,13 +694,13 @@ fn reopen_stops_at_an_active_ancestor() {
 
     repo.ok_json(&["done", &grandchild, "--by", "test", "--json"]);
     repo.ok_json(&["done", &child, "--by", "test", "--json"]);
-    assert_eq!(status(&repo, &parent), "todo");
+    assert_eq!(status(&repo, &parent), "ready");
 
     let value = repo.ok_json(&["reopen", &grandchild, "--json"]);
 
-    assert_eq!(status(&repo, &grandchild), "todo");
-    assert_eq!(status(&repo, &child), "todo");
-    assert_eq!(status(&repo, &parent), "todo");
+    assert_eq!(status(&repo, &grandchild), "ready");
+    assert_eq!(status(&repo, &child), "ready");
+    assert_eq!(status(&repo, &parent), "ready");
     let warnings = value["meta"]["warnings"].as_array().unwrap();
     let reopened: Vec<String> = warnings
         .iter()
@@ -727,7 +727,7 @@ fn reopen_fails_naming_a_cancelled_ancestor() {
     assert!(message.contains(&child), "{message}");
     assert!(message.contains("cancelled"), "{message}");
     assert_eq!(status(&repo, &grandchild), "cancelled");
-    assert_eq!(status(&repo, &parent), "todo");
+    assert_eq!(status(&repo, &parent), "ready");
 }
 
 #[test]
@@ -1057,7 +1057,7 @@ fn doctor_reports_orphan_and_self_parents() {
     let orphan = repo.add("Orphan", &[]);
     let content = repo
         .read_task(&orphan)
-        .replace("status: todo", "status: todo\nparent: orb-missing");
+        .replace("status: ready", "status: ready\nparent: orb-missing");
     repo.write_task(&orphan, &content);
 
     let (status, value) = repo.json(&["doctor", "--json"]);
@@ -1077,7 +1077,7 @@ fn doctor_reports_orphan_and_self_parents() {
     let task = repo.add("Self", &[]);
     let content = repo
         .read_task(&task)
-        .replace("status: todo", &format!("status: todo\nparent: {task}"));
+        .replace("status: ready", &format!("status: ready\nparent: {task}"));
     repo.write_task(&task, &content);
 
     let (status, value) = repo.json(&["doctor", "--json"]);
@@ -1117,7 +1117,7 @@ fn forced_cancel_of_a_terminal_parent_still_commits_its_cancelled_subtasks() {
     let child = subtask(&repo, &parent, "Part");
     let content = repo
         .read_task(&parent)
-        .replace("status: todo", "status: cancelled");
+        .replace("status: ready", "status: cancelled");
     repo.write_task(&parent, &content);
     repo.ok_json(&["sync", "--json"]);
 
@@ -1173,7 +1173,7 @@ fn a_board_written_by_the_previous_release_loads_everywhere() {
     assert!(!ids.contains(&parent.as_str()), "{ids:?}");
 
     let export = repo.ok_json(&["export", "--json"]);
-    assert_eq!(export["data"]["schema_version"], 3, "{export}");
+    assert_eq!(export["data"]["schema_version"], 4, "{export}");
     let exported = export["data"]["tasks"]
         .as_array()
         .unwrap()

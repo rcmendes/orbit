@@ -55,9 +55,9 @@ default). The type decides where in the Issue Hierarchy the Task may sit; it
 is not the same as Kind.
 _Avoid_: Kind, category, label
 
-**Area**:
-An optional, single classification of where work primarily lands. Each Board defines its own Areas; a Board that defines none accepts any short lowercase name. Area is shared metadata for filtering and agent routing; it is not personal or session-local state.
-_Avoid_: Label, component tag, free-form tag
+**Component**:
+An optional, single classification of where work primarily lands. Each Board defines its own Components; a Board that defines none accepts any short lowercase name. Component is shared metadata for filtering and agent routing; it is not personal or session-local state.
+_Avoid_: Label, area tag, free-form tag
 
 **Verification**:
 Optional, concise checks or commands agents should run for a Task, stored separately from narrative acceptance criteria in the body. Project-wide defaults live in [`docs/agents/project-guidance.md`](./agents/project-guidance.md); Task-level `verification` adds to or narrows those defaults.
@@ -71,13 +71,29 @@ _Avoid_: Transaction, script, bulk edit
 An optional caller-chosen string that names a Task in the system that asked for it. It is unique per Board; adding a Task with a Source Key that already exists returns that Task instead of creating another, so a retried add creates no duplicate.
 _Avoid_: External ID, idempotency token, alias
 
-**Annotation**:
-Structured data that one tool attaches to a Task under the tool's name, its owner. Orbit stores, returns, and shows it but never interprets it: an Annotation never affects Ready, Blocked, Claim eligibility, or Status, and it is never synchronized with a Remote Tracker.
+**Property**:
+Structured data that one tool attaches to a Task under the tool's name, its owner. Orbit stores, returns, and shows it but never interprets it: a Property never affects Ready, Blocked, Claim eligibility, or Status, and it is never synchronized with a Remote Tracker.
 _Avoid_: Metadata, custom field, namespace, extra
 
 **Status**:
-The stored lifecycle position of a Task: `todo`, `in_progress`, `done`, or `cancelled`.
+The stored lifecycle position of a Task: a name defined by the Board's Workflow. Every Status belongs to a Status Category (`todo`, `active`, `done`, or `canceled`), which carries the derived semantics such as terminal and Ready eligibility.
 _Avoid_: State, phase
+
+**Workflow**:
+The Board's declarative lifecycle definition in `config.toml`: named Statuses with categories, named Transitions between them, the initial Status, and exactly one Ready Status. Boards pick a shipped template (`minimal`, `standard`, `agentic`) or define `[workflow]` statuses and transitions directly.
+_Avoid_: State machine, lifecycle config
+
+**Status Category**:
+The semantic bucket a Status belongs to — `todo`, `active`, `done`, or `canceled` — defined by the Workflow. Commands read the category, never the status name, to decide whether work is terminal, claimable, or closable.
+_Avoid_: Status group, phase
+
+**Transition**:
+A named edge in the Workflow from one or more source Statuses to a target Status. `orbit show` lists the Transitions valid from the current Status as `allowed_transitions`; `orbit transition` runs one by name. A Transition into a closed Status records its Resolution on the Task.
+_Avoid_: Command, edge
+
+**Resolution**:
+The outcome a closing Transition records on the Task — for example `completed` or `cancelled`. It is set when the Task enters a `done` or `canceled` Status and cleared when it returns to an open Status.
+_Avoid_: Close reason, result
 
 **Priority**:
 The stored ordering weight of a Task: a name from the Board's ordered `board.priorities` list (`highest`, `high`, `medium`, `low` by default). Tasks sort by the name's ordinal, so a Board can rename or reorder priorities.
@@ -96,15 +112,15 @@ An append-only, authored, timestamped note attached to a Task.
 _Avoid_: Note, message
 
 **Dependency**:
-Another Task that must be `done` or `cancelled` before this Task can become Ready.
+Another Task in a closed Status Category (`done` or `canceled`) is required before this Task can become Ready; an open Dependency blocks it.
 _Avoid_: Blocker, prerequisite, parent
 
 **Ready**:
-A condition of a Task that is `todo`, has no Claim (including no Stale Claim), is not Waiting, carries no Hold Label, and whose every Dependency is `done` or `cancelled`. Ready is derived, never stored.
+A condition of a Task sitting in the Workflow's Ready Status — the one Status marked `ready` — with no Claim (including no Stale Claim), not Waiting, no Hold Label, no open Dependency, and no open descendant. Ready is derived, never stored.
 _Avoid_: Unblocked, available, actionable
 
 **Blocked**:
-A condition of a Task with at least one Dependency that is neither `done` nor `cancelled`. Blocked is derived, never stored.
+A condition of a Task with at least one Dependency that is not in a closed Status Category. Blocked is derived, never stored.
 _Avoid_: Blocked status, waiting
 
 **Waiting**:
@@ -112,11 +128,11 @@ A condition of a Task that cannot proceed because of something outside the depen
 _Avoid_: Blocked, on hold
 
 **Done**:
-The terminal Status for a Task whose work is complete. Counts as resolved for dependent Tasks.
+A Status in the `done` Status Category for a Task whose work is complete. Counts as resolved for dependent Tasks.
 _Avoid_: Closed, complete
 
 **Cancelled**:
-The terminal Status for a Task that was abandoned without completing its work. Counts as resolved for dependent Tasks.
+A Status in the `canceled` Status Category for a Task that was abandoned without completing its work. Counts as resolved for dependent Tasks. The shipped templates name it `cancelled`; custom Workflows may use any name in the `canceled` category.
 _Avoid_: Deleted, closed, wontfix
 
 **Claim**:

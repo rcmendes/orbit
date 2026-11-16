@@ -157,7 +157,7 @@ fn tool_definitions() -> Vec<Value> {
             "list",
             "List tasks with filters. Terminal tasks are hidden unless include_closed=true; all=true widens Repository scope.",
             json!({
-                "status": { "type": "string", "enum": ["todo", "in_progress", "done", "cancelled"] },
+                "status": { "type": "string", "description": "Workflow status name; `orbit show` lists each task's status and allowed transitions." },
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
                 "claimed_by": { "type": "string" },
                 "waiting": { "type": "boolean", "description": "Only tasks with an external blocker." },
@@ -273,6 +273,17 @@ fn tool_definitions() -> Vec<Value> {
                 "comment": { "type": "string", "description": "Completion note recorded atomically with the status change." }
             }),
             &["id", "status"],
+        ),
+        tool(
+            "transition",
+            "Run a named workflow transition on a task; `get` reports each task's allowed_transitions.",
+            json!({
+                "id": { "type": "string" },
+                "name": { "type": "string", "description": "Workflow transition name, for example promote, block, or defer." },
+                "by": { "type": "string", "description": "Caller identity for Claim-holder checks." },
+                "force": { "type": "boolean", "description": "Run even when another holder's live Claim blocks the transition." }
+            }),
+            &["id", "name"],
         ),
         tool(
             "link",
@@ -406,18 +417,11 @@ fn dispatch_tool(
             return tool_invalid("`limit` must be at least 1");
         }
     }
-    if let Some(status) = optional_str(arguments, "status") {
-        if name == "list"
-            && !matches!(
-                status.as_str(),
-                "todo" | "in_progress" | "done" | "cancelled"
-            )
-        {
-            return tool_invalid("`status` must be todo, in_progress, done, or cancelled");
-        }
-        if name == "finish" && !matches!(status.as_str(), "done" | "cancelled") {
-            return tool_invalid("`status` must be `done` or `cancelled`");
-        }
+    if let Some(status) = optional_str(arguments, "status")
+        && name == "finish"
+        && !matches!(status.as_str(), "done" | "cancelled")
+    {
+        return tool_invalid("`status` must be `done` or `cancelled`");
     }
     if optional_u64(arguments, "priority").is_some_and(|priority| priority > 3) {
         return tool_invalid("`priority` must be between 0 and 3");
@@ -874,6 +878,24 @@ fn dispatch_tool(
                 args.push(comment);
             }
         }
+        "transition" => {
+            let Some(id) = required_str(arguments, "id") else {
+                return tool_invalid("missing or invalid `id`");
+            };
+            let Some(name) = required_str(arguments, "name") else {
+                return tool_invalid("missing or invalid `name`");
+            };
+            args.push("transition".to_string());
+            args.push(id);
+            args.push(name);
+            if let Some(by) = optional_str(arguments, "by") {
+                args.push("--by".to_string());
+                args.push(by);
+            }
+            if bool_arg(arguments, "force") {
+                args.push("--force".to_string());
+            }
+        }
         "link" => {
             let Some(id) = required_str(arguments, "id") else {
                 return tool_invalid("missing or invalid `id`");
@@ -1206,7 +1228,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 17);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -1222,6 +1244,7 @@ mod tests {
             "heartbeat",
             "checkpoint",
             "finish",
+            "transition",
             "link",
             "delete",
             "label",

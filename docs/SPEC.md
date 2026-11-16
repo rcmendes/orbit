@@ -119,62 +119,50 @@ The detailed module map, board-resolution flow, domain relationships, state mach
 
 The canonical vocabulary lives in `docs/GLOSSARY.md`. In short:
 
-- A Task has one stored **Status**: `todo`, `in_progress`, `done`, or `cancelled`.
+- A Task has one stored **Status**: a name defined by the Board's **Workflow**. Every Status belongs to a **Status Category** — `todo`, `active`, `done`, or `canceled` — and the shipped templates (`minimal`, `standard`, `agentic`) or a custom `[workflow]` section in `config.toml` define the names, Transitions, and the single Ready Status.
 - A **Parent Task** groups **SubTasks**, and its completion depends on them. A **SubTask** is a Task with a `parent`; it is claimable and completable in its own right. Parentage is capped by `board.max_subtask_depth` (1–4, default 1: one level deep) and is not a Dependency.
 - **Kind** is structural and derived: `task` or `subtask`.
 - **Type** is the stored work shape: `task` (default), `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness. An **Epic** or **spec** is a top-level Task with `type: epic`; `epic` is refused on a SubTask. External trackers call the unit an Issue and a child a Sub-issue; see [`docs/GLOSSARY.md`](./GLOSSARY.md), [ADR 0009](./adr/0009-keep-task-vocabulary.md), and [ADR 0010](./adr/0010-structural-type-field.md).
-- **Ready** is derived: `todo`, no Claim (including no Stale Claim), not Waiting, no Hold Label, every Dependency is `done` or `cancelled`, and every SubTask is `done` or `cancelled`.
-- **Blocked** is derived: at least one Dependency is not `done` or `cancelled`, or a Parent Task has at least one open SubTask.
+- **Ready** is derived: the Task sits in the Workflow's Ready Status (the one Status flagged `ready`), has no Claim (including no Stale Claim), is not Waiting, carries no Hold Label, has no open Dependency, and has no open SubTask.
+- **Blocked** is derived: at least one Dependency is not in a closed Status Category, or a Parent Task has at least one open SubTask.
 - **Waiting** is an external blocker recorded by `waiting_on`; it is not a Status.
 - A **Claim** is exclusive, time-bounded responsibility for a Task. The time window is a **Lease**. An expired, unreleased Claim is **Stale**: the Task is not Ready, but it can be released or stolen.
 - A **Checkpoint** is the claim holder's latest handoff note: progress, the next useful action, and any blocker. It is stored on the Task, survives release and takeover, and never affects readiness or claim eligibility.
-- **Done** and **Cancelled** both resolve dependents. Cancelled exists so abandoned work does not have to lie with `done` or destroy history with `delete`.
+- **Done** and **Cancelled** Statuses (the `done` and `canceled` categories) both resolve dependents. Cancelled exists so abandoned work does not have to lie with `done` or destroy history with `delete`. A closing Transition records its **Resolution** on the Task; returning to an open Status clears it.
 - **Priority** is `P0` (highest) through `P3` (lowest); the stored value is an integer `0`–`3`.
 - **Label** is a short lowercase string attached to a Task for filtering or workflow state. **Hold Labels** are configured labels that suspend readiness; the defaults are `needs-triage`, `needs-info`, and `ready-for-human`. `ready-for-agent`, `bug`, and `enhancement` are neutral.
 - **Comment** is an append-only, authored, timestamped note on a Task. Comments do not affect Status or readiness.
 
 ### 3.1 Status state machine
 
-Only four values are stored in `status`:
+The lifecycle is a **Workflow** defined by the Board, not a fixed enum. `config.toml` selects a shipped template — `minimal`, `standard` (the default), or `agentic` — or defines `[workflow]` `statuses`, `transitions`, and `initial` directly. Every Status has a name and a category (`todo`, `active`, `done`, `canceled`); exactly one Status is flagged `ready`. The standard template:
 
-```mermaid
-stateDiagram-v2
-    direction LR
-
-    [*] --> todo: add
-
-    todo --> in_progress: claim or ready --claim
-    todo --> done: done
-    todo --> cancelled: cancel
-
-    in_progress --> todo: release
-    in_progress --> in_progress: heartbeat
-    in_progress --> in_progress: checkpoint
-    in_progress --> in_progress: claim --steal
-    in_progress --> done: done
-    in_progress --> cancelled: cancel
-
-    done --> todo: reopen
-    cancelled --> todo: reopen
-
-    done --> done: done --comment
-    cancelled --> cancelled: cancel --comment
-
-    note right of in_progress
-        Stale is derived:
-        in_progress with lease_until <= now.
-    end note
-
-    note left of todo
-        Ready is derived:
-        todo, no claim, no waiting_on,
-        no hold label, every dependency
-        done or cancelled, and every
-        SubTask done or cancelled.
-    end note
+```text
+statuses:    ready (todo, ready) · todo (todo) · in_progress (active)
+             · done (done) · cancelled (canceled)
+initial:     ready
+transitions: claim · release · promote · defer · done · cancel · reopen
 ```
 
-`done` and `cancelled` both resolve dependents. `reopen` returns a terminal Task to `todo`; `release` returns an active claim to `todo`; `cancel` is not `delete`. Waiting, hold labels, and dependency edges are gates on readiness and claims, not Statuses. The full transition table and readiness gate are in [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md).
+`minimal` drops the `todo` backlog and its `promote`/`defer` edges; `agentic` adds `blocked` and review-oriented statuses. Custom workflows may add statuses such as `In Review` and transitions such as `submit`; validation requires unique status and transition names, valid categories, exactly one ready Status, an initial Status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and no resolutions on transitions into open statuses.
+
+The built-in commands drive named Workflow edges:
+
+| From category | Command | Transition | Effect |
+| --- | --- | --- | --- |
+| any | `add` | — | Creates `tasks/ID.md` in the initial Status. |
+| ready Status | `claim`, `ready --claim` | `claim` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
+| `active` | `heartbeat` | — | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
+| `active` | `checkpoint` | — | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a closed Status or a task with no claim. |
+| `active` | `claim --steal` | `claim` | Replaces the holder and resets `claimed_at` and `lease_until`, preserving the latest checkpoint. `--steal` does not bypass hold labels or dependencies. |
+| `active` | `release` | `release` | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. |
+| open | `done` | `done` | Every Dependency must be in a closed category, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields and `waiting_on`; records the transition's resolution. |
+| open | `cancel` | `cancel` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields and `waiting_on`; records the transition's resolution. Resolves dependents. |
+| closed | `reopen` | `reopen` | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively claimed ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears claim fields, `waiting_on`, and the resolution. |
+| any | `transition <name>` | any defined edge | Runs one named Workflow transition directly, honoring the claim-holder check where the edge requires it. An unknown name or an edge that does not start from the current Status fails with `INVALID_TRANSITION` naming the valid transitions. |
+| any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live claim requires the holder unless `--force`. With dependents or SubTasks, requires `--force`, which first removes edges from dependents and deletes the whole SubTask subtree. |
+
+Closed categories (`done`, `canceled`) resolve dependents; `reopen`-style transitions return a Task to an open Status; `cancel` is not `delete`. `orbit show` reports `status_category`, `resolution`, and `allowed_transitions` — the Workflow edges valid from the current Status. Waiting, hold labels, and dependency edges are gates on readiness and claims, not Statuses. The full transition table and readiness gate are in [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ## 4. Task file
 
@@ -220,7 +208,7 @@ The example below is a SubTask file, `tasks/orb-f14c02.d4b3df.md`.
 ```yaml
 ---
 title: Build the CLI router
-status: todo
+status: in_progress
 type: task
 priority: 2
 labels:
@@ -249,7 +237,7 @@ updated_at: 2026-10-23T12:00:00Z
 Body text, acceptance criteria, notes.
 ```
 
-Required: `title`, `status`, `created_at`, `updated_at`. Optional: `type` (default `task`; one of `task`, `epic`, `spike`, `chore`, `decision`; always written on save), `priority` (default `2`), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `waiting_on`, `checkpoint`, `area` (optional; a short lowercase slug, restricted to `board.areas` when the Board configures them), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `repo` (optional; the member Repository that owns the Task, filled from the current Repository by `orbit add`), `remote` (optional provider-neutral link — `tracker`, `project`, `id`, optional `url`, `active`, and an opaque `baseline` — or inactive provenance when a Remote Tracker provider is enabled), `github` (optional legacy GitHub link kept for backward compatibility; new writes use `remote`), `source_key` (optional; a caller-chosen Source Key of 1 to 200 printable ASCII characters without spaces, unique per Board; `add --source-key` returns the existing Task instead of creating a duplicate, and `doctor` reports a key on two Tasks as `DUPLICATE_SOURCE_KEY`), `annotations` (optional; a map from owner to a JSON object, see Annotations below). A link with no `active` field is active; detach writes `active: false` while retaining the stable identity and sync baseline. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task whose own depth stays below `board.max_subtask_depth` (1–4, default 1); a SubTask cannot have `type: epic`, and the SubTask ID must encode the same parent. `doctor` reports a mismatch as `PARENT_MISMATCH` or an invalid epic as `INVALID_TYPE`.
+Required: `title`, `status`, `created_at`, `updated_at`. `status` names a Status from the Board's Workflow; `resolution` (optional) records the outcome a closing Transition set and is cleared on reopen. Optional: `type` (default `task`; one of `task`, `epic`, `spike`, `chore`, `decision`; always written on save), `priority` (default `2`), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `waiting_on`, `checkpoint`, `area` (optional; a short lowercase slug, restricted to `board.areas` when the Board configures them), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `repo` (optional; the member Repository that owns the Task, filled from the current Repository by `orbit add`), `remote` (optional provider-neutral link — `tracker`, `project`, `id`, optional `url`, `active`, and an opaque `baseline` — or inactive provenance when a Remote Tracker provider is enabled), `github` (optional legacy GitHub link kept for backward compatibility; new writes use `remote`), `source_key` (optional; a caller-chosen Source Key of 1 to 200 printable ASCII characters without spaces, unique per Board; `add --source-key` returns the existing Task instead of creating a duplicate, and `doctor` reports a key on two Tasks as `DUPLICATE_SOURCE_KEY`), `annotations` (optional; a map from owner to a JSON object, see Annotations below). A link with no `active` field is active; detach writes `active: false` while retaining the stable identity and sync baseline. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task whose own depth stays below `board.max_subtask_depth` (1–4, default 1); a SubTask cannot have `type: epic`, and the SubTask ID must encode the same parent. `doctor` reports a mismatch as `PARENT_MISMATCH` or an invalid epic as `INVALID_TYPE`.
 
 **Annotations.** An Annotation is structured data that one tool attaches to a Task under the tool's name, its owner. An owner is a lowercase slug (`[a-z0-9][a-z0-9-]*`, at most 40 characters); a value is a JSON object of at most 8192 bytes serialized compactly. Orbit stores, returns, and shows Annotations but never interprets them: they never affect Ready, Blocked, Claim eligibility, or Status, and they are never pushed to or pulled from a Remote Tracker. Board host sync merges them per owner. `show`, `list`, and `export` return `annotations` (an empty object when none); human `show` prints one `annotation <owner>: <json>` line per owner. `doctor` reports a malformed Annotation as `INVALID_ANNOTATION`.
 
@@ -292,7 +280,15 @@ lock_timeout_ms = 2000
 [id]
 length = 6
 prefix = "orb-"
+
+# Optional: pick a shipped workflow template (minimal, standard, agentic;
+# standard is the default) or define a custom one. Omitted, the Board uses
+# the standard template.
+# [workflow]
+# template = "agentic"
 ```
+
+`[workflow]` selects the Board's lifecycle. `template` names a shipped workflow — `minimal`, `standard` (the default), or `agentic`. Setting `statuses`, `transitions`, or `initial` instead defines a custom workflow; validation requires unique status and transition names, valid categories (`todo`, `active`, `done`, `canceled`), exactly one status flagged `ready`, an `initial` status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and none on transitions into open statuses. See §3.1 for the shipped templates.
 
 `board.storage` is retired (ADR 0019): every Board is a standalone repository, so the key is neither written nor honored; a config that still carries it marks a legacy Board for `orbit migrate`. `board.max_subtask_depth` is an integer from 1 to 4 (default 1) capping how many levels of SubTasks a Board allows; it is omitted from `config.toml` while it is 1. `id.prefix` must contain only lowercase letters, digits, and dashes; a dot is reserved for the SubTask boundary. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`. Optional `id.accepted_prefixes` lists additional valid Task-ID prefixes retained when Boards with different slugs are consolidated; new Task IDs still use `id.prefix`.
 
@@ -538,6 +534,7 @@ orbit checkpoint <id> [--progress TEXT] [--next TEXT|--clear-next] [--blocker TE
 orbit done <id> [--by NAME] [--force] [--comment TEXT | --comment-file PATH]
 orbit cancel <id> [--by NAME] [--force] [--comment TEXT | --comment-file PATH]
 orbit reopen <id> [--force]
+orbit transition <id> <name> [--by NAME] [--force]
 orbit update <id> [--title TEXT] [--body TEXT|--body-file PATH] [--priority N] [--type TYPE] [--waiting-on TEXT|--clear-waiting]
 orbit label add <id> <label>...
 orbit label remove <id> <label>...
@@ -750,7 +747,7 @@ Error:
 
 ### Batch
 
-`orbit batch --file PATH|-` reads `{"operations": [...]}`. Each operation has an `op` (`add`, `update`, `label`, `depend`, `undepend`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`, `comment`, `annotate`) and the fields of its command: `add` takes `key` (Source Key), `title`, `type`, `parent`, `labels`, `depends_on`, `body`, `priority`, `repo`, `waiting_on`, `area`, `verification`, `annotations`; `update` takes `id` plus `title`, `body`, `priority`, `type`, `waiting_on`/`clear_waiting`, `area`/`clear_area`, `verification`/`clear_verification`; `label` takes `id`, `add`, `remove`; `depend`/`undepend` take `id`, `on`; `claim` takes `id`, `by`, `steal`; `heartbeat` takes `id`, `by`; `release`, `done`, and `cancel` take `id`, `by`, `force` (and `comment` for `done`/`cancel`); `reopen` takes `id`, `force`; `comment` takes `id`, `by`, `body`; `annotate` takes `id`, `owner`, `value` (an object, or null to remove). Unknown fields fail with `INVALID_BATCH`.
+`orbit batch --file PATH|-` reads `{"operations": [...]}`. Each operation has an `op` (`add`, `update`, `label`, `depend`, `undepend`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`, `transition`, `comment`, `annotate`) and the fields of its command: `add` takes `key` (Source Key), `title`, `type`, `parent`, `labels`, `depends_on`, `body`, `priority`, `repo`, `waiting_on`, `area`, `verification`, `annotations`; `update` takes `id` plus `title`, `body`, `priority`, `type`, `waiting_on`/`clear_waiting`, `area`/`clear_area`, `verification`/`clear_verification`; `label` takes `id`, `add`, `remove`; `depend`/`undepend` take `id`, `on`; `claim` takes `id`, `by`, `steal`; `heartbeat` takes `id`, `by`; `release`, `done`, and `cancel` take `id`, `by`, `force` (and `comment` for `done`/`cancel`); `reopen` takes `id`, `force`; `transition` takes `id`, `name`, `by`, `force`; `comment` takes `id`, `by`, `body`; `annotate` takes `id`, `owner`, `value` (an object, or null to remove). Unknown fields fail with `INVALID_BATCH`.
 
 A reference (`id`, `on`, `parent`, `depends_on` entries) is a Task ID or `key:` plus a Source Key added earlier in the Batch or already on the Board. `by` defaults to `--by`, then `ORBIT_AGENT`, then `USER`.
 
@@ -769,7 +766,10 @@ Operations run in order on one in-memory snapshot under the exclusive lock. On t
       "id": "orb-a7b2c9",
       "kind": "task",
       "title": "Build the CLI router",
-      "status": "todo",
+      "status": "ready",
+      "status_category": "todo",
+      "resolution": null,
+      "allowed_transitions": ["claim", "defer", "done", "cancel"],
       "type": "task",
       "priority": 2,
       "labels": ["ready-for-agent"],

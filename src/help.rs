@@ -521,7 +521,8 @@ Examples:
   orbit show orb-a7b2c9 --json";
 
 pub const RELEASE_LONG: &str = "\
-Clears the claim and returns the task to todo, so it becomes ready again. By
+Clears the claim and returns the task to the workflow's release target (the
+ready status in the shipped templates), so it becomes ready again. By
 default only the agent holding the claim can release it; --force releases someone
 else's claim. Terminal tasks cannot be released.
 
@@ -624,12 +625,12 @@ Examples:
   orbit cancel orb-a7b2c9 --force --comment \"Superseded\"";
 
 pub const REOPEN_LONG: &str = "\
-Returns a done or cancelled task to todo and clears any claim. Reopening a SubTask
-of a done Parent Task reopens the parent too. Reopening is refused when a
-dependent task is already done, because that would leave a completed task with an
-unfinished dependency; --force allows it. Doctor reports the resulting historical
-warning, and a later completion of that dependent still enforces its
-dependencies.";
+Returns a done or cancelled task to the workflow's reopen target and clears any
+claim. Reopening a SubTask of a done Parent Task reopens the parent too.
+Reopening is refused when a dependent task is already done, because that would
+leave a completed task with an unfinished dependency; --force allows it. Doctor
+reports the resulting historical warning, and a later completion of that
+dependent still enforces its dependencies.";
 
 pub const REOPEN_EXAMPLES: &str = "\
 Examples:
@@ -641,6 +642,27 @@ Examples:
 
   # Reopen a SubTask; its done parent reopens with it
   orbit reopen orb-a7b2c9.d4b3df";
+
+pub const TRANSITION_LONG: &str = "\
+Runs one named transition from the Board's workflow: the same edges `orbit show`
+lists under allowed_transitions. Transitions into a done or cancelled status
+record the transition's resolution on the task; transitions back to an open
+status clear it. Built-in commands (claim, release, done, cancel, reopen) apply
+their own guards on top of the same edges; transition runs the edge directly,
+honoring the claim-holder check for transitions that require one. An unknown
+name or an edge that does not start from the current status is an
+INVALID_TRANSITION error that names the transitions valid from here.";
+
+pub const TRANSITION_EXAMPLES: &str = "\
+Examples:
+  # Move a task from the backlog into the ready queue
+  orbit transition orb-a7b2c9 promote
+
+  # Park ready work until later
+  orbit transition orb-a7b2c9 defer
+
+  # Inspect which transitions a task allows first
+  orbit show orb-a7b2c9 --json";
 
 pub const UPDATE_LONG: &str = "\
 Edits a task without changing its lifecycle. Use --title, --body/--body-file,

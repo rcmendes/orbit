@@ -57,6 +57,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Hand work back | `orbit release` |
 | Finish or abandon work | `orbit done`, `orbit cancel` |
 | Undo a close or remove a mistake | `orbit reopen`, `orbit delete` |
+| Run a Board-defined workflow transition | `orbit transition` |
 | Add context to a ticket | `orbit comment add`, `orbit update` |
 | Attach a tool's own data to a Task | `orbit annotation set/remove` |
 | Apply many changes at once, all or none | `orbit batch` |
@@ -368,7 +369,7 @@ orbit mcp                          # normally launched by the editor
 
 ### `orbit add` — file a ticket
 
-Creates a task in `todo` and prints its ID, which you need for dependents,
+Creates a task in the workflow's initial status (`ready` in the shipped templates) and prints its ID, which you need for dependents,
 labels, and comments.
 
 **Good fit:** a bug report, a feature, a follow-up from a review, or a ticket
@@ -637,9 +638,10 @@ work, including blocked tasks.
 
 ### `orbit ready` — the agent queue
 
-Shows tasks that are `todo`, unclaimed, not waiting on an external blocker, carry
-no hold label, and have all dependencies done or cancelled. A Parent Task is not
-Ready while any SubTask is open. Results are ordered by priority, then creation
+Shows tasks sitting in the workflow's ready status, unclaimed, not waiting on an
+external blocker, carrying no hold label, and with every dependency and SubTask
+in a closed status category. A Parent Task is not Ready while any SubTask is
+open. Results are ordered by priority, then creation
 time.
 
 With `--claim`, the first task is claimed atomically in the same command and
@@ -840,7 +842,7 @@ orbit release orb-a7b2c9 --by claude
 
 ### `orbit release` — hand work back
 
-Clears the claim and returns the task to `todo`. The holder can release; `--force`
+Clears the claim and returns the task to the workflow's release target (the ready status in the shipped templates). The holder can release; `--force`
 releases someone else's claim. Terminal tasks cannot be released. The latest
 checkpoint is kept for the next claimant.
 
@@ -886,7 +888,7 @@ orbit cancel orb-a7b2c9 --force
 
 ### `orbit reopen` — undo a close
 
-Returns a done or cancelled task to `todo`. Reopening a SubTask reopens every
+Returns a done or cancelled task to the workflow's reopen target (the ready status in the shipped templates) and clears its resolution. Reopening a SubTask reopens every
 done ancestor too, nearest first, so the feature is not left done with reopened
 work; the walk stops at an active ancestor. A SubTask under a cancelled ancestor
 is refused, naming that ancestor, until it is reopened. It
@@ -900,6 +902,26 @@ idea is back in scope.
 ```bash
 orbit reopen orb-a7b2c9
 orbit reopen orb-a7b2c9 --force
+```
+
+### `orbit transition` — run a named workflow transition
+
+Runs one named edge from the Board's workflow — the same edges `orbit show`
+lists under `allowed_transitions`. The shipped `standard` template adds
+`promote` (backlog `todo` to `ready`) and `defer` (`ready` to `todo`) on top of
+the lifecycle edges; custom `[workflow]` definitions can add statuses such as
+`In Review` and transitions such as `submit`. A transition into a done or
+cancelled status records its resolution on the task; a transition back to an
+open status clears it. An unknown name or an edge that does not start from the
+current status fails with `INVALID_TRANSITION` naming the valid transitions.
+
+**Good fit:** moving work through Board-defined statuses that have no dedicated
+command, such as promoting deferred work or submitting for review.
+
+```bash
+orbit transition orb-a7b2c9 promote
+orbit transition orb-a7b2c9 submit --by claude
+orbit show orb-a7b2c9 --json   # allowed_transitions lists the valid edges
 ```
 
 ### `orbit delete` — remove a mistake

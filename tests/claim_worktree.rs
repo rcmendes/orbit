@@ -162,7 +162,7 @@ fn claim_worktree_rejects_a_branch_checked_out_elsewhere_before_claiming() {
     assert_eq!(status, 1, "{value}");
     assert_eq!(value["error"]["code"], "GIT_ERROR", "{value}");
     let shown = repo.ok_json(&["show", id, "--json"]);
-    assert_eq!(shown["data"]["status"], "todo", "{shown}");
+    assert_eq!(shown["data"]["status"], "ready", "{shown}");
 }
 
 #[test]

@@ -1754,7 +1754,7 @@ fn github_create_previews_issue_without_writing_until_apply() {
         "Preview issue",
         "Description for GitHub",
         "Labels: bug",
-        "Task status: todo",
+        "Task status: ready",
         "Remote Issue state: open",
         "Apply with --apply",
     ] {

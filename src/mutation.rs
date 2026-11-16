@@ -187,6 +187,12 @@ pub enum Lifecycle<'a> {
         agent: &'a str,
         update: crate::transition::CheckpointUpdate,
     },
+    /// Runs a named workflow transition (`orbit transition <id> <name>`).
+    Transition {
+        name: &'a str,
+        caller: Option<&'a str>,
+        force: bool,
+    },
 }
 
 /// Executes a lifecycle operation on a freshly loaded snapshot.
@@ -226,8 +232,20 @@ pub fn execute_in(
             true,
         ),
         Lifecycle::Checkpoint { agent, update } => {
-            graph.get_mut(id)?.record_checkpoint(agent, update, now)?;
+            let workflow = graph.workflow.clone();
+            graph
+                .get_mut(id)?
+                .record_checkpoint(agent, update, now, &workflow)?;
             ("checkpoint", true, false)
+        }
+        Lifecycle::Transition {
+            name,
+            caller,
+            force,
+        } => {
+            let changed = crate::ops::transition(&mut graph, id, name, caller, force, now)?
+                == crate::transition::Outcome::Changed;
+            (name, changed, false)
         }
     };
     let task = graph.get(id)?.clone();

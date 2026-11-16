@@ -16,7 +16,8 @@ use crate::board_host;
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
-use crate::task::{self, Claim, Status, StrayClaimTimes, Task, TaskFrontmatter};
+use crate::task::{self, Claim, StrayClaimTimes, Task, TaskFrontmatter};
+use crate::workflow::Workflow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeSide {
@@ -227,6 +228,7 @@ fn reconcile(
         &remote_tree,
         resolutions,
         Utc::now(),
+        &board.workflow()?,
     )?;
     if !outcome.conflicts.is_empty() {
         return Err(OrbitError::new(
@@ -554,13 +556,14 @@ fn claim_notice(task: &str, winner: &Claim, loser: Option<&Claim>) -> ClaimNotic
 /// merged status is terminal keeps no Claim.
 fn merge_claim(
     id: &str,
-    status: Status,
+    status: &str,
+    workflow: &Workflow,
     base: &ClaimSide,
     local: &ClaimSide,
     remote: &ClaimSide,
     outcome: &mut MergeOutcome,
 ) -> ClaimSide {
-    if status.is_terminal() {
+    if workflow.is_terminal(status) {
         return ClaimSide {
             claim: None,
             stray: later_stray(&local.stray, &remote.stray),
@@ -628,6 +631,7 @@ fn merge_task(
     base: Option<Task>,
     local: Task,
     remote: Task,
+    workflow: &Workflow,
     outcome: &mut MergeOutcome,
 ) -> Result<String> {
     let base_front = base.as_ref().map(|task| &task.front);
@@ -641,9 +645,9 @@ fn merge_task(
         outcome,
     );
     let status = pick(
-        base_front.map(|f| f.status),
-        local.front.status,
-        remote.front.status,
+        base_front.map(|f| f.status.clone()),
+        local.front.status.clone(),
+        remote.front.status.clone(),
         &key("status"),
         outcome,
     );
@@ -747,9 +751,17 @@ fn merge_task(
         outcome,
     );
 
+    let resolution = pick(
+        base_front.map(|f| f.resolution.clone()),
+        local.front.resolution.clone(),
+        remote.front.resolution.clone(),
+        &key("resolution"),
+        outcome,
+    );
     let claim = merge_claim(
         id,
-        status,
+        &status,
+        workflow,
         &ClaimSide::of(base_front),
         &ClaimSide::of(Some(&local.front)),
         &ClaimSide::of(Some(&remote.front)),
@@ -825,6 +837,7 @@ fn merge_task(
         front: task::TaskFrontmatter {
             title,
             status,
+            resolution,
             task_type,
             priority,
             labels,
@@ -871,6 +884,7 @@ fn merge_trees(
     remote: &BTreeMap<String, String>,
     resolutions: &BTreeMap<String, MergeSide>,
     notice_time: DateTime<Utc>,
+    workflow: &Workflow,
 ) -> Result<MergeOutcome> {
     let mut outcome = MergeOutcome {
         files: BTreeMap::new(),
@@ -887,6 +901,7 @@ fn merge_trees(
             base.get(path).cloned(),
             local.get(path).cloned(),
             remote.get(path).cloned(),
+            workflow,
             &mut outcome,
         )?;
     }
@@ -921,6 +936,7 @@ fn resolve_path(
     base: Option<String>,
     local: Option<String>,
     remote: Option<String>,
+    workflow: &Workflow,
     outcome: &mut MergeOutcome,
 ) -> Result<()> {
     if local == remote {
@@ -960,7 +976,8 @@ fn resolve_path(
                 .and_then(|c| task::parse_task(id.clone(), c).ok());
             match (local_task, remote_task) {
                 (Some(local_task), Some(remote_task)) => {
-                    let content = merge_task(&id, base_task, local_task, remote_task, outcome)?;
+                    let content =
+                        merge_task(&id, base_task, local_task, remote_task, workflow, outcome)?;
                     outcome.files.insert(path.to_string(), Some(content));
                 }
                 _ => {
@@ -1079,6 +1096,7 @@ mod tests {
             &tree(&[(TASK_PATH, host)]),
             &parse_resolutions(resolutions).unwrap(),
             now(),
+            &Workflow::standard(),
         )
         .unwrap()
     }
@@ -1157,6 +1175,7 @@ mod tests {
             &tree(&[(path, &host)]),
             &BTreeMap::new(),
             now(),
+            &Workflow::standard(),
         )
         .unwrap();
         assert!(merged.conflicts.is_empty());
@@ -1208,7 +1227,7 @@ mod tests {
         let merged = merge_tasks(&base, &local, &host, &[]);
         assert!(merged.conflicts.is_empty());
         let task = merged_task(&merged);
-        assert_eq!(task.front.status, Status::Done);
+        assert_eq!(task.front.status, "done");
         assert!(task.front.claim.is_none());
     }
 
@@ -1217,15 +1236,39 @@ mod tests {
         let base = tree(&[(TASK_PATH, "original")]);
         let local = tree(&[(TASK_PATH, "edited")]);
         let host = BTreeMap::new();
-        let merged = merge_trees(&base, &local, &host, &BTreeMap::new(), now()).unwrap();
+        let merged = merge_trees(
+            &base,
+            &local,
+            &host,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+        )
+        .unwrap();
         assert_eq!(merged.conflicts.len(), 1);
         assert_eq!(merged.conflicts[0].field, "orbit-test");
         assert_eq!(merged.conflicts[0].host, "(deleted)");
         let resolutions = parse_resolutions(&["orbit-test=host".to_string()]).unwrap();
-        let merged = merge_trees(&base, &local, &host, &resolutions, now()).unwrap();
+        let merged = merge_trees(
+            &base,
+            &local,
+            &host,
+            &resolutions,
+            now(),
+            &Workflow::standard(),
+        )
+        .unwrap();
         assert!(merged.conflicts.is_empty());
         assert_eq!(merged.files[TASK_PATH], None);
-        let both_deleted = merge_trees(&base, &host, &host, &BTreeMap::new(), now()).unwrap();
+        let both_deleted = merge_trees(
+            &base,
+            &host,
+            &host,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+        )
+        .unwrap();
         assert!(!both_deleted.files.contains_key(TASK_PATH));
     }
 
@@ -1245,8 +1288,15 @@ mod tests {
     fn unrelated_trees_merge_different_tasks() {
         let local = tree(&[("tasks/orbit-local.md", "local task")]);
         let remote = tree(&[("tasks/orbit-host.md", "host task")]);
-        let merged =
-            merge_trees(&BTreeMap::new(), &local, &remote, &BTreeMap::new(), now()).unwrap();
+        let merged = merge_trees(
+            &BTreeMap::new(),
+            &local,
+            &remote,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+        )
+        .unwrap();
         assert!(merged.conflicts.is_empty());
         assert_eq!(
             merged.files["tasks/orbit-local.md"].as_deref(),
@@ -1264,7 +1314,15 @@ mod tests {
         let local = task_with("annotations:\n  ci:\n    passed: true\n");
         let remote = task_with("annotations:\n  planner:\n    order: 1\n");
         let mut outcome = outcome();
-        let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
+        let merged = merge_task(
+            "orb-aaaaaa",
+            Some(base),
+            local,
+            remote,
+            &Workflow::standard(),
+            &mut outcome,
+        )
+        .unwrap();
         let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
         assert_eq!(
             serde_json::to_value(&parsed.front.annotations).unwrap(),
@@ -1279,7 +1337,15 @@ mod tests {
         let local = task_with("source_key: planner:plan-7:step-1\n");
         let remote = task_with("");
         let mut outcome = outcome();
-        let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
+        let merged = merge_task(
+            "orb-aaaaaa",
+            Some(base),
+            local,
+            remote,
+            &Workflow::standard(),
+            &mut outcome,
+        )
+        .unwrap();
         let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
         assert_eq!(
             parsed.front.source_key.as_deref(),

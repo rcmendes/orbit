@@ -234,7 +234,7 @@ fn claims_have_leases_and_holder_checks() {
     assert_eq!(heartbeat["meta"]["committed"], false);
 
     let released = repo.ok_json(&["release", id.as_str(), "--by", "agent-1", "--json"]);
-    assert_eq!(released["data"]["status"], "todo");
+    assert_eq!(released["data"]["status"], "ready");
     assert!(released["data"]["claimed_by"].is_null());
 
     let ready = repo.ok_json(&["ready", "--json"]);

@@ -4,7 +4,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
-use crate::task::{Status, TaskType};
+use crate::task::TaskType;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -108,6 +108,10 @@ pub enum Command {
     /// Reopen a done or cancelled task.
     #[command(long_about = help::REOPEN_LONG, after_long_help = help::REOPEN_EXAMPLES)]
     Reopen(ReopenArgs),
+
+    /// Run a named workflow transition on a task.
+    #[command(long_about = help::TRANSITION_LONG, after_long_help = help::TRANSITION_EXAMPLES)]
+    Transition(TransitionArgs),
 
     /// Edit a task's title, body, priority, or external blocker.
     #[command(long_about = help::UPDATE_LONG, after_long_help = help::UPDATE_EXAMPLES)]
@@ -385,9 +389,10 @@ pub struct AddArgs {
 
 #[derive(Debug, Args)]
 pub struct ListArgs {
-    /// Filter by status. Requesting done or cancelled includes closed work.
-    #[arg(long, value_enum)]
-    pub status: Option<Status>,
+    /// Filter by workflow status name. Requesting a closed status includes
+    /// closed work.
+    #[arg(long, value_name = "STATUS")]
+    pub status: Option<String>,
 
     /// Filter by priority (0-3).
     #[arg(long, value_name = "N")]
@@ -647,6 +652,23 @@ pub struct ReopenArgs {
     pub id: String,
 
     /// Reopen even when a dependent task is already done.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TransitionArgs {
+    /// Task ID, for example orb-a7b2c9.
+    pub id: String,
+
+    /// Workflow transition name, for example promote or block.
+    pub name: String,
+
+    /// Caller identity for Claim-holder checks.
+    #[arg(long)]
+    pub by: Option<String>,
+
+    /// Run even when another holder's live Claim blocks the transition.
     #[arg(long)]
     pub force: bool,
 }

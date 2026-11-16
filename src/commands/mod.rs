@@ -26,6 +26,7 @@ use crud::{cmd_add, cmd_delete, cmd_update};
 use init::cmd_init;
 use lifecycle::{
     cmd_cancel, cmd_checkpoint, cmd_claim, cmd_done, cmd_heartbeat, cmd_release, cmd_reopen,
+    cmd_transition,
 };
 use query::{cmd_export, cmd_list, cmd_prime, cmd_ready, cmd_show, cmd_sync, cmd_tree};
 use relations::{cmd_comment, cmd_depend, cmd_label, cmd_undepend};
@@ -84,6 +85,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         }
         Command::Reopen(args) => {
             with_task_board(dir.as_deref(), true, |board| cmd_reopen(board, args))
+        }
+        Command::Transition(args) => {
+            with_task_board(dir.as_deref(), true, |board| cmd_transition(board, args))
         }
         Command::Update(args) => {
             with_task_board(dir.as_deref(), true, |board| cmd_update(board, args))

@@ -18,12 +18,12 @@ use crate::github::status::{
     status_from_issue, user_labels,
 };
 use crate::remote::RemoteProject;
+use crate::remote::Status;
 use crate::remote::model::{
     DesiredRelation, MappedFields, RelationAction, RelationChange, RelationKind, RemoteIssue,
     RemoteIssueFields, RemoteIssueRef, RemoteIssueSummary, RemoteIssueUpdate, RemoteRelations,
 };
 use crate::remote::port::RemoteAdapter;
-use crate::task::Status;
 
 /// The GitHub adapter: a [`GitHubClient`] plus the Board's GitHub settings.
 ///

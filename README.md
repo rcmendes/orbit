@@ -232,11 +232,11 @@ $ orbit list --group
 ╭───────────────────┬────────┬────┬──────┬───────┬─────────────────────────────┬─────────────────────────────┬────────────╮
 │ ID                │ STATUS │ P  │ TYPE │ ISSUE │ TITLE                       │ LABELS                      │ CLAIMED BY │
 ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9  Spec: SSO login across api, web, infra                                   epic · todo · P1 · ready-for-agent │
+│ orb-a7b2c9  Spec: SSO login across api, web, infra                                   epic · ready · P1 · ready-for-agent │
 ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ #12   │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
-│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ -     │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
-│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ -     │ web: login redirect         │ ready-for-agent, repo:web   │            │
+│ orb-a7b2c9.z21c2w │ ready  │ P0 │ task │ #12   │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
+│ orb-a7b2c9.hxdmqt │ ready  │ P1 │ task │ -     │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
+│ orb-a7b2c9.c5qmed │ ready  │ P2 │ task │ -     │ web: login redirect         │ ready-for-agent, repo:web   │            │
 ╰───────────────────┴────────┴────┴──────┴───────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
@@ -246,10 +246,10 @@ For one feature, `orbit tree` shows the parent, its children, progress, and bloc
 
 ```text
 $ orbit tree orb-a7b2c9
-orb-a7b2c9  todo  P1  epic  Spec: SSO login across api, web, infra  [ready-for-agent]  0/3 resolved
-  orb-a7b2c9.c5qmed  todo  P2  web: login redirect  [ready-for-agent, repo:web]
-  orb-a7b2c9.hxdmqt  todo  P1  api: OIDC callback  [ready-for-agent, repo:api]
-  orb-a7b2c9.z21c2w  todo  P0  infra: register OIDC client  [ready-for-agent, repo:infra]
+orb-a7b2c9  ready  P1  epic  Spec: SSO login across api, web, infra  [ready-for-agent]  0/3 resolved
+  orb-a7b2c9.c5qmed  ready  P2  web: login redirect  [ready-for-agent, repo:web]
+  orb-a7b2c9.hxdmqt  ready  P1  api: OIDC callback  [ready-for-agent, repo:api]
+  orb-a7b2c9.z21c2w  ready  P0  infra: register OIDC client  [ready-for-agent, repo:infra]
 ```
 
 Verify Board health, its branch, and uncommitted changes. If a Claude SessionStart hook is configured, `doctor` also warns when `orbit` is not the binary on `PATH`. From a Board anchor or member Repository it also names the resolved Board, checks Repository discovery and cached Issue freshness, and reports migration remnants, sync conflicts, and agent setup drift with a safe next action:
@@ -269,15 +269,15 @@ Orbit keeps the vocabulary small on purpose. Everything else is derived.
 | **Parent Task** | A Task that groups SubTasks. Its completion waits for its children. |
 | **Kind** | Structural and derived: `task` or `subtask`. |
 | **Type** | Work shape: `task` (default), `epic`, `spike`, `chore`, or `decision`. Metadata only; it never changes readiness. `epic` is top-level only. |
-| **Status** | Stored lifecycle: `todo`, `in_progress`, `done`, or `cancelled`. |
+| **Status** | Stored lifecycle position: a name from the Board's workflow, bucketed into a category (`todo`, `active`, `done`, `canceled`). |
 | **Priority** | `P0` (highest) through `P3` (lowest), stored as `0`–`3`. |
 | **Label** | A lowercase string for filtering and workflow state. |
 | **Hold Label** | A label that suspends readiness. Defaults: `needs-triage`, `needs-info`, `ready-for-human`. |
-| **Dependency** | Another Task that must be `done` or `cancelled` before this one is Ready. |
+| **Dependency** | Another Task in a closed status category before this one is Ready. |
 | **Claim** | Exclusive, time-bounded responsibility for a Task, held by one agent. |
 | **Lease** | The time window during which a Claim is valid. Default: 30 minutes. |
 | **Checkpoint** | The claim holder's latest handoff note: current progress, the next useful action, and any blocker. It survives release and takeover but never affects readiness. |
-| **Ready** | Derived: `todo`, unclaimed, not Waiting, no Hold Label, every Dependency resolved, and every SubTask resolved. Never stored. |
+| **Ready** | Derived: in the workflow's ready status, unclaimed, not Waiting, no Hold Label, every Dependency resolved, and every SubTask resolved. Never stored. |
 | **Waiting** | An external blocker recorded in `waiting_on`. Not a Status. |
 | **Comment** | An append-only, authored, timestamped note attached to a Task. |
 
@@ -380,7 +380,7 @@ Tasks are Markdown with YAML frontmatter:
 ```yaml
 ---
 title: Build the CLI router
-status: todo
+status: ready
 type: task
 priority: 2
 labels:
@@ -425,7 +425,7 @@ sequenceDiagram
     CLI->>Lock: acquire exclusive
     CLI->>Board: rehydrate graph from Markdown
     CLI->>CLI: filter Ready tasks, pick the highest priority
-    CLI->>Board: atomic write in_progress + lease
+    CLI->>Board: atomic write the active status + lease
     CLI->>Git: commit "orbit: claim ID"
     CLI-->>Agent: JSON envelope with task and lease
 
@@ -465,7 +465,7 @@ A checkpoint is the structured handoff for that recovery. Only the claim holder 
 
 ```mermaid
 flowchart TD
-    TASK["Task candidate"] --> STATUS{"status is todo?"}
+    TASK["Task candidate"] --> STATUS{"status is the workflow's ready status?"}
     STATUS -->|no| NOTREADY["not ready"]
     STATUS -->|yes| CLAIMED{"claimed_by is null?"}
     CLAIMED -->|no| NOTREADY
@@ -491,33 +491,34 @@ The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_B
 
 ### Status vs. derived state
 
-Only four values are stored in `status`:
+The lifecycle is a workflow defined by the Board in `config.toml`: named statuses, each in a category (`todo`, `active`, `done`, `canceled`), named transitions between them, the initial status, and one ready status. Boards pick a shipped template — `minimal`, `standard` (the default), or `agentic` — or write a custom `[workflow]` section; `orbit transition <id> <name>` runs any defined edge, and `orbit show` lists `allowed_transitions`. The standard template:
 
 ```mermaid
 stateDiagram-v2
     direction LR
 
-    [*] --> todo: add
+    [*] --> ready: add
 
-    todo --> in_progress: claim or ready --claim
+    ready --> in_progress: claim or ready --claim
+    ready --> done: done
+    ready --> cancelled: cancel
+    ready --> todo: defer
+    todo --> ready: promote
     todo --> done: done
     todo --> cancelled: cancel
 
-    in_progress --> todo: release
+    in_progress --> ready: release
     in_progress --> in_progress: heartbeat
     in_progress --> in_progress: checkpoint
     in_progress --> in_progress: claim --steal
     in_progress --> done: done
     in_progress --> cancelled: cancel
 
-    done --> todo: reopen
-    cancelled --> todo: reopen
-
-    done --> done: done --comment
-    cancelled --> cancelled: cancel --comment
+    done --> ready: reopen
+    cancelled --> ready: reopen
 ```
 
-Ready, blocked, waiting, stale, and held are derived from claims, dependencies, labels, and `waiting_on`. They cannot be written as a Status. `done` and `cancelled` both resolve dependents; `delete` is not a transition, it removes the task file.
+A transition into a done or cancelled status records its resolution on the task; reopening clears it. Ready, blocked, waiting, stale, and held are derived from claims, dependencies, labels, and `waiting_on`. They cannot be written as a Status. Statuses in the `done` and `canceled` categories both resolve dependents; `delete` is not a transition, it removes the task file.
 
 ## Features and SubTasks
 

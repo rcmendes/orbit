@@ -114,6 +114,13 @@ enum Operation {
         #[serde(default)]
         force: bool,
     },
+    Transition {
+        id: String,
+        name: String,
+        by: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
     Comment {
         id: String,
         by: Option<String>,
@@ -140,6 +147,7 @@ impl Operation {
             Operation::Done { .. } => "done",
             Operation::Cancel { .. } => "cancel",
             Operation::Reopen { .. } => "reopen",
+            Operation::Transition { .. } => "transition",
             Operation::Comment { .. } => "comment",
             Operation::Annotate { .. } => "annotate",
         }
@@ -324,11 +332,33 @@ impl Applier<'_> {
             Operation::Reopen { id, force } => {
                 let id = self.resolve(&id)?;
                 // An open Task is already where reopen leads; a re-run must not fail on it.
-                if !self.graph.get(&id)?.front.status.is_terminal() {
+                if !self
+                    .graph
+                    .workflow
+                    .is_terminal(&self.graph.get(&id)?.front.status)
+                {
                     return Ok((id, false, false));
                 }
                 crate::ops::reopen(&mut self.graph, &id, force, now)?;
                 Ok((id, true, false))
+            }
+            Operation::Transition {
+                id,
+                name,
+                by,
+                force,
+            } => {
+                let id = self.resolve(&id)?;
+                let caller = self.optional(by);
+                let outcome = crate::ops::transition(
+                    &mut self.graph,
+                    &id,
+                    &name,
+                    caller.as_deref(),
+                    force,
+                    now,
+                )?;
+                Ok((id, outcome == crate::transition::Outcome::Changed, false))
             }
             Operation::Comment { id, by, body } => {
                 let id = self.resolve(&id)?;
@@ -505,7 +535,7 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{Status, Task, TaskFrontmatter};
+    use crate::task::{Task, TaskFrontmatter};
 
     fn task(id: &str) -> Task {
         let now = Utc::now();
@@ -513,7 +543,8 @@ mod tests {
             id: id.to_string(),
             front: TaskFrontmatter {
                 title: id.to_string(),
-                status: Status::Todo,
+                status: "todo".to_string(),
+                resolution: None,
                 task_type: TaskType::Task,
                 priority: 2,
                 labels: Vec::new(),

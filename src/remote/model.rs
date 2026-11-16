@@ -10,7 +10,57 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::task::Status;
+/// The four canonical Orbit status buckets the Remote Tracker vocabulary
+/// speaks. Task files store workflow-defined status *names*; the sync engine
+/// keeps this fixed enum at the adapter boundary and resolves it against the
+/// Board's [`crate::workflow::Workflow`] when it reads or writes a Task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Todo,
+    #[serde(rename = "in_progress", alias = "in-progress")]
+    InProgress,
+    Done,
+    Cancelled,
+}
+
+impl Status {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Status::Done | Status::Cancelled)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Todo => "todo",
+            Status::InProgress => "in_progress",
+            Status::Done => "done",
+            Status::Cancelled => "cancelled",
+        }
+    }
+
+    /// The workflow status name this canonical status maps to: the preferred
+    /// name in the matching category (open work lands on the Ready status).
+    pub fn orbit_name(self, workflow: &crate::workflow::Workflow) -> String {
+        match self {
+            Status::Todo => workflow.open_status(),
+            Status::InProgress => workflow.active_status(),
+            Status::Done => workflow.done_status(),
+            Status::Cancelled => workflow.cancelled_status(),
+        }
+        .to_string()
+    }
+
+    /// The canonical status whose workflow category matches `name`, if any.
+    pub fn for_workflow_status(workflow: &crate::workflow::Workflow, name: &str) -> Option<Self> {
+        use crate::workflow::StatusCategory;
+        match workflow.category_of(name)? {
+            StatusCategory::Todo => Some(Status::Todo),
+            StatusCategory::Active => Some(Status::InProgress),
+            StatusCategory::Done => Some(Status::Done),
+            StatusCategory::Canceled => Some(Status::Cancelled),
+        }
+    }
+}
 
 /// Identity of a Remote Issue inside its Remote Project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

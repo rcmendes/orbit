@@ -229,8 +229,8 @@ orbit show <ID> --json
 
 Use `orbit list --all --include-closed --json` to inspect the whole board.
 `orbit ready --json` lists only
-unclaimed tasks whose dependencies are done or cancelled and which carry no hold
-label.
+unclaimed tasks in the workflow's ready status whose dependencies are in a
+closed status category and which carry no hold label.
 
 ## Claiming and completing work
 
@@ -286,7 +286,7 @@ Blocking edges stay `--depends-on` / `orbit depend`. Resolution stays
 
 - **Dependency**: `--depends-on <dependency-id>` at creation or
   `orbit depend <task-id> <dependency-id>` later creates a real Dependency: the
-  first Task cannot become Ready until the second is `done` or `cancelled`. Use it
+  first Task cannot become Ready until the second is in a closed status category. Use it
   only when one child must wait for another. Never use `depend` to record
   parentage; `--parent` does that, and the map waits for its SubTasks
   automatically.
@@ -310,5 +310,5 @@ Blocking edges stay `--depends-on` / `orbit depend`. Resolution stays
   ```
 
 - **Resolve**: `orbit done <id> --by <agent>` or `orbit cancel <id> --by <agent>`
-  each SubTask as its work lands. The map becomes Ready when every SubTask is
-  done or cancelled, and `orbit done` closes it.
+  each SubTask as its work lands. The map becomes Ready when every SubTask is in a closed
+  status category, and `orbit done` closes it.

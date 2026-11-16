@@ -24,6 +24,7 @@ pub mod relationships;
 pub mod sync;
 
 pub use crate::task::RemoteLink;
+pub use model::Status;
 
 /// Remote Projects explicitly configured on the Board: `[remote] projects`
 /// plus the legacy `[github] repositories` list, which names GitHub Remote

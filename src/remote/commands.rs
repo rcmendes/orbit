@@ -691,7 +691,8 @@ fn connect_origin(
     let setup = match client.validate_org_fields(organization, &effective.issue_fields) {
         Ok(setup) => setup,
         Err(_) if create_fields => {
-            let area_options = crate::github::client::area_field_options(&board.config.board.areas);
+            let area_options =
+                crate::github::client::area_field_options(&board.config.board.components);
             match client.create_org_fields(organization, &effective.issue_fields, &area_options) {
                 Ok(setup) => setup,
                 Err(create_error) => {
@@ -942,7 +943,8 @@ fn cmd_connect_fields(
     let org = effective.require_organization()?;
     let client = client_from_env()?;
     let setup = if create_fields {
-        let area_options = crate::github::client::area_field_options(&board.config.board.areas);
+        let area_options =
+            crate::github::client::area_field_options(&board.config.board.components);
         client.create_org_fields(org, &effective.issue_fields, &area_options)?
     } else {
         client.validate_org_fields(org, &effective.issue_fields)?
@@ -1254,7 +1256,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
     for id in &args.tasks {
         let task = graph.get(id)?;
         let unmapped: Vec<&str> = [
-            ("area", !mapped.area && task.front.area.is_some()),
+            ("area", !mapped.area && task.front.component.is_some()),
             (
                 "verification",
                 !mapped.verification && task.front.verification.is_some(),
@@ -1305,7 +1307,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
                 "title": task.front.title,
                 "body": task.body,
                 "labels": task.front.labels,
-                "area": task.front.area.as_deref(),
+                "area": task.front.component.as_deref(),
                 "verification": task.front.verification,
                 "status": task.front.status,
                 "issue_state": issue_state,
@@ -1325,7 +1327,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
             "title": task.front.title,
             "body": task.body,
             "labels": task.front.labels,
-            "area": task.front.area.as_deref(),
+            "area": task.front.component.as_deref(),
             "verification": task.front.verification,
             "status": task.front.status,
             "issue_state": issue_state,
@@ -1354,7 +1356,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
                     "title": task.front.title,
                     "body": task.body,
                     "labels": task.front.labels,
-                    "area": task.front.area.as_deref(),
+                    "area": task.front.component.as_deref(),
                     "verification": task.front.verification,
                     "status": task.front.status,
                     "issue_state": issue_state,
@@ -1442,7 +1444,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
             "title": task.front.title,
             "body": task.body,
             "labels": task.front.labels,
-            "area": task.front.area.as_deref(),
+            "area": task.front.component.as_deref(),
             "verification": task.front.verification,
             "status": task.front.status,
             "issue_state": issue_state,
@@ -1523,7 +1525,7 @@ fn format_create_preview(task: &Task, repository: &str, issue_state: &str) -> St
         } else {
             task.front.labels.join(", ")
         },
-        task.front.area.as_deref().unwrap_or("(none)"),
+        task.front.component.as_deref().unwrap_or("(none)"),
         task.front.verification.as_deref().unwrap_or("(none)"),
         task.front.status.as_str(),
         issue_state,
@@ -2274,7 +2276,7 @@ fn task_issue_differences(task: &Task, issue: &RemoteIssue) -> Vec<Value> {
         ("body", json!(task.body), json!(issue.body)),
         ("labels", json!(task.front.labels), json!(issue.labels)),
         ("status", json!(task.front.status), json!(issue.status)),
-        ("area", json!(task.front.area), json!(issue.area)),
+        ("area", json!(task.front.component), json!(issue.area)),
         (
             "verification",
             json!(task.front.verification),
@@ -2314,7 +2316,7 @@ fn create_imported_task(
         .as_deref()
         .map(|area| {
             let normalized = area.trim().to_lowercase();
-            if !task::is_valid_area(&normalized) {
+            if !task::is_valid_component(&normalized) {
                 return Err(OrbitError::invalid_argument(
                     "area must be a short lowercase slug of letters, digits, and `-`",
                 ));
@@ -2335,7 +2337,7 @@ fn create_imported_task(
             parent: None,
             waiting_on: None,
             checkpoint: None,
-            area,
+            component: area,
             verification,
             github: None,
             remote: Some(crate::remote::RemoteLink {
@@ -2346,11 +2348,12 @@ fn create_imported_task(
                 active: true,
                 baseline: None,
             }),
-            repo: None,
+            repository: None,
+            external_id: None,
             claim: None,
             stray_claim_times: None,
             source_key: None,
-            annotations: std::collections::BTreeMap::new(),
+            properties: std::collections::BTreeMap::new(),
             created_at: now,
             updated_at: now,
             extra: std::collections::BTreeMap::new(),
@@ -2819,10 +2822,10 @@ fn apply_issue_to_task(task: &mut Task, issue: &RemoteIssue, include_fields: boo
     // `RemoteIssue.labels` already excludes adapter-managed markers.
     task.front.labels = issue.labels.clone();
     if include_fields {
-        task.front.area = match &issue.area {
+        task.front.component = match &issue.area {
             Some(area) => {
                 let normalized = area.trim().to_ascii_lowercase();
-                if !task::is_valid_area(&normalized) {
+                if !task::is_valid_component(&normalized) {
                     return Err(OrbitError::invalid_argument(
                         "area must be a short lowercase slug of letters, digits, and `-`",
                     ));

@@ -287,7 +287,7 @@ fn subtasks_are_available_over_mcp() {
         json!({
             "title": "Part",
             "parent": parent_id.clone(),
-            "labels": ["repo:api", "ready-for-agent"]
+            "labels": ["bug", "ready-for-agent"]
         }),
     );
     let child = tool_envelope(&child);
@@ -309,12 +309,15 @@ fn subtasks_are_available_over_mcp() {
     assert_eq!(list["data"]["count"], 1);
     assert_eq!(list["data"]["tasks"][0]["id"], child_id.as_str());
 
-    let scoped = client.call(74, "list", json!({ "repo": "api", "all": true }));
+    let set_repository = client.call(77, "update", json!({ "id": child_id, "repository": "api" }));
+    assert_eq!(tool_envelope(&set_repository)["ok"], true);
+
+    let scoped = client.call(74, "list", json!({ "repository": "api", "all": true }));
     let scoped = tool_envelope(&scoped);
     assert_eq!(scoped["data"]["count"], 1);
     assert_eq!(scoped["data"]["tasks"][0]["id"], child_id.as_str());
 
-    let ready_scoped = client.call(75, "ready", json!({ "labels": ["repo:api"] }));
+    let ready_scoped = client.call(75, "ready", json!({ "labels": ["bug"] }));
     let ready_scoped = tool_envelope(&ready_scoped);
     assert_eq!(ready_scoped["data"]["count"], 1);
     assert_eq!(ready_scoped["data"]["tasks"][0]["id"], child_id.as_str());
@@ -586,7 +589,7 @@ fn invalid_inputs_are_tool_errors_not_protocol_errors() {
 }
 
 #[test]
-fn annotate_tool_sets_and_removes_an_annotation() {
+fn property_tool_sets_and_removes_a_property() {
     let repo = TestRepo::new();
     repo.init();
     let id = repo.add("Task", &[]);
@@ -595,22 +598,22 @@ fn annotate_tool_sets_and_removes_an_annotation() {
 
     let set = client.call(
         3,
-        "annotate",
+        "property",
         json!({ "id": id, "owner": "ci", "value": { "passed": true } }),
     );
     assert_eq!(
-        tool_envelope(&set)["data"]["annotation"],
+        tool_envelope(&set)["data"]["property"],
         json!({"passed": true})
     );
 
     let removed = client.call(
         4,
-        "annotate",
+        "property",
         json!({ "id": id, "owner": "ci", "value": null }),
     );
     assert_eq!(tool_envelope(&removed)["data"]["changed"], true);
     let show = repo.ok_json(&["show", &id, "--json"]);
-    assert_eq!(show["data"]["annotations"], json!({}));
+    assert_eq!(show["data"]["properties"], json!({}));
 }
 
 #[test]
@@ -637,12 +640,12 @@ fn batch_tool_applies_operations_in_one_call() {
 }
 
 #[test]
-fn annotate_tool_requires_a_value_key() {
+fn property_tool_requires_a_value_key() {
     let repo = TestRepo::new();
     repo.init();
     let id = repo.add("Task", &[]);
     repo.ok_json(&[
-        "annotation",
+        "property",
         "set",
         &id,
         "ci",
@@ -652,8 +655,8 @@ fn annotate_tool_requires_a_value_key() {
     ]);
     let mut client = McpClient::start(&repo);
     initialize(&mut client);
-    let response = client.call(3, "annotate", json!({ "id": id, "owner": "ci" }));
+    let response = client.call(3, "property", json!({ "id": id, "owner": "ci" }));
     assert_eq!(tool_envelope(&response)["ok"], false);
     let show = repo.ok_json(&["show", &id, "--json"]);
-    assert_eq!(show["data"]["annotations"], json!({"ci": {"a": 1}}));
+    assert_eq!(show["data"]["properties"], json!({"ci": {"a": 1}}));
 }

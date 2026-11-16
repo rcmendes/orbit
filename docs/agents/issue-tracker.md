@@ -85,7 +85,7 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
 - `orbit ready --json` returns `data.tasks`, each with `id`, `title`, `priority`,
   `labels`, `blocking`, and claim fields.
 - `orbit show <ID> --json` returns the full task, including `body`, `labels`,
-  `kind`, `type`, `area`, `verification`, `parent`, `subtasks`, `dependents`, and `comments`.
+  `kind`, `type`, `component`, `verification`, `parent`, `subtasks`, `dependents`, and `comments`.
 - `orbit list` prints an aligned table for humans. When the Board has remote
   material, an `ISSUE` column shows `-` for a Local Task, `#N` for a Linked
   Task, and `~#N` for detached provenance; use `--linked` or `--local` to
@@ -191,7 +191,7 @@ machine: gathering context, verifying the claim, grilling, writing the agent
 brief, and maintaining `.out-of-scope/`.
 
 `orbit triage` is a deterministic metadata primitive for any Task, Local or
-Linked. It sets `area`, task-level `verification`, and the canonical labels in
+Linked. It sets `component`, task-level `verification`, and the canonical labels in
 [`triage-labels.md`](./triage-labels.md). It does not verify a claim, grill,
 write a brief, or update `.out-of-scope/`. The commands are in
 [`triage-workflow.md`](./triage-workflow.md).

@@ -32,10 +32,10 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
         validate_priority(priority)?;
     }
     let label_filters = normalize_labels(&args.label)?;
-    let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
+    let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
-    let areas = normalize_areas(board, &args.area)?;
-    let excluded_areas = normalize_areas(board, &args.exclude_area)?;
+    let components = normalize_components(board, &args.component)?;
+    let excluded_components = normalize_components(board, &args.exclude_component)?;
     let scope = repository_scope(board, args.all)?;
 
     let mut tasks: Vec<&Task> = graph
@@ -51,7 +51,11 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             }
 
             if let Some(scope) = scope.as_deref()
-                && task.front.repo.as_deref().is_some_and(|repo| repo != scope)
+                && task
+                    .front
+                    .repository
+                    .as_deref()
+                    .is_some_and(|repo| repo != scope)
             {
                 return false;
             }
@@ -71,20 +75,22 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             if args.exclude_type.contains(&task.front.task_type) {
                 return false;
             }
-            if !areas.is_empty()
-                && !areas
+            if !components.is_empty()
+                && !components
                     .iter()
-                    .any(|area| task.front.area.as_deref() == Some(area.as_str()))
+                    .any(|component| task.front.component.as_deref() == Some(component.as_str()))
             {
                 return false;
             }
-            if excluded_areas
+            if excluded_components
                 .iter()
-                .any(|area| task.front.area.as_deref() == Some(area.as_str()))
+                .any(|component| task.front.component.as_deref() == Some(component.as_str()))
             {
                 return false;
             }
-            if !matches_repo(task, repo_filter.as_deref()) || !task.has_labels(&label_filters) {
+            if !matches_repository(task, repository_filter.as_deref())
+                || !task.has_labels(&label_filters)
+            {
                 return false;
             }
             if task.has_any_label(&excluded_labels) {
@@ -136,10 +142,10 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
         check_parent_filter(&graph, parent)?;
     }
     let label_filters = normalize_labels(&args.label)?;
-    let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
+    let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
-    let areas = normalize_areas(board, &args.area)?;
-    let excluded_areas = normalize_areas(board, &args.exclude_area)?;
+    let components = normalize_components(board, &args.component)?;
+    let excluded_components = normalize_components(board, &args.exclude_component)?;
     let scope = repository_scope(board, args.all)?;
 
     let filters = ReadyFilters {
@@ -148,10 +154,10 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
         excluded: &excluded_labels,
         types: &args.task_type,
         excluded_types: &args.exclude_type,
-        areas: &areas,
-        excluded_areas: &excluded_areas,
+        components: &components,
+        excluded_components: &excluded_components,
         scope: scope.as_deref(),
-        repo: repo_filter.as_deref(),
+        repository: repository_filter.as_deref(),
     };
     if args.claim {
         let agent = resolve_agent(args.by)?;
@@ -277,9 +283,10 @@ pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::C
 pub(super) fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let label_filters = normalize_labels(&args.label)?;
-    let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
-    let matches =
-        |task: &Task| task.has_labels(&label_filters) && matches_repo(task, repo_filter.as_deref());
+    let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
+    let matches = |task: &Task| {
+        task.has_labels(&label_filters) && matches_repository(task, repository_filter.as_deref())
+    };
     let counts = graph.counts_where(matches);
     let agent = optional_agent(args.by).unwrap_or_else(|| "unknown (set ORBIT_AGENT)".to_string());
     let instructions = format!(
@@ -333,8 +340,8 @@ Use the CLI; never edit task files directly.\n\
     if !label_filters.is_empty() {
         human.push_str(&format!("scope: {}\n", label_filters.join(", ")));
     }
-    if let Some(repo) = &repo_filter {
-        human.push_str(&format!("repository: {repo}\n"));
+    if let Some(repository) = &repository_filter {
+        human.push_str(&format!("repository: {repository}\n"));
     }
     human.push_str(&format!(
         "counts: total={} ready={} stale={} in_progress={} waiting={} blocked={}\n",
@@ -376,7 +383,7 @@ Use the CLI; never edit task files directly.\n\
             "agent": agent,
             "instructions": instructions,
             "labels": label_filters,
-            "repo": repo_filter,
+            "repository": repository_filter,
             "counts": counts,
             "ready": ready,
             "close_candidates": close_candidates,
@@ -416,7 +423,7 @@ pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> 
 
     let task_count = tasks.len();
     let snapshot = json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "board": {
             "branch": board.config.board.branch,
             "prefix": board.config.id.prefix,
@@ -427,7 +434,7 @@ pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> 
     });
     Ok(crate::output::CommandOutput::new(
         snapshot,
-        format!("exported {task_count} tasks and {comment_count} comments (schema 3)"),
+        format!("exported {task_count} tasks and {comment_count} comments (schema 4)"),
     ))
 }
 
@@ -451,7 +458,7 @@ pub(super) fn cmd_sync(board: &Board) -> Result<crate::output::CommandOutput> {
 
 /// The Repository scope for `list`/`ready`: the member Repository the command
 /// runs in, or `None` at the Board's root or with `--all`. A Task without a
-/// `repo` is Board-wide and always stays in scope.
+/// `repository` is Board-wide and always stays in scope.
 fn repository_scope(board: &Board, all: bool) -> Result<Option<String>> {
     if all {
         return Ok(None);
@@ -466,10 +473,10 @@ struct ReadyFilters<'a> {
     excluded: &'a [String],
     types: &'a [TaskType],
     excluded_types: &'a [TaskType],
-    areas: &'a [String],
-    excluded_areas: &'a [String],
+    components: &'a [String],
+    excluded_components: &'a [String],
     scope: Option<&'a str>,
-    repo: Option<&'a str>,
+    repository: Option<&'a str>,
 }
 
 fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Task> {
@@ -479,14 +486,19 @@ fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Tas
         excluded,
         types,
         excluded_types,
-        areas,
-        excluded_areas,
+        components,
+        excluded_components,
         scope,
-        repo,
+        repository,
     } = filters;
-    ready.retain(|task| matches_repo(task, repo));
+    ready.retain(|task| matches_repository(task, repository));
     if let Some(scope) = scope {
-        ready.retain(|task| task.front.repo.as_deref().is_none_or(|repo| repo == scope));
+        ready.retain(|task| {
+            task.front
+                .repository
+                .as_deref()
+                .is_none_or(|repo| repo == scope)
+        });
     }
     if let Some(parent) = parent {
         ready.retain(|task| task.front.parent.as_deref() == Some(parent));
@@ -503,21 +515,21 @@ fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Tas
     if !excluded_types.is_empty() {
         ready.retain(|task| !excluded_types.contains(&task.front.task_type));
     }
-    if !areas.is_empty() {
+    if !components.is_empty() {
         ready.retain(|task| {
             task.front
-                .area
+                .component
                 .as_deref()
-                .is_some_and(|area| areas.iter().any(|candidate| candidate == area))
+                .is_some_and(|component| components.iter().any(|candidate| candidate == component))
         });
     }
-    if !excluded_areas.is_empty() {
+    if !excluded_components.is_empty() {
         ready.retain(|task| {
-            !task
-                .front
-                .area
-                .as_deref()
-                .is_some_and(|area| excluded_areas.iter().any(|candidate| candidate == area))
+            !task.front.component.as_deref().is_some_and(|component| {
+                excluded_components
+                    .iter()
+                    .any(|candidate| candidate == component)
+            })
         });
     }
     ready

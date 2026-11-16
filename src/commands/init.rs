@@ -922,7 +922,7 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
             .repository
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
-            .filter(|name| crate::task::is_valid_repo(name));
+            .filter(|name| crate::task::is_valid_repository(name));
         let mut imported = 0usize;
         for id in source.task_ids()? {
             let source_path = source.task_path(&id);
@@ -934,8 +934,8 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
                 && let Ok(text) = std::str::from_utf8(&bytes)
             {
                 let mut task = crate::task::parse_task(id.clone(), text)?;
-                if task.front.repo.is_none() {
-                    task.front.repo = Some(name.to_string());
+                if task.front.repository.is_none() {
+                    task.front.repository = Some(name.to_string());
                     bytes = crate::task::render_task(&task)?.into_bytes();
                 }
             }

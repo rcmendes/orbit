@@ -13,7 +13,7 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
     let body = resolve_body(args.body, args.body_file)?;
     // Record the member Repository the command runs in; a worktree resolves
     // to its main checkout's Repository.
-    let repo = crate::repository::current_member_name(board)?;
+    let repository = crate::repository::current_member_name(board)?;
     let new = crate::ops::NewTask {
         title: args.title,
         priority: args.priority,
@@ -22,12 +22,13 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
         depends_on: args.depends_on,
         parent: args.parent,
         waiting_on: args.waiting_on,
-        area: args.area,
+        component: args.component,
         verification: args.verification,
-        repo,
+        repository,
+        external_id: args.external_id,
         body,
         source_key: args.source_key,
-        annotations: Default::default(),
+        properties: Default::default(),
     };
     let outcome = crate::ops::add(&mut graph, board, new, Utc::now())?;
     let task = graph.get(&outcome.id)?.clone();
@@ -75,13 +76,17 @@ pub(super) fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::outpu
         || args.task_type.is_some()
         || args.waiting_on.is_some()
         || args.clear_waiting
-        || args.area.is_some()
-        || args.clear_area
+        || args.component.is_some()
+        || args.clear_component
+        || args.repository.is_some()
+        || args.clear_repository
+        || args.external_id.is_some()
+        || args.clear_external_id
         || args.verification.is_some()
         || args.clear_verification;
     if !has_changes {
         return Err(OrbitError::invalid_argument(
-            "nothing to update; pass --title, --body, --priority, --type, --area, --verification, or --waiting-on",
+            "nothing to update; pass --title, --body, --priority, --type, --component, --repository, --external-id, --verification, or --waiting-on",
         ));
     }
 
@@ -103,8 +108,10 @@ pub(super) fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::outpu
         priority: args.priority,
         task_type: args.task_type,
         waiting_on: field(args.waiting_on, args.clear_waiting),
-        area: field(args.area, args.clear_area),
+        component: field(args.component, args.clear_component),
         verification: field(args.verification, args.clear_verification),
+        repository: field(args.repository, args.clear_repository),
+        external_id: field(args.external_id, args.clear_external_id),
     };
     crate::ops::update(&mut graph, board, &args.id, change, Utc::now())?;
     let task = graph.get(&args.id)?.clone();

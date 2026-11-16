@@ -704,13 +704,13 @@ flowchart TD
     K --> V
     C --> V
     V -->|failure| X["stop; old layout still readable"]
-    V -->|success| R["one commit: layout + content conversion<br/>github: to remote:, repo:* to repo,<br/>[github] to remote projects, board.areas"]
+    V -->|success| R["one commit: layout + content conversion<br/>github: to remote:, repo:* to repository,<br/>[github] to remote projects, board.components"]
     X --> A["doctor reports AMBIGUOUS_BOARD or LEGACY_LAYOUT<br/>rerun orbit migrate"]
 ```
 
 The conversion also rewrites task frontmatter `github:` links to `remote:`,
 moves `repo:*` labels into the `repo` field, converts `[github]` configuration
-into remote project entries, drops `board.storage`, and seeds `board.areas`
+into remote project entries, drops `board.storage`, and seeds `board.components`
 from the Area values Tasks already use — all in the same commit. Re-running
 after `--apply` is a no-op.
 

@@ -31,7 +31,7 @@ pub struct RepositoryConfig {
 
 impl RepositoryConfig {
     pub fn validate(&self) -> Result<()> {
-        if self.name.trim().is_empty() || !task::is_valid_repo(&self.name) {
+        if self.name.trim().is_empty() || !task::is_valid_repository(&self.name) {
             return Err(OrbitError::config(format!(
                 "repositories entry `{}` is not a valid Repository name",
                 self.name
@@ -125,7 +125,7 @@ pub fn main_checkout_of(path: &Path) -> Result<Option<PathBuf>> {
 pub fn current_member_name(board: &Board) -> Result<Option<String>> {
     Ok(current_member(board)?
         .map(|member| member.name)
-        .filter(|name| task::is_valid_repo(name)))
+        .filter(|name| task::is_valid_repository(name)))
 }
 
 /// The member Repository containing the current working directory, when the
@@ -149,7 +149,7 @@ pub fn current_member(board: &Board) -> Result<Option<Repository>> {
 pub fn current_scope(board: &Board) -> Result<Option<String>> {
     Ok(current_member(board)?
         .map(|member| member.name)
-        .filter(|name| task::is_valid_repo(name)))
+        .filter(|name| task::is_valid_repository(name)))
 }
 
 /// Resolves a canonical main-checkout path to its member Repository, applying

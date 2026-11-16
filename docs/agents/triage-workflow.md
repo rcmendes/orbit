@@ -1,6 +1,6 @@
 # Agent Triage workflow
 
-`orbit triage` writes metadata on any Task — Local or Linked: `area`, task-level
+`orbit triage` writes metadata on any Task — Local or Linked: `component`, task-level
 `verification`, and canonical labels. It is not Matt Pocock's triage skill.
 The split is in [Compatibility boundary](#compatibility-boundary).
 
@@ -11,7 +11,7 @@ change only when you sync explicitly.
 
 A proposal may change:
 
-- `area` (Board-configured values from `board.areas`, or any lowercase slug when
+- `component` (Board-configured values from `board.components`, or any lowercase slug when
   the Board defines none — see [`project-guidance.md`](./project-guidance.md))
 - Task-level `verification` (stored text; the command does not run it)
 - Canonical triage/category labels: `needs-triage`, `needs-info`, `ready-for-agent`,
@@ -49,7 +49,7 @@ machine:
 - Record rejected enhancements in `.out-of-scope/`
 
 `orbit triage` is the metadata step those skills can call. Given a proposal, it
-previews or writes `area`, `verification`, and canonical labels on a Task. It
+previews or writes `component`, `verification`, and canonical labels on a Task. It
 does not decide whether a claim is true, interview anyone, compose a
 brief, or create `.out-of-scope/` files.
 
@@ -60,7 +60,7 @@ commands.
 
 ## Commands
 
-1. **Context** — load current metadata, allowed areas, canonical labels, and project guidance:
+1. **Context** — load current metadata, allowed components, canonical labels, and project guidance:
 
    ```bash
    orbit triage context <ID> --json
@@ -87,7 +87,7 @@ commands.
    ```
 
 3. **Review** — validate and display the proposal. Interactive review shows a field-by-field diff
-   for `area`, `verification`, and label additions/removals when a proposal file is used and both
+   for `component`, `verification`, and label additions/removals when a proposal file is used and both
    stdin and stdout are terminals:
 
    ```bash
@@ -130,8 +130,8 @@ commands.
 | --- | --- |
 | `rationale` | Optional human/agent note (not written to the task) |
 | `uncertainty` | When set alone, preview shows no changes and apply is rejected |
-| `area` | Set `area` to a Board-allowed slug |
-| `clear_area` | Remove `area` |
+| `component` | Set `component` to a Board-allowed slug |
+| `clear_component` | Remove `component` |
 | `verification` | Set task-level verification text |
 | `clear_verification` | Remove verification |
 | `labels_add` / `labels_remove` | Canonical labels only |
@@ -140,7 +140,7 @@ Forbidden proposal keys (not managed by Triage): `title`, `body`, `status`, `sta
 
 ## Errors
 
-When a proposal adds or removes labels, Orbit checks the label set that would remain. That set may contain at most one state role (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) and at most one category role (`bug`, `enhancement`). Zero of either role is allowed. A proposal that only changes `area` or `verification` does not run this check. Labels that are not state or category roles are left in place.
+When a proposal adds or removes labels, Orbit checks the label set that would remain. That set may contain at most one state role (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) and at most one category role (`bug`, `enhancement`). Zero of either role is allowed. A proposal that only changes `component` or `verification` does not run this check. Labels that are not state or category roles are left in place.
 
 | Code | Meaning |
 | --- | --- |

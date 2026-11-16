@@ -558,7 +558,7 @@ orbit add "infra: register OIDC client" --parent orb-a7b2c9 --label repo:infra
 
 # Scope an agent to one feature or one repository.
 orbit ready --parent orb-a7b2c9 --claim --by api-agent
-orbit ready --repo api --claim --by api-agent
+orbit ready --repository api --claim --by api-agent
 
 # Inspect the family and its blockers.
 orbit tree orb-a7b2c9
@@ -709,7 +709,7 @@ project = "alice/widget"
 mode = "basic"
 ```
 
-Auto-push is push-only. `orbit add` creates an Issue when exactly one repository is available; title, body, labels, status, `area`, and `verification` changes are pushed; `done` closes with `state_reason: completed`, `cancelled` with `not_planned`, and `claim` adds the reserved `orbit:in-progress` label. It never pulls, never overwrites a field that changed on GitHub, and never creates an Issue for an existing Local Task. Priority, type, comments, claims, checkpoints, and relationships do not trigger a push. Conflicts and failed pushes are warnings, not command failures; the baseline stays unchanged so `orbit remote sync <task>` can resolve them. Use `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. See [github-sync.md](./docs/github-sync.md#automatic-push).
+Auto-push is push-only. `orbit add` creates an Issue when exactly one repository is available; title, body, labels, status, `component`, and `verification` changes are pushed; `done` closes with `state_reason: completed`, `cancelled` with `not_planned`, and `claim` adds the reserved `orbit:in-progress` label. It never pulls, never overwrites a field that changed on GitHub, and never creates an Issue for an existing Local Task. Priority, type, comments, claims, checkpoints, and relationships do not trigger a push. Conflicts and failed pushes are warnings, not command failures; the baseline stays unchanged so `orbit remote sync <task>` can resolve them. Use `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation. See [github-sync.md](./docs/github-sync.md#automatic-push).
 
 ```bash
 # Personal repository: [remote.github] mode = "basic" + a [[remote.projects]] entry.
@@ -747,7 +747,7 @@ the fields Orbit creates.
 
 For personal-account repositories, `connect` reports the exact manual basic-mode
 settings rather than changing the Board. Basic mode syncs titles, bodies,
-labels, and open/closed state without Issue Fields. `area` and `verification`
+labels, and open/closed state without Issue Fields. `component` and `verification`
 sync and structured Triage require full mode; basic-mode Triage supports labels
 only. See [docs/github-sync.md](./docs/github-sync.md) for limitations and
 upgrade steps.
@@ -834,7 +834,7 @@ orbit mcp
 orbit --dir ~/src/acme/.orbit mcp    # serve a specific Board
 ```
 
-MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent`, `repo`, and `type`; `update` accepts `type`; `checkpoint` records the active handoff state on a claimed task; `list` and `ready` accept `parent`, `repo`, `labels`, `exclude_labels`, `types`, `exclude_types`, work `areas`, and `all`; `list` also accepts `include_closed`. Inside a member Repository both scope to it plus Board-wide Tasks unless `all` is set.
+MCP is a bridge, not a second implementation. Each tool call spawns the installed `orbit` binary, so it reuses the same lock, atomic writes, auto-commit, and error envelope. It also serves `orbit://tasks/{id}` as a Markdown resource. `create` accepts `parent`, `component`, `external_id`, and `type`; `update` accepts `type`, `component`, `repository`, and `external_id`; `checkpoint` records the active handoff state on a claimed task; `list` and `ready` accept `parent`, `repository`, `components`, `exclude_components`, `labels`, `exclude_labels`, `types`, `exclude_types`, and `all`; `list` also accepts `include_closed`. Inside a member Repository both scope to it plus Board-wide Tasks unless `all` is set.
 
 Editors launch the server from their MCP configuration. `orbit setup` writes project-level configs for Claude, Cursor, Codex, OpenCode, and Devin by default, recording the absolute path of the running binary so editors launched outside a shell do not need `PATH`. `--scope user` writes the harness's user-level locations instead. Generated configs record no Board path; discovery starts from the project directory, and `--dir`/`ORBIT_DIR` covers an editor that launches elsewhere. Use `--no-mcp` for instructions only, or `--portable-mcp` to write the bare `orbit` command instead; the editor or agent that launches the MCP server must then find Orbit on its `PATH`. A repair without `--portable-mcp` returns MCP entries to the absolute-path default.
 

@@ -411,10 +411,15 @@ fn diagnose_tasks(
     }
 
     for task in graph.tasks.values() {
-        for (owner, value) in &task.front.annotations {
-            if let Err(error) = crate::task::validate_annotation(owner, value) {
+        for (owner, value) in &task.front.properties {
+            if let Err(error) = crate::task::validate_property(owner, value) {
                 issues.push(Issue::new(error.code, Some(&task.id), error.message));
             }
+        }
+        if let Some(external_id) = task.front.external_id.as_deref()
+            && let Err(error) = crate::task::validate_external_id(external_id)
+        {
+            issues.push(Issue::new(error.code, Some(&task.id), error.message));
         }
     }
 

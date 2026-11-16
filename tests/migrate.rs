@@ -258,7 +258,7 @@ fn migrate_apply_moves_a_legacy_workspace_board() {
 }
 
 #[test]
-fn migrate_rewrites_github_links_repo_labels_and_areas() {
+fn migrate_rewrites_github_links_repo_labels_and_components() {
     let repo = TestRepo::new();
     let board = repo.legacy_board_path();
     repo.legacy_board_files(&board, "orb-");
@@ -267,7 +267,7 @@ fn migrate_rewrites_github_links_repo_labels_and_areas() {
         "orb-d0e5f2",
         &task_content(
             "Linked task",
-            "area: cli\nlabels:\n- repo:api\n- bug\ngithub:\n  repo: acme/api\n  number: 42\n",
+            "component: cli\nlabels:\n- repo:api\n- bug\ngithub:\n  repo: acme/api\n  number: 42\n",
         ),
     );
 
@@ -275,7 +275,7 @@ fn migrate_rewrites_github_links_repo_labels_and_areas() {
 
     assert_eq!(value["data"]["applied"], true, "{value}");
     assert_eq!(value["data"]["github_links"], 1);
-    assert_eq!(value["data"]["repo_labels"], 1);
+    assert_eq!(value["data"]["repository_labels"], 1);
 
     let migrated = repo.board_path();
     let task = std::fs::read_to_string(migrated.join("tasks").join("orb-d0e5f2.md")).unwrap();
@@ -285,15 +285,15 @@ fn migrate_rewrites_github_links_repo_labels_and_areas() {
     assert!(task.contains("project: acme/api"), "{task}");
     assert!(task.contains("id:"), "{task}");
     assert!(task.contains("42"), "{task}");
-    assert!(task.contains("repo: api"), "{task}");
+    assert!(task.contains("repository: api"), "{task}");
     assert!(task.contains("- bug"), "{task}");
     assert!(!task.contains("repo:api"), "{task}");
 
-    // `board.areas` is seeded from the Area values the Tasks use.
+    // `board.components` is seeded from the Component values the Tasks use.
     let config = config_value(&migrated);
-    let areas = config["board"]["areas"].as_array().unwrap();
-    assert_eq!(areas.len(), 1);
-    assert_eq!(areas[0].as_str().unwrap(), "cli");
+    let components = config["board"]["components"].as_array().unwrap();
+    assert_eq!(components.len(), 1);
+    assert_eq!(components[0].as_str().unwrap(), "cli");
 }
 
 #[test]

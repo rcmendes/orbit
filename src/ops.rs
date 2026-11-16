@@ -83,9 +83,18 @@ pub fn add(
                     parent_task.front.status.as_str()
                 )));
             }
-            if parent_task.front.parent.is_some() {
+            if graph.depth(&parent_id) + 1 > usize::from(graph.max_subtask_depth) {
+                let rule = if graph.max_subtask_depth == 1 {
+                    "SubTasks are one level deep; raise board.max_subtask_depth to nest further"
+                        .to_string()
+                } else {
+                    format!(
+                        "SubTasks are limited to {} levels by board.max_subtask_depth",
+                        graph.max_subtask_depth
+                    )
+                };
                 return Err(OrbitError::invalid_argument(format!(
-                    "parent {parent_id} is a SubTask; SubTasks are one level deep"
+                    "parent {parent_id} is a SubTask; {rule}"
                 )));
             }
             Some(parent_id)
@@ -432,13 +441,13 @@ pub fn finish(
     kind: TerminalKind,
     now: DateTime<Utc>,
 ) -> Result<FinishOutcome> {
-    let open = graph.open_children(id);
-    if !open.is_empty() && !force {
+    let open_children = graph.open_children(id);
+    if !open_children.is_empty() && !force {
         return Err(OrbitError::new(
             code::SUBTASKS_OPEN,
-            format!("{id} has open SubTasks: {}", open.join(", ")),
+            format!("{id} has open SubTasks: {}", open_children.join(", ")),
         )
-        .with_details(serde_json::json!({"task": id, "subtasks": open})));
+        .with_details(serde_json::json!({"task": id, "subtasks": open_children})));
     }
     let blocking = graph.blocking_ids(graph.get(id)?);
     if matches!(kind, TerminalKind::Done) && !blocking.is_empty() {
@@ -448,6 +457,15 @@ pub fn finish(
         }
         .into());
     }
+    let open: Vec<String> = graph
+        .descendants(id)
+        .into_iter()
+        .filter(|descendant| {
+            graph
+                .get(descendant)
+                .is_ok_and(|task| !task.front.status.is_terminal())
+        })
+        .collect();
     for child in &open {
         graph.get_mut(child)?.cancel(by, true, now)?;
     }
@@ -482,40 +500,37 @@ pub fn cancel(
     Ok(finish(graph, id, by, force, TerminalKind::Cancelled, now)?.changed)
 }
 
-/// Reopens a Task and, when needed, its Done Parent Task. Returns the
-/// reopened parent's ID.
-pub fn reopen(
-    graph: &mut Graph,
-    id: &str,
-    force: bool,
-    now: DateTime<Utc>,
-) -> Result<Option<String>> {
+/// Reopens a Task and, when needed, its completed ancestor Tasks. Returns the
+/// reopened ancestors' IDs, nearest first.
+pub fn reopen(graph: &mut Graph, id: &str, force: bool, now: DateTime<Utc>) -> Result<Vec<String>> {
     let task = graph.get(id)?.clone();
     let child_dependents = done_dependents(graph, id);
     let mut probe = task.clone();
     probe.reopen(force, &child_dependents, now)?;
 
-    let mut reopened_parent = None;
-    if let Some(parent_id) = task.front.parent.clone() {
-        match graph.get(&parent_id)?.front.status {
+    let mut reopened = Vec::new();
+    for ancestor_id in graph.ancestors(id) {
+        match graph.get(&ancestor_id)?.front.status {
             Status::Done => {
-                let parent_dependents = done_dependents(graph, &parent_id);
+                let ancestor_dependents = done_dependents(graph, &ancestor_id);
                 graph
-                    .get_mut(&parent_id)?
-                    .reopen(force, &parent_dependents, now)?;
-                reopened_parent = Some(parent_id);
+                    .get_mut(&ancestor_id)?
+                    .reopen(force, &ancestor_dependents, now)?;
+                reopened.push(ancestor_id);
             }
             Status::Cancelled => {
                 return Err(OrbitError::new(
                     code::INVALID_TRANSITION,
-                    format!("{id} is a SubTask of cancelled {parent_id}; reopen the parent first"),
+                    format!(
+                        "{id} is a SubTask of cancelled {ancestor_id}; reopen the parent first"
+                    ),
                 ));
             }
-            _ => {}
+            _ => break,
         }
     }
     graph.get_mut(id)?.reopen(force, &child_dependents, now)?;
-    Ok(reopened_parent)
+    Ok(reopened)
 }
 
 fn done_dependents(graph: &Graph, id: &str) -> Vec<String> {

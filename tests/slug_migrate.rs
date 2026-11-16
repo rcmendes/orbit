@@ -410,6 +410,57 @@ fn migrate_rewrites_a_legacy_prefix_without_a_dash() {
 }
 
 #[test]
+fn slug_migrate_maps_every_segment_of_a_nested_subtask_id() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::graph::{Graph, LoadMode};
+    use orbit_tracker::migrate;
+
+    let repo = TestRepo::new();
+    repo.init();
+
+    // A three-segment chain cannot pass Strict loading until Task 4 relaxes
+    // validation, so build the plan from a Lenient load: `slug migrate` maps
+    // IDs segment-agnostically and this exercises that path directly.
+    for (id, title, parent) in [
+        ("orb-a0b1c2", "Release", None),
+        ("orb-a0b1c2.d4b3df", "Feature", Some("orb-a0b1c2")),
+        (
+            "orb-a0b1c2.d4b3df.e5f6g7",
+            "Step",
+            Some("orb-a0b1c2.d4b3df"),
+        ),
+    ] {
+        let parent_line = parent.map(|p| format!("parent: {p}\n")).unwrap_or_default();
+        repo.write_task(
+            id,
+            &format!(
+                "---\ntitle: {title}\nstatus: todo\n{parent_line}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n"
+            ),
+        );
+    }
+
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let (graph, _) = Graph::load(&board, LoadMode::Lenient).unwrap();
+    assert!(graph.tasks.contains_key("orb-a0b1c2.d4b3df.e5f6g7"));
+
+    let plan = migrate::plan(&board, &graph, "atlas").unwrap();
+
+    for id in [
+        "orb-a0b1c2",
+        "orb-a0b1c2.d4b3df",
+        "orb-a0b1c2.d4b3df.e5f6g7",
+    ] {
+        let mapping = plan
+            .mappings
+            .iter()
+            .find(|mapping| mapping.from == id)
+            .unwrap_or_else(|| panic!("no mapping for {id}"));
+        assert_eq!(mapping.to, format!("atlas-{}", &id["orb-".len()..]), "{id}");
+    }
+    assert_eq!(plan.subtask_count, 2);
+}
+
+#[test]
 fn migrate_flushes_pending_heartbeat_writes_before_the_single_commit() {
     let repo = TestRepo::new();
     repo.init();

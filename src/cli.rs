@@ -77,7 +77,7 @@ pub enum Command {
     #[command(long_about = help::SHOW_LONG, after_long_help = help::SHOW_EXAMPLES)]
     Show(ShowArgs),
 
-    /// Show a Parent Task, its SubTasks, and blocking edges.
+    /// Show a Task, its SubTasks at every level, and blocking edges.
     #[command(long_about = help::TREE_LONG, after_long_help = help::TREE_EXAMPLES)]
     Tree(TreeArgs),
 
@@ -349,7 +349,7 @@ pub struct AddArgs {
     #[arg(long = "depends-on", value_name = "ID", action = clap::ArgAction::Append)]
     pub depends_on: Vec<String>,
 
-    /// Create a SubTask under this Parent Task. SubTasks are one level deep.
+    /// Create a SubTask under this Parent Task. SubTasks are one level deep by default.
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 

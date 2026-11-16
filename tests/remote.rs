@@ -1258,6 +1258,86 @@ fn supported_subtask_relationships_are_previewed_and_applied() {
 }
 
 #[test]
+fn nested_subtask_relationships_sync_at_depth_two() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    add_fixture_issue(&fixture, "acme/widget#43", 43, "Middle issue");
+    add_fixture_issue(&fixture, "acme/widget#44", 44, "Nested issue");
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    repo.set_max_subtask_depth(2);
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    let parent = repo.add("Release", &[]);
+    repo.ok_json_with_env(
+        &[
+            "remote",
+            "link",
+            parent.as_str(),
+            "acme/widget#42",
+            "--json",
+        ],
+        &env,
+    );
+    let child = repo.add("Feature", &["--parent", parent.as_str()]);
+    repo.ok_json_with_env(
+        &["remote", "link", child.as_str(), "acme/widget#43", "--json"],
+        &env,
+    );
+    let grandchild = repo.add("Step", &["--parent", child.as_str()]);
+    repo.ok_json_with_env(
+        &[
+            "remote",
+            "link",
+            grandchild.as_str(),
+            "acme/widget#44",
+            "--json",
+        ],
+        &env,
+    );
+
+    repo.ok_json_with_env(&["remote", "sync", "--apply", "--json"], &env);
+
+    // Every Orbit parent edge became a sub-issue edge between the two linked
+    // Issues, including the edge whose Orbit parent is itself a SubTask.
+    let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    let blocking_numbers = |number: u64| {
+        let key = format!("acme/widget#{number}");
+        applied["issues"][key.as_str()]["blocking"]
+            .as_array()
+            .map(|issues| {
+                issues
+                    .iter()
+                    .map(|issue| issue["number"].as_u64().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(blocking_numbers(42), vec![43]);
+    assert_eq!(blocking_numbers(43), vec![44]);
+    assert!(blocking_numbers(44).is_empty());
+
+    // A second sync finds nothing left to push: the nested parentage is stable.
+    let preview = repo.ok_json_with_env(&["remote", "sync", "--json"], &env);
+    for task in preview["data"]["tasks"].as_array().unwrap() {
+        let adds: Vec<_> = task["relationships"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|change| change["action"] == "add")
+            .collect();
+        assert!(adds.is_empty(), "{task}");
+    }
+
+    // The Orbit parent chain survives the round trip untouched.
+    let shown = repo.ok_json(&["show", grandchild.as_str(), "--json"]);
+    assert_eq!(shown["data"]["parent"], child.as_str());
+    let shown = repo.ok_json(&["show", child.as_str(), "--json"]);
+    assert_eq!(shown["data"]["parent"], parent.as_str());
+}
+
+#[test]
 fn supported_blocked_by_relationships_are_previewed_and_applied() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);

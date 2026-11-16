@@ -250,7 +250,8 @@ release.
 
 --parent creates a SubTask under an existing Parent Task. The SubTask ID is the
 parent ID, a dot, and a fresh suffix (for example orb-a7b2c9.d4b3df). SubTasks are
-one level deep. A spec or epic is a top-level Parent Task created with --type epic;
+one level deep by default; raise board.max_subtask_depth to nest further. A spec
+or epic is a top-level Parent Task created with --type epic;
 its tickets are SubTasks. Epic is refused on a SubTask. When an external tracker
 or skill says \"sub-issue\", use --parent. Parentage is not a dependency: the
 Parent Task waits for its SubTasks, not the other way around. A SubTask can still
@@ -461,16 +462,18 @@ Examples:
   orbit show orb-a7b2c9 --json";
 
 pub const TREE_LONG: &str = "\
-Shows one Parent Task, its direct SubTasks, and the blocking edges around them.
+Shows one Task, its SubTasks at every level, and the blocking edges around them.
 Unlike `list --group`, which shows the whole Board, and `list --parent`, which
 shows only the children, `tree` always includes the root and its family. It is
 the scoped view for an epic, spec, or feature; non-task types appear before the
-title.
+title. The root may be any Task with SubTasks, including a SubTask that has its
+own.
 
-SubTasks are one level deep. `--json` returns data.root, data.tasks (root first),
-and data.count; each row has the same shape as `list` and `ready`. The root line
-shows resolved/total progress and is marked ready to close when every SubTask is
-done or cancelled.";
+SubTasks are one level deep by default; raise board.max_subtask_depth to nest
+further. `--json` returns data.root, data.tasks (root first, descendants
+depth-first), and data.count; each row has the same shape as `list` and `ready`.
+The root line shows resolved/total progress and is marked ready to close when
+every SubTask is done or cancelled.";
 
 pub const TREE_EXAMPLES: &str = "\
 Examples:

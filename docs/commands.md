@@ -405,9 +405,10 @@ orbit add "API: add the endpoint" --parent orb-a7b2c9 --label repo:api
 
 `--parent` creates a SubTask under an existing Parent Task. The SubTask ID is the
 parent ID, a dot, and a fresh suffix (`orb-a7b2c9.b3c4d5`); the `parent` field
-stores the same parent. SubTasks are one level deep and can still have real
-dependencies. The Parent Task becomes Ready only when every SubTask is done or
-cancelled.
+stores the same parent. SubTasks are one level deep by default — raise
+`board.max_subtask_depth` in `config.toml` to nest further — and can still have
+real dependencies. The Parent Task becomes Ready only when every SubTask is
+done or cancelled.
 
 `--type` sets the work shape: `task` (default), `epic`, `spike`, `chore`, or
 `decision`. Type is metadata and does not affect readiness. `epic` is refused on a
@@ -417,8 +418,11 @@ A spec or epic is a top-level Task with `type: epic`; its tickets are SubTasks.
 This is also the compatibility mapping for Beads and Matt Pocock's skills:
 **Issue** = Task, **Sub-issue** = SubTask, **Epic** = top-level Task with
 `type: epic`. Put the spec in the parent body, publish tickets with `--parent`,
-and use `orbit ready --parent <id>` as the frontier. There is no deeper nesting;
-flatten a ticket's own breakdown into sibling tickets with `--depends-on`. Never
+and use `orbit ready --parent <id>` as the frontier. Nesting is one level deep
+by default; a Board that sets `board.max_subtask_depth` to 2 or more can put
+SubTasks under SubTasks, up to 4 levels of parentage. On a default Board,
+flatten a ticket's own breakdown into sibling tickets with `--depends-on`.
+Never
 use `done --force` or `cancel --force` on a spec parent with open tickets: it
 cancels them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md) and
 [ADR 0010](./adr/0010-structural-type-field.md).
@@ -685,10 +689,11 @@ orbit show orb-a7b2c9 --json
 
 ### `orbit tree` — inspect one epic or spec
 
-Shows one Parent Task, its direct SubTasks, and their blocking edges. Unlike
+Shows one Task, its SubTasks at every level, and their blocking edges. Unlike
 `list --group` (the whole Board) and `list --parent` (children only), `tree`
 always includes the root and its family, with resolved/total progress on the
-root.
+root. The root may be any Task with SubTasks, including a SubTask that has its
+own; a SubTask without SubTasks returns `INVALID_ARGUMENT`.
 
 **Good fit:** inspecting a spec, epic, or feature before publishing tickets,
 checking the frontier, or seeing why one ticket is blocked.
@@ -698,8 +703,8 @@ orbit tree orb-a7b2c9
 orbit tree orb-a7b2c9 --json
 ```
 
-`tree` expects a Parent Task; a SubTask returns `INVALID_ARGUMENT`. `--json`
-returns `data.root`, `data.tasks` with the root first, and `data.count`.
+`--json` returns `data.root`, `data.tasks` with the root first and descendants
+depth-first, and `data.count`.
 
 ### `orbit prime` — starting context for a session
 
@@ -850,8 +855,9 @@ orbit release orb-a7b2c9 --force
 ### `orbit done` — close completed work
 
 Moves the task to `done`. Unfinished dependencies always block completion. A
-Parent Task with open SubTasks is refused; `--force` cancels those SubTasks and
-then closes the parent, and also overrides a competing live claim. `--comment`
+Parent Task with open SubTasks is refused; `--force` cancels every open
+descendant SubTask and then closes the parent, and also overrides a competing
+live claim. `--comment`
 records the completion note in the same transaction as the status change.
 
 **Good fit:** the work is implemented and verified. This is the normal end of the
@@ -868,7 +874,7 @@ orbit done orb-a7b2c9 --force --comment "Deferred the remaining pieces"
 Cancels a task without completing it. Cancelled tasks count as resolved, so
 dependents can become ready. A live claim from another agent blocks cancellation
 unless `--force` is passed. A Parent Task with open SubTasks is refused; `--force`
-cancels those SubTasks too.
+cancels every open descendant SubTask too.
 
 **Good fit:** the work is no longer needed, is a duplicate, or is a wontfix. Add
 `--comment` to record the reason.
@@ -880,9 +886,10 @@ orbit cancel orb-a7b2c9 --force
 
 ### `orbit reopen` — undo a close
 
-Returns a done or cancelled task to `todo`. Reopening a SubTask of a done Parent
-Task reopens the parent too, so the feature is not left done with reopened work.
-A SubTask under a cancelled parent is refused until the parent is reopened. It
+Returns a done or cancelled task to `todo`. Reopening a SubTask reopens every
+done ancestor too, nearest first, so the feature is not left done with reopened
+work; the walk stops at an active ancestor. A SubTask under a cancelled ancestor
+is refused, naming that ancestor, until it is reopened. It
 also refuses when a dependent is already done, because that would leave completed
 work with an unfinished dependency; `--force` allows it and `doctor` reports the
 historical warning.
@@ -1309,7 +1316,7 @@ orbit sync              # commit anything left uncommitted
 | `PREFIX_COLLISION` | Two old IDs would become the same new ID. No files were changed; choose another slug. |
 | `PREFIX_MISMATCH` | `id.prefix` and the task filenames disagree. Restore the configured prefix first; migration refuses an inconsistent Board. |
 | `DANGLING_PARENT` | Run `doctor`; the parent ID is missing. Recreate the parent or fix the SubTask's frontmatter. |
-| `NESTED_SUBTASK` | A SubTask points to itself or to another SubTask. SubTasks are one level deep. |
+| `NESTED_SUBTASK` | A SubTask points to itself or nests past `board.max_subtask_depth` (1–4, default 1). |
 | `INVALID_TYPE` | `epic` was used on a SubTask. Epic is top-level only; use `task`, `spike`, `chore`, or `decision` for a child. |
 | `ALREADY_INITIALIZED` | A Board already resolves for this working tree. Use it, run `orbit repo remove` to drop an explicit membership, move or migrate an ancestor/main/legacy Board, or pass a `DIR` outside every working tree. |
 | `BOARD_NOT_FOUND` | Run `orbit init`, pass `--dir`/`ORBIT_DIR`, or `orbit repo add` an existing Board. |

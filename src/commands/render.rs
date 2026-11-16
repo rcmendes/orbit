@@ -309,7 +309,7 @@ pub(super) fn format_tree_line(task: &Task, graph: &Graph, root: bool) -> String
     if !blocking.is_empty() {
         line.push_str(&format!("  blocked by: {}", blocking.join(", ")));
     }
-    if root { line } else { format!("  {line}") }
+    line
 }
 
 fn push_field_lines(lines: &mut Vec<String>, label: &str, text: &str) {

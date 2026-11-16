@@ -23,8 +23,20 @@ A Task that belongs to exactly one Parent Task. A SubTask is claimable and compl
 _Avoid_: Child task, checklist item, step
 
 **Parent Task**:
-A Task that groups SubTasks and whose completion depends on them.
+A role, not a kind: any Task that has SubTasks. A Parent Task's completion
+depends on them, so a Task can be a SubTask and a Parent Task at once.
 _Avoid_: Epic (as a synonym for every Parent Task), story
+
+**Depth**:
+How many `parent` hops a Task sits below a top-level Task: a top-level Task is
+depth 0, its SubTask depth 1, that SubTask's SubTask depth 2.
+_Avoid_: Level, nesting
+
+**Max SubTask Depth**:
+The Board setting `board.max_subtask_depth`: the deepest a SubTask may sit,
+from 1 (SubTasks cannot own SubTasks, the default) to 4. Omitting the setting
+keeps the one-level default.
+_Avoid_: Max depth, nesting limit
 
 **Close Candidate**:
 A non-terminal Parent Task with at least one SubTask and no open SubTasks.

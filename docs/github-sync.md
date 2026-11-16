@@ -685,6 +685,10 @@ No additional Orbit configuration is required. See
 
 SubTasks and dependencies are previewed as GitHub sub-issues and blocked-by
 relationships when both linked Issues live in the **same** Remote Project.
+Each Orbit `parent` edge becomes one sub-issue edge between the two linked
+Issues, so a Board with `board.max_subtask_depth` above 1 syncs every level of
+its SubTask chain the same way; how deep GitHub itself nests sub-issues is
+GitHub's concern, not Orbit's.
 `--apply` adds supported relationships and removes a same-project
 relationship only when it was present at the last successful sync baseline
 and has since disappeared from the Task graph. Cross-project relationships

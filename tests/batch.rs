@@ -271,6 +271,92 @@ fn batch_rerun_after_crash_before_commit_commits() {
 }
 
 #[test]
+fn batch_adds_a_subtask_under_a_subtask_from_the_same_batch() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+    let before = board_commits(&repo);
+    let value = ok_batch(
+        &repo,
+        json!({"operations": [
+            {"op": "add", "key": "planner:spec-1:feature", "title": "Feature"},
+            {"op": "add", "key": "planner:spec-1:part", "title": "Part",
+             "parent": "key:planner:spec-1:feature"},
+            {"op": "add", "key": "planner:spec-1:step", "title": "Step",
+             "parent": "key:planner:spec-1:part"}
+        ]}),
+    );
+    let keys = &value["data"]["keys"];
+    let part = keys["planner:spec-1:part"].as_str().unwrap();
+    let step = keys["planner:spec-1:step"].as_str().unwrap();
+    assert!(
+        step.starts_with(&format!("{part}.")),
+        "hierarchical ID: {part} -> {step}"
+    );
+    let shown = repo.ok_json(&["show", step, "--json"]);
+    assert_eq!(shown["data"]["kind"], "subtask");
+    assert_eq!(shown["data"]["parent"], part);
+    assert_eq!(board_commits(&repo), before + 1);
+}
+
+#[test]
+fn batch_depth_overflow_rolls_back_the_whole_batch() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+    let before_commits = board_commits(&repo);
+    let before_files = task_files(&repo);
+    let (status, value) = batch(
+        &repo,
+        json!({"operations": [
+            {"op": "add", "key": "planner:spec-1:feature", "title": "Feature"},
+            {"op": "add", "key": "planner:spec-1:part", "title": "Part",
+             "parent": "key:planner:spec-1:feature"},
+            {"op": "add", "key": "planner:spec-1:step", "title": "Step",
+             "parent": "key:planner:spec-1:part"},
+            {"op": "add", "key": "planner:spec-1:leaf", "title": "Leaf",
+             "parent": "key:planner:spec-1:step"}
+        ]}),
+        &[],
+    );
+    assert_ne!(status, 0);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT", "{value}");
+    assert_eq!(value["error"]["details"]["index"], 3);
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("board.max_subtask_depth"), "{message}");
+    assert_eq!(board_commits(&repo), before_commits);
+    assert_eq!(task_files(&repo), before_files);
+    let listed = repo.ok_json(&["list", "--all", "--json"]);
+    assert_eq!(listed["data"]["count"], 0);
+}
+
+#[test]
+fn batch_nested_subtask_rolls_back_on_a_default_board() {
+    let repo = TestRepo::new();
+    repo.init();
+    let before_commits = board_commits(&repo);
+    let before_files = task_files(&repo);
+    let (status, value) = batch(
+        &repo,
+        json!({"operations": [
+            {"op": "add", "key": "planner:spec-1:feature", "title": "Feature"},
+            {"op": "add", "key": "planner:spec-1:part", "title": "Part",
+             "parent": "key:planner:spec-1:feature"},
+            {"op": "add", "key": "planner:spec-1:step", "title": "Step",
+             "parent": "key:planner:spec-1:part"}
+        ]}),
+        &[],
+    );
+    assert_ne!(status, 0);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT", "{value}");
+    assert_eq!(value["error"]["details"]["index"], 2);
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("board.max_subtask_depth"), "{message}");
+    assert_eq!(board_commits(&repo), before_commits);
+    assert_eq!(task_files(&repo), before_files);
+}
+
+#[test]
 fn batch_reopen_of_an_open_task_is_unchanged() {
     let repo = TestRepo::new();
     repo.init();

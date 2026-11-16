@@ -207,6 +207,40 @@ fn subtask_ids_encode_the_parent() {
 }
 
 #[test]
+fn three_segment_subtask_id_loads_lists_and_shows() {
+    let repo = TestRepo::new();
+    repo.init();
+
+    repo.write_task(
+        "orb-a0b1c2",
+        "---\ntitle: Release\nstatus: todo\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n",
+    );
+    repo.write_task(
+        "orb-a0b1c2.d4b3df.e5f6g7",
+        "---\ntitle: Nested step\nstatus: todo\nparent: orb-a0b1c2\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n",
+    );
+
+    let listed = repo.ok_json(&["list", "--all", "--json"]);
+    let ids: Vec<&str> = listed["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"orb-a0b1c2.d4b3df.e5f6g7"), "{listed}");
+
+    let shown = repo.ok_json(&["show", "orb-a0b1c2.d4b3df.e5f6g7", "--json"]);
+    assert_eq!(shown["data"]["id"], "orb-a0b1c2.d4b3df.e5f6g7");
+    assert_eq!(shown["data"]["kind"], "subtask");
+    assert_eq!(shown["data"]["parent"], "orb-a0b1c2");
+
+    let output = repo.orbit(&["show", "orb-a0b1c2.d4b3df.e5f6g7"]);
+    assert!(output.status.success());
+    let human = String::from_utf8_lossy(&output.stdout);
+    assert!(human.contains("orb-a0b1c2.d4b3df.e5f6g7"), "{human}");
+}
+
+#[test]
 fn doctor_reports_parent_id_mismatch() {
     let repo = TestRepo::new();
     repo.init();
@@ -269,12 +303,9 @@ fn add_parent_rejects_missing_nested_and_terminal_parents() {
     let (status, value) = repo.json(&["add", "Nested", "--parent", &child, "--json"]);
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
-    assert!(
-        value["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("one level")
-    );
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("one level"), "{message}");
+    assert!(message.contains("board.max_subtask_depth"), "{message}");
 
     let (status, value) = repo.json(&[
         "add",
@@ -304,6 +335,44 @@ fn add_parent_rejects_missing_nested_and_terminal_parents() {
             .unwrap()
             .contains("active")
     );
+}
+
+#[test]
+fn max_subtask_depth_two_allows_a_second_level() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let grandchild = subtask(&repo, &child, "Step");
+    assert!(
+        grandchild.starts_with(&format!("{child}.")),
+        "{parent} -> {child} -> {grandchild}"
+    );
+
+    let shown = repo.ok_json(&["show", &grandchild, "--json"]);
+    assert_eq!(shown["data"]["kind"], "subtask");
+    assert_eq!(shown["data"]["parent"], child.as_str());
+
+    let (status, value) = repo.json(&["add", "Too deep", "--parent", &grandchild, "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("board.max_subtask_depth"), "{message}");
+}
+
+#[test]
+fn list_and_ready_reject_a_missing_parent_filter() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.add("Feature", &[]);
+
+    for command in ["list", "ready"] {
+        let (status, value) = repo.json(&[command, "--parent", "orb-missing", "--json"]);
+        assert_eq!(status, 1, "{command}");
+        assert_eq!(value["error"]["code"], "NOT_FOUND", "{command}");
+    }
 }
 
 #[test]
@@ -514,6 +583,207 @@ fn reopen_subtask_under_cancelled_parent_is_rejected() {
     assert_eq!(status(&repo, &child), "cancelled");
 }
 
+fn nested_chain(repo: &TestRepo) -> (String, String, String) {
+    repo.set_max_subtask_depth(2);
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(repo, &parent, "Part");
+    let grandchild = subtask(repo, &child, "Step");
+    (parent, child, grandchild)
+}
+
+#[test]
+fn nested_subtasks_block_done_until_each_level_resolves() {
+    let repo = TestRepo::new();
+    repo.init();
+    let (parent, child, grandchild) = nested_chain(&repo);
+
+    let (code, value) = repo.json(&["done", &parent, "--by", "test", "--json"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["error"]["code"], "SUBTASKS_OPEN");
+    assert_eq!(value["error"]["details"]["subtasks"][0], child.as_str());
+    assert_eq!(
+        value["error"]["details"]["subtasks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let (code, value) = repo.json(&["done", &child, "--by", "test", "--json"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["error"]["code"], "SUBTASKS_OPEN");
+    assert_eq!(
+        value["error"]["details"]["subtasks"][0],
+        grandchild.as_str()
+    );
+
+    repo.ok_json(&["done", &grandchild, "--by", "test", "--json"]);
+    repo.ok_json(&["done", &child, "--by", "test", "--json"]);
+
+    let shown = repo.ok_json(&["show", &parent, "--json"]);
+    assert_eq!(shown["data"]["eligible_for_close"], true);
+    let ready = repo.ok_json(&["ready", "--json"]);
+    let ids: Vec<&str> = ready["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert!(ids.contains(&parent.as_str()));
+}
+
+#[test]
+fn done_force_cancels_every_open_descendant() {
+    let repo = TestRepo::new();
+    repo.init();
+    let (parent, child, grandchild) = nested_chain(&repo);
+
+    let value = repo.ok_json(&["done", &parent, "--by", "test", "--force", "--json"]);
+
+    assert_eq!(status(&repo, &parent), "done");
+    assert_eq!(status(&repo, &child), "cancelled");
+    assert_eq!(status(&repo, &grandchild), "cancelled");
+    let warnings = value["meta"]["warnings"].as_array().unwrap();
+    let warning = warnings
+        .iter()
+        .filter_map(|warning| warning.as_str())
+        .find(|warning| warning.contains("cancelled open SubTasks"))
+        .expect("missing cancelled SubTasks warning");
+    assert!(warning.contains(&child), "{warning}");
+    assert!(warning.contains(&grandchild), "{warning}");
+}
+
+#[test]
+fn cancel_force_cancels_every_open_descendant() {
+    let repo = TestRepo::new();
+    repo.init();
+    let (parent, child, grandchild) = nested_chain(&repo);
+
+    repo.ok_json(&["cancel", &parent, "--by", "test", "--force", "--json"]);
+
+    assert_eq!(status(&repo, &parent), "cancelled");
+    assert_eq!(status(&repo, &child), "cancelled");
+    assert_eq!(status(&repo, &grandchild), "cancelled");
+}
+
+#[test]
+fn nested_done_force_still_respects_unfinished_dependencies() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+    let blocker = repo.add("Blocker", &[]);
+    let parent = repo.add("Feature", &["--depends-on", blocker.as_str()]);
+    let child = subtask(&repo, &parent, "Part");
+    let grandchild = subtask(&repo, &child, "Step");
+
+    let (code, value) = repo.json(&["done", &parent, "--by", "test", "--force", "--json"]);
+
+    assert_eq!(code, 1);
+    assert_eq!(value["error"]["code"], "DEPENDENCY_BLOCKED");
+    assert_eq!(status(&repo, &child), "todo");
+    assert_eq!(status(&repo, &grandchild), "todo");
+}
+
+#[test]
+fn reopen_walks_done_ancestors_nearest_first() {
+    let repo = TestRepo::new();
+    repo.init();
+    let (parent, child, grandchild) = nested_chain(&repo);
+
+    repo.ok_json(&["done", &grandchild, "--by", "test", "--json"]);
+    repo.ok_json(&["done", &child, "--by", "test", "--json"]);
+    repo.ok_json(&["done", &parent, "--by", "test", "--json"]);
+
+    let value = repo.ok_json(&["reopen", &grandchild, "--json"]);
+
+    assert_eq!(status(&repo, &grandchild), "todo");
+    assert_eq!(status(&repo, &child), "todo");
+    assert_eq!(status(&repo, &parent), "todo");
+    let warnings = value["meta"]["warnings"].as_array().unwrap();
+    let reopened: Vec<String> = warnings
+        .iter()
+        .filter_map(|warning| warning.as_str())
+        .filter(|warning| warning.starts_with("reopened parent "))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        reopened,
+        vec![
+            format!("reopened parent {child}"),
+            format!("reopened parent {parent}"),
+        ]
+    );
+}
+
+#[test]
+fn reopen_stops_at_an_active_ancestor() {
+    let repo = TestRepo::new();
+    repo.init();
+    let (parent, child, grandchild) = nested_chain(&repo);
+
+    repo.ok_json(&["done", &grandchild, "--by", "test", "--json"]);
+    repo.ok_json(&["done", &child, "--by", "test", "--json"]);
+    assert_eq!(status(&repo, &parent), "todo");
+
+    let value = repo.ok_json(&["reopen", &grandchild, "--json"]);
+
+    assert_eq!(status(&repo, &grandchild), "todo");
+    assert_eq!(status(&repo, &child), "todo");
+    assert_eq!(status(&repo, &parent), "todo");
+    let warnings = value["meta"]["warnings"].as_array().unwrap();
+    let reopened: Vec<String> = warnings
+        .iter()
+        .filter_map(|warning| warning.as_str())
+        .filter(|warning| warning.starts_with("reopened parent "))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(reopened, vec![format!("reopened parent {child}")]);
+}
+
+#[test]
+fn reopen_fails_naming_a_cancelled_ancestor() {
+    let repo = TestRepo::new();
+    repo.init();
+    let (parent, child, grandchild) = nested_chain(&repo);
+
+    repo.ok_json(&["cancel", &child, "--by", "test", "--force", "--json"]);
+    assert_eq!(status(&repo, &grandchild), "cancelled");
+
+    let (code, value) = repo.json(&["reopen", &grandchild, "--json"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["error"]["code"], "INVALID_TRANSITION");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains(&child), "{message}");
+    assert!(message.contains("cancelled"), "{message}");
+    assert_eq!(status(&repo, &grandchild), "cancelled");
+    assert_eq!(status(&repo, &parent), "todo");
+}
+
+#[test]
+fn delete_nested_subtasks_requires_force_and_cascades() {
+    let repo = TestRepo::new();
+    repo.init();
+    let (parent, child, grandchild) = nested_chain(&repo);
+
+    let (code, value) = repo.json(&["delete", &parent, "--json"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["error"]["code"], "SUBTASKS_EXIST");
+
+    let value = repo.ok_json(&["delete", &parent, "--force", "--json"]);
+    let deleted: Vec<&str> = value["data"]["deleted_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|id| id.as_str())
+        .collect();
+    for id in [&parent, &child, &grandchild] {
+        assert!(deleted.contains(&id.as_str()), "{deleted:?}");
+        assert!(!repo.task_path(id).exists());
+    }
+    let listed = repo.ok_json(&["list", "--all", "--json"]);
+    assert_eq!(listed["data"]["count"], 0);
+}
+
 #[test]
 fn depend_rejects_parent_child_edges() {
     let repo = TestRepo::new();
@@ -550,6 +820,9 @@ fn list_parent_filters_and_group_layout() {
     assert_eq!(filtered["data"]["tasks"][0]["id"], child.as_str());
 
     let (status, value) = repo.json(&["list", "--parent", &child, "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+    let (status, value) = repo.json(&["ready", "--parent", &child, "--json"]);
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
 
@@ -614,6 +887,182 @@ fn list_orders_by_priority_then_parent_then_subtasks() {
     assert!(position(&first) < position(&middle), "{stdout}");
     assert!(position(&middle) < position(&parent), "{stdout}");
     assert!(position(&parent) < position(&child), "{stdout}");
+}
+
+#[test]
+fn tree_recurses_through_nested_subtasks() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let grandchild = subtask(&repo, &child, "Step");
+
+    let tree = repo.ok_json(&["tree", &parent, "--json"]);
+    assert_eq!(tree["data"]["root"], parent.as_str());
+    assert_eq!(tree["data"]["count"], 3);
+    let tasks = tree["data"]["tasks"].as_array().unwrap();
+    let ids: Vec<&str> = tasks
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![parent.as_str(), child.as_str(), grandchild.as_str()],
+        "root first, then descendants depth-first: {ids:?}"
+    );
+    assert_eq!(tasks[0]["depth"], 0);
+    assert_eq!(tasks[1]["depth"], 1);
+    assert_eq!(tasks[2]["depth"], 2);
+
+    let shown = repo.ok_json(&["show", &grandchild, "--json"]);
+    assert_eq!(shown["data"]["depth"], 2);
+
+    let output = repo.orbit(&["tree", &parent]);
+    assert!(output.status.success());
+    let human = String::from_utf8_lossy(&output.stdout);
+    let line_of = |needle: &str, exclude: Option<&str>| {
+        human
+            .lines()
+            .find(|line| line.contains(needle) && exclude.is_none_or(|skip| !line.contains(skip)))
+            .unwrap_or_else(|| panic!("missing {needle} in {human}"))
+            .to_string()
+    };
+    let grandchild_line = line_of(&grandchild, None);
+    assert!(grandchild_line.starts_with("    "), "{grandchild_line}");
+    let child_line = line_of(&child, Some(&grandchild));
+    assert!(child_line.starts_with("  "), "{child_line}");
+    assert!(!child_line.starts_with("    "), "{child_line}");
+    assert!(!human.lines().next().unwrap().starts_with(' '));
+}
+
+#[test]
+fn tree_accepts_a_subtask_root_that_has_subtasks() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let grandchild = subtask(&repo, &child, "Step");
+
+    let tree = repo.ok_json(&["tree", &child, "--json"]);
+    assert_eq!(tree["data"]["root"], child.as_str());
+    assert_eq!(tree["data"]["count"], 2);
+    let ids: Vec<&str> = tree["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert_eq!(ids, vec![child.as_str(), grandchild.as_str()]);
+
+    // A SubTask without SubTasks keeps the current error.
+    let leaf = subtask(&repo, &parent, "Leaf");
+    let (status, value) = repo.json(&["tree", &leaf, "--json"]);
+    assert_eq!(status, 1);
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+}
+
+#[test]
+fn list_and_ready_parent_accept_a_subtask() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let grandchild = subtask(&repo, &child, "Step");
+    let sibling = subtask(&repo, &child, "Side");
+
+    let listed = repo.ok_json(&["list", "--parent", &child, "--json"]);
+    assert_eq!(listed["data"]["count"], 2);
+    let ids: Vec<&str> = listed["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert!(ids.contains(&grandchild.as_str()));
+    assert!(ids.contains(&sibling.as_str()));
+    assert!(!ids.contains(&parent.as_str()));
+
+    let ready = repo.ok_json(&["ready", "--parent", &child, "--json"]);
+    assert_eq!(ready["data"]["count"], 2);
+    let ready_ids: Vec<&str> = ready["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert!(ready_ids.contains(&grandchild.as_str()));
+    assert!(ready_ids.contains(&sibling.as_str()));
+
+    // Direct children only: the grandchild's own children would not appear.
+    let empty = repo.ok_json(&["list", "--parent", &grandchild, "--json"]);
+    assert_eq!(empty["data"]["count"], 0);
+}
+
+#[test]
+fn list_group_places_nested_subtasks_under_their_direct_parent() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let grandchild = subtask(&repo, &child, "Step");
+    let other = repo.add("Standalone", &[]);
+
+    let grouped = repo.ok_json(&["list", "--group", "--all", "--json"]);
+    let ids: Vec<&str> = grouped["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert!(ids.contains(&parent.as_str()));
+    assert!(ids.contains(&child.as_str()));
+    assert!(ids.contains(&grandchild.as_str()));
+    assert!(ids.contains(&other.as_str()));
+
+    let output = repo.orbit(&["list", "--group", "--all"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&parent), "{stdout}");
+    assert!(stdout.contains(&child), "{stdout}");
+    assert!(stdout.contains(&grandchild), "{stdout}");
+    assert!(stdout.contains(&other), "{stdout}");
+}
+
+#[test]
+fn ready_offers_a_task_only_when_its_subtasks_are_resolved_at_any_depth() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.set_max_subtask_depth(2);
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let grandchild = subtask(&repo, &child, "Step");
+
+    let ready_ids = |repo: &TestRepo| {
+        repo.ok_json(&["ready", "--all", "--json"])["data"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|task| task["id"].as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+    };
+
+    let ready = ready_ids(&repo);
+    assert!(ready.contains(&grandchild));
+    assert!(!ready.contains(&child));
+    assert!(!ready.contains(&parent));
+
+    repo.ok_json(&["done", &grandchild, "--by", "test", "--json"]);
+    let ready = ready_ids(&repo);
+    assert!(ready.contains(&child));
+    assert!(!ready.contains(&parent));
+
+    repo.ok_json(&["done", &child, "--by", "test", "--json"]);
+    let ready = ready_ids(&repo);
+    assert!(ready.contains(&parent));
 }
 
 #[test]
@@ -727,4 +1176,105 @@ fn forced_cancel_of_a_terminal_parent_still_commits_its_cancelled_subtasks() {
         String::from_utf8_lossy(&subject.stdout).trim(),
         format!("orbit: cancel {parent}")
     );
+}
+
+#[test]
+fn a_board_written_by_the_previous_release_loads_everywhere() {
+    let repo = TestRepo::new();
+    repo.init();
+    let parent = repo.add("Feature", &[]);
+    let child = subtask(&repo, &parent, "Part");
+    let loose = repo.add("Loose", &[]);
+
+    // A previous-release Board never wrote board.max_subtask_depth, and the
+    // current release still omits the key while the depth stays at the default.
+    let config = repo.read(".orbit/board/config.toml");
+    assert!(!config.contains("max_subtask_depth"), "{config}");
+
+    // Every command performs the same strict load and validation; doctor
+    // reports the Board healthy.
+    let (status, value) = repo.json(&["doctor", "--json"]);
+    assert_eq!(status, 0, "{value}");
+    assert_eq!(value["data"]["healthy"], true, "{value}");
+
+    let list = repo.ok_json(&["list", "--json"]);
+    assert_eq!(list["data"]["count"], 3, "{list}");
+
+    let tree = repo.ok_json(&["tree", parent.as_str(), "--json"]);
+    assert_eq!(tree["data"]["count"], 2, "{tree}");
+    assert_eq!(tree["data"]["tasks"][0]["id"], parent.as_str());
+    assert_eq!(tree["data"]["tasks"][1]["id"], child.as_str());
+
+    let ready = repo.ok_json(&["ready", "--json"]);
+    let ids: Vec<&str> = ready["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert!(ids.contains(&child.as_str()), "{ids:?}");
+    assert!(ids.contains(&loose.as_str()), "{ids:?}");
+    assert!(!ids.contains(&parent.as_str()), "{ids:?}");
+
+    let export = repo.ok_json(&["export", "--json"]);
+    assert_eq!(export["data"]["schema_version"], 3, "{export}");
+    let exported = export["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == child.as_str())
+        .expect("child missing from export");
+    assert_eq!(exported["kind"], "subtask");
+    assert_eq!(exported["parent"], parent.as_str());
+}
+
+#[test]
+fn a_shared_board_at_depth_two_never_offers_holds_or_open_parents() {
+    let repo = TestRepo::new();
+    repo.init();
+    let (parent, child, grandchild) = nested_chain(&repo);
+
+    // Two agents share the Board: agent-a claims an unrelated Task while
+    // agent-b puts a hold label on the deepest SubTask.
+    let claimed = repo.add("Claimed elsewhere", &[]);
+    repo.ok_json(&["claim", claimed.as_str(), "--by", "agent-a", "--json"]);
+    repo.ok_json(&[
+        "label",
+        "add",
+        grandchild.as_str(),
+        "needs-triage",
+        "--json",
+    ]);
+
+    let ready = repo.ok_json(&["ready", "--all", "--json"]);
+    let ids: Vec<&str> = ready["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+
+    // The hold-labelled SubTask is never offered, and neither is any ancestor
+    // while a descendant stays open — at any configured depth.
+    assert!(!ids.contains(&grandchild.as_str()), "{ids:?}");
+    assert!(!ids.contains(&child.as_str()), "{ids:?}");
+    assert!(!ids.contains(&parent.as_str()), "{ids:?}");
+    assert!(!ids.contains(&claimed.as_str()), "{ids:?}");
+
+    // Removing the hold makes only the leaf claimable again.
+    repo.ok_json(&[
+        "label",
+        "remove",
+        grandchild.as_str(),
+        "needs-triage",
+        "--json",
+    ]);
+    let ready = repo.ok_json(&["ready", "--all", "--json"]);
+    let ids: Vec<&str> = ready["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect();
+    assert_eq!(ids, vec![grandchild.as_str()], "{ids:?}");
 }

@@ -369,6 +369,19 @@ impl TestRepo {
         self.board_path().join("tasks").join(format!("{id}.md"))
     }
 
+    /// Sets `board.max_subtask_depth` in the Board config.
+    pub fn set_max_subtask_depth(&self, depth: u8) {
+        let path = self.board_path().join("config.toml");
+        let config = std::fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<String> = config.lines().map(str::to_string).collect();
+        let position = lines
+            .iter()
+            .position(|line| line.trim() == "[board]")
+            .expect("config.toml has a [board] section");
+        lines.insert(position + 1, format!("max_subtask_depth = {depth}"));
+        std::fs::write(path, lines.join("\n") + "\n").unwrap();
+    }
+
     /// Rewrite the lease to a time in the past so the claim is stale.
     pub fn make_stale(&self, id: &str) {
         let content = self.read_task(id);

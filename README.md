@@ -189,13 +189,13 @@ orbit add "Spec: SSO login across api, web, infra" \
   --type epic -p 1 --label ready-for-agent --body-file spec.md
 
 orbit add "api: OIDC callback" \
-  --parent orb-a7b2c9 -p 1 --label repo:api --label ready-for-agent
+  --parent orb-a7b2c9 -p 1 --label ready-for-agent
 
 orbit add "web: login redirect" \
-  --parent orb-a7b2c9 -p 2 --label repo:web --label ready-for-agent
+  --parent orb-a7b2c9 -p 2 --label ready-for-agent
 
 orbit add "infra: register OIDC client" \
-  --parent orb-a7b2c9 -p 0 --label repo:infra --label ready-for-agent
+  --parent orb-a7b2c9 -p 0 --label ready-for-agent
 ```
 
 A spec or epic is a top-level Task with `type: epic`; the tickets under it are **SubTasks**. Each SubTask is claimed and completed independently, and the parent becomes Ready only when every child is done or cancelled.
@@ -234,9 +234,9 @@ $ orbit list --group
 ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ orb-a7b2c9  Spec: SSO login across api, web, infra                                   epic · todo · P1 · ready-for-agent │
 ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ #12   │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
-│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ -     │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
-│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ -     │ web: login redirect         │ ready-for-agent, repo:web   │            │
+│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ #12   │ infra: register OIDC client │ ready-for-agent │            │
+│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ -     │ api: OIDC callback          │ ready-for-agent   │            │
+│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ -     │ web: login redirect         │ ready-for-agent   │            │
 ╰───────────────────┴────────┴────┴──────┴───────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
@@ -247,9 +247,9 @@ For one feature, `orbit tree` shows the parent, its children, progress, and bloc
 ```text
 $ orbit tree orb-a7b2c9
 orb-a7b2c9  todo  P1  epic  Spec: SSO login across api, web, infra  [ready-for-agent]  0/3 resolved
-  orb-a7b2c9.c5qmed  todo  P2  web: login redirect  [ready-for-agent, repo:web]
-  orb-a7b2c9.hxdmqt  todo  P1  api: OIDC callback  [ready-for-agent, repo:api]
-  orb-a7b2c9.z21c2w  todo  P0  infra: register OIDC client  [ready-for-agent, repo:infra]
+  orb-a7b2c9.c5qmed  todo  P2  web: login redirect  [ready-for-agent]
+  orb-a7b2c9.hxdmqt  todo  P1  api: OIDC callback  [ready-for-agent]
+  orb-a7b2c9.z21c2w  todo  P0  infra: register OIDC client  [ready-for-agent]
 ```
 
 Verify Board health, its branch, and uncommitted changes. If a Claude SessionStart hook is configured, `doctor` also warns when `orbit` is not the binary on `PATH`. From a Board anchor or member Repository it also names the resolved Board, checks Repository discovery and cached Issue freshness, and reports migration remnants, sync conflicts, and agent setup drift with a safe next action:
@@ -526,9 +526,9 @@ A Parent Task groups SubTasks. The parent waits for the family; the children do 
 ```mermaid
 flowchart TD
     EPIC["Parent Task · type: epic<br/>Spec: SSO login across api, web, infra"]
-    API["SubTask<br/>api: OIDC callback<br/>repo:api"]
-    WEB["SubTask<br/>web: login redirect<br/>repo:web"]
-    INFRA["SubTask<br/>infra: register OIDC client<br/>repo:infra"]
+    API["SubTask<br/>api: OIDC callback<br/>repository: api"]
+    WEB["SubTask<br/>web: login redirect<br/>repository: web"]
+    INFRA["SubTask<br/>infra: register OIDC client<br/>repository: infra"]
     GATE{{"Parent becomes Ready only when every SubTask is done or cancelled"}}
 
     EPIC --> API
@@ -552,9 +552,10 @@ orbit add "SSO login across api, web, infra" --type epic --body-file feature.md
 # created orb-a7b2c9
 
 # One SubTask per piece of work.
-orbit add "api: OIDC callback" --parent orb-a7b2c9 --label repo:api
-orbit add "web: login redirect" --parent orb-a7b2c9 --label repo:web
-orbit add "infra: register OIDC client" --parent orb-a7b2c9 --label repo:infra
+# Run each add inside its member Repository so `repository` fills in.
+orbit add "api: OIDC callback" --parent orb-a7b2c9
+orbit add "web: login redirect" --parent orb-a7b2c9
+orbit add "infra: register OIDC client" --parent orb-a7b2c9
 
 # Scope an agent to one feature or one repository.
 orbit ready --parent orb-a7b2c9 --claim --by api-agent
@@ -943,7 +944,7 @@ The full guide — when to use each command, end-to-end scenarios, and a common-
 | Heartbeats are uncommitted | `orbit sync` commits lease-only changes. |
 | The Task-ID prefix must change | Preview with `orbit slug migrate <slug> --dry-run`, then apply. Live claims require `--force`; external old-ID links still break. |
 | The Board is missing | `orbit init` creates one; a missing linked Board returns `LINK_NOT_FOUND`. |
-| A pre-ADR-0019 Board or layout needs converting | Preview with `orbit migrate`, then `orbit migrate --apply`; it rewrites `github:` links to `remote:`, `repo:*` labels to the `repo` field, and converts worktree-mode Boards in one commit. |
+| A pre-ADR-0019 Board or layout needs converting | Preview with `orbit migrate`, then `orbit migrate --apply`; it rewrites `github:` links to `remote:`, `repo:*` labels to the `repository` field, and converts worktree-mode Boards in one commit. |
 | A writer is busy | `LOCKED` is retryable. Retry after a short backoff. |
 
 `doctor` never rewrites tasks or comments, so it is always safe to run. It works without a Board: it reports the discovery trace, legacy layout, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and agent configs that still record an absolute Board path, then checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, the checked-out branch, and a Claude hook that cannot find the Orbit binary. From a Board anchor it additionally reports the resolved Board, member Repository access and cache freshness, migration remnants, duplicate GitHub identities, orphaned links, sync conflicts, and agent setup drift. Plain non-Git member directories are informational warnings rather than health failures; a directory that used to be a repository is still reported as stale. Semantic conflicts are reported with next actions, never resolved by `doctor`.

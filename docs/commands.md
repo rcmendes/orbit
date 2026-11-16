@@ -351,10 +351,12 @@ update and remove normally.
 
 Runs the Model Context Protocol server over stdio with 14 tools and the
 `orbit://tasks/{id}` resource. Editors launch it from their MCP configuration.
-`create` accepts `parent`, `repo`, and `type`; `update` accepts `type`;
-`checkpoint` records the claim holder's handoff; `list` and `ready` accept
-`parent`, `repo`, `labels`, `exclude_labels`, `types`, `exclude_types`, and
-work `areas` to scope a feature, repository, or area.
+`create` accepts `parent`, `type`, `component`, `external_id`, `verification`,
+and `body`; `update` accepts `type`, `component`, `repository`, `external_id`,
+and `verification`; `checkpoint` records the claim holder's handoff; `list` and
+`ready` accept `parent`, `repository`, `components`, `exclude_components`,
+`labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature,
+repository, or component.
 
 **Good fit:** an editor or agent that speaks MCP should read and update the Board
 directly instead of shelling out to the CLI.
@@ -398,8 +400,9 @@ orbit add "Ship the API" -p high --depends-on orb-f14c02 --label ready-for-agent
 # returns the first Task (meta.matched: true) instead of creating another
 orbit add "Step 3" --source-key planner:plan-7:step-3
 
-# Break a feature into a SubTask
-orbit add "API: add the endpoint" --parent orb-a7b2c9 --label repo:api
+# Break a feature into a SubTask (run inside the api member Repository, or set
+# it afterwards with `orbit update <id> --repository api`)
+orbit add "API: add the endpoint" --parent orb-a7b2c9
 # created orb-a7b2c9.b3c4d5  medium  API: add the endpoint  (subtask of orb-a7b2c9)
 ```
 
@@ -570,7 +573,7 @@ orbit batch --file plan.json --json | jq '.data.keys'
 Lists tasks with combinable filters. Done and cancelled tasks are hidden by
 default; pass `--include-closed`, or name a terminal status with `--status`, to
 include them. Inside a member Repository or one of its worktrees the list is
-scoped to that Repository's Tasks plus Board-wide Tasks (tasks with no `repo`);
+scoped to that Repository's Tasks plus Board-wide Tasks (tasks with no `repository`);
 `--all` widens it to the whole Board, and at the Board's root there is no
 scoping. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`,
 `TITLE`, `LABELS`, and `CLAIMED BY` columns; titles longer than 60 characters
@@ -593,7 +596,7 @@ orbit list
 orbit list --linked                               # only Tasks linked to a Remote Issue
 orbit list --local                                # only Tasks without an active link
 orbit list --label needs-triage
-orbit list --label repo:api --label ready-for-agent   # every label must match
+orbit list --label sso --label ready-for-agent       # every label must match
 orbit list --repository api                          # repository field api
 orbit list --status in_progress --claimed-by claude
 orbit list --status done            # closed work, without --include-closed
@@ -614,9 +617,9 @@ Human output with `--group` looks like this:
 ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ orb-a7b2c9  Spec: SSO login across api, web, infra                                   epic · todo · high · ready-for-agent │
 ├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9.z21c2w │ todo   │ highest  │ task │ #12   │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
-│ orb-a7b2c9.hxdmqt │ todo   │ high     │ task │ -     │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
-│ orb-a7b2c9.c5qmed │ todo   │ medium   │ task │ -     │ web: login redirect         │ ready-for-agent, repo:web   │            │
+│ orb-a7b2c9.z21c2w │ todo   │ highest  │ task │ #12   │ infra: register OIDC client │ ready-for-agent │            │
+│ orb-a7b2c9.hxdmqt │ todo   │ high     │ task │ -     │ api: OIDC callback          │ ready-for-agent   │            │
+│ orb-a7b2c9.c5qmed │ todo   │ medium   │ task │ -     │ web: login redirect         │ ready-for-agent   │            │
 ╰───────────────────┴────────┴──────────┴──────┴───────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
@@ -1221,13 +1224,14 @@ in the same order.
 orbit add "SSO login across api, web, infra" --body-file feature.md
 # created orb-a7b2c9  medium  SSO login across api, web, infra
 
-# one SubTask per repository
-orbit add "api: OIDC callback" --parent orb-a7b2c9 --label repo:api
-orbit add "web: login redirect" --parent orb-a7b2c9 --label repo:web
-orbit add "infra: register client" --parent orb-a7b2c9 --label repo:infra
+# one SubTask per repository — run each add inside its member Repository so
+# `repository` fills in, or set it afterwards with `orbit update <id> --repository NAME`
+orbit add "api: OIDC callback" --parent orb-a7b2c9
+orbit add "web: login redirect" --parent orb-a7b2c9
+orbit add "infra: register client" --parent orb-a7b2c9
 
 # an agent in the api repository picks its piece
-orbit list --parent orb-a7b2c9 --label repo:api --json
+orbit list --parent orb-a7b2c9 --repository api --json
 orbit claim orb-a7b2c9.b3c4d5 --by api-agent
 
 # when every piece is done or cancelled, close the feature explicitly

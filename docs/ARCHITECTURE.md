@@ -709,9 +709,9 @@ flowchart TD
 ```
 
 The conversion also rewrites task frontmatter `github:` links to `remote:`,
-moves `repo:*` labels into the `repo` field, converts `[github]` configuration
+moves `repo:*` labels into the `repository` field, converts `[github]` configuration
 into remote project entries, drops `board.storage`, and seeds `board.components`
-from the Area values Tasks already use — all in the same commit. Re-running
+from the Component values Tasks already use — all in the same commit. Re-running
 after `--apply` is a no-op.
 
 A forced `git clean -xdff` that removes `DIR` leaves the `orbit` branch and a stale worktree record. `doctor` reports `ORPHAN_WORKTREE`; `doctor --fix` or `init` prunes the record and re-attaches `DIR` without task loss.

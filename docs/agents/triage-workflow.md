@@ -71,7 +71,7 @@ commands.
    ```json
    {
      "rationale": "CLI command surface change",
-     "area": "cli",
+     "component": "cli",
      "verification": "cargo test triage",
      "labels_add": ["ready-for-agent"],
      "labels_remove": ["needs-triage"]
@@ -82,7 +82,7 @@ commands.
 
    ```json
    {
-     "uncertainty": "Issue body lacks reproduction steps; cannot classify area yet."
+     "uncertainty": "Issue body lacks reproduction steps; cannot classify component yet."
    }
    ```
 

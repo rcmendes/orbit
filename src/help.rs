@@ -281,7 +281,7 @@ Examples:
   orbit add \"Spec: SSO login\" --type epic --body-file spec.md
 
   # Break a feature into a SubTask
-  orbit add \"API: add the endpoint\" --parent orb-a7b2c9 --label repo:api
+  orbit add \"API: add the endpoint\" --parent orb-a7b2c9
 
   # Publish a ticket under a spec or epic parent
   orbit add \"web: login redirect\" --parent orb-a7b2c9 --label ready-for-agent";

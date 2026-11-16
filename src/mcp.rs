@@ -955,6 +955,18 @@ fn dispatch_tool(
         },
     }
 
+    // `--if-version` and `--idempotency-key` are global CLI flags declared on
+    // the mutation tools' schemas; forward them for custom and registry-driven
+    // tools alike. The CLI itself rejects them where they do not apply.
+    if let Some(version) = optional_str(arguments, "if_version") {
+        args.push("--if-version".to_string());
+        args.push(version);
+    }
+    if let Some(key) = optional_str(arguments, "idempotency_key") {
+        args.push("--idempotency-key".to_string());
+        args.push(key);
+    }
+
     let outcome = run_orbit(executable, dir, &args, true);
     if let Some(path) = batch_file {
         let _ = std::fs::remove_file(path);

@@ -26,6 +26,8 @@ contract.
 | Option | Meaning |
 | --- | --- |
 | `--json` | Print exactly one JSON object on stdout, including errors. |
+| `--if-version <VERSION>` | Run a Task mutation only when the Task's `updated_at` still matches VERSION (the value `orbit show` reports); a stale version fails with retryable `VERSION_CONFLICT`. `orbit batch` takes a per-operation `if_version` instead. |
+| `--idempotency-key <KEY>` | Make a write retry-safe: repeating the call with the same key returns the first recorded result (`meta.idempotent_replay: true`) instead of running again. |
 | `--dir <PATH>` | Use a Board anchor or a specific Board directory for this command. |
 | `ORBIT_DIR` | Environment equivalent of `--dir`. |
 | `--no-sync` | Skip Remote Tracker auto-push and Board host auto-sync for this command (hidden from `--help`; still accepted). `ORBIT_NO_AUTO_SYNC=1` (or `ORBIT_NO_HOST_SYNC=1`) does the same for a process. Explicit `orbit remote sync` and `orbit board sync` are unaffected. |
@@ -1475,6 +1477,8 @@ orbit sync              # commit anything left uncommitted
 | Error | What to do |
 | --- | --- |
 | `NO_READY_TASKS` | Not an error: nothing is startable. Wait, triage, or remove a hold label. |
+| `VERSION_CONFLICT` | The Task changed since the `--if-version` you passed. Re-read it with `orbit show <id>` and retry with the current `updated_at`; the error is retryable and carries `details.actual_version`. |
+| `INVALID_IDEMPOTENCY_KEY` | `--idempotency-key` must be 1–200 printable ASCII characters without spaces. |
 | `ALREADY_CLAIMED` | Another agent holds a live lease. Pick other work, or `--steal` to take it over. |
 | `CLAIM_STALE` | The holder's lease expired. Recover with `orbit claim <id> --steal`. |
 | `DEPENDENCY_BLOCKED` | Finish or cancel the IDs in `error.details.blocking`. |

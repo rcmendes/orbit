@@ -714,3 +714,68 @@ fn property_tool_requires_a_value_key() {
     let show = repo.ok_json(&["show", &id, "--json"]);
     assert_eq!(show["data"]["properties"], json!({"ci": {"a": 1}}));
 }
+
+#[test]
+fn mutation_tools_expose_and_forward_concurrency_arguments() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let tools = client.request(2, "tools/list", json!({}));
+    let tool_list = tools["result"]["tools"].as_array().unwrap();
+    for name in ["update", "claim", "create", "batch"] {
+        let tool = tool_list
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        let properties = tool["inputSchema"]["properties"].as_object().unwrap();
+        assert!(
+            properties.contains_key("idempotency_key"),
+            "{name} must expose idempotency_key"
+        );
+        if name != "create" && name != "batch" {
+            assert!(
+                properties.contains_key("if_version"),
+                "{name} must expose if_version"
+            );
+        }
+    }
+    // Read tools do not advertise write-only arguments.
+    let get = tool_list.iter().find(|tool| tool["name"] == "get").unwrap();
+    assert!(
+        !get["inputSchema"]["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("idempotency_key")
+    );
+
+    // A stale if_version surfaces as a retryable VERSION_CONFLICT envelope.
+    let conflict = client.call(
+        3,
+        "update",
+        json!({ "id": id, "title": "Nope", "if_version": "2000-01-01T00:00:00Z" }),
+    );
+    let envelope = tool_envelope(&conflict);
+    assert_eq!(envelope["ok"], false, "{envelope}");
+    assert_eq!(envelope["error"]["code"], "VERSION_CONFLICT", "{envelope}");
+    assert_eq!(envelope["error"]["retryable"], true, "{envelope}");
+
+    // idempotency_key replays the first recorded result.
+    let first = client.call(
+        4,
+        "update",
+        json!({ "id": id, "title": "Renamed", "idempotency_key": "mcp-k1" }),
+    );
+    assert_eq!(tool_envelope(&first)["ok"], true);
+    let replay = client.call(
+        5,
+        "update",
+        json!({ "id": id, "title": "Other", "idempotency_key": "mcp-k1" }),
+    );
+    let replayed = tool_envelope(&replay);
+    assert_eq!(replayed["ok"], true, "{replayed}");
+    assert_eq!(replayed["data"]["title"], "Renamed", "{replayed}");
+    assert_eq!(replayed["meta"]["idempotent_replay"], true, "{replayed}");
+}

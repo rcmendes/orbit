@@ -1108,7 +1108,7 @@ fn init_human_report_describes_each_setup_step() {
         "3. Verify",
         "orbit doctor",
         "Next steps:",
-        "orbit add \"First task\" -p 1",
+        "orbit add \"First task\" -p high",
         "orbit ready --claim --by claude",
     ] {
         assert!(

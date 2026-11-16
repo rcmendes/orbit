@@ -39,7 +39,7 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
 
     crate::mutation::create_task(board, &task)?;
 
-    let priority = task.front.priority;
+    let priority = &task.front.priority;
     let title = &task.front.title;
     let task_type = task.front.task_type;
     let type_prefix = if task_type == TaskType::Task {
@@ -49,9 +49,9 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
     };
     let human = match &task.front.parent {
         Some(parent) => {
-            format!("created {id}  P{priority}  {type_prefix}{title}  (subtask of {parent})")
+            format!("created {id}  {priority}  {type_prefix}{title}  (subtask of {parent})")
         }
-        None => format!("created {id}  P{priority}  {type_prefix}{title}"),
+        None => format!("created {id}  {priority}  {type_prefix}{title}"),
     };
     let warning = crate::mutation::commit(board, &format!("orbit: add {id}"))?;
     Ok(task_output(&graph, &task, human, warning).with_meta(json!({ "matched": false })))

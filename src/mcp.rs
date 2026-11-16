@@ -158,7 +158,7 @@ fn tool_definitions() -> Vec<Value> {
             "List tasks with filters. Terminal tasks are hidden unless include_closed=true; all=true widens Repository scope.",
             json!({
                 "status": { "type": "string", "enum": ["todo", "in_progress", "done", "cancelled"] },
-                "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
+                "priority": { "type": "string", "description": "Priority name from the Board's configured list (default: highest, high, medium, low)." },
                 "claimed_by": { "type": "string" },
                 "waiting": { "type": "boolean", "description": "Only tasks with an external blocker." },
                 "label": { "type": "string", "description": "Filter by label." },
@@ -190,7 +190,7 @@ fn tool_definitions() -> Vec<Value> {
             json!({
                 "title": { "type": "string" },
                 "type": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"], "description": "Work shape; defaults to task." },
-                "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
+                "priority": { "type": "string", "description": "Priority name from the Board's configured list (default: highest, high, medium, low)." },
                 "labels": { "type": "array", "items": { "type": "string" } },
                 "depends_on": { "type": "array", "items": { "type": "string" } },
                 "parent": { "type": "string", "description": "Create a SubTask under this Parent Task." },
@@ -209,7 +209,7 @@ fn tool_definitions() -> Vec<Value> {
                 "title": { "type": "string" },
                 "body": { "type": "string" },
                 "type": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"], "description": "New work shape." },
-                "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
+                "priority": { "type": "string", "description": "Priority name from the Board's configured list (default: highest, high, medium, low)." },
                 "waiting_on": { "type": "string" },
                 "clear_waiting": { "type": "boolean" },
                 "area": { "type": "string", "description": "New work-area slug; restricted to the Board's configured areas when set." },
@@ -419,9 +419,6 @@ fn dispatch_tool(
             return tool_invalid("`status` must be `done` or `cancelled`");
         }
     }
-    if optional_u64(arguments, "priority").is_some_and(|priority| priority > 3) {
-        return tool_invalid("`priority` must be between 0 and 3");
-    }
     if name == "update"
         && arguments.get("waiting_on").is_some()
         && bool_arg(arguments, "clear_waiting")
@@ -583,9 +580,9 @@ fn dispatch_tool(
                 args.push("--status".to_string());
                 args.push(status);
             }
-            if let Some(priority) = optional_u64(arguments, "priority") {
+            if let Some(priority) = optional_str(arguments, "priority") {
                 args.push("--priority".to_string());
-                args.push(priority.to_string());
+                args.push(priority);
             }
             if let Some(claimed_by) = optional_str(arguments, "claimed_by") {
                 args.push("--claimed-by".to_string());
@@ -697,9 +694,9 @@ fn dispatch_tool(
                 args.push("--type".to_string());
                 args.push(task_type);
             }
-            if let Some(priority) = optional_u64(arguments, "priority") {
+            if let Some(priority) = optional_str(arguments, "priority") {
                 args.push("-p".to_string());
-                args.push(priority.to_string());
+                args.push(priority);
             }
             if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
                 for label in labels {
@@ -754,9 +751,9 @@ fn dispatch_tool(
                 args.push("--type".to_string());
                 args.push(task_type);
             }
-            if let Some(priority) = optional_u64(arguments, "priority") {
+            if let Some(priority) = optional_str(arguments, "priority") {
                 args.push("--priority".to_string());
-                args.push(priority.to_string());
+                args.push(priority);
             }
             if let Some(waiting_on) = optional_str(arguments, "waiting_on") {
                 args.push("--waiting-on".to_string());

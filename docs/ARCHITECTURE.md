@@ -150,7 +150,7 @@ flowchart LR
 | Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/workflow.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, the Board-defined Workflow (statuses, categories, transitions, templates), lifecycle transition rules, dependency validation, readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Execution | `src/mutation.rs`, `src/remote/execution.rs` | Board mutation execution (lifecycle, terminal, reopen, shared Task persistence and commit warnings) and provider-neutral Remote Tracker execution (`synchronize`, `create_and_link`, `apply_plan`) behind a resolved `RemoteAdapter`; both run inside the caller's Board access scope. |
-| Contract | `src/error.rs` | Stable error codes, messages, details, and retryability. |
+| Contract | `src/error.rs`, `src/contract.rs`, `src/output.rs`, `src/capabilities.rs` | Stable error codes rendered as RFC 9457-style problem fields (`type`, `title`, `detail`, `retryable`, `hint`), the Board contract semver and its compatibility gate, and the `orbit capabilities` handshake that reports contract version, modules, and workflow — including on Boards the gate refuses. |
 | Setup | `src/setup.rs` | Detect harnesses and write managed instruction files, MCP entries, and the Claude SessionStart hook. |
 
 ### Board sync tree seam

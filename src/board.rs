@@ -124,7 +124,7 @@ pub struct RepoContext {
     pub legacy_local_board: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub board: BoardConfig,
@@ -152,6 +152,27 @@ pub struct Config {
         skip_serializing_if = "crate::workflow::WorkflowConfig::is_default"
     )]
     pub workflow: crate::workflow::WorkflowConfig,
+    /// The contract version the Board was written for (ADR 0022). A binary
+    /// refuses a Board whose contract is newer than its own; see
+    /// [`crate::contract`]. Boards predating the field read as the current
+    /// contract.
+    #[serde(default = "crate::contract::default_version")]
+    pub contract: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            board: BoardConfig::default(),
+            id: IdConfig::default(),
+            github: crate::github::GitHubConfig::default(),
+            remote: crate::remote::RemoteConfig::default(),
+            repositories: Vec::new(),
+            workspace: crate::workspace::WorkspaceConfig::default(),
+            workflow: crate::workflow::WorkflowConfig::default(),
+            contract: crate::contract::default_version(),
+        }
+    }
 }
 
 impl Config {
@@ -173,7 +194,29 @@ impl Config {
         Ok(config)
     }
 
+    /// Parses `config.toml` without semantic validation. `orbit capabilities`
+    /// uses this to report the Board's contract and workflow even when the
+    /// contract is newer than this binary's — the handshake must answer on a
+    /// Board every other command refuses.
+    pub fn load_lenient(root: &Path) -> Result<Self> {
+        let path = root.join("config.toml");
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(OrbitError::board_not_found());
+            }
+            Err(error) => {
+                return Err(OrbitError::io(format!("read {}", path.display()), error));
+            }
+        };
+        toml::from_str(&content)
+            .map_err(|error| OrbitError::config(format!("invalid {}: {error}", path.display())))
+    }
+
     pub fn validate(&self) -> Result<()> {
+        // The contract gate runs first: a newer Board fails before any other
+        // check can misread fields this binary does not know.
+        crate::contract::check_compatible(&self.contract)?;
         if self.board.lease_minutes <= 0 {
             return Err(OrbitError::config("board.lease_minutes must be positive"));
         }

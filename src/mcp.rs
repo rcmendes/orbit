@@ -1140,13 +1140,18 @@ fn tool_internal(message: impl Into<String>) -> ToolResponse {
 }
 
 fn tool_error(code: &str, message: impl Into<String>) -> ToolResponse {
+    let message = message.into();
     ToolResponse {
         envelope: json!({
             "ok": false,
             "error": {
+                "type": crate::output::problem_type(code),
+                "title": crate::output::problem_title(code),
                 "code": code,
-                "message": message.into(),
-                "retryable": false
+                "message": message,
+                "detail": message,
+                "retryable": false,
+                "hint": crate::output::default_hint(code)
             }
         }),
         is_error: true,
@@ -1167,7 +1172,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 52);
+        assert_eq!(tools.len(), 53);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))

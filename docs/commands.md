@@ -1137,6 +1137,29 @@ changes.
 orbit sync
 ```
 
+### `orbit capabilities` — the contract handshake
+
+Prints what this Board and this `orbit` binary share: the contract version the
+binary speaks, the `contract` semver the Board declares in `config.toml`,
+whether they are compatible, the optional modules the Board has enabled
+(`remote` with its projects and `auto_push`, `workspace` scoping), and the
+Board's workflow — template or custom, initial status, statuses with
+categories, and named transitions.
+
+Every other Board command refuses a Board whose contract is newer than the
+binary's with `CONTRACT_VERSION_UNSUPPORTED`; `capabilities` reads
+`config.toml` leniently and still answers, so scripts and agents can
+negotiate before choosing commands. An older or equal contract is accepted, and
+a Board without the field reads as the current contract.
+
+**Good fit:** checking compatibility before scripting against a Board,
+or inspecting a Board's workflow and modules.
+
+```bash
+orbit capabilities
+orbit capabilities --json | jq '.data.workflow.initial'
+```
+
 ### `orbit board` — host and synchronize the Board
 
 A Board has no host by default — its history stays on this machine — or
@@ -1480,6 +1503,7 @@ orbit sync              # commit anything left uncommitted
 | `STORAGE_MISMATCH` | `config.toml` still records `board.storage` but the Board folder's Git shape disagrees. `orbit migrate` removes the retired key and normalizes the layout. |
 | `ABSOLUTE_BOARD_PATH` | A managed agent config still records a Board path. Re-run `orbit setup` to rewrite it path-free. |
 | `LOCKED` | Retryable: another writer holds the lock. Retry after a short backoff. |
+| `CONTRACT_VERSION_UNSUPPORTED` | The Board's `contract` in `config.toml` is newer than this `orbit` supports. Upgrade `orbit`; `orbit capabilities` still reports the Board's contract and workflow. |
 
 ## Command reference
 
@@ -1531,6 +1555,7 @@ orbit sync              # commit anything left uncommitted
 | `orbit mcp` | — | — (is the MCP server itself) |
 | `orbit doctor` | `doctor` | write, idempotent |
 | `orbit sync` | `sync` | write, idempotent |
+| `orbit capabilities` | `capabilities` | read-only, idempotent |
 | `orbit schema` | — | — (publishes this registry; not a Board operation) |
 | `orbit board host` | `board_host` | write |
 | `orbit board sync` | `board_sync` | write |

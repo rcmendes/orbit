@@ -1452,6 +1452,24 @@ Examples:
   orbit board sync --resolve orb-a1b2c3.title=local --resolve config=host
   orbit board sync --json";
 
+pub const CAPABILITIES_LONG: &str = "\
+Prints the contract handshake for this Board: the contract version this orbit
+binary speaks, the contract version the Board declares in config.toml, whether
+they are compatible, the optional modules the Board has enabled (Remote
+Trackers, workspace scoping), and the Board's workflow — its template or
+custom definition, initial status, statuses with categories, and named
+transitions.
+
+Unlike every other Board command, capabilities reads config.toml leniently and
+still answers when the Board's contract is newer than this binary's; every
+other command refuses such a Board with CONTRACT_VERSION_UNSUPPORTED. Use it to
+negotiate the contract before running Board commands.";
+
+pub const CAPABILITIES_EXAMPLES: &str = "\
+Examples:
+  orbit capabilities
+  orbit capabilities --json | jq '.data.workflow.initial'";
+
 pub const SCHEMA_LONG: &str = "\
 Print the JSON Schema of the command registry: every public command with its
 CLI path, summary, MCP tool mapping, argument schema, and safety annotations

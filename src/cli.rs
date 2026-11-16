@@ -183,6 +183,12 @@ pub enum Command {
     #[command(long_about = help::SYNC_LONG, after_long_help = help::SYNC_EXAMPLES)]
     Sync,
 
+    /// Report the Board's contract handshake: contract version, modules, and
+    /// workflow. Answers even on a Board whose contract is newer than this
+    /// binary's, so consumers can negotiate before other commands refuse.
+    #[command(long_about = help::CAPABILITIES_LONG, after_long_help = help::CAPABILITIES_EXAMPLES)]
+    Capabilities,
+
     /// Print the JSON Schema of the command registry.
     ///
     /// Describes every public command once — CLI path, summary, MCP tool,

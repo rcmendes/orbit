@@ -12,8 +12,9 @@ use crate::commands::{
 use crate::error::{OrbitError, Result, code};
 use crate::graph::Graph;
 use crate::mutation::TerminalKind;
-use crate::task::{self, Status, Task, TaskFrontmatter, TaskType};
+use crate::task::{self, Task, TaskFrontmatter, TaskType};
 use crate::transition::{ClaimGate, FieldUpdate, Outcome, TransitionError};
+use crate::workflow::StatusCategory;
 
 /// Fields for a new Task. Values are raw and validated by [`add`].
 pub struct NewTask {
@@ -89,10 +90,10 @@ pub fn add(
     let parent = match new.parent {
         Some(parent_id) => {
             let parent_task = graph.get(&parent_id)?;
-            if parent_task.front.status.is_terminal() {
+            if graph.workflow.is_terminal(&parent_task.front.status) {
                 return Err(OrbitError::invalid_argument(format!(
                     "parent {parent_id} is {}; a SubTask needs an active Parent Task",
-                    parent_task.front.status.as_str()
+                    parent_task.front.status
                 )));
             }
             if graph.depth(&parent_id) + 1 > usize::from(graph.max_subtask_depth) {
@@ -161,7 +162,8 @@ pub fn add(
         id: id.clone(),
         front: TaskFrontmatter {
             title,
-            status: Status::Todo,
+            status: graph.workflow.initial_status().to_string(),
+            resolution: None,
             task_type,
             priority,
             labels,
@@ -418,12 +420,12 @@ pub fn link(graph: &mut Graph, id: &str, link: task::Link, now: DateTime<Utc>) -
                 ));
             }
         }
-        if link.is_blocking() && task.front.status.is_terminal() {
+        if link.is_blocking() && graph.workflow.is_terminal(&task.front.status) {
             return Err(OrbitError::new(
                 code::INVALID_TRANSITION,
                 format!(
                     "{id} is {}; cannot add a blocking link to a terminal task",
-                    task.front.status.as_str()
+                    task.front.status
                 ),
             ));
         }
@@ -557,6 +559,7 @@ pub fn claim(
     now: DateTime<Utc>,
 ) -> Result<bool> {
     let task = graph.get(id)?;
+    let workflow = graph.workflow.clone();
     let gate = ClaimGate {
         hold_labels: graph.hold_labels(task),
         blocking: graph.blocking_ids(task),
@@ -564,7 +567,7 @@ pub fn claim(
     };
     graph
         .get_mut(id)?
-        .claim(by, steal, lease(board), &gate, now)?;
+        .claim(by, steal, lease(board), &gate, now, &workflow)?;
     Ok(true)
 }
 
@@ -576,7 +579,10 @@ pub fn heartbeat(
     by: &str,
     now: DateTime<Utc>,
 ) -> Result<bool> {
-    graph.get_mut(id)?.heartbeat(by, lease(board), now)?;
+    let workflow = graph.workflow.clone();
+    graph
+        .get_mut(id)?
+        .heartbeat(by, lease(board), now, &workflow)?;
     Ok(true)
 }
 
@@ -588,7 +594,8 @@ pub fn release(
     force: bool,
     now: DateTime<Utc>,
 ) -> Result<bool> {
-    Ok(graph.get_mut(id)?.release(by, force, now)? == Outcome::Changed)
+    let workflow = graph.workflow.clone();
+    Ok(graph.get_mut(id)?.release(by, force, now, &workflow)? == Outcome::Changed)
 }
 
 pub struct FinishOutcome {
@@ -598,7 +605,8 @@ pub struct FinishOutcome {
     pub cancelled_subtasks: Vec<String>,
 }
 
-/// Moves a Task to Done or Cancelled, cancelling open SubTasks when forced.
+/// Moves a Task to Done or Cancelled through the workflow's closing
+/// transitions, cancelling open SubTasks when forced.
 pub fn finish(
     graph: &mut Graph,
     id: &str,
@@ -623,22 +631,23 @@ pub fn finish(
         }
         .into());
     }
+    let workflow = graph.workflow.clone();
     let open: Vec<String> = graph
         .descendants(id)
         .into_iter()
         .filter(|descendant| {
             graph
                 .get(descendant)
-                .is_ok_and(|task| !task.front.status.is_terminal())
+                .is_ok_and(|task| !workflow.is_terminal(&task.front.status))
         })
         .collect();
     for child in &open {
-        graph.get_mut(child)?.cancel(by, true, now)?;
+        graph.get_mut(child)?.cancel(by, true, now, &workflow)?;
     }
     let task = graph.get_mut(id)?;
     let outcome = match kind {
-        TerminalKind::Done => task.complete(by, force, &blocking, &[], now)?,
-        TerminalKind::Cancelled => task.cancel(by, force, now)?,
+        TerminalKind::Done => task.complete(by, force, &blocking, &[], now, &workflow)?,
+        TerminalKind::Cancelled => task.cancel(by, force, now, &workflow)?,
     };
     Ok(FinishOutcome {
         changed: outcome == Outcome::Changed,
@@ -666,25 +675,42 @@ pub fn cancel(
     Ok(finish(graph, id, by, force, TerminalKind::Cancelled, now)?.changed)
 }
 
+/// Runs one named workflow transition on a Task, e.g. `orbit transition
+/// orb-… promote`. Closing transitions record the transition's resolution.
+pub fn transition(
+    graph: &mut Graph,
+    id: &str,
+    name: &str,
+    caller: Option<&str>,
+    force: bool,
+    now: DateTime<Utc>,
+) -> Result<Outcome> {
+    let workflow = graph.workflow.clone();
+    Ok(graph
+        .get_mut(id)?
+        .transition_to(name, caller, force, now, &workflow)?)
+}
+
 /// Reopens a Task and, when needed, its completed ancestor Tasks. Returns the
 /// reopened ancestors' IDs, nearest first.
 pub fn reopen(graph: &mut Graph, id: &str, force: bool, now: DateTime<Utc>) -> Result<Vec<String>> {
     let task = graph.get(id)?.clone();
+    let workflow = graph.workflow.clone();
     let child_dependents = done_dependents(graph, id);
     let mut probe = task.clone();
-    probe.reopen(force, &child_dependents, now)?;
+    probe.reopen(force, &child_dependents, now, &workflow)?;
 
     let mut reopened = Vec::new();
     for ancestor_id in graph.ancestors(id) {
-        match graph.get(&ancestor_id)?.front.status {
-            Status::Done => {
+        match workflow.category_of(&graph.get(&ancestor_id)?.front.status) {
+            Some(StatusCategory::Done) => {
                 let ancestor_dependents = done_dependents(graph, &ancestor_id);
                 graph
                     .get_mut(&ancestor_id)?
-                    .reopen(force, &ancestor_dependents, now)?;
+                    .reopen(force, &ancestor_dependents, now, &workflow)?;
                 reopened.push(ancestor_id);
             }
-            Status::Cancelled => {
+            Some(StatusCategory::Canceled) => {
                 return Err(OrbitError::new(
                     code::INVALID_TRANSITION,
                     format!(
@@ -695,7 +721,9 @@ pub fn reopen(graph: &mut Graph, id: &str, force: bool, now: DateTime<Utc>) -> R
             _ => break,
         }
     }
-    graph.get_mut(id)?.reopen(force, &child_dependents, now)?;
+    graph
+        .get_mut(id)?
+        .reopen(force, &child_dependents, now, &workflow)?;
     Ok(reopened)
 }
 
@@ -703,7 +731,9 @@ fn done_dependents(graph: &Graph, id: &str) -> Vec<String> {
     graph
         .blocking_dependents(id)
         .iter()
-        .filter(|dependent| dependent.front.status == Status::Done)
+        .filter(|dependent| {
+            graph.workflow.category_of(&dependent.front.status) == Some(StatusCategory::Done)
+        })
         .map(|dependent| dependent.id.clone())
         .collect()
 }

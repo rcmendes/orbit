@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{OrbitError, Result};
 use crate::github::model::{IssueState, IssueStateReason};
-use crate::task::Status;
+use crate::remote::Status;
 
 /// One-to-one link between an Orbit Task and a GitHub Issue (`owner/repo` + number).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

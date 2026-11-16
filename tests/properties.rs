@@ -1,16 +1,18 @@
 use chrono::{TimeZone, Utc};
 use orbit_tracker::graph::Graph;
-use orbit_tracker::task::{Link, Status, Task, TaskFrontmatter, TaskType};
+use orbit_tracker::task::{Link, Task, TaskFrontmatter, TaskType};
+use orbit_tracker::workflow::Workflow;
 use proptest::prelude::*;
 use std::collections::{BTreeMap, HashSet};
 
-fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
+fn task(id: String, status: &str, dependencies: Vec<String>) -> Task {
     let now = Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap();
     Task {
         id,
         front: TaskFrontmatter {
             title: "property task".to_string(),
-            status,
+            status: status.to_string(),
+            resolution: None,
             task_type: TaskType::Task,
             priority: "medium".to_string(),
             labels: Vec::new(),
@@ -38,7 +40,7 @@ fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
     }
 }
 
-fn build_dag(edges: &[(usize, usize)], statuses: &[Status]) -> (Graph, Vec<String>) {
+fn build_dag(edges: &[(usize, usize)], statuses: &[&str]) -> (Graph, Vec<String>) {
     let ids: Vec<String> = (0..statuses.len())
         .map(|index| format!("orb-{index:06}"))
         .collect();
@@ -65,7 +67,10 @@ fn build_dag(edges: &[(usize, usize)], statuses: &[Status]) -> (Graph, Vec<Strin
         tasks[from].front.links.push(Link::dependency(&ids[to]));
     }
 
-    (Graph::from_tasks(tasks), ids)
+    (
+        Graph::from_tasks_with_workflow(tasks, Vec::new(), Workflow::standard()),
+        ids,
+    )
 }
 
 proptest! {
@@ -74,16 +79,18 @@ proptest! {
         edges in prop::collection::vec((0usize..12, 0usize..12), 0..40),
         statuses in prop::collection::vec(
             prop_oneof![
-                Just(Status::Todo),
-                Just(Status::InProgress),
-                Just(Status::Done),
-                Just(Status::Cancelled),
+                Just("ready"),
+                Just("todo"),
+                Just("in_progress"),
+                Just("done"),
+                Just("cancelled"),
             ],
             12
         ),
     ) {
         let (graph, _) = build_dag(&edges, &statuses);
         prop_assert!(graph.find_cycle().is_none());
+        let workflow = &graph.workflow;
 
         for task in graph.tasks.values() {
             let expected: Vec<String> = task
@@ -93,7 +100,7 @@ proptest! {
                     graph
                         .tasks
                         .get(*dependency)
-                        .map(|dependency| !dependency.front.status.is_terminal())
+                        .map(|dependency| !workflow.is_terminal(&dependency.front.status))
                         .unwrap_or(true)
                 })
                 .map(str::to_string)
@@ -102,14 +109,14 @@ proptest! {
             prop_assert_eq!(graph.blocking_ids(task), expected);
             prop_assert_eq!(
                 graph.is_ready(task),
-                task.front.status == Status::Todo
+                workflow.is_ready_status(&task.front.status)
                     && task.front.claim.is_none()
                     && graph.blocking_ids(task).is_empty()
             );
         }
 
         for task in graph.ready_tasks() {
-            prop_assert_eq!(task.front.status, Status::Todo);
+            prop_assert!(graph.workflow.is_ready_status(&task.front.status));
             prop_assert!(task.front.claim.is_none());
             let all_dependencies_terminal = task
                 .blocking_links()
@@ -118,7 +125,9 @@ proptest! {
                     graph
                         .tasks
                         .get(dependency)
-                        .is_some_and(|dependency| dependency.front.status.is_terminal())
+                        .is_some_and(|dependency| {
+                            graph.workflow.is_terminal(&dependency.front.status)
+                        })
                 });
             prop_assert!(all_dependencies_terminal);
         }
@@ -128,7 +137,7 @@ proptest! {
     fn reverse_edges_create_cycles(
         edges in prop::collection::vec((0usize..12, 0usize..12), 1..40),
     ) {
-        let statuses = vec![Status::Todo; 12];
+        let statuses = vec!["ready"; 12];
         let (graph, ids) = build_dag(&edges, &statuses);
 
         let first = edges

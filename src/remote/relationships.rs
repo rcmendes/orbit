@@ -204,7 +204,8 @@ mod tests {
             id: id.to_string(),
             front: TaskFrontmatter {
                 title: id.to_string(),
-                status: crate::task::Status::Todo,
+                status: "todo".to_string(),
+                resolution: None,
                 task_type: TaskType::Task,
                 priority: default_priority(),
                 labels: Vec::new(),
@@ -273,8 +274,8 @@ mod tests {
             labels: Vec::new(),
             area: None,
             verification: None,
-            status: Some(crate::task::Status::Todo),
-            remote_status: Some(crate::task::Status::Todo),
+            status: Some(crate::remote::Status::Todo),
+            remote_status: Some(crate::remote::Status::Todo),
             subtasks: vec![RemoteIssueRef {
                 project: "acme/a".into(),
                 id: "2".into(),

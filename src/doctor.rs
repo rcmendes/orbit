@@ -441,7 +441,11 @@ fn diagnose_tasks(
             warnings.push(format!("{}: claim metadata is incomplete", task.id));
         }
 
-        if task.front.status == crate::task::Status::Done {
+        if graph
+            .workflow
+            .category_of(&task.front.status)
+            .is_some_and(|category| category.is_terminal())
+        {
             let unfinished = graph.blocking_ids(task);
             if !unfinished.is_empty() {
                 warnings.push(format!(

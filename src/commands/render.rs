@@ -331,6 +331,18 @@ pub(super) fn format_detail(
     let mut lines = Vec::new();
     lines.push(format!("{}  {}", task.id, task.front.title));
     lines.push(format!("status: {}", task.front.status.as_str()));
+    if let Some(resolution) = &task.front.resolution {
+        lines.push(format!("resolution: {resolution}"));
+    }
+    let allowed: Vec<&str> = graph
+        .workflow
+        .transitions_from(&task.front.status)
+        .iter()
+        .map(|transition| transition.name.as_str())
+        .collect();
+    if !allowed.is_empty() {
+        lines.push(format!("allowed_transitions: {}", allowed.join(", ")));
+    }
     lines.push(format!("kind: {}", task.kind()));
     lines.push(format!("type: {}", task.front.task_type.as_str()));
     if remote {
@@ -376,7 +388,7 @@ pub(super) fn format_detail(
         lines.push(format!("property {owner}: {value}"));
     }
     if let Some(checkpoint) = &task.front.checkpoint {
-        let label = if task.front.status.is_terminal() {
+        let label = if graph.workflow.is_terminal(&task.front.status) {
             "checkpoint (archived)"
         } else {
             "checkpoint"

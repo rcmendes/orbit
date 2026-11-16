@@ -39,16 +39,24 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
     let components = normalize_components(board, &args.component)?;
     let excluded_components = normalize_components(board, &args.exclude_component)?;
     let scope = repository_scope(board, args.all)?;
+    if let Some(status) = args.status.as_deref()
+        && graph.workflow.status(status).is_none()
+    {
+        return Err(OrbitError::invalid_argument(format!(
+            "unknown status `{status}`; the workflow defines: {}",
+            graph.workflow.status_names().join(", ")
+        )));
+    }
 
     let mut tasks: Vec<&Task> = graph
         .tasks
         .values()
         .filter(|task| {
-            if let Some(status) = args.status {
+            if let Some(status) = args.status.as_deref() {
                 if task.front.status != status {
                     return false;
                 }
-            } else if !args.include_closed && task.front.status.is_terminal() {
+            } else if !args.include_closed && graph.workflow.is_terminal(&task.front.status) {
                 return false;
             }
 

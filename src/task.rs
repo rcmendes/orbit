@@ -14,31 +14,6 @@ pub const MAX_LABEL_LENGTH: usize = 32;
 pub const MAX_VERIFICATION_LENGTH: usize = 2000;
 pub const MAX_REPOSITORY_LENGTH: usize = 128;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum Status {
-    Todo,
-    #[value(name = "in_progress", alias = "in-progress")]
-    InProgress,
-    Done,
-    Cancelled,
-}
-
-impl Status {
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Status::Done | Status::Cancelled)
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Status::Todo => "todo",
-            Status::InProgress => "in_progress",
-            Status::Done => "done",
-            Status::Cancelled => "cancelled",
-        }
-    }
-}
-
 /// Structural shape of a Task. `kind` remains derived (`task` or `subtask`);
 /// `type` is metadata and does not affect readiness or lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
@@ -479,7 +454,9 @@ pub fn validate_source_key(key: &str) -> Result<()> {
 #[derive(Serialize, Deserialize)]
 struct RawFrontmatter {
     title: String,
-    status: Status,
+    status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolution: Option<String>,
     #[serde(default, rename = "type")]
     task_type: TaskType,
     #[serde(default = "default_priority")]
@@ -561,6 +538,7 @@ impl From<RawFrontmatter> for TaskFrontmatter {
         Self {
             title: raw.title,
             status: raw.status,
+            resolution: raw.resolution,
             task_type: raw.task_type,
             priority: raw.priority,
             labels: raw.labels,
@@ -594,6 +572,7 @@ impl From<TaskFrontmatter> for RawFrontmatter {
         Self {
             title: front.title,
             status: front.status,
+            resolution: front.resolution,
             task_type: front.task_type,
             priority: front.priority,
             labels: front.labels,
@@ -624,7 +603,12 @@ impl From<TaskFrontmatter> for RawFrontmatter {
 #[serde(from = "RawFrontmatter", into = "RawFrontmatter")]
 pub struct TaskFrontmatter {
     pub title: String,
-    pub status: Status,
+    /// The workflow status name; resolved against the Board's
+    /// [`crate::workflow::Workflow`] for its category.
+    pub status: String,
+    /// The resolution recorded by the closing transition that set `status`;
+    /// cleared when the Task reopens or transitions to an open status.
+    pub resolution: Option<String>,
     pub task_type: TaskType,
     /// A Priority name from the Board's `board.priorities` list; Tasks sort
     /// by the name's ordinal in that list, not by the name itself.
@@ -839,6 +823,11 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
     if front.title.trim().is_empty() {
         return Err(OrbitError::corrupt_task(format!(
             "task {id} has an empty title"
+        )));
+    }
+    if front.status.trim().is_empty() {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an empty status"
         )));
     }
     front.priority = front.priority.trim().to_lowercase();
@@ -1144,7 +1133,8 @@ mod tests {
             id: "orb-a7b2c9".to_string(),
             front: TaskFrontmatter {
                 title: "Build the CLI router".to_string(),
-                status: Status::Todo,
+                status: "todo".to_string(),
+                resolution: None,
                 task_type: TaskType::Task,
                 priority: "high".to_string(),
                 labels: Vec::new(),

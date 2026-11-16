@@ -179,7 +179,7 @@ fn checkpoints_do_not_change_readiness() {
     assert_eq!(second_task["data"]["blocking"][0], first.as_str());
 
     let released = repo.ok_json(&["release", &first, "--by", "alice", "--json"]);
-    assert_eq!(released["data"]["status"], "todo");
+    assert_eq!(released["data"]["status"], "ready");
 
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);

@@ -6,7 +6,8 @@ use serde::Serialize;
 use crate::board::Board;
 use crate::comment::Comment;
 use crate::error::{OrbitError, Result, code};
-use crate::task::{self, Status, Task, TaskType};
+use crate::task::{self, Task, TaskType};
+use crate::workflow::{StatusCategory, Workflow};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Issue {
@@ -96,6 +97,9 @@ pub struct Graph {
     non_ready_labels: Vec<String>,
     /// Maximum SubTask nesting depth from `board.max_subtask_depth` (1–4).
     pub max_subtask_depth: u8,
+    /// The Board's declarative workflow: status categories, the Ready status,
+    /// and the named transitions `allowed_transitions` reports.
+    pub workflow: Workflow,
     /// Ordered Priority names from `board.priorities`, most important first.
     /// Tasks sort by the name's ordinal; a name outside the list sorts last.
     pub priorities: Vec<String>,
@@ -103,22 +107,24 @@ pub struct Graph {
 
 impl Graph {
     pub fn from_tasks(tasks: Vec<Task>) -> Self {
-        Self::from_tasks_with_priorities(tasks, task::default_priorities())
+        Self::from_tasks_with_workflow(tasks, Vec::new(), Workflow::standard())
     }
 
     pub fn from_tasks_with_priorities(tasks: Vec<Task>, priorities: Vec<String>) -> Self {
-        Self {
-            tasks: tasks
-                .into_iter()
-                .map(|task| (task.id.clone(), task))
-                .collect(),
-            non_ready_labels: Vec::new(),
-            max_subtask_depth: 1,
-            priorities,
-        }
+        let mut graph = Self::from_tasks(tasks);
+        graph.priorities = priorities;
+        graph
     }
 
     pub fn from_tasks_with_holds(tasks: Vec<Task>, non_ready_labels: Vec<String>) -> Self {
+        Self::from_tasks_with_workflow(tasks, non_ready_labels, Workflow::standard())
+    }
+
+    pub fn from_tasks_with_workflow(
+        tasks: Vec<Task>,
+        non_ready_labels: Vec<String>,
+        workflow: Workflow,
+    ) -> Self {
         Self {
             tasks: tasks
                 .into_iter()
@@ -126,6 +132,7 @@ impl Graph {
                 .collect(),
             non_ready_labels,
             max_subtask_depth: 1,
+            workflow,
             priorities: task::default_priorities(),
         }
     }
@@ -209,10 +216,12 @@ impl Graph {
             }
         }
 
+        let workflow = board.workflow()?;
         let graph = Self {
             tasks,
             non_ready_labels: board.config.board.non_ready_labels.clone(),
             max_subtask_depth: board.config.board.max_subtask_depth,
+            workflow,
             priorities: board.config.board.priorities.clone(),
         };
         let validation = graph.validate();
@@ -255,6 +264,16 @@ impl Graph {
         let mut issues = Vec::new();
 
         for task in self.tasks.values() {
+            if self.workflow.status(&task.front.status).is_none() {
+                issues.push(Issue::new(
+                    code::CORRUPT_TASK,
+                    Some(&task.id),
+                    format!(
+                        "{} has status `{}` which the board workflow does not define",
+                        task.id, task.front.status
+                    ),
+                ));
+            }
             for link in &task.front.links {
                 let Some(target) = link.target_task() else {
                     continue;
@@ -395,8 +414,11 @@ impl Graph {
         Ok(first)
     }
 
+    /// Ready means the Task sits in the workflow's Ready status and the
+    /// derived conditions hold: unclaimed, not waiting, no hold labels, no
+    /// open blocking dependencies, and no open SubTasks.
     pub fn is_ready(&self, task: &Task) -> bool {
-        task.front.status == Status::Todo
+        self.workflow.is_ready_status(&task.front.status)
             && task.front.claim.is_none()
             && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
@@ -419,7 +441,7 @@ impl Graph {
         task.blocking_links()
             .filter(|link| match link.target_task() {
                 Some(target) => match self.tasks.get(target) {
-                    Some(dependency) => !dependency.front.status.is_terminal(),
+                    Some(dependency) => !self.workflow.is_terminal(&dependency.front.status),
                     None => true,
                 },
                 None => true,
@@ -492,7 +514,7 @@ impl Graph {
     pub fn open_children(&self, id: &str) -> Vec<String> {
         self.children(id)
             .into_iter()
-            .filter(|task| !task.front.status.is_terminal())
+            .filter(|task| !self.workflow.is_terminal(&task.front.status))
             .map(|task| task.id.clone())
             .collect()
     }
@@ -541,14 +563,14 @@ impl Graph {
     }
 
     pub fn eligible_for_close(&self, task: &Task) -> bool {
-        if task.front.status.is_terminal() {
+        if self.workflow.is_terminal(&task.front.status) {
             return false;
         }
         let children = self.children(&task.id);
         !children.is_empty()
             && children
                 .iter()
-                .all(|child| child.front.status.is_terminal())
+                .all(|child| self.workflow.is_terminal(&child.front.status))
     }
 
     pub fn close_candidates(&self) -> Vec<&Task> {
@@ -600,7 +622,7 @@ impl Graph {
             .tasks
             .values()
             .filter(|task| {
-                task.front.status == Status::InProgress
+                self.workflow.category_of(&task.front.status) == Some(StatusCategory::Active)
                     && task
                         .front
                         .claim
@@ -656,17 +678,21 @@ impl Graph {
             }
 
             counts.total += 1;
-            match task.front.status {
-                Status::Todo => counts.todo += 1,
-                Status::InProgress => counts.in_progress += 1,
-                Status::Done => counts.done += 1,
-                Status::Cancelled => counts.cancelled += 1,
+            // Counts bucket by status category: `todo` includes the Ready
+            // status, `in_progress` means the active category, and the closed
+            // buckets follow the workflow's done/canceled categories.
+            match self.workflow.category_of(&task.front.status) {
+                Some(StatusCategory::Todo) => counts.todo += 1,
+                Some(StatusCategory::Active) => counts.in_progress += 1,
+                Some(StatusCategory::Done) => counts.done += 1,
+                Some(StatusCategory::Canceled) => counts.cancelled += 1,
+                None => {}
             }
 
             if self.is_ready(task) {
                 counts.ready += 1;
             }
-            if task.front.status == Status::InProgress
+            if self.workflow.category_of(&task.front.status) == Some(StatusCategory::Active)
                 && task
                     .front
                     .claim
@@ -675,10 +701,12 @@ impl Graph {
             {
                 counts.stale += 1;
             }
-            if !task.front.status.is_terminal() && task.external_blockers().next().is_some() {
+            if !self.workflow.is_terminal(&task.front.status)
+                && task.external_blockers().next().is_some()
+            {
                 counts.waiting += 1;
             }
-            if !task.front.status.is_terminal()
+            if !self.workflow.is_terminal(&task.front.status)
                 && (!self.blocking_ids(task).is_empty() || !self.open_children(&task.id).is_empty())
             {
                 counts.blocked += 1;
@@ -815,8 +843,13 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
     let subtask_count = subtasks.len();
     let open_subtask_count = open_subtasks.len();
     let resolved_subtask_count = subtask_count.saturating_sub(open_subtask_count);
-    let eligible_for_close =
-        subtask_count > 0 && open_subtask_count == 0 && !task.front.status.is_terminal();
+    let eligible_for_close = graph.eligible_for_close(task);
+    let allowed_transitions: Vec<&str> = graph
+        .workflow
+        .transitions_from(&task.front.status)
+        .iter()
+        .map(|transition| transition.name.as_str())
+        .collect();
     // Derived `waiting_on` view over external blocking links.
     let waiting_labels = task.waiting_labels();
     let waiting_on = if waiting_labels.is_empty() {
@@ -829,6 +862,12 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "id": task.id,
         "title": task.front.title,
         "status": task.front.status,
+        "status_category": graph
+            .workflow
+            .category_of(&task.front.status)
+            .map(StatusCategory::as_str),
+        "resolution": task.front.resolution,
+        "allowed_transitions": allowed_transitions,
         "type": task.front.task_type,
         "priority": task.front.priority,
         "kind": task.kind(),
@@ -854,7 +893,7 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
             .front
             .checkpoint
             .as_ref()
-            .map(|_| task.front.status.is_terminal()),
+            .map(|_| graph.workflow.is_terminal(&task.front.status)),
         "component": task.front.component.as_deref(),
         "repository": task.front.repository.as_deref(),
         "external_id": task.front.external_id.as_deref(),
@@ -904,13 +943,14 @@ mod tests {
     use chrono::TimeZone;
     use std::collections::BTreeMap;
 
-    fn task(id: &str, status: Status, deps: &[&str]) -> Task {
+    fn task(id: &str, status: &str, deps: &[&str]) -> Task {
         let now = Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap();
         Task {
             id: id.to_string(),
             front: TaskFrontmatter {
                 title: id.to_string(),
-                status,
+                status: status.to_string(),
+                resolution: None,
                 task_type: TaskType::Task,
                 priority: default_priority(),
                 labels: Vec::new(),
@@ -941,9 +981,9 @@ mod tests {
     #[test]
     fn detects_cycles() {
         let graph = Graph::from_tasks(vec![
-            task("orb-aaaaaa", Status::Todo, &["orb-bbbbbb"]),
-            task("orb-bbbbbb", Status::Todo, &["orb-cccccc"]),
-            task("orb-cccccc", Status::Todo, &["orb-aaaaaa"]),
+            task("orb-aaaaaa", "todo", &["orb-bbbbbb"]),
+            task("orb-bbbbbb", "todo", &["orb-cccccc"]),
+            task("orb-cccccc", "todo", &["orb-aaaaaa"]),
         ]);
 
         let cycle = graph.find_cycle().unwrap();
@@ -953,23 +993,23 @@ mod tests {
     #[test]
     fn readiness_requires_terminal_dependencies() {
         let graph = Graph::from_tasks(vec![
-            task("orb-aaaaaa", Status::Todo, &[]),
-            task("orb-bbbbbb", Status::Todo, &["orb-aaaaaa"]),
+            task("orb-aaaaaa", "ready", &[]),
+            task("orb-bbbbbb", "ready", &["orb-aaaaaa"]),
         ]);
 
         assert!(graph.is_ready(graph.get("orb-aaaaaa").unwrap()));
         assert!(!graph.is_ready(graph.get("orb-bbbbbb").unwrap()));
         assert_eq!(
             graph.blocked_by(graph.get("orb-bbbbbb").unwrap()),
-            vec!["orb-aaaaaa (todo)".to_string()]
+            vec!["orb-aaaaaa (ready)".to_string()]
         );
     }
 
     #[test]
     fn parent_waits_for_open_subtasks() {
-        let mut child = task("orb-bbbbbb", Status::Todo, &[]);
+        let mut child = task("orb-bbbbbb", "todo", &[]);
         child.front.parent = Some("orb-aaaaaa".to_string());
-        let graph = Graph::from_tasks(vec![task("orb-aaaaaa", Status::Todo, &[]), child]);
+        let graph = Graph::from_tasks(vec![task("orb-aaaaaa", "ready", &[]), child]);
 
         let parent = graph.get("orb-aaaaaa").unwrap();
         assert!(!graph.is_ready(parent));
@@ -983,15 +1023,15 @@ mod tests {
             vec!["orb-bbbbbb"]
         );
 
-        let mut done_child = task("orb-bbbbbb", Status::Done, &[]);
+        let mut done_child = task("orb-bbbbbb", "done", &[]);
         done_child.front.parent = Some("orb-aaaaaa".to_string());
-        let graph = Graph::from_tasks(vec![task("orb-aaaaaa", Status::Todo, &[]), done_child]);
+        let graph = Graph::from_tasks(vec![task("orb-aaaaaa", "ready", &[]), done_child]);
         assert!(graph.is_ready(graph.get("orb-aaaaaa").unwrap()));
     }
 
     #[test]
     fn missing_parent_and_nested_subtasks_are_issues() {
-        let mut orphan = task("orb-aaaaaa", Status::Todo, &[]);
+        let mut orphan = task("orb-aaaaaa", "todo", &[]);
         orphan.front.parent = Some("orb-missing".to_string());
         let graph = Graph::from_tasks(vec![orphan]);
         assert!(
@@ -1001,11 +1041,11 @@ mod tests {
                 .any(|issue| issue.code == code::DANGLING_PARENT)
         );
 
-        let mut parent = task("orb-aaaaaa", Status::Todo, &[]);
+        let mut parent = task("orb-aaaaaa", "todo", &[]);
         parent.front.parent = Some("orb-cccccc".to_string());
-        let mut child = task("orb-bbbbbb", Status::Todo, &[]);
+        let mut child = task("orb-bbbbbb", "todo", &[]);
         child.front.parent = Some("orb-aaaaaa".to_string());
-        let graph = Graph::from_tasks(vec![task("orb-cccccc", Status::Todo, &[]), parent, child]);
+        let graph = Graph::from_tasks(vec![task("orb-cccccc", "todo", &[]), parent, child]);
         assert!(
             graph
                 .validate()
@@ -1056,14 +1096,14 @@ mod tests {
 
     fn chain() -> Graph {
         Graph::from_tasks(vec![
-            task("orb-aaaaaa", Status::Todo, &[]),
-            child_of(task("orb-bbbbbb", Status::Todo, &[]), "orb-aaaaaa"),
-            child_of(task("orb-bbbbbb.cccccc", Status::Todo, &[]), "orb-bbbbbb"),
+            task("orb-aaaaaa", "todo", &[]),
+            child_of(task("orb-bbbbbb", "todo", &[]), "orb-aaaaaa"),
+            child_of(task("orb-bbbbbb.cccccc", "todo", &[]), "orb-bbbbbb"),
             child_of(
-                task("orb-bbbbbb.cccccc.dddddd", Status::Todo, &[]),
+                task("orb-bbbbbb.cccccc.dddddd", "todo", &[]),
                 "orb-bbbbbb.cccccc",
             ),
-            child_of(task("orb-eeeeee", Status::Todo, &[]), "orb-aaaaaa"),
+            child_of(task("orb-eeeeee", "todo", &[]), "orb-aaaaaa"),
         ])
     }
 
@@ -1113,9 +1153,9 @@ mod tests {
 
     #[test]
     fn depth_and_ancestors_survive_a_parent_cycle() {
-        let mut first = task("orb-aaaaaa", Status::Todo, &[]);
+        let mut first = task("orb-aaaaaa", "todo", &[]);
         first.front.parent = Some("orb-bbbbbb".to_string());
-        let mut second = task("orb-bbbbbb", Status::Todo, &[]);
+        let mut second = task("orb-bbbbbb", "todo", &[]);
         second.front.parent = Some("orb-aaaaaa".to_string());
         let graph = Graph::from_tasks(vec![first, second]);
 
@@ -1126,7 +1166,7 @@ mod tests {
 
     #[test]
     fn missing_dependencies_fail_closed() {
-        let graph = Graph::from_tasks(vec![task("orb-aaaaaa", Status::Todo, &["orb-missing"])]);
+        let graph = Graph::from_tasks(vec![task("orb-aaaaaa", "ready", &["orb-missing"])]);
         assert!(!graph.is_ready(graph.get("orb-aaaaaa").unwrap()));
         assert!(
             graph
@@ -1138,7 +1178,7 @@ mod tests {
 
     #[test]
     fn hold_labels_block_readiness() {
-        let mut held = task("orb-aaaaaa", Status::Todo, &[]);
+        let mut held = task("orb-aaaaaa", "ready", &[]);
         held.front.labels = vec!["needs-triage".to_string()];
         let graph = Graph::from_tasks_with_holds(vec![held], vec!["needs-triage".to_string()]);
         let held_task = graph.get("orb-aaaaaa").unwrap().clone();
@@ -1153,8 +1193,8 @@ mod tests {
     #[test]
     fn would_create_cycle_finds_the_path() {
         let graph = Graph::from_tasks(vec![
-            task("orb-aaaaaa", Status::Todo, &[]),
-            task("orb-bbbbbb", Status::Todo, &["orb-aaaaaa"]),
+            task("orb-aaaaaa", "todo", &[]),
+            task("orb-bbbbbb", "todo", &["orb-aaaaaa"]),
         ]);
 
         let cycle = graph
@@ -1170,9 +1210,9 @@ mod tests {
 
     #[test]
     fn ready_tasks_sort_by_priority_then_age() {
-        let mut high = task("orb-aaaaaa", Status::Todo, &[]);
+        let mut high = task("orb-aaaaaa", "ready", &[]);
         high.front.priority = "highest".to_string();
-        let mut low = task("orb-bbbbbb", Status::Todo, &[]);
+        let mut low = task("orb-bbbbbb", "ready", &[]);
         low.front.priority = "low".to_string();
 
         let graph = Graph::from_tasks(vec![low, high]);
@@ -1189,9 +1229,9 @@ mod tests {
         // A name the Board does not configure sorts after every known name.
         assert_eq!(graph.priority_ordinal("unknown"), 3);
 
-        let mut first = task("orb-aaaaaa", Status::Todo, &[]);
+        let mut first = task("orb-aaaaaa", "ready", &[]);
         first.front.priority = "p2".to_string();
-        let mut second = task("orb-bbbbbb", Status::Todo, &[]);
+        let mut second = task("orb-bbbbbb", "ready", &[]);
         second.front.priority = "p0".to_string();
         let graph = Graph::from_tasks_with_priorities(vec![first, second], graph.priorities);
         assert_eq!(graph.ready_tasks()[0].id, "orb-bbbbbb");

@@ -122,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 16);
+    assert_eq!(names.len(), 17);
     for expected in [
         "ready",
         "list",
@@ -134,6 +134,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "heartbeat",
         "checkpoint",
         "finish",
+        "transition",
         "link",
         "delete",
         "label",
@@ -436,7 +437,7 @@ fn update_claim_and_release_are_available() {
 
     let released = client.call(52, "release", json!({ "id": id, "by": "claude" }));
     let released = tool_envelope(&released);
-    assert_eq!(released["data"]["status"], "todo");
+    assert_eq!(released["data"]["status"], "ready");
     assert!(released["data"]["claimed_by"].is_null());
 }
 

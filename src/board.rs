@@ -145,6 +145,13 @@ pub struct Config {
         skip_serializing_if = "crate::workspace::WorkspaceConfig::is_empty"
     )]
     pub workspace: crate::workspace::WorkspaceConfig,
+    /// The Board's declarative workflow: a shipped template (`minimal`,
+    /// `standard`, `agentic`) or a fully custom `[workflow]` definition.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::workflow::WorkflowConfig::is_default"
+    )]
+    pub workflow: crate::workflow::WorkflowConfig,
 }
 
 impl Config {
@@ -225,6 +232,8 @@ impl Config {
         }
         self.github.validate()?;
         self.workspace.validate()?;
+        self.workflow.validate()?;
+        crate::workflow::Workflow::from_config(self)?;
         let mut names = std::collections::BTreeSet::new();
         let mut paths = std::collections::BTreeSet::new();
         for repository in &self.repositories {
@@ -884,6 +893,13 @@ impl Board {
 
     pub fn is_board(root: &Path) -> bool {
         root.join("config.toml").exists()
+    }
+
+    /// The Board's resolved workflow: the configured template or custom
+    /// `[workflow]` definition. `Config::validate` already checked it, so
+    /// this only fails if the config was built programmatically.
+    pub fn workflow(&self) -> Result<crate::workflow::Workflow> {
+        crate::workflow::Workflow::from_config(&self.config)
     }
 
     pub fn task_ids(&self) -> Result<Vec<String>> {

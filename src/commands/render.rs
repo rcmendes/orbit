@@ -95,7 +95,7 @@ fn issue_cell(task: &Task) -> String {
 
 fn task_cells(task: &Task, remote: bool) -> Vec<String> {
     let mut cells: Vec<String> = vec![
-        task.id.to_string(),
+        task.display_id().to_string(),
         task.front.status.as_str().to_string(),
         task.front.priority.clone(),
         task.front.task_type.clone(),
@@ -160,7 +160,11 @@ pub(super) fn format_grouped_table(groups: &[ListGroup], remote: bool) -> String
     for group in groups {
         lines.push(full_border("├", "┤", inner_width));
         if let Some(parent) = group.parent {
-            let left = format!("{}  {}", parent.id, truncate(&parent.front.title, 60));
+            let left = format!(
+                "{}  {}",
+                parent.display_id(),
+                truncate(&parent.front.title, 60)
+            );
             lines.push(banner_row(&left, &group_meta(parent), inner_width));
         } else {
             lines.push(banner_row("No parent", "", inner_width));
@@ -273,14 +277,14 @@ fn format_summary_with_parent(task: &Task, include_parent: bool, graph: &Graph) 
         task.front
             .parent
             .as_deref()
-            .map(|parent| format!("  (subtask of {parent})"))
+            .map(|parent| format!("  (subtask of {})", graph.display_id(parent)))
             .unwrap_or_default()
     } else {
         String::new()
     };
     format!(
         "{}  {:<11}  {}  {}{}{}{}{}",
-        task.id,
+        task.display_id(),
         task.front.status.as_str(),
         task.front.priority,
         type_prefix,
@@ -304,7 +308,11 @@ pub(super) fn format_tree_line(task: &Task, graph: &Graph, root: bool) -> String
             }
         }
     }
-    let blocking = graph.blocked_by(task);
+    let blocking: Vec<String> = graph
+        .blocked_by(task)
+        .iter()
+        .map(|id| graph.display_id(id))
+        .collect();
     if !blocking.is_empty() {
         line.push_str(&format!("  blocked by: {}", blocking.join(", ")));
     }
@@ -328,7 +336,17 @@ pub(super) fn format_detail(
     remote: bool,
 ) -> String {
     let mut lines = Vec::new();
-    lines.push(format!("{}  {}", task.id, task.front.title));
+    lines.push(format!("{}  {}", task.display_id(), task.front.title));
+    if let Some(key) = &task.front.key {
+        lines.push(format!("key: {key}"));
+        lines.push(format!("id: {}", task.id));
+    }
+    if !task.front.key_aliases.is_empty() {
+        lines.push(format!(
+            "key_aliases: {}",
+            task.front.key_aliases.join(", ")
+        ));
+    }
     lines.push(format!("status: {}", task.front.status.as_str()));
     if let Some(resolution) = &task.front.resolution {
         lines.push(format!("resolution: {resolution}"));
@@ -364,13 +382,17 @@ pub(super) fn format_detail(
     }
     lines.push(format!("priority: {}", task.front.priority));
     if let Some(parent) = &task.front.parent {
-        lines.push(format!("parent: {parent}"));
+        lines.push(format!("parent: {}", graph.display_id(parent)));
     }
     if task.front.links.is_empty() {
         lines.push("links: -".to_string());
     } else {
         for link in &task.front.links {
-            let mut line = format!("link {} {}", link.kind, link.target.label());
+            let target_label = match &link.target {
+                crate::task::LinkTarget::Task(id) => graph.display_id(id),
+                other => other.label(),
+            };
+            let mut line = format!("link {} {}", link.kind, target_label);
             if link.is_blocking() {
                 line.push_str(" (blocking)");
             }
@@ -425,7 +447,11 @@ pub(super) fn format_detail(
         lines.push(format!("reporter: {reporter}"));
     }
     lines.push(format!("ready: {}", graph.is_ready(task)));
-    let blocking = graph.blocked_by(task);
+    let blocking: Vec<String> = graph
+        .blocked_by(task)
+        .iter()
+        .map(|id| graph.display_id(id))
+        .collect();
     if !blocking.is_empty() {
         lines.push(format!("blocking: {}", blocking.join(", ")));
     }
@@ -437,23 +463,27 @@ pub(super) fn format_detail(
         "updated_at: {}",
         task.front.updated_at.to_rfc3339()
     ));
-    let dependents: Vec<&str> = graph
+    let dependents: Vec<String> = graph
         .dependents(&task.id)
         .iter()
-        .map(|dependent| dependent.id.as_str())
+        .map(|dependent| graph.display_id(&dependent.id))
         .collect();
     if !dependents.is_empty() {
         lines.push(format!("dependents: {}", dependents.join(", ")));
     }
-    let children: Vec<&str> = graph
+    let children: Vec<String> = graph
         .children(&task.id)
         .iter()
-        .map(|child| child.id.as_str())
+        .map(|child| graph.display_id(&child.id))
         .collect();
     if !children.is_empty() {
         lines.push(format!("subtasks: {}", children.join(", ")));
     }
-    let open_subtasks = graph.open_children(&task.id);
+    let open_subtasks: Vec<String> = graph
+        .open_children(&task.id)
+        .iter()
+        .map(|id| graph.display_id(id))
+        .collect();
     if !open_subtasks.is_empty() {
         lines.push(format!("open_subtasks: {}", open_subtasks.join(", ")));
     }

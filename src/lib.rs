@@ -15,6 +15,7 @@ pub mod graph;
 pub mod health;
 pub mod help;
 pub mod hierarchy;
+pub mod key;
 pub mod lock;
 pub mod mcp;
 pub mod migrate;

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::board::{Board, Config};
 use crate::board_host;
@@ -229,6 +229,7 @@ fn reconcile(
         resolutions,
         Utc::now(),
         &board.workflow()?,
+        &crate::key::load(board)?,
     )?;
     if !outcome.conflicts.is_empty() {
         return Err(OrbitError::new(
@@ -338,12 +339,17 @@ enum FileKind {
     Task,
     Comments,
     Config,
+    /// `keys.toml`: the Issue-key allocator state; merges by maximum.
+    Keys,
     Other,
 }
 
 fn classify(path: &str) -> (FileKind, String) {
     if path == "config.toml" {
         return (FileKind::Config, "config".to_string());
+    }
+    if path == crate::key::STATE_FILE {
+        return (FileKind::Keys, "keys".to_string());
     }
     for (prefix, kind) in [
         ("tasks/", FileKind::Task),
@@ -700,6 +706,26 @@ fn merge_task(
         &key("title"),
         outcome,
     );
+    // The project key merges like any field; a same-key collision across
+    // *different* Tasks is resolved after the merge by re-keying.
+    let issue_key = pick(
+        base_front.map(|f| f.key.clone()),
+        local.front.key.clone(),
+        remote.front.key.clone(),
+        &key("key"),
+        outcome,
+    );
+    // Key aliases only ever accumulate (a re-key appends, never removes),
+    // so the merge is a sorted union of both sides.
+    let mut key_aliases: Vec<String> = local
+        .front
+        .key_aliases
+        .iter()
+        .chain(remote.front.key_aliases.iter())
+        .cloned()
+        .collect();
+    key_aliases.sort();
+    key_aliases.dedup();
     let status = pick(
         base_front.map(|f| f.status.clone()),
         local.front.status.clone(),
@@ -900,6 +926,8 @@ fn merge_task(
         front: task::TaskFrontmatter {
             title,
             status,
+            key: issue_key,
+            key_aliases,
             resolution,
             task_type,
             priority,
@@ -939,6 +967,147 @@ fn read_tree(root: &Path, revision: &str) -> Result<BTreeMap<String, String>> {
     Ok(tree)
 }
 
+/// Lenient `keys.toml` shape for merging: either field may be absent.
+#[derive(Debug, Deserialize)]
+struct KeyStatePartial {
+    prefix: Option<String>,
+    next_key: Option<u64>,
+}
+
+fn parse_key_state_partial(content: &str) -> Option<KeyStatePartial> {
+    toml::from_str(content).ok()
+}
+
+fn render_key_state(prefix: &str, next_key: u64) -> Result<String> {
+    toml::to_string_pretty(&crate::key::KeyState {
+        prefix: prefix.to_string(),
+        next_key,
+    })
+    .map_err(|error| OrbitError::config(format!("serialize keys.toml: {error}")))
+}
+
+/// Merge two diverged `keys.toml` contents: the higher `next_key` wins so no
+/// handed-out key is reused, and the prefix must agree — a prefix split is
+/// a real conflict.
+fn merge_keys_file(local: Option<&str>, remote: Option<&str>) -> std::result::Result<String, ()> {
+    let parse = |content: Option<&str>| content.and_then(parse_key_state_partial);
+    let (Some(local), Some(remote)) = (parse(local), parse(remote)) else {
+        return Err(());
+    };
+    if let (Some(local_prefix), Some(remote_prefix)) = (&local.prefix, &remote.prefix)
+        && local_prefix != remote_prefix
+    {
+        return Err(());
+    }
+    let prefix = local
+        .prefix
+        .or(remote.prefix)
+        .unwrap_or_else(|| crate::key::DEFAULT_KEY_PREFIX.to_string());
+    let next_key = local
+        .next_key
+        .into_iter()
+        .chain(remote.next_key)
+        .max()
+        .unwrap_or(1);
+    render_key_state(&prefix, next_key).map_err(|_| ())
+}
+
+/// The allocator state the merged tree implies: the merged `keys.toml` when
+/// present and parseable, else the local Board's loaded state.
+fn merged_key_state(outcome: &MergeOutcome, fallback: &crate::key::KeyState) -> (String, u64) {
+    if let Some(content) = outcome
+        .files
+        .get(crate::key::STATE_FILE)
+        .and_then(|content| content.as_deref())
+        && let Some(partial) = parse_key_state_partial(content)
+    {
+        let prefix = partial
+            .prefix
+            .filter(|prefix| !prefix.is_empty())
+            .unwrap_or_else(|| fallback.prefix.clone());
+        let next_key = partial.next_key.unwrap_or(fallback.next_key);
+        return (prefix, next_key);
+    }
+    (fallback.prefix.clone(), fallback.next_key)
+}
+
+/// Re-key Tasks that ended the merge sharing one project key. The Task with
+/// the lowest internal ID keeps the key — a deterministic rule both clones
+/// compute identically — and every other Task takes the next free number
+/// with the contested key recorded as an alias, so the old key keeps
+/// resolving (ADR 0022). `keys.toml` is raised to cover the re-keyed
+/// numbers.
+fn resolve_key_collisions(
+    outcome: &mut MergeOutcome,
+    key_state: &crate::key::KeyState,
+) -> Result<()> {
+    // Collect merged Task files carrying a live key.
+    let mut by_key: BTreeMap<String, Vec<(String, Task)>> = BTreeMap::new();
+    let mut max_number = 0u64;
+    for (path, content) in &outcome.files {
+        let Some(content) = content else { continue };
+        let Some(stem) = path
+            .strip_prefix("tasks/")
+            .and_then(|rest| rest.strip_suffix(".md"))
+        else {
+            continue;
+        };
+        if stem.contains('/') || stem.starts_with('.') {
+            continue;
+        }
+        let Ok(task) = task::parse_task(stem.to_string(), content) else {
+            continue;
+        };
+        for key_str in crate::key::task_keys(&task.front) {
+            if let Some(number) = crate::key::key_number(key_str) {
+                max_number = max_number.max(number);
+            }
+        }
+        if let Some(key) = &task.front.key {
+            by_key
+                .entry(crate::key::normalize(key))
+                .or_default()
+                .push((path.clone(), task));
+        }
+    }
+    if by_key.values().all(|entries| entries.len() < 2) {
+        return Ok(());
+    }
+
+    let (prefix, mut next) = merged_key_state(outcome, key_state);
+    next = next.max(max_number + 1);
+    let start_next = next;
+
+    for entries in by_key.into_values() {
+        if entries.len() < 2 {
+            continue;
+        }
+        let mut entries = entries;
+        entries.sort_by(|left, right| left.1.id.cmp(&right.1.id));
+        for (path, mut task) in entries.into_iter().skip(1) {
+            let old = task.front.key.clone().unwrap_or_else(|| task.id.clone());
+            let new_key = crate::key::rekey(&mut task, &old, next, &prefix);
+            next += 1;
+            let rendered = task::render_task(&task)?;
+            outcome.files.insert(path, Some(rendered));
+            outcome.notices.push(ClaimNotice {
+                task: task.id.clone(),
+                body: format!(
+                    "key conflict resolved on board sync: {old} is held by another Issue; this Issue was re-keyed to {new_key} ({old} stays recorded as an alias)"
+                ),
+            });
+        }
+    }
+
+    if next > start_next {
+        outcome.files.insert(
+            crate::key::STATE_FILE.to_string(),
+            Some(render_key_state(&prefix, next)?),
+        );
+    }
+    Ok(())
+}
+
 /// Merge the trees of `local` and `remote` three-way against `base`
 /// (empty for unrelated histories). Every union path resolves to merged
 /// content (`Some`) or deletion (`None`); unmerged divergences land in
@@ -950,6 +1119,7 @@ fn merge_trees(
     resolutions: &BTreeMap<String, MergeSide>,
     notice_time: DateTime<Utc>,
     workflow: &Workflow,
+    key_state: &crate::key::KeyState,
 ) -> Result<MergeOutcome> {
     let mut outcome = MergeOutcome {
         files: BTreeMap::new(),
@@ -970,6 +1140,11 @@ fn merge_trees(
             &mut outcome,
         )?;
     }
+
+    // Diverged clones can hand the same project key to different Issues;
+    // re-key all but one (deterministically) and record the old key as an
+    // alias so it keeps resolving (ADR 0022).
+    resolve_key_collisions(&mut outcome, key_state)?;
 
     // Tell every claim loser on their Task's comment sidecar. The notices
     // stay on the outcome so the report can surface them too.
@@ -1067,6 +1242,21 @@ fn resolve_path(
                 }
             }
         }
+        FileKind::Keys => {
+            // The allocator high-water mark merges by maximum so neither
+            // side's handed-out keys are reused; a prefix divergence is a
+            // real conflict.
+            match merge_keys_file(local.as_deref(), remote.as_deref()) {
+                Ok(content) => {
+                    outcome.files.insert(path.to_string(), Some(content));
+                }
+                Err(()) => {
+                    let (_, field) = classify(path);
+                    let chosen = file_conflict(outcome, &field, local, remote);
+                    outcome.files.insert(path.to_string(), chosen);
+                }
+            }
+        }
         FileKind::Config | FileKind::Other => {
             let chosen = file_conflict(outcome, &field, local, remote);
             outcome.files.insert(path.to_string(), chosen);
@@ -1146,6 +1336,13 @@ mod tests {
         "2026-01-01T00:00:00Z".parse().unwrap()
     }
 
+    fn key_state() -> crate::key::KeyState {
+        crate::key::KeyState {
+            prefix: "ORB".to_string(),
+            next_key: 1,
+        }
+    }
+
     const TASK_PATH: &str = "tasks/orbit-test.md";
 
     fn task_content(title: &str, priority: &str, status_and_claim: &str) -> String {
@@ -1162,6 +1359,7 @@ mod tests {
             &parse_resolutions(resolutions).unwrap(),
             now(),
             &Workflow::standard(),
+            &key_state(),
         )
         .unwrap()
     }
@@ -1241,6 +1439,7 @@ mod tests {
             &BTreeMap::new(),
             now(),
             &Workflow::standard(),
+            &key_state(),
         )
         .unwrap();
         assert!(merged.conflicts.is_empty());
@@ -1308,6 +1507,7 @@ mod tests {
             &BTreeMap::new(),
             now(),
             &Workflow::standard(),
+            &key_state(),
         )
         .unwrap();
         assert_eq!(merged.conflicts.len(), 1);
@@ -1321,6 +1521,7 @@ mod tests {
             &resolutions,
             now(),
             &Workflow::standard(),
+            &key_state(),
         )
         .unwrap();
         assert!(merged.conflicts.is_empty());
@@ -1332,6 +1533,7 @@ mod tests {
             &BTreeMap::new(),
             now(),
             &Workflow::standard(),
+            &key_state(),
         )
         .unwrap();
         assert!(!both_deleted.files.contains_key(TASK_PATH));
@@ -1360,6 +1562,7 @@ mod tests {
             &BTreeMap::new(),
             now(),
             &Workflow::standard(),
+            &key_state(),
         )
         .unwrap();
         assert!(merged.conflicts.is_empty());
@@ -1370,6 +1573,56 @@ mod tests {
         assert_eq!(
             merged.files["tasks/orbit-host.md"].as_deref(),
             Some("host task")
+        );
+    }
+
+    fn keyed_task_content(key: &str) -> String {
+        format!(
+            "---\ntitle: T\nstatus: todo\nkey: {key}\ncreated_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\nbody\n"
+        )
+    }
+
+    #[test]
+    fn diverged_key_assignments_are_rekeyed_with_aliases() {
+        // Unrelated histories: each clone handed ORB-1 to a different Task.
+        let local = tree(&[("tasks/orb-aaaaaa.md", keyed_task_content("ORB-1").as_str())]);
+        let remote = tree(&[("tasks/orb-bbbbbb.md", keyed_task_content("ORB-1").as_str())]);
+        let merged = merge_trees(
+            &BTreeMap::new(),
+            &local,
+            &remote,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+            &key_state(),
+        )
+        .unwrap();
+        assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
+
+        // `orb-aaaaaa` sorts before `orb-bbbbbb`, so it keeps ORB-1.
+        let keeper = task::parse_task(
+            "orb-aaaaaa".to_string(),
+            merged.files["tasks/orb-aaaaaa.md"].as_deref().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(keeper.front.key.as_deref(), Some("ORB-1"));
+        assert!(keeper.front.key_aliases.is_empty());
+        let loser = task::parse_task(
+            "orb-bbbbbb".to_string(),
+            merged.files["tasks/orb-bbbbbb.md"].as_deref().unwrap(),
+        )
+        .unwrap();
+        // The loser takes ORB-2, records ORB-1 as an alias, and keeps its
+        // immutable Task ID.
+        assert_eq!(loser.id, "orb-bbbbbb");
+        assert_eq!(loser.front.key.as_deref(), Some("ORB-2"));
+        assert_eq!(loser.front.key_aliases, vec!["ORB-1".to_string()]);
+        assert!(merged.files.contains_key(crate::key::STATE_FILE));
+        assert!(
+            merged
+                .notices
+                .iter()
+                .any(|notice| notice.body.contains("re-keyed"))
         );
     }
 

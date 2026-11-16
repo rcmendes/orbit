@@ -118,6 +118,9 @@ pub fn finish(
         comment::validate_body(body)?;
     }
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    // Comment sidecars and file writes key off the immutable internal ID.
+    let id = graph.resolve(id)?;
+    let id = id.as_str();
     let outcome = crate::ops::finish(&mut graph, id, caller, force, kind, now)?;
     let open = outcome.cancelled_subtasks;
     for child in &open {

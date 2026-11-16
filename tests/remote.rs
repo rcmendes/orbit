@@ -312,9 +312,24 @@ fn list_shows_and_filters_github_links() {
     assert!(human.status.success());
     let stdout = String::from_utf8_lossy(&human.stdout);
     assert!(stdout.contains("ISSUE"), "{stdout}");
-    let linked_line = stdout.lines().find(|line| line.contains(&linked)).unwrap();
+    // The ID column shows the project key; the internal ID stays in JSON.
+    let key_of = |id: &str| {
+        repo.ok_json(&["show", id, "--json"])["data"]["key"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let linked_key = key_of(&linked);
+    let local_key = key_of(&local);
+    let linked_line = stdout
+        .lines()
+        .find(|line| line.contains(&linked_key))
+        .unwrap();
     assert!(linked_line.contains("#42"), "{stdout}");
-    let local_line = stdout.lines().find(|line| line.contains(&local)).unwrap();
+    let local_line = stdout
+        .lines()
+        .find(|line| line.contains(&local_key))
+        .unwrap();
     assert!(local_line.contains(" - "), "{stdout}");
 
     let show = repo.orbit(&["show", linked.as_str()]);

@@ -351,6 +351,8 @@ mod tests {
             front: TaskFrontmatter {
                 title: id.to_string(),
                 status: "todo".to_string(),
+                key: None,
+                key_aliases: Vec::new(),
                 resolution: None,
                 task_type: ty.to_string(),
                 priority: default_priority(),

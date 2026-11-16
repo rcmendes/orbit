@@ -174,8 +174,9 @@ fn tree_shows_the_parent_children_and_blockers() {
     let output = repo.orbit(&["tree", &parent]);
     assert!(output.status.success());
     let human = String::from_utf8_lossy(&output.stdout);
-    assert!(human.contains(&parent));
-    assert!(human.contains(&first));
+    // Human output leads with project keys.
+    assert!(human.contains(&repo.key(&parent)));
+    assert!(human.contains(&repo.key(&first)));
     assert!(human.contains("blocked by"));
 
     let (status, value) = repo.json(&["tree", &first, "--json"]);
@@ -824,11 +825,11 @@ fn list_parent_filters_and_group_layout() {
         .unwrap_or_else(|| panic!("no parent banner in {stdout}"));
     let child_line = stdout
         .lines()
-        .position(|line| line.contains(&child))
+        .position(|line| line.contains(&repo.key(&child)))
         .unwrap_or_else(|| panic!("no child line in {stdout}"));
     let other_line = stdout
         .lines()
-        .position(|line| line.contains(&other))
+        .position(|line| line.contains(&repo.key(&other)))
         .unwrap_or_else(|| panic!("no standalone line in {stdout}"));
     assert!(parent_line < child_line, "{stdout}");
     assert!(child_line < other_line, "{stdout}");
@@ -854,9 +855,13 @@ fn list_orders_by_priority_then_parent_then_subtasks() {
             .unwrap_or_else(|| panic!("missing {needle} in {stdout}"))
     };
 
-    assert!(position(&first) < position(&middle), "{stdout}");
-    assert!(position(&middle) < position(&parent), "{stdout}");
-    assert!(position(&parent) < position(&child), "{stdout}");
+    let first_key = repo.key(&first);
+    let middle_key = repo.key(&middle);
+    let parent_key = repo.key(&parent);
+    let child_key = repo.key(&child);
+    assert!(position(&first_key) < position(&middle_key), "{stdout}");
+    assert!(position(&middle_key) < position(&parent_key), "{stdout}");
+    assert!(position(&parent_key) < position(&child_key), "{stdout}");
 }
 
 #[test]
@@ -895,9 +900,11 @@ fn tree_recurses_through_nested_subtasks() {
             .unwrap_or_else(|| panic!("missing {needle} in {human}"))
             .to_string()
     };
-    let grandchild_line = line_of(&grandchild, None);
+    let grandchild_key = repo.key(&grandchild);
+    let child_key = repo.key(&child);
+    let grandchild_line = line_of(&grandchild_key, None);
     assert!(grandchild_line.starts_with("    "), "{grandchild_line}");
-    let child_line = line_of(&child, Some(&grandchild));
+    let child_line = line_of(&child_key, Some(&grandchild_key));
     assert!(child_line.starts_with("  "), "{child_line}");
     assert!(!child_line.starts_with("    "), "{child_line}");
     assert!(!human.lines().next().unwrap().starts_with(' '));
@@ -984,10 +991,11 @@ fn list_group_places_nested_subtasks_under_their_direct_parent() {
     let output = repo.orbit(&["list", "--group", "--all"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(&parent), "{stdout}");
-    assert!(stdout.contains(&child), "{stdout}");
-    assert!(stdout.contains(&grandchild), "{stdout}");
-    assert!(stdout.contains(&other), "{stdout}");
+    // Human output leads with project keys.
+    assert!(stdout.contains(&repo.key(&parent)), "{stdout}");
+    assert!(stdout.contains(&repo.key(&child)), "{stdout}");
+    assert!(stdout.contains(&repo.key(&grandchild)), "{stdout}");
+    assert!(stdout.contains(&repo.key(&other)), "{stdout}");
 }
 
 #[test]
@@ -1045,8 +1053,11 @@ fn group_shows_a_parent_that_the_filter_hides() {
     let output = repo.orbit(&["list", "--group", "--type", "sub-task"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(&format!("{parent}  Feature")), "{stdout}");
-    assert!(stdout.contains(&child), "{stdout}");
+    assert!(
+        stdout.contains(&format!("{}  Feature", repo.key(&parent))),
+        "{stdout}"
+    );
+    assert!(stdout.contains(&repo.key(&child)), "{stdout}");
     assert!(!stdout.contains("No parent"), "{stdout}");
 }
 
@@ -1101,12 +1112,18 @@ fn show_human_includes_kind_parent_and_subtasks() {
     let output = repo.orbit(&["show", &parent]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("kind: task"), "{stdout}");
-    assert!(stdout.contains(&format!("subtasks: {child}")), "{stdout}");
+    assert!(
+        stdout.contains(&format!("subtasks: {}", repo.key(&child))),
+        "{stdout}"
+    );
 
     let output = repo.orbit(&["show", &child]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("kind: subtask"), "{stdout}");
-    assert!(stdout.contains(&format!("parent: {parent}")), "{stdout}");
+    assert!(
+        stdout.contains(&format!("parent: {}", repo.key(&parent))),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -1173,7 +1190,7 @@ fn a_board_written_by_the_previous_release_loads_everywhere() {
     assert!(!ids.contains(&parent.as_str()), "{ids:?}");
 
     let export = repo.ok_json(&["export", "--json"]);
-    assert_eq!(export["data"]["schema_version"], 4, "{export}");
+    assert_eq!(export["data"]["schema_version"], 5, "{export}");
     let exported = export["data"]["tasks"]
         .as_array()
         .unwrap()

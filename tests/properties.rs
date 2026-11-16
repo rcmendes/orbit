@@ -12,6 +12,8 @@ fn task(id: String, status: &str, dependencies: Vec<String>) -> Task {
         front: TaskFrontmatter {
             title: "property task".to_string(),
             status: status.to_string(),
+            key: None,
+            key_aliases: Vec::new(),
             resolution: None,
             task_type: "task".to_string(),
             priority: "medium".to_string(),

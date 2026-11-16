@@ -398,6 +398,8 @@ mod tests {
             front: TaskFrontmatter {
                 title: title.into(),
                 status: status.as_str().to_string(),
+                key: None,
+                key_aliases: Vec::new(),
                 resolution: None,
                 task_type: "task".to_string(),
                 priority: default_priority(),

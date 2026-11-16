@@ -107,26 +107,27 @@ pub(super) fn cmd_comment(
 
 fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    graph.get(&args.id)?;
+    // The comment sidecar is named by the immutable internal ID.
+    let id = graph.resolve(&args.id)?;
     let author = resolve_agent(args.by)?;
     let body = resolve_body(args.body, args.body_file)?;
 
     let now = Utc::now();
-    let comments = crate::mutation::append_comment(board, &args.id, &author, &body, now)?;
+    let comments = crate::mutation::append_comment(board, &id, &author, &body, now)?;
     let comment = comments.last().expect("a comment was appended").clone();
     let task = {
-        let task = graph.get_mut(&args.id)?;
+        let task = graph.get_mut(&id)?;
         task.touch(now);
         task.clone()
     };
-    let warning = crate::mutation::save(board, &task, &format!("orbit: comment {}", args.id))?;
+    let warning = crate::mutation::save(board, &task, &format!("orbit: comment {id}"))?;
     let mut output = crate::output::CommandOutput::new(
         json!({
-            "id": args.id,
+            "id": id,
             "comment": comment,
             "count": comments.len()
         }),
-        format!("commented {} as {author}", args.id),
+        format!("commented {id} as {author}"),
     );
     output.warnings.extend(warning);
     Ok(output)
@@ -134,10 +135,10 @@ fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output:
 
 fn cmd_comment_list(board: &Board, args: CommentListArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
-    graph.get(&args.id)?;
-    let comments = board.read_comments(&args.id)?;
+    let id = graph.resolve(&args.id)?;
+    let comments = board.read_comments(&id)?;
     let human = if comments.is_empty() {
-        format!("{} has no comments", args.id)
+        format!("{id} has no comments")
     } else {
         comments
             .iter()
@@ -147,7 +148,7 @@ fn cmd_comment_list(board: &Board, args: CommentListArgs) -> Result<crate::outpu
     };
 
     Ok(
-        crate::output::CommandOutput::new(json!({ "id": args.id, "comments": comments }), human)
+        crate::output::CommandOutput::new(json!({ "id": id, "comments": comments }), human)
             .with_meta(json!({ "count": comments.len() })),
     )
 }
@@ -282,12 +283,11 @@ fn cmd_link_list(board: &Board, args: LinkTargetArgs) -> Result<crate::output::C
             .links
             .iter()
             .map(|link| {
-                let mut line = format!(
-                    "{} {} ({})",
-                    link.inward_name(),
-                    link.target.label(),
-                    link.kind
-                );
+                let target = match &link.target {
+                    crate::task::LinkTarget::Task(id) => graph.display_id(id),
+                    other => other.label(),
+                };
+                let mut line = format!("{} {} ({})", link.inward_name(), target, link.kind);
                 if link.is_blocking() {
                     line.push_str(" [blocking]");
                 }

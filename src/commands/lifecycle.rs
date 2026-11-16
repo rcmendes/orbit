@@ -115,8 +115,11 @@ fn plan_worktree(board: &Board, id: &str) -> Result<WorktreePlan> {
             )
         })?,
     };
-    let path = member.path.join(".worktrees").join(id);
-    let branch = format!("ticket/{id}");
+    // Worktree paths and branch names key off the immutable Task ID, never
+    // a project key the user typed.
+    let task_id = task.id.clone();
+    let path = member.path.join(".worktrees").join(&task_id);
+    let branch = format!("ticket/{task_id}");
     let records = crate::git::worktree_records(&member.path)?;
     let target = crate::repository::canonical_lenient(&path);
     if let Some(record) = records.iter().find(|record| {

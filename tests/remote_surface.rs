@@ -76,9 +76,10 @@ fn list_shows_the_issue_column_when_a_task_is_linked() {
 
     let stdout = list_header(&repo);
     assert!(stdout.contains("ISSUE"), "{stdout}");
+    // The ID column shows the project key; JSON keeps the internal ID.
     let row = stdout
         .lines()
-        .find(|line| line.contains(&id))
+        .find(|line| line.starts_with("ORB-1"))
         .unwrap_or_else(|| panic!("no row for {id}: {stdout}"));
     assert!(row.contains("#42"), "{stdout}");
 }

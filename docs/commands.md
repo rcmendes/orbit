@@ -170,6 +170,14 @@ repository name; a Board anchored at `~/.orbit` uses `orb` with a warning. Pass 
 explicitly. Re-running `init` preserves the stored prefix; an empty Board can
 change it, while a populated Board returns `SLUG_LOCKED` and points at
 `orbit slug migrate <slug>`. `--print` reports the same result without writing.
+
+Every Issue also gets a sequential **project key** — `PREFIX-N`, such as
+`ORB-12` — allocated under the Board lock at creation and tracked in
+`keys.toml`. The key is the handle humans and agents quote: `orbit show
+ORB-12` (any case) resolves it everywhere a Task ID is accepted, while the
+immutable Task ID stays the file name and the `id` in JSON. When Board sync
+re-keys an Issue after a cross-clone collision, the old key moves to
+`key_aliases` and keeps resolving. See [SPEC.md](./SPEC.md#project-key).
 The JSON and human output carry `prefix`, `storage`, and the `exclude` entries;
 the JSON also reports `global`, `created`, `preview`, `portable_mcp`, and
 the managed files.
@@ -372,7 +380,7 @@ orbit mcp                          # normally launched by the editor
 
 ### `orbit add` — file a ticket
 
-Creates a task in the workflow's initial status (`ready` in the shipped templates) and prints its ID, which you need for dependents,
+Creates a task in the workflow's initial status (`ready` in the shipped templates) and prints its ID and project key, which you need for dependents,
 labels, and comments.
 
 **Good fit:** a bug report, a feature, a follow-up from a review, or a ticket
@@ -581,7 +589,7 @@ Operations are `add`, `update`, `label`, `depend`, `undepend`, `link`,
 `unlink`, `claim`, `assign`, `heartbeat`, `release`, `done`, `cancel`, `reopen`,
 `transition`, `comment`, and `property`,
 each with its command's fields (see [SPEC.md](./SPEC.md#batch)). A reference is a
-Task ID or `key:` plus a Source Key, so later operations can point at Tasks the
+Task ID, a project key or alias, or `key:` plus a Source Key, so later operations can point at Tasks the
 same Batch creates.
 
 **Good fit:** filing a whole plan (an epic, its SubTasks, and their
@@ -613,7 +621,8 @@ default; pass `--include-closed`, or name a terminal status with `--status`, to
 include them. Inside a member Repository or one of its worktrees the list is
 scoped to that Repository's Tasks plus Board-wide Tasks (tasks with no `repository`);
 `--all` widens it to the whole Board, and at the Board's root there is no
-scoping. Human output is an aligned table with `ID`, `STATUS`, `P`, `TYPE`,
+scoping. Human output is an aligned table whose `ID` column shows the project
+key (`ORB-12`; the Task ID for Tasks that predate keys), with `STATUS`, `P`, `TYPE`,
 `TITLE`, `LABELS`, and `CLAIMED BY` columns; titles longer than 60 characters
 are shortened with an ellipsis. When the Board has remote material — a
 configured Remote Project or any Task carrying a Remote link — an `ISSUE`

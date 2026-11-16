@@ -836,6 +836,17 @@ pub static TOOLS: &[Tool] = &[
     ),
     // --- Board maintenance ------------------------------------------------------
     tool(
+        "capabilities",
+        "Report the contract handshake: contract versions, enabled modules, and the Board's workflow. Answers even on a Board whose contract is newer than this binary's.",
+        &["capabilities"],
+        &[],
+        false,
+        true,
+        false,
+        true,
+        false,
+    ),
+    tool(
         "doctor",
         "Check the Board for integrity issues; fix=true removes stale temp files and re-attaches an orphaned orbit worktree.",
         &["doctor"],
@@ -1508,6 +1519,11 @@ pub static COMMANDS: &[CommandEntry] = &[
     ),
     cmd(&["doctor"], "Check Board integrity.", "doctor"),
     cmd(&["sync"], "Commit pending lease-only changes.", "sync"),
+    cmd(
+        &["capabilities"],
+        "Report the contract handshake.",
+        "capabilities",
+    ),
     exempt(
         &["schema"],
         "Print the command registry schema.",
@@ -1644,12 +1660,16 @@ pub fn output_schema() -> Value {
             "error": {
                 "type": "object",
                 "properties": {
+                    "type": { "type": "string" },
+                    "title": { "type": "string" },
                     "code": { "type": "string" },
                     "message": { "type": "string" },
+                    "detail": { "type": "string" },
                     "retryable": { "type": "boolean" },
+                    "hint": { "type": "string" },
                     "details": {}
                 },
-                "required": ["code", "message", "retryable"]
+                "required": ["type", "title", "code", "message", "detail", "retryable", "hint"]
             }
         },
         "required": ["ok"]

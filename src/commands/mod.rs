@@ -128,6 +128,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             .map(|()| crate::output::CommandOutput::new(Value::Null, "").with_silent()),
         Command::Doctor(args) => crate::doctor::run(dir.as_deref(), args),
         Command::Sync => with_board(dir.as_deref(), true, cmd_sync),
+        Command::Capabilities => crate::capabilities::run(dir.as_deref()),
         Command::Schema(args) => crate::registry::cmd_schema(&args),
         Command::Board(args) => match &args.command {
             crate::cli::BoardCommand::Host(host_args) => {

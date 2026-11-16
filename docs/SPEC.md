@@ -310,9 +310,16 @@ prefix = "orb-"
 # the standard template.
 # [workflow]
 # template = "agentic"
+
+# Optional: profiles applied by `orbit setup <plugin>`, one [[profiles]]
+# record per profile — see §5 Profiles.
+# [[profiles]]
+# name = "acme"
+# source = "user"
+# requires = ["workflow"]
 ```
 
-`[workflow]` selects the Board's lifecycle. `template` names a shipped workflow — `minimal`, `standard` (the default), or `agentic`. Setting `statuses`, `transitions`, or `initial` instead defines a custom workflow; validation requires unique status and transition names, valid categories (`todo`, `active`, `done`, `canceled`), exactly one status flagged `ready`, an `initial` status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and none on transitions into open statuses. See §3.1 for the shipped templates.
+`[workflow]` selects the Board's lifecycle. `template` names a shipped workflow — `minimal`, `standard` (the default), or `agentic`. Setting `statuses`, `transitions`, or `initial` instead defines a custom workflow; validation requires unique status and transition names, valid categories (`todo`, `active`, `done`, `canceled`), exactly one status flagged `ready`, an `initial` status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and none on transitions into open statuses. See §3.1 for the shipped templates. The three templates ship inside Orbit; a Profile's `[workflow]` section selects one of them or defines a custom workflow the same way.
 
 `board.storage` is retired (ADR 0019): every Board is a standalone repository, so the key is neither written nor honored; a config that still carries it marks a legacy Board for `orbit migrate`. `board.priorities` is the ordered Priority vocabulary, most important first; each entry is a lowercase name and `board.default_priority` must name one of them. Tasks store a Priority name and sort by its position in the list, so renaming or reordering the list reorders every Task without rewriting files. `board.types` declares the Issue type vocabulary (`[[board.types]]` entries with `name` and optional `required` frontmatter fields), `board.hierarchy` orders the types into levels (`[[board.hierarchy]]` entries with a `types` list, top level first; a child must sit strictly deeper than its parent), and `board.default_type` names the type `orbit add` uses when neither `--type` nor `--parent` applies. All three are omitted from `config.toml` while they match the defaults (`epic`, `story`, `task`, `bug`, `sub-task`; `epic` > `story`/`task`/`bug` > `sub-task`; `task`); a legacy `board.max_subtask_depth` key is ignored. `id.prefix` must contain only lowercase letters, digits, and dashes; a dot remains valid in legacy IDs but new IDs never contain one. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`. Optional `id.accepted_prefixes` lists additional valid Task-ID prefixes retained when Boards with different slugs are consolidated; new Task IDs still use `id.prefix`.
 ## 5. Board lifecycle
@@ -527,9 +534,48 @@ Before ADR 0019, a local Board lived at `<git-common-dir>/orbit/board` with its 
 
 `orbit setup [CLIENT] --scope project|user` defaults to `project`. Project scope writes repository-level instruction files and MCP configs. User scope writes the same managed content at the harness's user-level locations. Neither scope records an absolute Board path: generated configs rely on discovery from the project directory, or on `--dir`/`ORBIT_DIR` when an editor launches the server elsewhere. MCP configs record an absolute Orbit binary path by default so GUI-launched editors need no `PATH`; `--portable-mcp` writes the bare `orbit` command instead and requires the editor's `PATH` to resolve it. `doctor` reports an older config that still records a Board path as `ABSOLUTE_BOARD_PATH`; re-running `setup` rewrites it path-free.
 
+### Profiles
+
+A **Profile** is a declarative TOML document that translates a plugin's vocabulary onto a Board (ADR 0022): it never adds code, it only selects configuration the kernel already understands. `orbit setup <plugin>` resolves the target in this order — an explicit path (`./acme.toml` or any name containing `/` or ending `.toml`), profiles shipped inside the binary, `<board>/profiles/<name>.toml`, `<orbit>/profiles/<name>.toml`, `<repo>/profiles/<name>.toml`, `~/.config/orbit/profiles/<name>.toml`, then `./profiles/<name>.toml` — and, when the name is also an agent integration (`claude`, `cursor`, `codex`, `opencode`, `devin`, `mattpocock`), applies the profile alongside the harness files. A target that is neither an integration nor a resolvable profile fails with `INVALID_ARGUMENT`.
+
+The profile format:
+
+```toml
+name = "acme"                  # optional; defaults to the file stem
+description = "Acme plugin"
+contract = "1.0.0"             # minimum contract version, semver
+requires = ["workflow", "links"]   # capabilities the binary must provide
+optional = ["remote"]          # capabilities used when present, tolerated missing
+holds = ["needs-info"]         # merged into board.non_ready_labels
+
+[roles]                        # plugin role name -> assignee kind
+reviewer = "human"             # `agent` or `human`
+
+[vocabulary.status]            # plugin-term -> Orbit-term maps, recorded verbatim
+triage = "in_review"
+[vocabulary.priority]
+p0 = "highest"
+
+[workflow]                     # optional; same shape as config.toml [workflow]
+template = "agentic"           # or statuses/transitions/initial for a custom workflow
+
+[board]                        # optional board.* overrides; absent fields keep current values
+priorities = ["highest", "high", "medium", "low"]
+default_priority = "medium"
+non_ready_labels = ["needs-triage"]
+components = ["api"]
+default_type = "task"
+# types = [{ name = "bug", required = ["steps"] }]
+# hierarchy = [{ types = ["epic"] }, { types = ["story", "task", "bug"] }]
+```
+
+Before touching the Board, `orbit setup` negotiates the profile's requirements: every `requires` entry must be a Capability this binary provides (the same list `orbit capabilities` reports), and `contract` must not be newer than the binary's contract. An unmet profile fails with `PROFILE_UNMET`, whose `details` name the missing capabilities and required contract — `optional` entries never block. Applying writes the profile's `[workflow]` and `[board]` overrides, merges `holds` into `non_ready_labels`, and upserts a `[[profiles]]` record (name, source, contract, requires/optional, holds, roles, vocabulary) into `config.toml` under the Board lock, committing `orbit: apply profile <name>`. Re-applying the same profile is a no-op — `data.changed` is `false` and nothing commits — and re-applying with a different source or content replaces the record in place. `--check` reports `installed`/`stale`/`unmet` without writing; `--print` previews the resulting `config.toml`; `--remove` refuses a profile-only target because profiles are declarative (remove the `[[profiles]]` record and its settings by hand or apply a different profile), and only warns when a profile rides along with a harness removal.
+
+`orbit doctor` re-checks every `[[profiles]]` record against the running binary and reports `PROFILE_UNMET` for a profile whose requirements are no longer met — for example after a downgrade or a hand-edited record. `orbit capabilities` lists the binary's supported `capabilities` and the Board's applied `profiles` so consumers can negotiate before choosing commands.
+
 ### Doctor
 
-`doctor` runs without a Board and reports the discovery trace. Running without a Board is not itself a failure; the layout findings and task checks determine health. It diagnoses a legacy layout, a half-moved Board (`AMBIGUOUS_BOARD`), an orphan worktree whose `orbit` branch record outlived `DIR` (`ORPHAN_WORKTREE`), a `board.storage` value that disagrees with the Board's Git shape (`STORAGE_MISMATCH`), and managed agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`). From a Board anchor or any member repository it additionally names the resolved Board and reports missing or malformed layout, undiscovered, unreachable, or stale member repositories, interrupted migrations and local Board remnants, duplicate GitHub identities, orphaned links, field-level sync conflicts, and managed agent setup drift or collisions. Plain non-Git member directories are informational warnings rather than findings; a directory that used to be a repository remains an actionable stale-repository finding. Every diagnostic identifies a severity, affected repository or Task/Issue when applicable, cause, and safe next action. `doctor --fix` removes stale temp files and re-attaches an orphan worktree; legacy Board layouts are converted with `orbit migrate`. Task-level checks run when a Board is resolved.
+`doctor` runs without a Board and reports the discovery trace. Running without a Board is not itself a failure; the layout findings and task checks determine health. It diagnoses a legacy layout, a half-moved Board (`AMBIGUOUS_BOARD`), an orphan worktree whose `orbit` branch record outlived `DIR` (`ORPHAN_WORKTREE`), a `board.storage` value that disagrees with the Board's Git shape (`STORAGE_MISMATCH`), and managed agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`). From a Board anchor or any member repository it additionally names the resolved Board and reports missing or malformed layout, undiscovered, unreachable, or stale member repositories, interrupted migrations and local Board remnants, duplicate GitHub identities, orphaned links, field-level sync conflicts, and managed agent setup drift or collisions. Plain non-Git member directories are informational warnings rather than findings; a directory that used to be a repository remains an actionable stale-repository finding. Every diagnostic identifies a severity, affected repository or Task/Issue when applicable, cause, and safe next action. It also re-checks each applied `[[profiles]]` record and reports `PROFILE_UNMET` when the profile's required capabilities or minimum contract exceed this binary. `doctor --fix` removes stale temp files and re-attaches an orphan worktree; legacy Board layouts are converted with `orbit migrate`. Task-level checks run when a Board is resolved.
 
 When the Board has a configured GitHub provider, `doctor` also reports GitHub authentication and required scopes, linked-repository access, and (in full mode) organization Issue Field configuration problems. These checks are read-only and are collected alongside Board diagnostics; a GitHub problem does not prevent task or Board integrity checks from running. Board diagnostics are likewise read-only unless an explicit deterministic `--fix` is requested; doctor never resolves semantic conflicts, merges or deletes Tasks, detaches repositories, closes Issues, or overwrites user-authored agent files.
 
@@ -784,7 +830,7 @@ Every error carries the RFC 9457-style problem fields alongside the legacy ones:
 
 `config.toml` carries `contract = "<semver>"`: the contract version the Board was written for. Every Orbit binary speaks one contract (`orbit_tracker::contract::VERSION`, currently `1.0.0`). `Config::validate` — the choke point every Board open passes through — refuses a Board whose contract is newer than the binary's with `CONTRACT_VERSION_UNSUPPORTED`; an older or equal contract is accepted, and a missing field reads as the current contract.
 
-`orbit capabilities [--json]` is the handshake (ADR 0022). It reads `config.toml` leniently — without validation — so it still answers on a Board every other command refuses. `data` reports `orbit_version`, the binary's `contract`, `board.contract` and `board.compatible`, the enabled optional `modules` (`remote` with its projects/trackers and `auto_push`, `workspace` with its include/exclude/detached lists; the legacy `[github]` section reports as the `remote` module's `github_adapter`), and `workflow`: `source` (`template` or `custom`), `template` when templated, `initial`, every `statuses` entry (`name`, `category`, `ready`), and every `transitions` entry (`name`, `from`, `to`, `resolution`). `workflow` is `null` when the Board's `[workflow]` section does not resolve on this binary. The MCP tool `capabilities` exposes the same command.
+`orbit capabilities [--json]` is the handshake (ADR 0022). It reads `config.toml` leniently — without validation — so it still answers on a Board every other command refuses. `data` reports `orbit_version`, the binary's `contract`, `capabilities` (the named features this binary provides — the vocabulary Profiles negotiate `requires`/`optional` against), `board.contract` and `board.compatible`, the enabled optional `modules` (`remote` with its projects/trackers and `auto_push`, `workspace` with its include/exclude/detached lists; the legacy `[github]` section reports as the `remote` module's `github_adapter`), the Board's applied `profiles` (the `[[profiles]]` record names), and `workflow`: `source` (`template` or `custom`), `template` when templated, `initial`, every `statuses` entry (`name`, `category`, `ready`), and every `transitions` entry (`name`, `from`, `to`, `resolution`). `workflow` is `null` when the Board's `[workflow]` section does not resolve on this binary. The MCP tool `capabilities` exposes the same command.
 
 ### Batch
 

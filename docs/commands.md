@@ -302,13 +302,30 @@ and cached agent IDs stop resolving. `--json` reports `current`, `target`,
 `claims`, `collisions`, `dry_run`, `applied`, and `commit`. `slug show` reports
 `slug`, `prefix`, `tasks`, `subtasks`, and `comment_files`.
 
-### `orbit setup` — adjust one harness
+### `orbit setup` — adjust one harness or apply a profile
 
 Installs, checks, or removes a harness integration without touching the Board.
 `--scope project` (the default) writes repository-level files; `--scope user`
 writes the harness's user-level locations. `--print`, `--check`, and `--remove`
 operate on the selected scope. Generated configs record the Orbit binary but not
 the Board path, so moving the Orbit folder does not stale them.
+
+A target that is not an agent integration resolves as a **profile** — a
+declarative TOML document (`profiles/<name>.toml` shipped with Orbit,
+`<board>/profiles/`, `<orbit>/profiles/`, `<repo>/profiles/`,
+`~/.config/orbit/profiles/`, `./profiles/`, or an explicit `./name.toml` path)
+that maps a plugin's vocabulary onto the Board: `requires`/`optional`
+capabilities, a minimum `contract`, a `[workflow]` template or custom
+definition, `holds` merged into `non_ready_labels`, `[roles]`, `[vocabulary]`
+maps, and optional `[board]` overrides. `orbit setup <plugin>` negotiates the
+requirements first — an unmet profile fails with `PROFILE_UNMET` naming the
+missing capabilities — then applies the profile to `config.toml` idempotently
+and records it under `[[profiles]]` for `doctor` and `capabilities`. A profile
+sharing an integration's name (for example `mattpocock`) applies alongside the
+harness files. `--check` reports `installed`/`stale`/`unmet`; `--print` previews
+the resulting `config.toml`; `--remove` refuses a profile-only target — profiles
+are declarative, so remove the `[[profiles]]` record and its settings by hand
+or apply a different profile.
 
 User scope writes Claude memory to `~/.claude/CLAUDE.md`, its hook to
 `~/.claude/settings.json`, and MCP to `~/.claude.json`; Cursor rules, the shared
@@ -339,6 +356,9 @@ orbit setup all --check        # installed / missing / stale
 orbit setup all --portable-mcp # MCP command `orbit`; editor PATH must find it
 orbit setup cursor --print     # preview
 orbit setup all --remove       # remove only Orbit-managed content
+orbit setup acme               # apply the acme profile to the Board
+orbit setup acme --check       # installed / stale / unmet
+orbit setup acme --print       # preview the resulting config.toml
 ```
 
 **Core options**
@@ -348,7 +368,7 @@ orbit setup all --remove       # remove only Orbit-managed content
 | `--scope project` | Default. Write instruction and MCP files for this repository. | `orbit setup claude` |
 | `--scope user` | One machine-wide integration; writes the harness's user-level locations. | `orbit setup cursor --scope user` |
 | `--check` | CI or a repair check: report installed, missing, or stale and exit non-zero on drift. | `orbit setup all --check` |
-| `--remove` | Remove only Orbit-managed files, sections, hooks, and MCP entries. | `orbit setup all --remove` |
+| `--remove` | Remove only Orbit-managed files, sections, hooks, and MCP entries. Refuses a profile-only target; a profile riding along with a harness removal stays applied. | `orbit setup all --remove` |
 | `--no-mcp` | Write instruction and skill files without MCP entries. | `orbit setup codex --no-mcp` |
 | `--hooks` | Add the Claude or Devin SessionStart hook. | `orbit setup claude --hooks` |
 | `--portable-mcp` | Write bare `orbit` in MCP configs; the editor's PATH must resolve it. | `orbit setup opencode --portable-mcp` |
@@ -1109,7 +1129,7 @@ orbit --dir <board> migrate model --apply   # migrate a specific Board directory
 
 ### `orbit doctor` — health check
 
-Reports the discovery trace, legacy layout, half-moved Board (`AMBIGUOUS_BOARD`), orphan worktree (`ORPHAN_WORKTREE`), storage mismatch (`STORAGE_MISMATCH`), and agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`). After `orbit migrate`, run `doctor` from the Board anchor or a member repository to verify that the Board resolves and its migrated graph is healthy. Running without a Board is not itself a failure. When a Board resolves, it also checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, a wrong checked-out branch, and a Claude hook that cannot find the running Orbit binary on `PATH`. Exits `1` when it finds an issue.
+Reports the discovery trace, legacy layout, half-moved Board (`AMBIGUOUS_BOARD`), orphan worktree (`ORPHAN_WORKTREE`), storage mismatch (`STORAGE_MISMATCH`), agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`), and applied profiles whose requirements this binary does not meet (`PROFILE_UNMET`). After `orbit migrate`, run `doctor` from the Board anchor or a member repository to verify that the Board resolves and its migrated graph is healthy. Running without a Board is not itself a failure. When a Board resolves, it also checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, a wrong checked-out branch, and a Claude hook that cannot find the running Orbit binary on `PATH`. Exits `1` when it finds an issue.
 
 From a Board anchor or any member repository, the report identifies the resolved Board, missing or malformed layout, undiscovered/unreachable/stale member repositories, interrupted migration state, duplicate GitHub identities, orphaned links, field-level sync conflicts, and missing or conflicting managed agent setup. Plain non-Git member directories such as `docs/` or `notes/` are informational warnings and do not make the Board unhealthy; a directory that used to be a repository is reported as a stale repository instead. Each finding carries a severity, affected repository/Task/Issue, cause, and a safe next action.
 
@@ -1141,10 +1161,12 @@ orbit sync
 
 Prints what this Board and this `orbit` binary share: the contract version the
 binary speaks, the `contract` semver the Board declares in `config.toml`,
-whether they are compatible, the optional modules the Board has enabled
-(`remote` with its projects and `auto_push`, `workspace` scoping), and the
-Board's workflow — template or custom, initial status, statuses with
-categories, and named transitions.
+whether they are compatible, the `capabilities` this binary provides (the
+vocabulary Profiles negotiate `requires`/`optional` against), the optional
+modules the Board has enabled (`remote` with its projects and `auto_push`,
+`workspace` scoping), the Board's applied `profiles`, and the Board's workflow
+— template or custom, initial status, statuses with categories, and named
+transitions.
 
 Every other Board command refuses a Board whose contract is newer than the
 binary's with `CONTRACT_VERSION_UNSUPPORTED`; `capabilities` reads
@@ -1504,6 +1526,7 @@ orbit sync              # commit anything left uncommitted
 | `ABSOLUTE_BOARD_PATH` | A managed agent config still records a Board path. Re-run `orbit setup` to rewrite it path-free. |
 | `LOCKED` | Retryable: another writer holds the lock. Retry after a short backoff. |
 | `CONTRACT_VERSION_UNSUPPORTED` | The Board's `contract` in `config.toml` is newer than this `orbit` supports. Upgrade `orbit`; `orbit capabilities` still reports the Board's contract and workflow. |
+| `PROFILE_UNMET` | A Profile's `requires` capabilities or minimum `contract` exceed this `orbit`. Upgrade `orbit` or apply a profile whose requirements are met; `details` names what is missing. `orbit doctor` reports the same code for an applied `[[profiles]]` record. |
 
 ## Command reference
 
@@ -1551,7 +1574,7 @@ orbit sync              # commit anything left uncommitted
 | `orbit delete` | `delete` | write, destructive |
 | `orbit prime` | `prime` | read-only, idempotent |
 | `orbit export` | `export` | read-only, idempotent |
-| `orbit setup` | — | — (writes agent harness configuration; not a Board operation) |
+| `orbit setup` | — | — (writes agent harness configuration and Board config.toml profiles; not a Board operation) |
 | `orbit mcp` | — | — (is the MCP server itself) |
 | `orbit doctor` | `doctor` | write, idempotent |
 | `orbit sync` | `sync` | write, idempotent |
@@ -1580,6 +1603,8 @@ orbit sync              # commit anything left uncommitted
 | `orbit triage apply` | `triage_apply` | write |
 
 <!-- END GENERATED COMMANDS -->
+
+
 `orbit schema [COMMAND]` prints the same information as JSON;
 `orbit schema --docs` regenerates this section. Meta commands (`init`,
 `setup`, `mcp`, `schema`) are exempt from MCP exposure because they configure

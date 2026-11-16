@@ -1509,8 +1509,8 @@ pub static COMMANDS: &[CommandEntry] = &[
     cmd(&["export"], "Export a JSON snapshot.", "export"),
     exempt(
         &["setup"],
-        "Install, check, or remove one agent integration.",
-        "writes agent harness configuration; not a Board operation",
+        "Install, check, or remove one agent integration, or apply a profile.",
+        "writes agent harness configuration and Board config.toml profiles; not a Board operation",
     ),
     exempt(
         &["mcp"],

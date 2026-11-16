@@ -1042,12 +1042,27 @@ Examples:
   orbit export --json | jq '.data | {schema_version, tasks: (.tasks | length)}'";
 
 pub const SETUP_LONG: &str = "\
-Installs or repairs one harness integration. Each client writes its instruction
+Installs or repairs one agent integration, or applies a profile. Each client
+writes its instruction
 file, skill, and MCP configuration as appropriate; Claude and Devin can also
 receive the SessionStart hook with --hooks. Re-running is safe: only managed
 sections are
 rewritten. A hand-written docs/agents/issue-tracker.md without the marker is
 reported as skipped and left alone.
+
+Any target that is not an agent integration (claude, cursor, codex, opencode,
+devin, mattpocock, all) resolves as a profile: `profiles/<name>.toml` shipped
+with Orbit, `<board>/profiles/`, `<orbit>/profiles/`, `<repo>/profiles/`,
+`~/.config/orbit/profiles/`, `./profiles/`, or an explicit path
+(`orbit setup ./acme.toml`). A profile declares the capabilities it requires,
+a workflow template or custom workflow, hold and role names, and vocabulary
+mappings; `orbit setup <plugin>` negotiates the requirements — failing with
+PROFILE_UNMET when this binary lacks them — then applies the profile to the
+Board's config.toml idempotently and records it under `[[profiles]]` so
+`orbit doctor` and `orbit capabilities` keep reporting it. A profile found
+for a known integration name (for example `mattpocock`) applies alongside the
+harness files. Profiles cannot be removed with --remove; edit config.toml or
+apply a different profile.
 
 --scope project (the default) writes repository-level files. --scope user writes
 the same managed content under the user's home: Claude memory, settings, and
@@ -1058,7 +1073,8 @@ tracker guide. --print, --check, and --remove all operate on the selected scope.
 Generated configs never record the Board path, so moving the Orbit folder does
 not stale them.
 
-Use init for first-time setup. setup is for adjusting one harness later, checking
+Use init for first-time setup. setup is for adjusting one integration or
+applying a profile later, checking
 drift in CI with --check (non-zero when missing or stale), or removing Orbit's
 content with --remove.
 
@@ -1085,7 +1101,13 @@ Examples:
   orbit setup cursor --print
 
   # Remove only Orbit-managed content
-  orbit setup all --remove";
+  orbit setup all --remove
+
+  # Apply the acme profile to the Board (idempotent)
+  orbit setup acme
+
+  # Check whether the profile is applied and current
+  orbit setup acme --check";
 
 pub const MCP_LONG: &str = "\
 Runs the Model Context Protocol server over stdio. Editors start this process from

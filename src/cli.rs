@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::help;
-use crate::setup::{SetupClient, SetupScope};
+use crate::setup::SetupScope;
 use crate::task::IdentityKind;
 
 #[derive(Debug, Parser)]
@@ -1138,9 +1138,14 @@ pub struct PrimeArgs {
 
 #[derive(Debug, Args)]
 pub struct SetupArgs {
-    /// Which agent integration to install.
-    #[arg(value_enum)]
-    pub client: SetupClient,
+    /// Which agent integration or profile to install.
+    ///
+    /// Agent integrations: claude, cursor, codex, opencode, devin,
+    /// mattpocock, all. Any other name is resolved as a profile: a
+    /// `profiles/<name>.toml` shipped with Orbit, in the Board's Orbit
+    /// folder, in the repository, or in `~/.config/orbit/profiles/`.
+    #[arg(value_name = "TARGET")]
+    pub client: String,
 
     /// Where to write the integration: the repository or the user's home.
     #[arg(long, value_enum, default_value_t = SetupScope::Project)]

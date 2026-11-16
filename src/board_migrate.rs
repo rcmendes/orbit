@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::board::{self, Board, Config, Discovery};
-use crate::cli::BoardMigrateArgs as MigrateArgs;
+use crate::cli::MigrateArgs;
 use crate::error::{OrbitError, Result, code};
 use crate::git::CommitOutcome;
 use crate::output::CommandOutput;

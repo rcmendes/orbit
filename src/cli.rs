@@ -54,8 +54,13 @@ pub enum Command {
     /// to `remote:`, `[github]` to remote project entries, `repo:*` labels to
     /// the `repository` field, and seeding `board.components` — all in one
     /// commit.
+    ///
+    /// The `model` subcommand instead converts a pre-ADR-0022 Board's Tasks
+    /// to the Issue model: workflow statuses, named priorities, typed links,
+    /// properties, components/repository fields, Issue types, and project
+    /// keys — also previewed by default and committed once with --apply.
     #[command(long_about = help::BOARD_MIGRATE_LONG, after_long_help = help::BOARD_MIGRATE_EXAMPLES)]
-    Migrate(BoardMigrateArgs),
+    Migrate(MigrateArgs),
 
     /// Create a task.
     #[command(long_about = help::ADD_LONG, after_long_help = help::ADD_EXAMPLES)]
@@ -321,7 +326,35 @@ pub enum SlugCommand {
 }
 
 #[derive(Debug, Args)]
-pub struct BoardMigrateArgs {
+pub struct MigrateArgs {
+    /// Apply the migration. Without this flag the command only previews.
+    #[arg(long, conflicts_with = "dry_run")]
+    pub apply: bool,
+
+    /// Preview the migration without writing anything (the default).
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Model conversions for Boards written before the Issue model.
+    #[command(subcommand)]
+    pub command: Option<MigrateCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MigrateCommand {
+    /// Rewrite a pre-ADR-0022 Board's Tasks to the Issue model: workflow
+    /// statuses, named priorities, typed links, properties,
+    /// components/repository fields, Issue types, and project keys.
+    ///
+    /// Previews by default; --apply rewrites config.toml, every Task file,
+    /// and keys.toml in a single validated commit. Run `orbit migrate`
+    /// first when the Board still uses a pre-ADR-0019 layout.
+    #[command(long_about = help::MODEL_MIGRATE_LONG, after_long_help = help::MODEL_MIGRATE_EXAMPLES)]
+    Model(ModelMigrateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ModelMigrateArgs {
     /// Apply the migration. Without this flag the command only previews.
     #[arg(long, conflicts_with = "dry_run")]
     pub apply: bool,

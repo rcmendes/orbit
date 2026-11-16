@@ -66,6 +66,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Attach a tool's own data to a Task | `orbit property set/remove` |
 | Apply many changes at once, all or none | `orbit batch` |
 | Read the board | `orbit list`, `orbit show`, `orbit tree`, `orbit prime` |
+| Follow what changed on the Board | `orbit changes`, `orbit history` |
 | Inspect the command surface | `orbit schema` |
 | Collect or archive the board | `orbit export` |
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
@@ -833,6 +834,36 @@ orbit export --json | jq '.data.board'
 The snapshot is the standard envelope with `data.schema_version`, `data.board`,
 and `data.tasks`; each task has the same shape as `show --json`, plus comments.
 
+### `orbit changes` and `orbit history` — the change feed
+
+`orbit changes` lists the named events derived from the Board's Git history —
+`issue.created`, `issue.transitioned`, `issue.assigned`, `issue.checkpointed`,
+`issue.commented`, `issue.updated`, `issue.deleted`, `board.changed` — oldest
+first. Each event carries its kind, the Issue it touched, the actor, a trace id
+(the producing commit), and the commit. The response's `cursor` is the Board
+head commit: pass it back as `--since` to fetch only newer events. A cursor
+that is not an ancestor of the head is rejected rather than skipping or
+repeating events. `--type` filters by kind (repeatable) and `--limit` keeps
+the newest events.
+
+`orbit history <id>` shows one Issue's timeline, matched by Task ID or project
+key; it keeps working after the Issue is deleted because the timeline comes
+from Git, not the live Board.
+
+**Good fit:** polling for Board changes, auditing who did what, or reconstructing
+an Issue's story without reading Git by hand.
+
+```bash
+orbit changes --json
+orbit changes --since 4f2c9ab --type issue.transitioned --json
+orbit history orb-a7b2c9 --json
+orbit history ORB-12 --limit 10
+```
+
+`changes --json` returns `data.events`, `data.cursor`, and `data.count`;
+`history --json` returns `data.issue`, `data.events`, and `data.count`. Both
+are exposed as the read-only, idempotent MCP tools `changes` and `history`.
+
 ## Claim and finish work
 
 ### `orbit claim` — take a specific task
@@ -1578,6 +1609,8 @@ orbit sync              # commit anything left uncommitted
 | `orbit delete` | `delete` | write, destructive |
 | `orbit prime` | `prime` | read-only, idempotent |
 | `orbit export` | `export` | read-only, idempotent |
+| `orbit changes` | `changes` | read-only, idempotent |
+| `orbit history` | `history` | read-only, idempotent |
 | `orbit setup` | — | — (writes agent harness configuration and Board config.toml profiles; not a Board operation) |
 | `orbit mcp` | — | — (is the MCP server itself) |
 | `orbit doctor` | `doctor` | write, idempotent |

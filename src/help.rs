@@ -1041,6 +1041,44 @@ Examples:
   # Inspect the schema version and task count
   orbit export --json | jq '.data | {schema_version, tasks: (.tasks | length)}'";
 
+pub const CHANGES_LONG: &str = "\
+Lists the named change events derived from the Board's Git history, oldest
+first: issue.created, issue.transitioned, issue.assigned, issue.commented,
+issue.updated, issue.deleted, board.changed, and more. Each event carries its
+kind, the Issue it touched, the actor, a trace id (the producing commit), and
+the commit it came from.
+
+The response's `cursor` is the Board head commit. Pass it back as --since to
+fetch only events from newer commits; a cursor that is not an ancestor of the
+Board head is rejected rather than silently skipping or repeating events.
+--type filters by event kind (repeatable) and --limit keeps the newest events
+when the feed is longer than the limit.";
+
+pub const CHANGES_EXAMPLES: &str = "\
+Examples:
+  # Everything that happened on the Board, oldest first
+  orbit changes --json
+
+  # Only what changed since the last cursor
+  orbit changes --since 4f2c9ab --json
+
+  # Only status transitions, capped at the 20 newest
+  orbit changes --type issue.transitioned --limit 20 --json";
+
+pub const HISTORY_LONG: &str = "\
+Shows one Issue's event timeline from the Board's Git history: creation,
+status transitions, assignment, comments, checkpoints, updates, and deletion,
+oldest first. Accepts a Task ID or project key and keeps working for deleted
+Issues because the timeline comes from Git, not the live Board.";
+
+pub const HISTORY_EXAMPLES: &str = "\
+Examples:
+  # The full timeline of one Issue
+  orbit history orb-a7b2c9 --json
+
+  # A project key works too; cap at the 10 newest events
+  orbit history ORB-12 --limit 10 --json";
+
 pub const SETUP_LONG: &str = "\
 Installs or repairs one agent integration, or applies a profile. Each client
 writes its instruction
@@ -1111,9 +1149,9 @@ Examples:
 
 pub const MCP_LONG: &str = "\
 Runs the Model Context Protocol server over stdio. Editors start this process from
-their MCP configuration, so it is rarely run by hand. It exposes 15 tools (ready,
-list, get, create, update, claim, release, heartbeat, checkpoint, finish, link,
-delete, label, comment, property) and the orbit://tasks/{id} Markdown resource,
+their MCP configuration, so it is rarely run by hand. It exposes every command
+`orbit schema` lists as an MCP tool (the full set is generated from the command
+registry) plus the orbit://tasks/{id} Markdown resource,
 reusing the CLI's lock, atomic writes, and auto-commit. `create` accepts `parent`
 to make a SubTask and `type`, `component`, and `external_id` to set fields;
 `update` accepts `type`, `component`, `repository`, and `external_id`; `checkpoint`

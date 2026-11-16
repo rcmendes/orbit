@@ -12,6 +12,7 @@ pub mod concurrency;
 pub mod contract;
 pub mod doctor;
 pub mod error;
+pub mod feed;
 pub mod git;
 pub mod github;
 pub mod graph;

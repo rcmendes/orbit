@@ -122,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 53);
+    assert_eq!(names.len(), 55);
     for expected in [
         "ready",
         "list",
@@ -176,6 +176,8 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "triage_context",
         "triage_review",
         "triage_apply",
+        "changes",
+        "history",
     ] {
         assert!(names.contains(&expected), "{expected}");
     }

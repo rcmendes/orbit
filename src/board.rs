@@ -1071,10 +1071,35 @@ impl Board {
     }
 
     pub fn commit(&self, message: &str, force: bool) -> Result<CommitOutcome> {
+        self.commit_as(message, force, None)
+    }
+
+    /// [`Board::commit`] that records `actor` in an `Orbit-Actor` commit
+    /// trailer so the change feed (`orbit changes`, `orbit history`) can
+    /// attribute the events the commit produces. `None` or a blank actor
+    /// records no trailer.
+    pub fn commit_as(
+        &self,
+        message: &str,
+        force: bool,
+        actor: Option<&str>,
+    ) -> Result<CommitOutcome> {
         if !force && !self.config.board.auto_commit {
             return Ok(CommitOutcome::Skipped);
         }
-        match git::commit(&self.root, message) {
+        let actor = actor
+            .map(str::trim)
+            .filter(|actor| !actor.is_empty() && !actor.contains('\n'));
+        let trailers: Vec<String> = actor
+            .map(|actor| format!("{}: {actor}", crate::feed::ACTOR_TRAILER))
+            .into_iter()
+            .collect();
+        let outcome = if trailers.is_empty() {
+            git::commit(&self.root, message)
+        } else {
+            git::commit_with_trailers(&self.root, message, &trailers)
+        };
+        match outcome {
             Ok(outcome) => Ok(outcome),
             Err(error) if !force => {
                 self.commit_failed.set(true);

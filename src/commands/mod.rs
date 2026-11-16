@@ -1,6 +1,7 @@
 mod batch;
 mod board;
 mod crud;
+mod feed;
 mod init;
 mod lifecycle;
 mod property;
@@ -97,6 +98,8 @@ fn version_target(command: &Command) -> Result<VersionTarget> {
             Command::Tree(_) => "orbit tree",
             Command::Prime(_) => "orbit prime",
             Command::Export => "orbit export",
+            Command::Changes(_) => "orbit changes",
+            Command::History(_) => "orbit history",
             Command::Setup(_) => "orbit setup",
             Command::Mcp => "orbit mcp",
             Command::Doctor(_) => "orbit doctor",
@@ -323,6 +326,12 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         }),
         Command::Prime(args) => prime_with_host_sync(dir.as_deref(), args, &concurrency),
         Command::Export => with_board(dir.as_deref(), false, &concurrency, cmd_export),
+        Command::Changes(args) => with_board(dir.as_deref(), false, &concurrency, |board| {
+            feed::cmd_changes(board, args)
+        }),
+        Command::History(args) => with_board(dir.as_deref(), false, &concurrency, |board| {
+            feed::cmd_history(board, args)
+        }),
         Command::Setup(args) => {
             concurrency.reject_idempotency("orbit setup")?;
             crate::setup::run(args, dir.as_deref())

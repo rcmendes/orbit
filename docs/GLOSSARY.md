@@ -322,6 +322,22 @@ A named feature an Orbit binary provides — `workflow`, `issue-types`,
 `orbit capabilities` and negotiated by Profiles through `requires`/`optional`.
 _Avoid_: Feature flag, module (modules are Board-enabled subsystems)
 
+**Change feed**:
+The named events (`issue.created`, `issue.transitioned`, `issue.commented`,
+`board.changed`, ...) that `orbit changes` and `orbit history` derive by
+replaying the Board folder's Git history, oldest commit first. Every meaningful
+Board mutation lands as one `orbit: <verb> <id>` commit, so the feed survives
+Board-host merges across clones. `orbit changes --since <cursor>` returns only
+events from commits newer than the cursor.
+_Avoid_: Audit log, webhook stream, event store
+
+**Board event**:
+One entry of the Change feed: a kind, the Issue it touched (when any), the
+actor, a trace id (the producing commit, shared by every event that commit
+emitted), the commit itself, and kind-specific detail such as a status
+transition's `from`/`to`.
+_Avoid_: Notification, log line
+
 ## Compatibility vocabulary
 
 Beads, Linear, and Matt Pocock's skills call the unit an **Issue**, a child a

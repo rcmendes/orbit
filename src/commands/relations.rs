@@ -120,7 +120,12 @@ fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output:
         task.touch(now);
         task.clone()
     };
-    let warning = crate::mutation::save(board, &task, &format!("orbit: comment {id}"))?;
+    let warning = crate::mutation::save_as(
+        board,
+        &task,
+        &format!("orbit: comment {id}"),
+        Some(author.as_str()),
+    )?;
     let mut output = crate::output::CommandOutput::new(
         json!({
             "id": id,

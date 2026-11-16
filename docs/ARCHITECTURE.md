@@ -147,7 +147,7 @@ flowchart LR
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs`, `src/registry.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, expose the same operations over MCP, and describe every public command once in the registry that generates the MCP tools, `orbit schema`, and the `docs/commands.md` reference. |
 | Application | `src/commands/`, `src/migrate.rs`, `src/board_migrate.rs`, `src/repository.rs`, `src/board_host.rs`, `src/board_sync.rs`, `src/health.rs`, `src/github/`, `src/remote/`, `src/workspace.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. `src/remote/` owns the provider-neutral Remote Tracker port — sync engine, baselines, auto-push, relationships, link persistence, and the Remote Issue catalog seam — while `src/github/` is the built-in GitHub adapter. `src/repository.rs` owns Board membership (discovered child Repositories plus explicit `[repositories]` entries) and the rebuildable inventory cache; `src/board_host.rs`/`src/board_sync.rs` own host configuration and the Orbit-aware merge used by `orbit board sync`. `src/workspace.rs` is a compatibility shim that still stores the `[workspace]` config block and the Board-anchor lookup. `doctor` adds read-only repository/cache, migration, link, and managed-agent diagnostics. Prefix migration rewrites one Board's IDs; `orbit migrate` converts a legacy layout and `init` merges child Boards on an anchor. |
-| Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/workflow.rs`, `src/comment.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, the Board-defined Workflow (statuses, categories, transitions, templates), lifecycle transition rules, dependency validation, readiness, counts, and comments. |
+| Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/workflow.rs`, `src/comment.rs`, `src/feed.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, the Board-defined Workflow (statuses, categories, transitions, templates), lifecycle transition rules, dependency validation, readiness, counts, comments, and the Change feed — named events `orbit changes`/`orbit history` derive by replaying Board Git history with a monotonic commit cursor. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Execution | `src/mutation.rs`, `src/remote/execution.rs` | Board mutation execution (lifecycle, terminal, reopen, shared Task persistence and commit warnings) and provider-neutral Remote Tracker execution (`synchronize`, `create_and_link`, `apply_plan`) behind a resolved `RemoteAdapter`; both run inside the caller's Board access scope. |
 | Contract | `src/error.rs`, `src/contract.rs`, `src/output.rs`, `src/capabilities.rs`, `src/concurrency.rs` | Stable error codes rendered as RFC 9457-style problem fields (`type`, `title`, `detail`, `retryable`, `hint`), the Board contract semver and its compatibility gate, the `orbit capabilities` handshake that reports contract version, modules, and workflow — including on Boards the gate refuses — and the shared optimistic-concurrency (`--if-version` against `updated_at`) and write-idempotency (`--idempotency-key` records under the Board cache) checks every mutation runs inside the exclusive lock. |
@@ -470,6 +470,8 @@ flowchart TB
         READY["ready"]
         PRIME["prime"]
         EXPORT["export"]
+        CHANGES["changes"]
+        HISTORY["history"]
     end
 
     subgraph Execute["4. Claim and resolve"]
@@ -507,6 +509,8 @@ flowchart TB
     COMMENT -.->|annotates| SHOW
     PRIME -.->|prints context| READY
     EXPORT -.->|snapshots| READY
+    CHANGES -.->|reads git history| EXPORT
+    HISTORY -.->|reads git history| SHOW
     READY -->|lists candidates| CLAIM
     CLAIM -->|active status and lease| HEART
     HEART -->|extends lease| DONE
@@ -527,7 +531,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | --- | --- | --- |
 | Bootstrap | `init`, `migrate`, `setup`, `repo add`/`remove` | Create or convert the Board; optionally wire harness files and MCP entries, or register a member Repository on a multi-Repository Board. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
-| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `remote status`, `remote create`/`sync` preview, `repo list` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot. Sync and create previews do not write; only `--apply` changes Board state or GitHub. |
+| Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `changes`, `history`, `remote status`, `remote create`/`sync` preview, `repo list` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; `changes` pages the Change feed with a commit cursor and `history` replays one Issue's timeline from Git history. Sync and create previews do not write; only `--apply` changes Board state or GitHub. |
 | Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen`, `transition` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
 | Maintenance | `doctor`, `sync`, `remote`, `repo`, `board`, `slug`, `mcp` | Check Board and configured Remote Tracker health, commit heartbeat-only changes, explicitly create or synchronize Remote Issues or push mapped changes when auto-push is enabled, manage member Repositories and the rebuildable repository catalog, configure and synchronize the Board host, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 

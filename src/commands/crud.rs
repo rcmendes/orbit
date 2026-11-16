@@ -59,7 +59,11 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
         }
         None => format!("created {display}  {priority}  {type_prefix}{title}"),
     };
-    let warning = crate::mutation::commit(board, &format!("orbit: add {id}"))?;
+    let warning = crate::mutation::commit_as(
+        board,
+        &format!("orbit: add {id}"),
+        task.front.reporter.as_deref(),
+    )?;
     Ok(task_output(&graph, &task, human, warning).with_meta(json!({ "matched": false })))
 }
 
@@ -162,7 +166,8 @@ pub(super) fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::outpu
         &mut cleaned_ids,
     )?;
 
-    let warning = crate::mutation::commit(board, &format!("orbit: delete {id}"))?;
+    let warning =
+        crate::mutation::commit_as(board, &format!("orbit: delete {id}"), caller.as_deref())?;
     let subtasks_deleted = deleted_ids.len().saturating_sub(1);
     let human = if subtasks_deleted == 0 {
         format!("deleted {id}")

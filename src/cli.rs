@@ -180,6 +180,18 @@ pub enum Command {
     #[command(long_about = help::EXPORT_LONG, after_long_help = help::EXPORT_EXAMPLES)]
     Export,
 
+    /// List named change events derived from Board Git history.
+    ///
+    /// Events come oldest first; the response's `cursor` is the Board head
+    /// commit — pass it back as `--since` to fetch only newer events. Each
+    /// event carries `actor` and `trace_id` (the producing commit).
+    #[command(long_about = help::CHANGES_LONG, after_long_help = help::CHANGES_EXAMPLES)]
+    Changes(ChangesArgs),
+
+    /// Show one Issue's event timeline from Board Git history.
+    #[command(long_about = help::HISTORY_LONG, after_long_help = help::HISTORY_EXAMPLES)]
+    History(HistoryArgs),
+
     /// Install, check, or remove one agent integration.
     #[command(long_about = help::SETUP_LONG, after_long_help = help::SETUP_EXAMPLES)]
     Setup(SetupArgs),
@@ -1147,6 +1159,35 @@ pub struct PrimeArgs {
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ChangesArgs {
+    /// Cursor commit from a previous `orbit changes` response; only events
+    /// from newer commits are returned.
+    #[arg(long, value_name = "CURSOR")]
+    pub since: Option<String>,
+
+    /// Only events of these kinds, for example `issue.transitioned` or
+    /// `issue.commented`. Repeatable; matches exactly.
+    #[arg(long = "type", value_name = "KIND", action = clap::ArgAction::Append)]
+    pub kinds: Vec<String>,
+
+    /// Maximum events to return. Keeps the newest events when the feed is
+    /// longer than the limit.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+pub struct HistoryArgs {
+    /// Issue ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// Maximum events to return. Keeps the newest events when the timeline is
+    /// longer than the limit.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Args)]

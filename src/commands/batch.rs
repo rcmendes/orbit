@@ -697,6 +697,9 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
             .iter()
             .all(|operation| matches!(operation, Operation::Heartbeat { .. }));
 
+    // The feed's actor for the whole Batch commit: the default `--by`
+    // identity (per-operation `by` still wins inside each operation).
+    let batch_actor = optional_agent(args.by.clone());
     let mut run = Applier {
         board,
         graph,
@@ -744,7 +747,7 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
         // before the commit must publish the files the first run left behind.
         if !heartbeat_only {
             let message = format!("orbit: batch {} operations", results.len());
-            match board.commit(&message, false)? {
+            match board.commit_as(&message, false, batch_actor.as_deref())? {
                 crate::git::CommitOutcome::Committed => committed = true,
                 outcome => warnings.extend(crate::mutation::commit_warning(outcome)),
             }

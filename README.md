@@ -46,6 +46,7 @@ claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 - [Triage, labels, and comments](#triage-labels-and-comments)
 - [Two front doors: JSON CLI and MCP](#two-front-doors-json-cli-and-mcp)
 - [Export the board](#export-the-board)
+- [Follow the change feed](#follow-the-change-feed)
 - [Agent setup](#agent-setup)
 - [Command map](#command-map)
 - [Recovery and maintenance](#recovery-and-maintenance)
@@ -850,6 +851,18 @@ orbit export --json | jq '.data.tasks[] | select(.kind == "subtask")'
 
 The snapshot is ordered by task ID, carries `schema_version` (currently `3`), and contains no timestamp or machine-local paths. The same board state produces the same data, which makes export suitable for a knowledge base, an archive, or a diff between two points in time. Pin `schema_version` in the collector.
 
+## Follow the change feed
+
+Every meaningful Board mutation lands as one commit on the Board's `orbit` branch, so `orbit changes` derives a named event feed — `issue.created`, `issue.transitioned`, `issue.commented`, `board.changed`, and more — by replaying that history, oldest first. Each event carries its actor and a trace id (the producing commit).
+
+```bash
+orbit changes --json                                  # everything, oldest first
+orbit changes --since <cursor> --json                 # only newer events
+orbit history orb-a7b2c9 --json                       # one Issue's timeline
+```
+
+`changes` returns a `cursor` (the Board head commit) to feed back as `--since` on the next poll; `history` accepts a Task ID or project key and keeps resolving after the Issue is deleted. Both are read-only MCP tools too.
+
 ## Agent setup
 
 `orbit init` creates a Board at `./.orbit/board` inside a Git repository or at `<anchor>/.orbit/board` outside one. It asks once, in a terminal, whether to wire the harnesses it detects; without a terminal it writes no agent files and prints the next step. On the first MCP setup it also asks whether generated configs should use an absolute path (the default) or the portable `orbit` command, which requires Orbit on the editor's `PATH`. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
@@ -917,7 +930,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | --- | --- |
 | **Set up** | `init` · `repo` · `setup` |
 | **Author** | `add` · `update` · `depend` · `undepend` · `link` · `label` · `comment` · `delete` |
-| **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `remote status` |
+| **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `changes` · `history` · `remote status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
 | **Maintain** | `doctor` · `sync` · `board` · `migrate` · `remote` · `slug` · `mcp` |
 

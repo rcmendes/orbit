@@ -481,6 +481,57 @@ pub static TOOLS: &[Tool] = &[
         true,
         false,
     ),
+    tool(
+        "changes",
+        "List named change events derived from Board Git history, oldest first, with a resumable cursor.",
+        &["changes"],
+        &[
+            long(
+                "since",
+                "Cursor commit from a previous changes call; only newer events return.",
+                "--since",
+            ),
+            repeat(
+                "kinds",
+                "Only events of these kinds, for example issue.transitioned or issue.commented.",
+                "--type",
+            ),
+            arg(
+                "limit",
+                "Maximum events to return; keeps the newest events when the feed is longer.",
+                JsonType::Int,
+                &[],
+                Some(CliTarget::Long("--limit")),
+                false,
+            ),
+        ],
+        false,
+        true,
+        false,
+        true,
+        false,
+    ),
+    tool(
+        "history",
+        "Show one Issue's event timeline from Board Git history, oldest first.",
+        &["history"],
+        &[
+            pos("id", ID_DESC),
+            arg(
+                "limit",
+                "Maximum events to return; keeps the newest events when the timeline is longer.",
+                JsonType::Int,
+                &[],
+                Some(CliTarget::Long("--limit")),
+                false,
+            ),
+        ],
+        false,
+        true,
+        false,
+        true,
+        false,
+    ),
     // --- Writes ----------------------------------------------------------------
     tool(
         "create",
@@ -1564,6 +1615,12 @@ pub static COMMANDS: &[CommandEntry] = &[
     cmd(&["delete"], "Delete a task.", "delete"),
     cmd(&["prime"], "Print session context.", "prime"),
     cmd(&["export"], "Export a JSON snapshot.", "export"),
+    cmd(
+        &["changes"],
+        "List change events from Board Git history.",
+        "changes",
+    ),
+    cmd(&["history"], "Show one Issue's event timeline.", "history"),
     exempt(
         &["setup"],
         "Install, check, or remove one agent integration, or apply a profile.",

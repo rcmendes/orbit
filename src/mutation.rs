@@ -49,9 +49,33 @@ pub fn persist_task(board: &Board, task: &Task, message: &str) -> Result<CommitO
     board.commit(message, false)
 }
 
+/// [`persist_task`] that records `actor` in an `Orbit-Actor` commit trailer
+/// for the change feed (`orbit changes`, `orbit history`).
+pub fn persist_task_as(
+    board: &Board,
+    task: &Task,
+    message: &str,
+    actor: Option<&str>,
+) -> Result<CommitOutcome> {
+    write_task(board, task)?;
+    board.commit_as(message, false, actor)
+}
+
 /// Writes a Task and commits it, returning the commit warning if any.
 pub fn save(board: &Board, task: &Task, message: &str) -> Result<Option<String>> {
     Ok(commit_warning(persist_task(board, task, message)?))
+}
+
+/// [`save`] that records `actor` in an `Orbit-Actor` commit trailer.
+pub fn save_as(
+    board: &Board,
+    task: &Task,
+    message: &str,
+    actor: Option<&str>,
+) -> Result<Option<String>> {
+    Ok(commit_warning(persist_task_as(
+        board, task, message, actor,
+    )?))
 }
 
 /// Writes a new Task file (never replacing an existing one) without committing.
@@ -63,6 +87,11 @@ pub fn create_task(board: &Board, task: &Task) -> Result<()> {
 /// Commits already-published files, returning the commit warning if any.
 pub fn commit(board: &Board, message: &str) -> Result<Option<String>> {
     Ok(commit_warning(board.commit(message, false)?))
+}
+
+/// [`commit`] that records `actor` in an `Orbit-Actor` commit trailer.
+pub fn commit_as(board: &Board, message: &str, actor: Option<&str>) -> Result<Option<String>> {
+    Ok(commit_warning(board.commit_as(message, false, actor)?))
 }
 
 /// Removes a Task file and its comment sidecar; absent files are fine.
@@ -153,8 +182,11 @@ pub fn finish(
         }
     }
     if (changed || comments.is_some() || !open.is_empty())
-        && let Some(warning) =
-            commit_warning(board.commit(&format!("orbit: {} {id}", kind.verb()), false)?)
+        && let Some(warning) = commit_warning(board.commit_as(
+            &format!("orbit: {} {id}", kind.verb()),
+            false,
+            caller,
+        )?)
     {
         warnings.push(warning);
     }
@@ -225,33 +257,37 @@ pub fn execute_in(
     operation: Lifecycle<'_>,
     now: DateTime<Utc>,
 ) -> Result<MutationResult> {
-    let (verb, changed, heartbeat) = match operation {
+    let (verb, changed, heartbeat, actor) = match operation {
         Lifecycle::Claim { agent, kind, steal } => (
             "claim",
             crate::ops::claim(&mut graph, board, id, agent, kind, steal, now)?,
             false,
+            Some(agent),
         ),
         Lifecycle::Assign { name, kind, force } => (
             "assign",
             crate::ops::assign(&mut graph, id, name, kind, force, now)?,
             false,
+            Some(name),
         ),
         Lifecycle::Release { caller, force } => (
             "release",
             crate::ops::release(&mut graph, id, caller, force, now)?,
             false,
+            caller,
         ),
         Lifecycle::Heartbeat { agent } => (
             "heartbeat",
             crate::ops::heartbeat(&mut graph, board, id, agent, now)?,
             true,
+            Some(agent),
         ),
         Lifecycle::Checkpoint { agent, update } => {
             let workflow = graph.workflow.clone();
             graph
                 .get_mut(id)?
                 .record_checkpoint(agent, update, now, &workflow)?;
-            ("checkpoint", true, false)
+            ("checkpoint", true, false, Some(agent))
         }
         Lifecycle::Transition {
             name,
@@ -260,7 +296,7 @@ pub fn execute_in(
         } => {
             let changed = crate::ops::transition(&mut graph, id, name, caller, force, now)?
                 == crate::transition::Outcome::Changed;
-            (name, changed, false)
+            (name, changed, false, caller)
         }
     };
     let task = graph.get(id)?.clone();
@@ -269,7 +305,7 @@ pub fn execute_in(
         write_task(board, &task)?;
         if !heartbeat
             && let Some(warning) =
-                commit_warning(board.commit(&format!("orbit: {verb} {id}"), false)?)
+                commit_warning(board.commit_as(&format!("orbit: {verb} {id}"), false, actor)?)
         {
             warnings.push(warning);
         }

@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 53);
+        assert_eq!(tools.len(), 55);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -1212,6 +1212,8 @@ mod tests {
             "reopen",
             "prime",
             "export",
+            "changes",
+            "history",
             "doctor",
             "sync",
             "repo_add",

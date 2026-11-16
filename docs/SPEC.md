@@ -633,6 +633,8 @@ orbit undepend <id> <dep-id>
 orbit delete <id> [--by NAME] [--force]
 orbit prime [--hook-json] [--repository NAME] [--label LABEL]... [--by NAME]
 orbit export
+orbit changes [--since CURSOR] [--type KIND]... [--limit N]
+orbit history <id> [--limit N]
 orbit setup <claude|cursor|codex|opencode|devin|mattpocock|all> [--scope project|user] [--hooks] [--no-mcp] [--portable-mcp] [--mcp-bin PATH] [--print] [--check] [--remove]
 orbit mcp
 orbit migrate [--apply|--dry-run]
@@ -670,6 +672,40 @@ Task is rejected and directs the user to sync; done and cancelled Tasks require
 or failure independently. Repository Boards infer a destination only when one
 repository is linked; Boards with several available GitHub repositories require
 `--project OWNER/REPO` to choose the destination.
+
+### Change feed
+
+`orbit changes` and `orbit history` expose the Change feed: named events
+derived by replaying the Board folder's Git history, oldest commit first
+(ADR 0022). Every meaningful mutation already lands as one
+`orbit: <verb> <id>` commit, so the feed needs no extra storage and survives
+Board-host merges: a `board sync` merge commit diffs against its first parent
+and replays the host-side delta as that commit's events, while the feed walks
+only the first-parent chain so nothing is reported twice.
+
+Each Board event carries `id` (`<commit>:<ordinal>`), `type`
+(`issue.created`, `issue.transitioned`, `issue.assigned`, `issue.checkpointed`,
+`issue.commented`, `issue.comments_deleted`, `issue.updated`, `issue.deleted`,
+`board.changed`), the Issue's internal `id` and project `key` when the change
+touched a Task, `actor`, `trace_id` (the producing commit — every event one
+commit emitted shares it), `commit`, `at`, the Orbit `verb`, and kind-specific
+`data` (a status change's `from`/`to`, an assignee change, the changed paths of
+a `board.changed`). The actor resolves from the commit's `Orbit-Actor` trailer
+— which lifecycle mutations, `add`, `comment`, `delete`, and `batch` record
+from the caller's identity — then the Issue's own record at that commit
+(reporter, newest comment author, assignee, checkpoint author), then the
+commit's Git author.
+
+`changes` returns `{"events", "cursor", "count"}`; `cursor` is the Board head
+commit and `--since <cursor>` replays only commits reachable from `HEAD` but
+not from the cursor, so a consumer pages forward by feeding the cursor back. A
+cursor that is not an ancestor of `HEAD` — rewritten history — fails with
+`INVALID_ARGUMENT` rather than silently skipping or repeating events. `--type`
+filters by event kind (repeatable) and `--limit N` keeps the newest N events.
+`history <id>` returns `{"issue", "events", "count"}`: one Issue's timeline,
+matched by Task ID or project key (case-insensitive), which still resolves
+after the Issue is deleted because the timeline comes from Git, not the live
+Board. Both are read-only, idempotent MCP tools (`changes`, `history`).
 
 ### Automatic push
 
@@ -773,6 +809,7 @@ Entries record what each release delivered. Some name commands that were later r
 - `slug migrate` validates the target like `--slug`. The current slug is a no-op with no commit. Applying with live claims requires `--force`; dry-run reports them without refusing. An unhealthy Board returns `MIGRATION_BLOCKED`; a target collision returns `PREFIX_COLLISION`. `--dry-run` writes nothing.
 - A hand-edited `id.prefix` that matches no task file returns one `PREFIX_MISMATCH` from strict loads and `doctor`. Migration refuses this state; restore the configured prefix first.
 - `export` is read-only, takes the shared lock, and emits a deterministic snapshot: tasks sorted by ID, no timestamps or machine-local paths. `schema_version` is `5` (5 added the Issue `key` and `key_aliases` fields; 4 renamed Annotations to namespaced Properties and promoted `area`/`repo` to `component`/`repository` plus `external_id`); `data.board.prefix` is the literal Task-ID prefix.
+- `changes` and `history` are read-only and derive the Change feed from Board Git history (see [Change feed](#change-feed)). `changes --since` takes the `cursor` a previous call returned and fails with `INVALID_ARGUMENT` on an unknown or non-ancestor cursor; `--type` filters event kinds and `--limit` keeps the newest events. `history <id>` accepts a Task ID or project key and resolves deleted Issues too.
 - `done` never bypasses unfinished dependencies. `--force` overrides a competing live claim and, on a Parent Task, cancels open SubTasks before closing it.
 - A forced `reopen` can leave an already-done dependent with an unfinished dependency. That is a historical fact, not corruption: `doctor` reports it as a warning, and the next `done` of that dependent still enforces its dependencies.
 - `reopen` refuses when a done dependent exists unless `--force`. Reopening a SubTask of a done parent reopens the parent too.

@@ -587,23 +587,35 @@ pub fn reset_hard(repo: &Path, commit: &str) -> Result<()> {
 }
 
 pub fn commit(cwd: &Path, message: &str) -> Result<CommitOutcome> {
+    commit_with_trailers(cwd, message, &[])
+}
+
+/// Commits every change in `cwd` like [`commit`], appending each trailer as a
+/// `Key: value` line in the commit's trailer block (for example
+/// `Orbit-Actor: devin`, which the change feed reads back as the event actor).
+pub fn commit_with_trailers(
+    cwd: &Path,
+    message: &str,
+    trailers: &[String],
+) -> Result<CommitOutcome> {
     if status_porcelain(cwd)?.trim().is_empty() {
         return Ok(CommitOutcome::NoChanges);
     }
 
     run_git(Some(cwd), &["add", "-A"], None)?;
-    let output = run_git_raw(
-        Some(cwd),
-        &[
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--no-gpg-sign",
-            "-m",
-            message,
-        ],
-        None,
-    )?;
+    let mut args: Vec<&str> = vec![
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--no-gpg-sign",
+        "-m",
+        message,
+    ];
+    for trailer in trailers {
+        args.push("-m");
+        args.push(trailer);
+    }
+    let output = run_git_raw(Some(cwd), &args, None)?;
 
     if output.status.success() {
         return Ok(CommitOutcome::Committed);

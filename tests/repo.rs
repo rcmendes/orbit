@@ -390,12 +390,16 @@ fn ready_scopes_to_the_current_member_repository() {
 
     // The api Task plus the Board-wide Task are in scope; the higher-priority
     // Billing Task in the other Repository must not leak into the queue.
-    let api_task = repo.ok_json_in(&api, &["add", "API work", "-p", "2", "--json"])["data"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    repo.ok_json_in(&billing, &["add", "Billing work", "-p", "0", "--json"]);
-    let board_task = repo.add("Board work", &["-p", "0"]);
+    let api_task =
+        repo.ok_json_in(&api, &["add", "API work", "-p", "medium", "--json"])["data"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    repo.ok_json_in(
+        &billing,
+        &["add", "Billing work", "-p", "highest", "--json"],
+    );
+    let board_task = repo.add("Board work", &["-p", "highest"]);
 
     let ready = repo.ok_json_in(&api, &["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 2, "{ready}");

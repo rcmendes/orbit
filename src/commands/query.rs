@@ -28,9 +28,11 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
     if let Some(parent) = args.parent.as_deref() {
         check_parent_filter(&graph, parent)?;
     }
-    if let Some(priority) = args.priority {
-        validate_priority(priority)?;
-    }
+    let priority = args
+        .priority
+        .as_deref()
+        .map(|priority| validate_priority(board, priority))
+        .transpose()?;
     let label_filters = normalize_labels(&args.label)?;
     let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
@@ -55,8 +57,8 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             {
                 return false;
             }
-            if let Some(priority) = args.priority
-                && task.front.priority != priority
+            if let Some(priority) = &priority
+                && task.front.priority != *priority
             {
                 return false;
             }
@@ -289,7 +291,7 @@ Use the CLI; never edit task files directly.\n\
 - `orbit heartbeat <id> --by <agent>` extends the lease while working.\n\
 - `orbit checkpoint <id> --by <agent> --progress \"...\"` leaves a handoff that survives release and takeover.\n\
 {COMPLETION_LINE}\n\
-- `orbit add \"title\" -p N --depends-on <id>` creates work.\n\
+- `orbit add \"title\" -p high --depends-on <id>` creates work.\n\
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.\n\
 - A Parent Task whose SubTasks are all resolved appears under close candidates; close it explicitly when the family is done.\n\
 - `orbit show <id>` reads the full body."

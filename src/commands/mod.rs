@@ -312,13 +312,23 @@ fn task_output(
     output
 }
 
-pub(crate) fn validate_priority(priority: u8) -> Result<()> {
-    if priority > 3 {
-        return Err(OrbitError::invalid_argument(
-            "priority must be between 0 and 3",
-        ));
+/// Normalizes a Priority name against the Board's `board.priorities` list and
+/// returns the configured spelling. Names are matched case-insensitively.
+pub(crate) fn validate_priority(board: &Board, priority: &str) -> Result<String> {
+    let name = priority.trim().to_lowercase();
+    match board
+        .config
+        .board
+        .priorities
+        .iter()
+        .find(|candidate| candidate.as_str() == name)
+    {
+        Some(configured) => Ok(configured.clone()),
+        None => Err(OrbitError::invalid_argument(format!(
+            "unknown priority `{priority}`; expected one of: {}",
+            board.config.board.priorities.join(", ")
+        ))),
     }
-    Ok(())
 }
 
 pub(crate) fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {

@@ -501,7 +501,7 @@ fn sync_never_rebases_or_force_pushes() {
     peer_write(
         &peer,
         &task_relative,
-        &peer_read(&peer, &task_relative).replace("priority: 2", "priority: 1"),
+        &peer_read(&peer, &task_relative).replace("priority: medium", "priority: high"),
     );
     peer_commit(&repo, &peer, "host edit");
     let peer_tip = repo.git_in(&peer, &["rev-parse", "HEAD"]).stdout;
@@ -719,7 +719,7 @@ fn host_sync_auto_runs_at_prime() {
     peer_write(
         &peer,
         &format!("tasks/{peer_id}.md"),
-        "---\ntitle: Peer task\nstatus: todo\ntype: task\npriority: 2\nlabels: []\ndepends_on: []\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n",
+        "---\ntitle: Peer task\nstatus: todo\ntype: task\npriority: medium\nlabels: []\ndepends_on: []\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n",
     );
     peer_commit(&repo, &peer, "peer task");
 

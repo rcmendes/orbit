@@ -442,7 +442,20 @@ fn merge_profile(
         ));
         return Ok(());
     }
-    let outcome = profile_outcome(args, dir, resolved)?;
+    let outcome = match profile_outcome(args, dir, resolved) {
+        Ok(outcome) => outcome,
+        Err(error) if error.code == code::BOARD_NOT_FOUND => {
+            // Harness setup (for example `setup mattpocock`) must still
+            // write its agent files on a repository that has no Board yet;
+            // the profile simply has nothing to apply to.
+            output.warnings.push(format!(
+                "no Orbit Board found; profile `{}` was not applied",
+                resolved.profile.name()
+            ));
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     if let (Some(target), Value::Object(extra)) = (output.data.as_object_mut(), &outcome.data) {
         for (key, value) in extra {
             target.insert(key.clone(), value.clone());
@@ -2708,59 +2721,161 @@ description: \"Use the Orbit CLI to claim, track, and complete tasks in this rep
     )
 }
 
+/// The built-in profile `orbit setup mattpocock` applies; the `docs/agents/`
+/// guides are generated from its vocabulary, so editing the profile TOML in
+/// `src/profile.rs` changes what setup writes.
+fn mattpocock_profile() -> crate::profile::Profile {
+    crate::profile::builtin("mattpocock").expect("the mattpocock profile ships with orbit")
+}
+
+/// The profile's `[workflow]` section resolved against this binary, when it
+/// defines one.
+fn mattpocock_workflow(profile: &crate::profile::Profile) -> Option<crate::workflow::Workflow> {
+    crate::workflow::Workflow::from_config(&crate::board::Config {
+        workflow: profile.workflow.clone().unwrap_or_default(),
+        ..crate::board::Config::default()
+    })
+    .ok()
+}
+
+/// The Orbit status a triage role maps to under the profile, when the
+/// profile's `vocabulary.status` table names one.
+fn profile_role_status<'a>(profile: &'a crate::profile::Profile, role: &str) -> Option<&'a str> {
+    profile
+        .vocabulary
+        .get("status")
+        .and_then(|map| map.get(role))
+        .map(String::as_str)
+}
+
 fn mattpocock_section(remote_details: bool) -> String {
     let list = list_guidance(remote_details);
+    let profile = mattpocock_profile();
+    let workflow = mattpocock_workflow(&profile);
+    let ready = workflow
+        .as_ref()
+        .and_then(|workflow| workflow.ready_status().map(str::to_string))
+        .unwrap_or_else(|| "Ready".to_string());
+    let initial = profile
+        .workflow
+        .as_ref()
+        .and_then(|section| section.initial.clone())
+        .unwrap_or_else(|| "Triage".to_string());
     format!(
         "{BEGIN_MARKER}
 ## Orbit
 
-We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdown on the board and are served by the `orbit` CLI; the board is shared by every Git worktree.
+We use Orbit, a Git-native issue tracker for coding agents. Issues live as Markdown on the board and are served by the `orbit` CLI; the board is shared by every Git worktree. This repository applies the `mattpocock` profile: the five triage roles are workflow statuses and transitions, not labels — see `docs/agents/triage-labels.md` for the mapping.
 
-- To find actionable work, run `orbit ready --json` and parse `data.tasks`.
+- To find actionable work, run `orbit ready --json` and parse `data.tasks`. Only Issues in the `{ready}` status appear there.
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
 - To claim a known Task and prepare its worktree, run `orbit claim <ID> --by <agent> --worktree`; it creates or reuses `.worktrees/<ID>` on `ticket/<ID>` in the Task's Repository. If preparation fails after claiming, `CLAIM_WORKTREE_FAILED` means the claim remains active; fix the cause and retry.
 - To hand off work, run `orbit checkpoint <ID> --by <agent> --progress \"...\" --next \"...\"`; the record survives release and takeover, and never affects readiness.
-- To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change.
-- To create work, run `orbit add \"Title\" -p high --depends-on <ID>`.
+- To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change. Closing an Issue as `wontfix` instead runs `orbit transition <ID> wontfix`, which records resolution `Won't Do`.
+- To create work, run `orbit add \"Title\" -p high --depends-on <ID>`. New Issues start in `{initial}`.
 - Orbit calls the unit a Task. A skill's \"issue\" is a Task; a \"sub-issue\" is a SubTask; an \"epic\" or \"spec\" is a top-level Task with `--type epic`.
 - To publish tickets under an existing issue or spec, run `orbit add \"Title\" --parent <PARENT_ID>`; the parent waits for every descendant to resolve.
-- `type` is a Board-configured Issue type (default vocabulary: epic, story, task, bug, sub-task). `bug` and `enhancement` stay labels.
+- `type` is a Board-configured Issue type. This profile maps the `bug` category to type `bug` and `enhancement` to type `story`; pass `--type` on `orbit add` or `orbit update` rather than adding category labels.
+- Triage state moves with `orbit transition <ID> <role>`: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. `ready-for-human` work is assigned to a person with `orbit assign <ID> --to <name>` (assignee kind `human`), which takes it out of the agent queue.
 - Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
 - Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Tasks; `--all` widens to the whole Board.
-- To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`.
+- To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`. Labels are free-form metadata — triage state is a status, not a label.
 - To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.
-- The hold labels `needs-triage`, `needs-info`, and `ready-for-human` keep tasks out of the ready queue and prevent claims until removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.
 - Never edit task frontmatter directly; that bypasses dependency validation, leases, and the write lock.
 - Use `orbit show <ID>` to read acceptance criteria.
 {list}
-{END_MARKER}"
+{END_MARKER}",
+        ready = ready,
+        initial = initial,
     )
 }
 
 fn mattpocock_triage_labels_section() -> String {
+    let profile = mattpocock_profile();
+    let status = |role: &str| {
+        profile_role_status(&profile, role)
+            .unwrap_or(role)
+            .to_string()
+    };
+    // `wontfix` maps to a resolution, so its target status comes from the
+    // workflow transition named after the role rather than the status
+    // vocabulary.
+    let wontfix_status = mattpocock_workflow(&profile)
+        .and_then(|workflow| {
+            workflow
+                .transition_named("wontfix")
+                .map(|transition| transition.to.clone())
+        })
+        .unwrap_or_else(|| status("wontfix"));
+    let wontfix_resolution = profile
+        .vocabulary
+        .get("resolution")
+        .and_then(|map| map.get("wontfix"))
+        .map(String::as_str)
+        .unwrap_or("Won't Do");
+    let human_kind = profile
+        .roles
+        .get("ready-for-human")
+        .map(String::as_str)
+        .unwrap_or("human");
+    let issue_type = |role: &str| {
+        profile
+            .vocabulary
+            .get("type")
+            .and_then(|map| map.get(role))
+            .map(String::as_str)
+            .unwrap_or(role)
+            .to_string()
+    };
     format!(
         "{BEGIN_MARKER}
 # Orbit triage labels
 
-Use these canonical labels with Orbit Tasks:
+The skills speak in terms of five canonical triage roles. This repository's
+Orbit Board applies the `mattpocock` profile, which maps each role onto the
+Issue workflow — a status reached through `orbit transition`, an assignee
+kind, a resolution, or an Issue type — instead of a label.
 
-| Role | Label | Meaning |
+| Role | Orbit mechanism | Meaning |
 | --- | --- | --- |
-| Needs maintainer review | `needs-triage` | Not yet evaluated |
-| Needs reporter input | `needs-info` | Waiting for more information |
-| Agent-ready | `ready-for-agent` | Specified and available to an agent |
-| Human work | `ready-for-human` | Requires human implementation |
-| Won't fix | `wontfix` | Abandoned; also cancel the Task |
-| Bug | `bug` | Something is broken |
-| Enhancement | `enhancement` | New feature or improvement |
+| `needs-triage` | `orbit transition <ID> needs-triage` → status `{needs_triage}` | Maintainer needs to evaluate this issue |
+| `needs-info` | `orbit transition <ID> needs-info` → status `{needs_info}` | Waiting on reporter for more information |
+| `ready-for-agent` | `orbit transition <ID> ready-for-agent` → status `{ready_for_agent}` | Fully specified, ready for an AFK agent |
+| `ready-for-human` | `orbit transition <ID> ready-for-human` → status `{ready_for_human}`, then `orbit assign <ID> --to <name>` | Requires human implementation |
+| `wontfix` | `orbit transition <ID> wontfix` → status `{wontfix_status}`, resolution `{wontfix_resolution}` | Will not be actioned |
 
-`needs-triage`, `needs-info`, and `ready-for-human` are hold labels. They keep
-Tasks out of `orbit ready` until removed. `ready-for-agent`, `bug`, and
-`enhancement` do not block readiness. `wontfix` is a label plus a terminal
-status; use `orbit cancel <ID> --by <agent>`.
-{END_MARKER}"
+## Category roles → Issue types
+
+- `bug` → Issue type `{bug_type}`: `orbit add \"<title>\" --type {bug_type}` or `orbit update <ID> --type {bug_type}`
+- `enhancement` → Issue type `{enhancement_type}`
+
+## Orbit semantics
+
+Only the Ready status lists in `orbit ready`, and only while the Issue is
+unassigned, unblocked, and free of hold labels. `Triage` and `Needs Info`
+Issues are never Ready, so they cannot be claimed. A `ready-for-human`
+Issue is assigned to a person with `orbit assign <ID> --to <name>` — the
+assignee kind is `{human_kind}` — which takes it out of the agent queue.
+
+`wontfix` closes the Issue through the workflow's `wontfix` transition,
+which records resolution `{wontfix_resolution}`; `orbit reopen <ID>`
+returns it to the initial status.
+
+When a skill mentions a role (e.g. \"apply the AFK-ready triage label\"), run
+the matching `orbit transition`. Each transition replaces the previous
+triage state, so there is no label to remove first.
+{END_MARKER}",
+        needs_triage = status("needs-triage"),
+        needs_info = status("needs-info"),
+        ready_for_agent = status("ready-for-agent"),
+        ready_for_human = status("ready-for-human"),
+        wontfix_status = wontfix_status,
+        wontfix_resolution = wontfix_resolution,
+        human_kind = human_kind,
+        bug_type = issue_type("bug"),
+        enhancement_type = issue_type("enhancement"),
     )
 }
 

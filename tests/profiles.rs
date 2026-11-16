@@ -230,16 +230,42 @@ fn setup_applies_a_profile_alongside_a_known_integration() {
     // files install and the profile applies to the Board.
     user_profile(
         &repo,
-        "mattpocock",
-        "name = \"mattpocock\"\nrequires = [\"workflow\"]\n[workflow]\ntemplate = \"agentic\"\n",
+        "claude",
+        "name = \"claude\"\nrequires = [\"workflow\"]\n[workflow]\ntemplate = \"agentic\"\n",
     );
 
-    let applied = repo.ok_json(&["setup", "mattpocock", "--json"]);
-    assert_eq!(applied["data"]["profile"]["name"], "mattpocock");
-    assert!(repo.path().join("docs/agents/issue-tracker.md").is_file());
+    let applied = repo.ok_json(&["setup", "claude", "--json"]);
+    assert_eq!(applied["data"]["profile"]["name"], "claude");
+    assert!(repo.path().join("CLAUDE.md").is_file());
     let config = board_config(&repo);
     assert!(config.contains("template = \"agentic\""), "{config}");
+    assert!(config.contains("name = \"claude\""), "{config}");
+}
+
+#[test]
+fn setup_mattpocock_applies_the_builtin_profile() {
+    let repo = TestRepo::new();
+    repo.init();
+    // `mattpocock` ships as a built-in profile: `orbit setup mattpocock`
+    // writes the docs/agents guides and applies the profile's custom
+    // workflow, roles, and vocabulary to the Board.
+    let applied = repo.ok_json(&["setup", "mattpocock", "--json"]);
+    assert_eq!(applied["data"]["profile"]["name"], "mattpocock");
+    assert_eq!(applied["data"]["profile"]["source"], "builtin");
+    assert!(repo.path().join("docs/agents/issue-tracker.md").is_file());
+    assert!(repo.path().join("docs/agents/triage-labels.md").is_file());
+
+    let config = board_config(&repo);
+    assert!(config.contains("initial = \"Triage\""), "{config}");
+    assert!(config.contains("name = \"Ready\""), "{config}");
+    assert!(config.contains("resolution = \"Won't Do\""), "{config}");
     assert!(config.contains("name = \"mattpocock\""), "{config}");
+    assert!(config.contains("[profiles.roles]"), "{config}");
+    assert!(config.contains("[profiles.vocabulary.status]"), "{config}");
+
+    // Re-applying is a no-op.
+    let again = repo.ok_json(&["setup", "mattpocock", "--json"]);
+    assert_eq!(again["data"]["changed"], false, "{again}");
 }
 
 #[test]
@@ -389,6 +415,156 @@ fn board_local_profile_directory_is_found() {
     .unwrap();
     let applied = repo.ok_json(&["setup", "inboard", "--json"]);
     assert_eq!(applied["data"]["profile"]["source"], "board", "{applied}");
+}
+
+/// The five mattpocock triage roles round-trip through the applied
+/// profile: state roles are workflow transitions, `ready-for-human` is a
+/// human assignee, `wontfix` records the `Won't Do` resolution, and the
+/// category roles are Issue types.
+#[test]
+fn mattpocock_profile_drives_the_skills_flow_end_to_end() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.ok_json(&["setup", "mattpocock", "--json"]);
+
+    let status_of = |id: &str| -> String {
+        repo.ok_json(&["show", id, "--json"])["data"]["status"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let add = |args: &[&str]| -> String {
+        let mut argv = vec!["add"];
+        argv.extend_from_slice(args);
+        argv.push("--json");
+        repo.ok_json(&argv)["data"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // needs-triage → needs-info → ready-for-agent → ready → claim → done.
+    let id = add(&["Triage me"]);
+    assert_eq!(status_of(&id), "Triage");
+    repo.ok_json(&["transition", &id, "needs-info", "--json"]);
+    assert_eq!(status_of(&id), "Needs Info");
+    repo.ok_json(&["transition", &id, "ready-for-agent", "--json"]);
+    assert_eq!(status_of(&id), "Ready");
+    let ready = repo.ok_json(&["ready", "--json"]);
+    assert!(
+        ready["data"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|task| task["id"] == id),
+        "{ready}"
+    );
+    repo.ok_json(&["claim", &id, "--by", "devin", "--json"]);
+    assert_eq!(status_of(&id), "In Progress");
+    repo.ok_json(&[
+        "done",
+        &id,
+        "--by",
+        "devin",
+        "--comment",
+        "shipped",
+        "--json",
+    ]);
+    let done = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(done["data"]["status"], "Done");
+    assert_eq!(done["data"]["resolution"], "completed");
+
+    // ready-for-human: Ready status plus a human assignee kind.
+    let human = add(&["Human work"]);
+    repo.ok_json(&["transition", &human, "ready-for-human", "--json"]);
+    repo.ok_json(&["assign", &human, "--to", "alice", "--json"]);
+    let shown = repo.ok_json(&["show", &human, "--json"]);
+    assert_eq!(shown["data"]["status"], "In Progress");
+    assert_eq!(shown["data"]["assignee"], "alice");
+    assert_eq!(shown["data"]["assignee_kind"], "human");
+    assert_eq!(shown["data"]["ready"], false);
+
+    // wontfix: closes through the transition with the Won't Do resolution.
+    let dropped = add(&["Drop me"]);
+    repo.ok_json(&["transition", &dropped, "wontfix", "--json"]);
+    let shown = repo.ok_json(&["show", &dropped, "--json"]);
+    assert_eq!(shown["data"]["status"], "Cancelled");
+    assert_eq!(shown["data"]["resolution"], "Won't Do");
+
+    // bug/enhancement map to the bug/story Issue types.
+    let bug = add(&["--type", "bug", "Broken"]);
+    assert_eq!(
+        repo.ok_json(&["show", &bug, "--json"])["data"]["type"],
+        "bug"
+    );
+    let story = add(&["--type", "story", "Better"]);
+    assert_eq!(
+        repo.ok_json(&["show", &story, "--json"])["data"]["type"],
+        "story"
+    );
+}
+
+/// The generated `docs/agents/` guides match the profile's vocabulary:
+/// roles become transitions and statuses, `wontfix` a resolution, and the
+/// category roles Issue types.
+#[test]
+fn mattpocock_docs_match_the_profile_vocabulary() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.ok_json(&["setup", "mattpocock", "--json"]);
+
+    let labels = repo.read("docs/agents/triage-labels.md");
+    for expected in [
+        "orbit transition <ID> needs-triage` → status `Triage`",
+        "orbit transition <ID> needs-info` → status `Needs Info`",
+        "orbit transition <ID> ready-for-agent` → status `Ready`",
+        "orbit transition <ID> ready-for-human` → status `Ready`",
+        "orbit transition <ID> wontfix` → status `Cancelled`, resolution `Won't Do`",
+        "Issue type `bug`",
+        "Issue type `story`",
+        "assignee kind is `human`",
+    ] {
+        assert!(
+            labels.contains(expected),
+            "missing `{expected}` in:\n{labels}"
+        );
+    }
+
+    let tracker = repo.read("docs/agents/issue-tracker.md");
+    for expected in [
+        "the `mattpocock` profile",
+        "Only Issues in the `Ready` status appear there",
+        "New Issues start in `Triage`",
+        "`orbit transition <ID> <role>`",
+        "`orbit transition <ID> wontfix`",
+        "resolution `Won't Do`",
+        "enhancement` to type `story`",
+    ] {
+        assert!(
+            tracker.contains(expected),
+            "missing `{expected}` in:\n{tracker}"
+        );
+    }
+}
+
+#[test]
+fn setup_mattpocock_without_a_board_still_writes_the_guides() {
+    let repo = TestRepo::new();
+    // No `init`: the docs are written and the profile application is
+    // skipped with a warning instead of failing the whole setup.
+    let value = repo.ok_json(&["setup", "mattpocock", "--json"]);
+    assert!(repo.path().join("docs/agents/issue-tracker.md").is_file());
+    assert!(
+        value["meta"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("profile `mattpocock` was not applied")),
+        "{value}"
+    );
 }
 
 #[test]

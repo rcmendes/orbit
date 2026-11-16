@@ -323,8 +323,9 @@ maps, and optional `[board]` overrides. `orbit setup <plugin>` negotiates the
 requirements first — an unmet profile fails with `PROFILE_UNMET` naming the
 missing capabilities — then applies the profile to `config.toml` idempotently
 and records it under `[[profiles]]` for `doctor` and `capabilities`. A profile
-sharing an integration's name (for example `mattpocock`) applies alongside the
-harness files. `--check` reports `installed`/`stale`/`unmet`; `--print` previews
+sharing an integration's name (for example `mattpocock`, which ships as a
+built-in profile mapping the five triage roles onto the Issue workflow)
+applies alongside the harness files. `--check` reports `installed`/`stale`/`unmet`; `--print` previews
 the resulting `config.toml`; `--remove` refuses a profile-only target — profiles
 are declarative, so remove the `[[profiles]]` record and its settings by hand
 or apply a different profile.

@@ -78,6 +78,10 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
 `--exclude-label epic` still works on older boards. New work should use
 `--type epic` and `--exclude-type epic`.
 
+On a Board with the `mattpocock` profile applied (`orbit setup mattpocock`),
+the skills' `bug` and `enhancement` categories are Issue types — `bug` and
+`story` — not labels; see [triage-labels.md](./triage-labels.md).
+
 ## Conventions
 
 - Use a stable agent identity per session and pass it as `--by` on `claim`,
@@ -116,7 +120,7 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
 - Inside a member Repository, `orbit ready` and `orbit list` scope to it plus
   Board-wide Tasks; `--all` widens to the whole Board.
 
-## Labels
+## Labels and triage state
 
 Labels are lowercase strings stored on the task. Add and remove them with:
 
@@ -126,11 +130,22 @@ orbit label remove <ID> <label>...
 orbit label list
 ```
 
-The canonical triage state labels are `needs-triage`, `needs-info`,
-`ready-for-agent`, `ready-for-human`, and `wontfix`. The category labels are `bug`
-and `enhancement`; these stay labels, not Types. `needs-triage`, `needs-info`, and `ready-for-human` are **hold
-labels**: tasks carrying one are not Ready and cannot be claimed until the label is
-removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.
+The canonical triage vocabulary is the five roles `needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, and `wontfix`, plus the category roles
+`bug` and `enhancement`. How a role is recorded depends on the Board's
+profile — see [triage-labels.md](./triage-labels.md) for the mapping:
+
+- With the `mattpocock` profile applied, the state roles are workflow
+  statuses reached through `orbit transition <ID> <role>` (`Triage`,
+  `Needs Info`, `Ready`, and `Cancelled` with resolution `Won't Do`),
+  `ready-for-human` is a `human` assignee kind, and `bug`/`enhancement` are
+  the `bug`/`story` Issue types. Only the `Ready` status lists in
+  `orbit ready`; the other statuses are never Ready and cannot be claimed.
+- Without a profile, the roles remain labels: `needs-triage`, `needs-info`,
+  and `ready-for-human` are **hold labels** that keep a task out of
+  `orbit ready` and block claims until removed; `ready-for-agent`, `bug`,
+  and `enhancement` are neutral; `wontfix` is a label plus
+  `orbit cancel <ID> --by <agent>`.
 
 ## Comments
 
@@ -172,8 +187,10 @@ Create one task per ticket, blockers first, and capture the returned `data.id`:
 orbit add "<title>" -p <priority-name> --body-file - --depends-on <blocker-id>...
 ```
 
-Feed the Markdown body on stdin. Add `--label ready-for-agent` to publish a ticket
-that is ready for an agent, or add it afterward with `orbit label add`. If the
+Feed the Markdown body on stdin. On a Board with the `mattpocock` profile, a
+ticket that is ready for an agent starts in `Triage` and moves with
+`orbit transition <ID> ready-for-agent`; on an unprofiled Board, add
+`--label ready-for-agent` (or `orbit label add` afterward). If the
 source is an existing issue or spec, create each ticket as a SubTask with
 `--parent <source-id>`; otherwise create top-level Tasks. Use `--type epic` when
 publishing a spec or epic parent. Then use the returned ID for any dependent
@@ -194,13 +211,17 @@ for state and category, and comments for triage notes.
 
 Orbit is the tracker. Matt Pocock's engineering skills own the triage state
 machine: gathering context, verifying the claim, grilling, writing the agent
-brief, and maintaining `.out-of-scope/`.
+brief, and maintaining `.out-of-scope/`. The five roles map onto Orbit through
+the Board's profile — see [triage-labels.md](./triage-labels.md).
 
 `orbit triage` is a deterministic metadata primitive for any Task, Local or
 Linked. It sets `component`, task-level `verification`, and the canonical labels in
 [`triage-labels.md`](./triage-labels.md). It does not verify a claim, grill,
 write a brief, or update `.out-of-scope/`. The commands are in
-[`triage-workflow.md`](./triage-workflow.md).
+[`triage-workflow.md`](./triage-workflow.md). Triage *state* (which role a
+Task carries) is a workflow transition under the `mattpocock` profile;
+`orbit triage` still owns the metadata fields and publishes them to Linked
+Tasks.
 
 Before you implement a `ready-for-agent` ticket, read the agent brief. The
 template is in [`agent-brief.md`](./agent-brief.md).
@@ -211,16 +232,27 @@ commands are in [Wayfinding operations](#wayfinding-operations).
 
 ## Triage operations
 
+On a Board with the `mattpocock` profile, triage state is a workflow status:
+
 - **Unlabeled:** `orbit list --unlabeled --json`
-- **Needs triage:** `orbit list --label needs-triage --json`
-- **Needs info:** `orbit list --label needs-info --json`
-- **Ready for agents:** `orbit list --label ready-for-agent --json`
-- **Category:** add `bug` or `enhancement` with `orbit label add`.
-- **State transition:** remove the old state label, add the new one.
-- **Wontfix:** add the `wontfix` label and close with
-  `orbit cancel <ID> --by <agent>`.
+- **Needs triage:** `orbit list --status Triage --json` (or
+  `orbit transition <ID> needs-triage` to file one there)
+- **Needs info:** `orbit list --status "Needs Info" --json`
+- **Ready for agents:** `orbit ready --json` (the `Ready` status, unblocked)
+- **Category:** `bug`/`enhancement` are Issue types — `orbit add --type bug`,
+  `orbit update <ID> --type story`
+- **State transition:** `orbit transition <ID> needs-triage|needs-info|ready-for-agent|ready-for-human|wontfix`
+- **Wontfix:** `orbit transition <ID> wontfix` closes the Task with resolution
+  `Won't Do`; `orbit reopen <ID>` returns it to `Triage`.
+- **Human work:** `orbit transition <ID> ready-for-human`, then
+  `orbit assign <ID> --to <name>` (assignee kind `human`).
 - **Comments:** `orbit comment add <ID> --by <agent> --body ...`; read with
   `orbit comment list <ID>` or `orbit show <ID> --json`.
+
+On an unprofiled Board the same roles are labels instead: filter with
+`orbit list --label <role> --json`, move state by removing the old role label
+and adding the new one, and close `wontfix` with `orbit cancel <ID> --by
+<agent>`.
 
 Remote Tracker sync and Triage require Orbit 0.9.0 or newer. For Linked Tasks,
 use the structured workflow in

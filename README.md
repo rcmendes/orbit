@@ -872,7 +872,7 @@ orbit setup cursor           # .cursor/rules/orbit.mdc + skill + MCP
 orbit setup codex            # AGENTS.md + skill + MCP
 orbit setup opencode         # AGENTS.md + MCP
 orbit setup devin            # .devin/ rule + skill + MCP
-orbit setup mattpocock       # docs/agents/issue-tracker.md
+orbit setup mattpocock       # docs/agents guides + mattpocock profile
 orbit setup all --scope user # machine-wide instruction and MCP files
 orbit setup all --check      # installed / missing / stale
 orbit setup all --no-mcp     # instruction files only

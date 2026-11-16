@@ -52,7 +52,12 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
     }
 
     match command {
-        Command::Migrate(args) => crate::board_migrate::cmd_migrate(&args, dir.as_deref()),
+        Command::Migrate(args) => match &args.command {
+            Some(crate::cli::MigrateCommand::Model(model_args)) => {
+                crate::model_migrate::cmd_model(model_args, dir.as_deref())
+            }
+            None => crate::board_migrate::cmd_migrate(&args, dir.as_deref()),
+        },
         Command::Init(args) => cmd_init(args, dir.as_deref()),
         Command::Repo(args) => with_board(dir.as_deref(), true, |board| cmd_repo(board, args)),
         Command::Slug(args) => {

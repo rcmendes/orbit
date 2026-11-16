@@ -59,6 +59,19 @@ Examples:
   # Migrate a specific Board directory
   orbit --dir ~/src/acme/.orbit migrate --apply";
 
+pub const MODEL_MIGRATE_LONG: &str = "Convert a pre-ADR-0022 Board's Tasks to the Issue model. Previews by default; --apply rewrites config.toml, every Task file, and keys.toml in one validated commit: legacy status names map onto the Board workflow (todo becomes the Ready status), numeric priorities become Priority names, depends_on/waiting_on/claimed_by rewrite to links/assignee/lease, area/repo/annotations move to component/repository/properties, parented default-type Tasks become sub-tasks, and every Task receives a sequential project key. Run `orbit migrate` first when the Board still uses a pre-ADR-0019 layout.";
+
+pub const MODEL_MIGRATE_EXAMPLES: &str = "\
+Examples:
+  # Preview the model migration without writing anything
+  orbit migrate model
+
+  # Rewrite the Board to the Issue model in one commit
+  orbit migrate model --apply
+
+  # Migrate a specific Board directory
+  orbit --dir ~/src/acme/.orbit migrate model --apply";
+
 pub const INIT_LONG: &str = "\
 Creates or reuses a Board. Every Board is its own Git repository on branch
 `orbit` (ADR 0019). In a Git working tree, the default Board is the hidden

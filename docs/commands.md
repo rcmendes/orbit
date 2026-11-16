@@ -48,6 +48,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Set up a repository or Board anchor | `orbit init`, `orbit repo add`, `orbit repo remove` |
 | Manage member Repositories | `orbit repo list`, `orbit repo refresh` |
 | Convert a pre-ADR-0019 Board | `orbit migrate` |
+| Convert a Board to the Issue model | `orbit migrate model` |
 | File a new ticket | `orbit add` |
 | Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend`, `orbit link` |
 | Triage incoming work | `orbit label add/remove/list` |
@@ -1060,6 +1061,50 @@ orbit --dir <board> migrate --apply   # migrate a specific Board directory
 Re-running after `--apply` is a no-op, so an interrupted conversion can be
 retried safely. Task IDs, bodies, comments, assignments, and Git history are
 preserved; the report lists every content change and the resulting commit.
+
+### `orbit migrate model` — convert a Board to the Issue model
+
+Converts a Board written before the Issue model (ADR 0022) — legacy status
+names, numeric priorities, `depends_on`/`waiting_on`, `claimed_by`,
+`area`/`repo`/`annotations`, missing project keys — into the canonical model,
+in one commit. Previews by default; `--apply` performs the conversion. Run
+`orbit migrate` first when the Board still uses a pre-ADR-0019 layout; this
+command refuses with `MIGRATION_BLOCKED` until then.
+
+The conversion is deterministic and idempotent:
+
+- Legacy status names map onto the Board workflow by category: `todo` becomes
+  the Ready status, `in_progress`/`done`/`cancelled` (and `canceled`) map to
+  the matching workflow statuses. A pre-model Board (no `board.priorities`,
+  no `[workflow]`) gets `workflow.template = "standard"` written explicitly.
+- Numeric priorities index the ordered `board.priorities` list (0 is most
+  important); `board.default_priority` is rewritten the same way.
+- `depends_on`/`waiting_on` and `claimed_by`/`claimed_at`/`lease_until`
+  rewrite to typed `links` and `assignee`/`lease`; `area`, `repo`, and
+  `repo:*` labels move to `component`/`repository`; `annotations` merges into
+  `properties`. Values that cannot move safely stay in place and are reported
+  as warnings.
+- Parented Tasks typed as the Board's default type are re-typed to the
+  hierarchy's leaf type (`sub-task` by default); Issue types the files use
+  but the Board does not configure are added to `board.types`/`board.hierarchy`.
+- Every Task without a `key` receives the next sequential project key and
+  `keys.toml` records the allocator state. Task IDs, bodies, comments,
+  checkpoints, unknown frontmatter fields, and existing keys/aliases are
+  preserved.
+
+`--apply` builds and validates the result in a temporary Git worktree, then
+commits it as `orbit: migrate board model` and fast-forwards the Board, so a
+failure leaves the original untouched. It refuses when the migration would
+introduce new Board issues (`MIGRATION_BLOCKED` with the issue list) or when
+the Board has uncommitted changes. Re-running after `--apply` reports
+`already_migrated` and writes nothing. Verify the result with `orbit doctor`.
+
+```bash
+orbit migrate model            # preview the plan; writes nothing
+orbit migrate model --apply    # convert the resolved Board in place
+orbit migrate model --dry-run  # same preview, explicit
+orbit --dir <board> migrate model --apply   # migrate a specific Board directory
+```
 
 ### `orbit doctor` — health check
 

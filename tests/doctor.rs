@@ -175,6 +175,54 @@ fn doctor_fix_reattaches_a_legacy_orphan_at_its_original_path() {
     assert!(!repo.board_path().exists());
 }
 
+fn write_chain_task(repo: &TestRepo, id: &str, task_type: &str, parent: Option<&str>) {
+    let parent_line = parent
+        .map(|parent| format!("parent: {parent}\n"))
+        .unwrap_or_default();
+    repo.write_task(
+        id,
+        &format!(
+            "---\ntitle: {id}\nstatus: todo\ntype: {task_type}\n{parent_line}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n"
+        ),
+    );
+}
+
+fn codes_and_tasks(value: &serde_json::Value, code: &str) -> Vec<String> {
+    value["data"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|issue| issue["code"] == code)
+        .filter_map(|issue| issue["task"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn doctor_checks_parent_edges_against_the_board_hierarchy() {
+    let repo = TestRepo::new();
+    repo.init();
+    // A valid epic > task > sub-task chain with flat IDs.
+    write_chain_task(&repo, "orb-a0b1c2", "epic", None);
+    write_chain_task(&repo, "orb-d4b3df", "task", Some("orb-a0b1c2"));
+    write_chain_task(&repo, "orb-e5f6g7", "sub-task", Some("orb-d4b3df"));
+
+    let value = doctor_json(&repo, &["doctor", "--json"]);
+    assert!(codes_and_tasks(&value, "INVALID_TYPE").is_empty());
+
+    // `sub-task` is the leaf of the default hierarchy: it cannot parent.
+    write_chain_task(&repo, "orb-h8j9km", "sub-task", Some("orb-e5f6g7"));
+    // Two working types cannot parent each other either.
+    write_chain_task(&repo, "orb-j9k0mn", "task", Some("orb-d4b3df"));
+
+    let value = doctor_json(&repo, &["doctor", "--json"]);
+    let mut got = codes_and_tasks(&value, "INVALID_TYPE");
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["orb-h8j9km".to_string(), "orb-j9k0mn".to_string()]
+    );
+}
+
 #[test]
 fn doctor_reports_storage_mismatch() {
     let repo = TestRepo::new();

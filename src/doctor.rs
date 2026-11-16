@@ -168,6 +168,7 @@ fn diagnose(
     };
     if let Some(board) = &board {
         issues.extend(crate::remote::commands::doctor_issues(board));
+        issues.extend(profile_issues(board));
     }
 
     let healthy = issues.is_empty();
@@ -362,6 +363,39 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
     }
 }
 
+/// Reports every applied `[[profiles]]` record whose requirements this
+/// binary does not meet — the same negotiation `orbit setup <plugin>`
+/// performs, re-checked so a binary downgrade or a hand-edited record
+/// surfaces here.
+fn profile_issues(board: &Board) -> Vec<Issue> {
+    board
+        .config
+        .profiles
+        .iter()
+        .filter_map(|profile| {
+            let unmet = crate::profile::unmet_applied(profile);
+            if unmet.is_empty() {
+                return None;
+            }
+            Some(
+                Issue::new(
+                    code::PROFILE_UNMET,
+                    None,
+                    format!(
+                        "profile `{}` requires {}",
+                        profile.name,
+                        unmet.describe().join(" and ")
+                    ),
+                )
+                .with_issue(&profile.name)
+                .with_next_action(
+                    "upgrade Orbit, or apply a profile whose requirements this binary meets",
+                ),
+            )
+        })
+        .collect()
+}
+
 fn orbit_on_path() -> bool {
     let orbit_name = if cfg!(windows) { "orbit.exe" } else { "orbit" };
     let running = std::env::current_exe()
@@ -385,10 +419,6 @@ fn diagnose_tasks(
     let (graph, mut load_issues) = Graph::load(board, LoadMode::Lenient)?;
     issues.append(&mut load_issues);
 
-    let prefix_mismatch = issues
-        .iter()
-        .any(|issue| issue.code == code::PREFIX_MISMATCH);
-
     if let Err(error) = crate::health::comment_files(board, &graph, false, issues) {
         issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message));
     }
@@ -411,32 +441,41 @@ fn diagnose_tasks(
     }
 
     for task in graph.tasks.values() {
-        for (owner, value) in &task.front.annotations {
-            if let Err(error) = crate::task::validate_annotation(owner, value) {
+        for (owner, value) in &task.front.properties {
+            if let Err(error) = crate::task::validate_property(owner, value) {
                 issues.push(Issue::new(error.code, Some(&task.id), error.message));
             }
+        }
+        if let Some(external_id) = task.front.external_id.as_deref()
+            && let Err(error) = crate::task::validate_external_id(external_id)
+        {
+            issues.push(Issue::new(error.code, Some(&task.id), error.message));
         }
     }
 
     for task in graph.stale_tasks() {
         warnings.push(format!(
-            "{}: stale claim by {}",
+            "{}: stale lease held by {}",
             task.id,
-            task.holder().unwrap_or("unknown")
+            task.assignee_name().unwrap_or("unknown")
         ));
     }
 
     for task in graph.tasks.values() {
         let no_times = task
             .front
-            .claim
+            .lease
             .as_ref()
-            .is_some_and(|claim| !claim.has_times());
-        if no_times || task.front.stray_claim_times.is_some() {
-            warnings.push(format!("{}: claim metadata is incomplete", task.id));
+            .is_some_and(|lease| !lease.has_times());
+        if no_times || task.front.stray_lease_times.is_some() {
+            warnings.push(format!("{}: lease metadata is incomplete", task.id));
         }
 
-        if task.front.status == crate::task::Status::Done {
+        if graph
+            .workflow
+            .category_of(&task.front.status)
+            .is_some_and(|category| category.is_terminal())
+        {
             let unfinished = graph.blocking_ids(task);
             if !unfinished.is_empty() {
                 warnings.push(format!(
@@ -445,7 +484,7 @@ fn diagnose_tasks(
                     unfinished.join(", ")
                 ));
             }
-            let open_subtasks = graph.open_children(&task.id);
+            let open_subtasks = graph.open_descendants(&task.id);
             if !open_subtasks.is_empty() {
                 warnings.push(format!(
                     "{} is done but has open SubTasks: {}",
@@ -454,12 +493,6 @@ fn diagnose_tasks(
                 ));
             }
         }
-    }
-
-    // A prefix mismatch means the IDs use the observed prefix; comparing them
-    // with the configured prefix would flag every SubTask.
-    if !prefix_mismatch {
-        crate::health::parent_id_agreement(board, &graph, issues);
     }
 
     match crate::git::status_porcelain(&board.root) {

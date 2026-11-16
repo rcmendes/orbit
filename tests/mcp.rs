@@ -122,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 16);
+    assert_eq!(names.len(), 59);
     for expected in [
         "ready",
         "list",
@@ -130,17 +130,76 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "create",
         "update",
         "claim",
+        "assign",
         "release",
         "heartbeat",
         "checkpoint",
         "finish",
+        "transition",
+        "submit",
+        "review",
+        "ask",
+        "answer",
         "link",
         "delete",
         "label",
         "comment",
+        "property",
+        "batch",
+        "tree",
+        "reopen",
+        "prime",
+        "export",
+        "doctor",
+        "sync",
+        "repo_add",
+        "repo_remove",
+        "repo_list",
+        "repo_refresh",
+        "slug_show",
+        "slug_migrate",
+        "migrate",
+        "migrate_model",
+        "board_host",
+        "board_sync",
+        "board_move",
+        "remote_status",
+        "remote_connect",
+        "remote_disconnect",
+        "remote_list",
+        "remote_issues",
+        "remote_issues_refresh",
+        "remote_issues_show",
+        "remote_import",
+        "remote_link",
+        "remote_create",
+        "remote_detach",
+        "remote_reattach",
+        "remote_sync",
+        "remote_auto_push",
+        "triage_context",
+        "triage_review",
+        "triage_apply",
+        "changes",
+        "history",
     ] {
         assert!(names.contains(&expected), "{expected}");
     }
+
+    // Registry-generated tools carry MCP safety annotations.
+    let tool_list = tools["result"]["tools"].as_array().unwrap();
+    let get_tool = tool_list.iter().find(|tool| tool["name"] == "get").unwrap();
+    assert_eq!(get_tool["annotations"]["readOnlyHint"], true);
+    let delete_tool = tool_list
+        .iter()
+        .find(|tool| tool["name"] == "delete")
+        .unwrap();
+    assert_eq!(delete_tool["annotations"]["destructiveHint"], true);
+    let remote_tool = tool_list
+        .iter()
+        .find(|tool| tool["name"] == "remote_status")
+        .unwrap();
+    assert_eq!(remote_tool["annotations"]["openWorldHint"], true);
 
     let list_tool = tools["result"]["tools"]
         .as_array()
@@ -170,7 +229,7 @@ fn create_claim_heartbeat_and_finish_round_trip() {
         "create",
         json!({
             "title": "MCP task",
-            "priority": 1,
+            "priority": "high",
             "body": "Made over MCP"
         }),
     );
@@ -186,7 +245,7 @@ fn create_claim_heartbeat_and_finish_round_trip() {
     let claimed = client.call(12, "ready", json!({ "claim": true, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
     assert_eq!(claimed["data"]["status"], "in_progress");
-    assert_eq!(claimed["data"]["claimed_by"], "claude");
+    assert_eq!(claimed["data"]["assignee"], "claude");
 
     let heartbeat = client.call(13, "heartbeat", json!({ "id": id, "by": "claude" }));
     let heartbeat = tool_envelope(&heartbeat);
@@ -228,7 +287,7 @@ fn checkpoint_round_trips_over_mcp() {
 
     let claimed = client.call(21, "claim", json!({ "id": id, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
-    assert_eq!(claimed["data"]["claimed_by"], "claude");
+    assert_eq!(claimed["data"]["assignee"], "claude");
 
     let recorded = client.call(
         22,
@@ -287,12 +346,13 @@ fn subtasks_are_available_over_mcp() {
         json!({
             "title": "Part",
             "parent": parent_id.clone(),
-            "labels": ["repo:api", "ready-for-agent"]
+            "labels": ["bug", "ready-for-agent"]
         }),
     );
     let child = tool_envelope(&child);
     let child_id = child["data"]["id"].as_str().unwrap().to_string();
-    assert!(child_id.starts_with(&format!("{parent_id}.")));
+    // IDs are flat; the parent edge lives in `parent` (ADR 0022).
+    assert!(!child_id.contains('.'), "{child_id}");
     assert_eq!(child["data"]["parent"], parent_id.as_str());
 
     let ready = client.call(72, "ready", json!({ "parent": parent_id.clone() }));
@@ -309,12 +369,15 @@ fn subtasks_are_available_over_mcp() {
     assert_eq!(list["data"]["count"], 1);
     assert_eq!(list["data"]["tasks"][0]["id"], child_id.as_str());
 
-    let scoped = client.call(74, "list", json!({ "repo": "api", "all": true }));
+    let set_repository = client.call(77, "update", json!({ "id": child_id, "repository": "api" }));
+    assert_eq!(tool_envelope(&set_repository)["ok"], true);
+
+    let scoped = client.call(74, "list", json!({ "repository": "api", "all": true }));
     let scoped = tool_envelope(&scoped);
     assert_eq!(scoped["data"]["count"], 1);
     assert_eq!(scoped["data"]["tasks"][0]["id"], child_id.as_str());
 
-    let ready_scoped = client.call(75, "ready", json!({ "labels": ["repo:api"] }));
+    let ready_scoped = client.call(75, "ready", json!({ "labels": ["bug"] }));
     let ready_scoped = tool_envelope(&ready_scoped);
     assert_eq!(ready_scoped["data"]["count"], 1);
     assert_eq!(ready_scoped["data"]["tasks"][0]["id"], child_id.as_str());
@@ -355,9 +418,9 @@ fn type_is_available_over_mcp() {
     assert_eq!(ready["data"]["count"], 1);
     assert_eq!(ready["data"]["tasks"][0]["id"], task_id.as_str());
 
-    let updated = client.call(84, "update", json!({ "id": task_id, "type": "spike" }));
+    let updated = client.call(84, "update", json!({ "id": task_id, "type": "bug" }));
     let updated = tool_envelope(&updated);
-    assert_eq!(updated["data"]["type"], "spike");
+    assert_eq!(updated["data"]["type"], "bug");
 
     let nested = client.call(
         85,
@@ -420,21 +483,21 @@ fn update_claim_and_release_are_available() {
     let updated = client.call(
         50,
         "update",
-        json!({ "id": id, "title": "Changed", "priority": 0 }),
+        json!({ "id": id, "title": "Changed", "priority": "highest" }),
     );
     let updated = tool_envelope(&updated);
     assert_eq!(updated["data"]["title"], "Changed");
-    assert_eq!(updated["data"]["priority"], 0);
+    assert_eq!(updated["data"]["priority"], "highest");
 
     let claimed = client.call(51, "claim", json!({ "id": id, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
     assert_eq!(claimed["data"]["status"], "in_progress");
-    assert_eq!(claimed["data"]["claimed_by"], "claude");
+    assert_eq!(claimed["data"]["assignee"], "claude");
 
     let released = client.call(52, "release", json!({ "id": id, "by": "claude" }));
     let released = tool_envelope(&released);
-    assert_eq!(released["data"]["status"], "todo");
-    assert!(released["data"]["claimed_by"].is_null());
+    assert_eq!(released["data"]["status"], "ready");
+    assert!(released["data"]["assignee"].is_null());
 }
 
 #[test]
@@ -586,7 +649,7 @@ fn invalid_inputs_are_tool_errors_not_protocol_errors() {
 }
 
 #[test]
-fn annotate_tool_sets_and_removes_an_annotation() {
+fn property_tool_sets_and_removes_a_property() {
     let repo = TestRepo::new();
     repo.init();
     let id = repo.add("Task", &[]);
@@ -595,22 +658,22 @@ fn annotate_tool_sets_and_removes_an_annotation() {
 
     let set = client.call(
         3,
-        "annotate",
+        "property",
         json!({ "id": id, "owner": "ci", "value": { "passed": true } }),
     );
     assert_eq!(
-        tool_envelope(&set)["data"]["annotation"],
+        tool_envelope(&set)["data"]["property"],
         json!({"passed": true})
     );
 
     let removed = client.call(
         4,
-        "annotate",
+        "property",
         json!({ "id": id, "owner": "ci", "value": null }),
     );
     assert_eq!(tool_envelope(&removed)["data"]["changed"], true);
     let show = repo.ok_json(&["show", &id, "--json"]);
-    assert_eq!(show["data"]["annotations"], json!({}));
+    assert_eq!(show["data"]["properties"], json!({}));
 }
 
 #[test]
@@ -637,12 +700,12 @@ fn batch_tool_applies_operations_in_one_call() {
 }
 
 #[test]
-fn annotate_tool_requires_a_value_key() {
+fn property_tool_requires_a_value_key() {
     let repo = TestRepo::new();
     repo.init();
     let id = repo.add("Task", &[]);
     repo.ok_json(&[
-        "annotation",
+        "property",
         "set",
         &id,
         "ci",
@@ -652,8 +715,73 @@ fn annotate_tool_requires_a_value_key() {
     ]);
     let mut client = McpClient::start(&repo);
     initialize(&mut client);
-    let response = client.call(3, "annotate", json!({ "id": id, "owner": "ci" }));
+    let response = client.call(3, "property", json!({ "id": id, "owner": "ci" }));
     assert_eq!(tool_envelope(&response)["ok"], false);
     let show = repo.ok_json(&["show", &id, "--json"]);
-    assert_eq!(show["data"]["annotations"], json!({"ci": {"a": 1}}));
+    assert_eq!(show["data"]["properties"], json!({"ci": {"a": 1}}));
+}
+
+#[test]
+fn mutation_tools_expose_and_forward_concurrency_arguments() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let tools = client.request(2, "tools/list", json!({}));
+    let tool_list = tools["result"]["tools"].as_array().unwrap();
+    for name in ["update", "claim", "create", "batch"] {
+        let tool = tool_list
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        let properties = tool["inputSchema"]["properties"].as_object().unwrap();
+        assert!(
+            properties.contains_key("idempotency_key"),
+            "{name} must expose idempotency_key"
+        );
+        if name != "create" && name != "batch" {
+            assert!(
+                properties.contains_key("if_version"),
+                "{name} must expose if_version"
+            );
+        }
+    }
+    // Read tools do not advertise write-only arguments.
+    let get = tool_list.iter().find(|tool| tool["name"] == "get").unwrap();
+    assert!(
+        !get["inputSchema"]["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("idempotency_key")
+    );
+
+    // A stale if_version surfaces as a retryable VERSION_CONFLICT envelope.
+    let conflict = client.call(
+        3,
+        "update",
+        json!({ "id": id, "title": "Nope", "if_version": "2000-01-01T00:00:00Z" }),
+    );
+    let envelope = tool_envelope(&conflict);
+    assert_eq!(envelope["ok"], false, "{envelope}");
+    assert_eq!(envelope["error"]["code"], "VERSION_CONFLICT", "{envelope}");
+    assert_eq!(envelope["error"]["retryable"], true, "{envelope}");
+
+    // idempotency_key replays the first recorded result.
+    let first = client.call(
+        4,
+        "update",
+        json!({ "id": id, "title": "Renamed", "idempotency_key": "mcp-k1" }),
+    );
+    assert_eq!(tool_envelope(&first)["ok"], true);
+    let replay = client.call(
+        5,
+        "update",
+        json!({ "id": id, "title": "Other", "idempotency_key": "mcp-k1" }),
+    );
+    let replayed = tool_envelope(&replay);
+    assert_eq!(replayed["ok"], true, "{replayed}");
+    assert_eq!(replayed["data"]["title"], "Renamed", "{replayed}");
+    assert_eq!(replayed["meta"]["idempotent_replay"], true, "{replayed}");
 }

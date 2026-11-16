@@ -181,7 +181,7 @@ fn same_project(link: &RemoteLinkView, other: &RemoteLinkView) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{TaskFrontmatter, TaskType, default_priority};
+    use crate::task::{TaskFrontmatter, default_priority};
     use chrono::TimeZone;
     use std::collections::BTreeMap;
 
@@ -204,25 +204,30 @@ mod tests {
             id: id.to_string(),
             front: TaskFrontmatter {
                 title: id.to_string(),
-                status: crate::task::Status::Todo,
-                task_type: TaskType::Task,
+                status: "todo".to_string(),
+                key: None,
+                key_aliases: Vec::new(),
+                resolution: None,
+                task_type: "task".to_string(),
                 priority: default_priority(),
                 labels: Vec::new(),
-                depends_on: Vec::new(),
+                links: Vec::new(),
                 parent: None,
-                waiting_on: None,
                 checkpoint: None,
-                claim: None,
-                stray_claim_times: None,
+                assignee: None,
+                lease: None,
+                reporter: None,
+                stray_lease_times: None,
                 created_at: now,
                 updated_at: now,
-                area: None,
+                component: None,
                 verification: None,
                 github: None,
                 remote: None,
-                repo: None,
+                repository: None,
+                external_id: None,
                 source_key: None,
-                annotations: BTreeMap::new(),
+                properties: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: String::new(),
@@ -273,8 +278,8 @@ mod tests {
             labels: Vec::new(),
             area: None,
             verification: None,
-            status: Some(crate::task::Status::Todo),
-            remote_status: Some(crate::task::Status::Todo),
+            status: Some(crate::remote::Status::Todo),
+            remote_status: Some(crate::remote::Status::Todo),
             subtasks: vec![RemoteIssueRef {
                 project: "acme/a".into(),
                 id: "2".into(),

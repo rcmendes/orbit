@@ -282,7 +282,7 @@ fn remote_connect_and_link_use_fixture_client() {
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["github"]["repo"], "acme/widget");
     assert_eq!(show["data"]["title"], "Imported issue");
-    assert_eq!(show["data"]["area"], "cli");
+    assert_eq!(show["data"]["component"], "cli");
 }
 
 #[test]
@@ -312,9 +312,24 @@ fn list_shows_and_filters_github_links() {
     assert!(human.status.success());
     let stdout = String::from_utf8_lossy(&human.stdout);
     assert!(stdout.contains("ISSUE"), "{stdout}");
-    let linked_line = stdout.lines().find(|line| line.contains(&linked)).unwrap();
+    // The ID column shows the project key; the internal ID stays in JSON.
+    let key_of = |id: &str| {
+        repo.ok_json(&["show", id, "--json"])["data"]["key"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let linked_key = key_of(&linked);
+    let local_key = key_of(&local);
+    let linked_line = stdout
+        .lines()
+        .find(|line| line.contains(&linked_key))
+        .unwrap();
     assert!(linked_line.contains("#42"), "{stdout}");
-    let local_line = stdout.lines().find(|line| line.contains(&local)).unwrap();
+    let local_line = stdout
+        .lines()
+        .find(|line| line.contains(&local_key))
+        .unwrap();
     assert!(local_line.contains(" - "), "{stdout}");
 
     let show = repo.orbit(&["show", linked.as_str()]);
@@ -594,7 +609,7 @@ fn basic_mode_rejects_create_when_task_has_structured_metadata() {
     write_basic_github_config(&repo);
     let id = repo.add(
         "Personal issue",
-        &["--area", "cli", "--verification", "cargo test"],
+        &["--component", "cli", "--verification", "cargo test"],
     );
 
     let (status, value) = repo.json_with_env(
@@ -703,7 +718,7 @@ fn basic_mode_adopts_and_syncs_without_importing_issue_fields() {
     assert!(adopted["data"]["issue"]["area"].is_null());
     assert!(adopted["data"]["issue"]["verification"].is_null());
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert!(show["data"]["area"].is_null());
+    assert!(show["data"]["component"].is_null());
     assert!(show["data"]["verification"].is_null());
 
     let sync = repo.ok_json_with_env(
@@ -717,7 +732,7 @@ fn basic_mode_adopts_and_syncs_without_importing_issue_fields() {
     repo.ok_json(&[
         "update",
         id.as_str(),
-        "--area",
+        "--component",
         "cli",
         "--verification",
         "cargo test",
@@ -1024,7 +1039,7 @@ fn github_sync_human_dry_run_lists_push_changes() {
     let fixture = write_fixture(&fixture_dir);
     let repo = TestRepo::new();
     let id = adopt_fixture_task(&repo, &fixture, "Local title");
-    set_task_frontmatter(&repo, &id, "area", "setup");
+    set_task_frontmatter(&repo, &id, "component", "setup");
     set_task_frontmatter(&repo, &id, "updated_at", "2026-10-24T14:00:00Z");
 
     let output = repo.orbit_with_env(
@@ -1115,7 +1130,7 @@ fn linked_task_status_labels_and_metadata_push_from_orbit() {
     set_task_frontmatter(&repo, &id, "status", "done");
     repo.ok_json(&["label", "remove", id.as_str(), "bug", "--json"]);
     repo.ok_json(&["label", "add", id.as_str(), "feature", "--json"]);
-    set_task_frontmatter(&repo, &id, "area", "setup");
+    set_task_frontmatter(&repo, &id, "component", "setup");
     set_task_frontmatter(&repo, &id, "verification", "\"cargo test sync\"");
     set_task_frontmatter(&repo, &id, "updated_at", "2026-10-25T14:00:00Z");
 
@@ -1189,7 +1204,7 @@ fn remote_only_label_and_metadata_changes_pull_when_orbit_is_unchanged() {
     );
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["labels"], serde_json::json!(["remote-label"]));
-    assert_eq!(show["data"]["area"], "setup");
+    assert_eq!(show["data"]["component"], "setup");
     assert_eq!(show["data"]["verification"], "cargo test remote");
 }
 
@@ -1255,6 +1270,86 @@ fn supported_subtask_relationships_are_previewed_and_applied() {
         applied["issues"]["acme/widget#42"]["blocking"][0]["number"],
         43
     );
+}
+
+#[test]
+fn nested_subtask_relationships_sync_at_depth_two() {
+    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(&fixture_dir);
+    add_fixture_issue(&fixture, "acme/widget#43", 43, "Middle issue");
+    add_fixture_issue(&fixture, "acme/widget#44", 44, "Nested issue");
+    let repo = TestRepo::new();
+    repo.init();
+    write_github_config(&repo);
+    let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
+
+    // epic > task > sub-task reaches depth two on the default hierarchy.
+    let parent = repo.add("Release", &["--type", "epic"]);
+    repo.ok_json_with_env(
+        &[
+            "remote",
+            "link",
+            parent.as_str(),
+            "acme/widget#42",
+            "--json",
+        ],
+        &env,
+    );
+    let child = repo.add("Feature", &["--parent", parent.as_str(), "--type", "task"]);
+    repo.ok_json_with_env(
+        &["remote", "link", child.as_str(), "acme/widget#43", "--json"],
+        &env,
+    );
+    let grandchild = repo.add("Step", &["--parent", child.as_str()]);
+    repo.ok_json_with_env(
+        &[
+            "remote",
+            "link",
+            grandchild.as_str(),
+            "acme/widget#44",
+            "--json",
+        ],
+        &env,
+    );
+
+    repo.ok_json_with_env(&["remote", "sync", "--apply", "--json"], &env);
+
+    // Every Orbit parent edge became a sub-issue edge between the two linked
+    // Issues, including the edge whose Orbit parent is itself a SubTask.
+    let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+    let blocking_numbers = |number: u64| {
+        let key = format!("acme/widget#{number}");
+        applied["issues"][key.as_str()]["blocking"]
+            .as_array()
+            .map(|issues| {
+                issues
+                    .iter()
+                    .map(|issue| issue["number"].as_u64().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(blocking_numbers(42), vec![43]);
+    assert_eq!(blocking_numbers(43), vec![44]);
+    assert!(blocking_numbers(44).is_empty());
+
+    // A second sync finds nothing left to push: the nested parentage is stable.
+    let preview = repo.ok_json_with_env(&["remote", "sync", "--json"], &env);
+    for task in preview["data"]["tasks"].as_array().unwrap() {
+        let adds: Vec<_> = task["relationships"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|change| change["action"] == "add")
+            .collect();
+        assert!(adds.is_empty(), "{task}");
+    }
+
+    // The Orbit parent chain survives the round trip untouched.
+    let shown = repo.ok_json(&["show", grandchild.as_str(), "--json"]);
+    assert_eq!(shown["data"]["parent"], child.as_str());
+    let shown = repo.ok_json(&["show", child.as_str(), "--json"]);
+    assert_eq!(shown["data"]["parent"], parent.as_str());
 }
 
 #[test]
@@ -1674,7 +1769,7 @@ fn github_create_previews_issue_without_writing_until_apply() {
         "Preview issue",
         "Description for GitHub",
         "Labels: bug",
-        "Task status: todo",
+        "Task status: ready",
         "Remote Issue state: open",
         "Apply with --apply",
     ] {
@@ -1734,7 +1829,7 @@ fn github_create_includes_configured_issue_fields_in_the_created_issue() {
     set_configured_issue_field_ids(&repo);
     let id = repo.add(
         "Issue with fields",
-        &["--area", "cli", "--verification", "cargo test"],
+        &["--component", "cli", "--verification", "cargo test"],
     );
 
     let result = repo.ok_json_with_env(
@@ -2027,7 +2122,7 @@ fn github_status_reports_conflicts_and_doctor_reports_configuration_problems() {
     let id = adopt_fixture_task(&repo, &fixture, "Imported issue");
     set_configured_issue_field_ids(&repo);
     set_task_frontmatter(&repo, &id, "title", "\"Orbit edit\"");
-    set_task_frontmatter(&repo, &id, "area", "setup");
+    set_task_frontmatter(&repo, &id, "component", "setup");
     set_task_frontmatter(&repo, &id, "updated_at", "2026-11-28T15:00:00Z");
     set_fixture_issue_field(&fixture, "title", serde_json::json!("GitHub edit"));
     set_fixture_issue_field(
@@ -2467,7 +2562,7 @@ fn injected_sync_rejects_issue_fields_in_basic_mode() {
         &["remote", "link", &id, "personal/widget#42", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    repo.ok_json(&["update", &id, "--area", "cli", "--json"]);
+    repo.ok_json(&["update", &id, "--component", "cli", "--json"]);
     let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
     let resolver = fixture_resolver(&board, &fixture);
     let _lock = board.lock_exclusive().unwrap();
@@ -2568,7 +2663,7 @@ fn auto_push_creates_an_issue_and_tracks_status_and_labels() {
     let (_fixture_dir, fixture) = auto_push_fixture();
     let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
 
-    let add = repo.ok_json_with_env(&["add", "Auto-created task", "-p", "1", "--json"], &env);
+    let add = repo.ok_json_with_env(&["add", "Auto-created task", "-p", "high", "--json"], &env);
     let id = add["data"]["id"].as_str().unwrap().to_string();
     let created = fixture_issue(&fixture, 1);
     assert_eq!(created["title"], "Auto-created task");
@@ -2640,7 +2735,7 @@ fn auto_push_pushes_mapped_fields_but_not_priority_changes() {
     let id = add["data"]["id"].as_str().unwrap().to_string();
     let before = fixture_issue(&fixture, 1)["updated_at"].clone();
 
-    repo.ok_json_with_env(&["update", &id, "--priority", "0", "--json"], &env);
+    repo.ok_json_with_env(&["update", &id, "--priority", "highest", "--json"], &env);
     let after_priority = fixture_issue(&fixture, 1);
     assert_eq!(after_priority["updated_at"], before);
     assert_eq!(after_priority["title"], "Field task");
@@ -2768,7 +2863,10 @@ fn auto_push_basic_mode_keeps_area_and_verification_local() {
     let (_fixture_dir, fixture) = auto_push_fixture();
     let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
 
-    let add = repo.ok_json_with_env(&["add", "Metadata task", "--area", "cli", "--json"], &env);
+    let add = repo.ok_json_with_env(
+        &["add", "Metadata task", "--component", "cli", "--json"],
+        &env,
+    );
     let warnings = add["meta"]["warnings"].as_array().unwrap();
     assert!(
         warnings

@@ -124,7 +124,7 @@ pub struct RepoContext {
     pub legacy_local_board: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub board: BoardConfig,
@@ -145,6 +145,46 @@ pub struct Config {
         skip_serializing_if = "crate::workspace::WorkspaceConfig::is_empty"
     )]
     pub workspace: crate::workspace::WorkspaceConfig,
+    /// The Board's declarative workflow: a shipped template (`minimal`,
+    /// `standard`, `agentic`) or a fully custom `[workflow]` definition.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::workflow::WorkflowConfig::is_default"
+    )]
+    pub workflow: crate::workflow::WorkflowConfig,
+    /// Declarative transition policy (`[policy]`): rules scoped by
+    /// transition, type, label, or profile that guard workflow transitions
+    /// and carry post-functions. Enforced in `ops` for every surface.
+    #[serde(default, skip_serializing_if = "crate::policy::PolicyConfig::is_empty")]
+    pub policy: crate::policy::PolicyConfig,
+    /// Profiles applied to this Board (`orbit setup <plugin>`), recorded so
+    /// `orbit doctor` and `orbit capabilities` can re-negotiate their
+    /// requirements without re-reading the profile files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<crate::profile::AppliedProfile>,
+    /// The contract version the Board was written for (ADR 0022). A binary
+    /// refuses a Board whose contract is newer than its own; see
+    /// [`crate::contract`]. Boards predating the field read as the current
+    /// contract.
+    #[serde(default = "crate::contract::default_version")]
+    pub contract: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            board: BoardConfig::default(),
+            id: IdConfig::default(),
+            github: crate::github::GitHubConfig::default(),
+            remote: crate::remote::RemoteConfig::default(),
+            repositories: Vec::new(),
+            workspace: crate::workspace::WorkspaceConfig::default(),
+            workflow: crate::workflow::WorkflowConfig::default(),
+            policy: crate::policy::PolicyConfig::default(),
+            profiles: Vec::new(),
+            contract: crate::contract::default_version(),
+        }
+    }
 }
 
 impl Config {
@@ -166,15 +206,57 @@ impl Config {
         Ok(config)
     }
 
+    /// Parses `config.toml` without semantic validation. `orbit capabilities`
+    /// uses this to report the Board's contract and workflow even when the
+    /// contract is newer than this binary's — the handshake must answer on a
+    /// Board every other command refuses.
+    pub fn load_lenient(root: &Path) -> Result<Self> {
+        let path = root.join("config.toml");
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(OrbitError::board_not_found());
+            }
+            Err(error) => {
+                return Err(OrbitError::io(format!("read {}", path.display()), error));
+            }
+        };
+        toml::from_str(&content)
+            .map_err(|error| OrbitError::config(format!("invalid {}: {error}", path.display())))
+    }
+
     pub fn validate(&self) -> Result<()> {
+        // The contract gate runs first: a newer Board fails before any other
+        // check can misread fields this binary does not know.
+        crate::contract::check_compatible(&self.contract)?;
         if self.board.lease_minutes <= 0 {
             return Err(OrbitError::config("board.lease_minutes must be positive"));
         }
-        if self.board.default_priority > 3 {
-            return Err(OrbitError::config(
-                "board.default_priority must be between 0 and 3",
-            ));
+        if self.board.priorities.is_empty() {
+            return Err(OrbitError::config("board.priorities must not be empty"));
         }
+        let mut seen_priorities = std::collections::BTreeSet::new();
+        for priority in &self.board.priorities {
+            if !task::is_valid_label(priority) {
+                return Err(OrbitError::config(format!(
+                    "board.priorities contains invalid priority `{priority}`"
+                )));
+            }
+            if !seen_priorities.insert(priority.as_str()) {
+                return Err(OrbitError::config(format!(
+                    "board.priorities contains duplicate priority `{priority}`"
+                )));
+            }
+        }
+        if !self.board.priorities.contains(&self.board.default_priority) {
+            return Err(OrbitError::config(format!(
+                "board.default_priority `{}` is not in board.priorities",
+                self.board.default_priority
+            )));
+        }
+        // The Issue model must agree with itself: known default type, every
+        // type placed on exactly one hierarchy level.
+        crate::hierarchy::Hierarchy::from_config(&self.board)?;
         for label in &self.board.non_ready_labels {
             if !task::is_valid_label(label) {
                 return Err(OrbitError::config(format!(
@@ -182,10 +264,10 @@ impl Config {
                 )));
             }
         }
-        for area in &self.board.areas {
-            if !crate::task::is_valid_area(area) {
+        for component in &self.board.components {
+            if !crate::task::is_valid_component(component) {
                 return Err(OrbitError::config(format!(
-                    "board.areas contains invalid area `{area}`"
+                    "board.components contains invalid component `{component}`"
                 )));
             }
         }
@@ -203,6 +285,24 @@ impl Config {
         }
         self.github.validate()?;
         self.workspace.validate()?;
+        self.workflow.validate()?;
+        crate::workflow::Workflow::from_config(self)?;
+        crate::policy::Policy::from_config(self)?;
+        let mut profile_names = std::collections::BTreeSet::new();
+        for profile in &self.profiles {
+            if !task::is_valid_label(&profile.name) {
+                return Err(OrbitError::config(format!(
+                    "profiles contains invalid profile name `{}`",
+                    profile.name
+                )));
+            }
+            if !profile_names.insert(profile.name.as_str()) {
+                return Err(OrbitError::config(format!(
+                    "profiles contains duplicate profile `{}`",
+                    profile.name
+                )));
+            }
+        }
         let mut names = std::collections::BTreeSet::new();
         let mut paths = std::collections::BTreeSet::new();
         for repository in &self.repositories {
@@ -270,16 +370,43 @@ pub struct BoardConfig {
     /// Still parsed so `orbit migrate` can read pre-migration Boards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<StorageMode>,
-    /// Optional per-Board Area vocabulary. When empty, any short lowercase
-    /// Area name is accepted.
+    /// Optional per-Board Component vocabulary. When empty, any short
+    /// lowercase Component name is accepted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub areas: Vec<String>,
+    pub components: Vec<String>,
     #[serde(default = "default_lease")]
     pub lease_minutes: i64,
     #[serde(default = "task::default_priority")]
-    pub default_priority: u8,
+    pub default_priority: String,
+    /// Ordered Priority names, most important first. Tasks store a name and
+    /// sort by its position here; renaming or reordering changes the order.
+    #[serde(default = "task::default_priorities")]
+    pub priorities: Vec<String>,
     #[serde(default = "default_non_ready_labels")]
     pub non_ready_labels: Vec<String>,
+    /// The Board's Issue type vocabulary (`[[board.types]]`). Each entry may
+    /// declare `required` frontmatter fields the type demands.
+    #[serde(
+        default = "crate::hierarchy::default_issue_types",
+        skip_serializing_if = "issue_types_are_default"
+    )]
+    pub types: Vec<crate::hierarchy::IssueTypeConfig>,
+    /// The Issue type `orbit add` uses when neither `--type` nor `--parent`
+    /// applies.
+    #[serde(
+        default = "crate::hierarchy::default_issue_type",
+        skip_serializing_if = "is_default_issue_type"
+    )]
+    pub default_type: String,
+    /// The ordered Issue hierarchy (`[[board.hierarchy]]`), top level first.
+    /// A Task's `parent` is allowed only when its type sits on a strictly
+    /// deeper level than the parent's type; the level count is the maximum
+    /// depth. Replaces the retired `board.max_subtask_depth` integer (ADR 0022).
+    #[serde(
+        default = "crate::hierarchy::default_hierarchy",
+        skip_serializing_if = "hierarchy_is_default"
+    )]
+    pub hierarchy: Vec<crate::hierarchy::HierarchyLevelConfig>,
     #[serde(default = "default_true")]
     pub auto_commit: bool,
     #[serde(default = "default_lock_timeout")]
@@ -324,10 +451,14 @@ impl Default for BoardConfig {
         Self {
             branch: default_branch(),
             storage: None,
-            areas: Vec::new(),
+            components: Vec::new(),
             lease_minutes: default_lease(),
             default_priority: task::default_priority(),
+            priorities: task::default_priorities(),
             non_ready_labels: default_non_ready_labels(),
+            types: crate::hierarchy::default_issue_types(),
+            default_type: crate::hierarchy::default_issue_type(),
+            hierarchy: crate::hierarchy::default_hierarchy(),
             auto_commit: true,
             lock_timeout_ms: default_lock_timeout(),
             host: None,
@@ -382,11 +513,6 @@ impl IdConfig {
             .chain(self.accepted_prefixes.iter().map(String::as_str))
             .find(|prefix| task::is_valid_id(id, prefix))
     }
-
-    pub fn parent_id(&self, id: &str) -> Option<String> {
-        self.prefix_for_id(id)
-            .and_then(|prefix| task::parent_id_from_id(id, prefix))
-    }
 }
 
 fn validate_id_prefix(prefix: &str) -> Result<()> {
@@ -432,6 +558,18 @@ fn default_non_ready_labels() -> Vec<String> {
         "needs-info".to_string(),
         "ready-for-human".to_string(),
     ]
+}
+
+fn issue_types_are_default(types: &[crate::hierarchy::IssueTypeConfig]) -> bool {
+    types == crate::hierarchy::default_issue_types()
+}
+
+fn is_default_issue_type(value: &str) -> bool {
+    value == crate::hierarchy::default_issue_type()
+}
+
+fn hierarchy_is_default(levels: &[crate::hierarchy::HierarchyLevelConfig]) -> bool {
+    levels == crate::hierarchy::default_hierarchy()
 }
 
 fn default_true() -> bool {
@@ -822,6 +960,13 @@ impl Board {
         root.join("config.toml").exists()
     }
 
+    /// The Board's resolved workflow: the configured template or custom
+    /// `[workflow]` definition. `Config::validate` already checked it, so
+    /// this only fails if the config was built programmatically.
+    pub fn workflow(&self) -> Result<crate::workflow::Workflow> {
+        crate::workflow::Workflow::from_config(&self.config)
+    }
+
     pub fn task_ids(&self) -> Result<Vec<String>> {
         let directory = self.tasks_dir();
         let entries = std::fs::read_dir(&directory).map_err(|error| {
@@ -933,10 +1078,35 @@ impl Board {
     }
 
     pub fn commit(&self, message: &str, force: bool) -> Result<CommitOutcome> {
+        self.commit_as(message, force, None)
+    }
+
+    /// [`Board::commit`] that records `actor` in an `Orbit-Actor` commit
+    /// trailer so the change feed (`orbit changes`, `orbit history`) can
+    /// attribute the events the commit produces. `None` or a blank actor
+    /// records no trailer.
+    pub fn commit_as(
+        &self,
+        message: &str,
+        force: bool,
+        actor: Option<&str>,
+    ) -> Result<CommitOutcome> {
         if !force && !self.config.board.auto_commit {
             return Ok(CommitOutcome::Skipped);
         }
-        match git::commit(&self.root, message) {
+        let actor = actor
+            .map(str::trim)
+            .filter(|actor| !actor.is_empty() && !actor.contains('\n'));
+        let trailers: Vec<String> = actor
+            .map(|actor| format!("{}: {actor}", crate::feed::ACTOR_TRAILER))
+            .into_iter()
+            .collect();
+        let outcome = if trailers.is_empty() {
+            git::commit(&self.root, message)
+        } else {
+            git::commit_with_trailers(&self.root, message, &trailers)
+        };
+        match outcome {
             Ok(outcome) => Ok(outcome),
             Err(error) if !force => {
                 self.commit_failed.set(true);
@@ -2223,7 +2393,11 @@ mod tests {
         assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
 
         let mut config = Config::default();
-        config.board.default_priority = 9;
+        config.board.default_priority = "urgent".to_string();
+        assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
+
+        let mut config = Config::default();
+        config.board.priorities = vec!["high".to_string(), "high".to_string()];
         assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
 
         let mut config = Config::default();
@@ -2245,10 +2419,6 @@ mod tests {
         config.id.accepted_prefixes = vec!["legacy-".to_string()];
         config.validate().unwrap();
         assert!(config.id.is_valid_task_id("legacy-a7b2c9"));
-        assert_eq!(
-            config.id.parent_id("legacy-a7b2c9.d4b3df"),
-            Some("legacy-a7b2c9".to_string())
-        );
 
         let serialized = config.to_toml().unwrap();
         let restored: Config = toml::from_str(&serialized).unwrap();
@@ -2256,5 +2426,87 @@ mod tests {
 
         config.id.accepted_prefixes.push("legacy-".to_string());
         assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
+    }
+
+    #[test]
+    fn issue_model_loads_and_validates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[board]\ndefault_type = \"bug\"\n\n[[board.types]]\nname = \"epic\"\n\n[[board.types]]\nname = \"bug\"\nrequired = [\"area\"]\n\n[[board.hierarchy]]\ntypes = [\"epic\"]\n\n[[board.hierarchy]]\ntypes = [\"bug\"]\n",
+        )
+        .unwrap();
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.board.default_type, "bug");
+        assert_eq!(config.board.types.len(), 2);
+        assert_eq!(config.board.hierarchy.len(), 2);
+        assert_eq!(config.board.types[1].required, vec!["area".to_string()]);
+
+        // Defaults apply when the sections are absent.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.board.default_type, "task");
+        assert_eq!(config.board.types.len(), 5);
+        assert_eq!(config.board.hierarchy.len(), 3);
+    }
+
+    #[test]
+    fn issue_model_rejects_inconsistent_config() {
+        // default_type naming an unconfigured type.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[board]\ndefault_type = \"mystery\"\n",
+        )
+        .unwrap();
+        let error = Config::load(dir.path()).unwrap_err();
+        assert_eq!(error.code, code::CONFIG_ERROR);
+        assert!(
+            error.message.contains("board.default_type"),
+            "{}",
+            error.message
+        );
+
+        // A type placed on two levels.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[[board.hierarchy]]\ntypes = [\"task\"]\n\n[[board.hierarchy]]\ntypes = [\"task\", \"sub-task\"]\n\n[[board.hierarchy]]\ntypes = [\"epic\", \"story\", \"bug\"]\n",
+        )
+        .unwrap();
+        let error = Config::load(dir.path()).unwrap_err();
+        assert_eq!(error.code, code::CONFIG_ERROR);
+        assert!(
+            error.message.contains("more than one level"),
+            "{}",
+            error.message
+        );
+
+        // A level naming an unknown type.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[[board.hierarchy]]\ntypes = [\"mystery\"]\n",
+        )
+        .unwrap();
+        let error = Config::load(dir.path()).unwrap_err();
+        assert_eq!(error.code, code::CONFIG_ERROR);
+        assert!(error.message.contains("unknown type"), "{}", error.message);
+    }
+
+    #[test]
+    fn default_issue_model_is_not_serialized() {
+        let config = Config::default();
+        let toml = config.to_toml().unwrap();
+        assert!(!toml.contains("max_subtask_depth"));
+        assert!(!toml.contains("default_type"));
+        assert!(!toml.contains("[[board.types]]"));
+        assert!(!toml.contains("[[board.hierarchy]]"));
+
+        let mut config = Config::default();
+        config.board.default_type = "bug".to_string();
+        let toml = config.to_toml().unwrap();
+        assert!(toml.contains("default_type = \"bug\""));
     }
 }

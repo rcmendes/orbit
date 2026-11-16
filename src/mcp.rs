@@ -133,222 +133,7 @@ fn initialize_result(params: &Value) -> Value {
 }
 
 fn tool_definitions() -> Vec<Value> {
-    vec![
-        tool(
-            "ready",
-            "List ready tasks. With claim=true, atomically claim the highest-priority one.",
-            json!({
-                "claim": { "type": "boolean", "description": "Claim the first ready task." },
-                "by": { "type": "string", "description": "Agent identity for the claim." },
-                "limit": { "type": "integer", "minimum": 1, "description": "Maximum tasks to list." },
-                "parent": { "type": "string", "description": "Only Ready SubTasks of this Parent Task." },
-                "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
-                "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
-                "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
-                "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
-                "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
-                "areas": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these work-area slugs; restricted to the Board's configured areas when set." },
-                "exclude_areas": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these work-area slugs." },
-                "all": { "type": "boolean", "description": "Include Ready tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." }
-            }),
-            &[],
-        ),
-        tool(
-            "list",
-            "List tasks with filters. Terminal tasks are hidden unless include_closed=true; all=true widens Repository scope.",
-            json!({
-                "status": { "type": "string", "enum": ["todo", "in_progress", "done", "cancelled"] },
-                "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
-                "claimed_by": { "type": "string" },
-                "waiting": { "type": "boolean", "description": "Only tasks with an external blocker." },
-                "label": { "type": "string", "description": "Filter by label." },
-                "unlabeled": { "type": "boolean", "description": "Only tasks with no labels." },
-                "parent": { "type": "string", "description": "Only SubTasks of this Parent Task." },
-                "repo": { "type": "string", "description": "Only tasks with this repository label. Shorthand for label repo:NAME." },
-                "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
-                "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
-                "types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Only tasks with any of these work shapes." },
-                "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"] }, "description": "Exclude tasks with any of these work shapes." },
-                "areas": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these work-area slugs; restricted to the Board's configured areas when set." },
-                "exclude_areas": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these work-area slugs." },
-                "all": { "type": "boolean", "description": "Include tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." },
-                "include_closed": { "type": "boolean", "description": "Include done and cancelled tasks." },
-                "linked": { "type": "boolean", "description": "Only Tasks with an active Remote Issue link." },
-                "local": { "type": "boolean", "description": "Only Tasks without an active Remote Issue link; includes detached provenance." }
-            }),
-            &[],
-        ),
-        tool(
-            "get",
-            "Read one task, including its Markdown body and dependents.",
-            json!({ "id": { "type": "string", "description": "Task id, for example orb-a7b2c9." } }),
-            &["id"],
-        ),
-        tool(
-            "create",
-            "Create a task. Returns the new task id.",
-            json!({
-                "title": { "type": "string" },
-                "type": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"], "description": "Work shape; defaults to task." },
-                "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
-                "labels": { "type": "array", "items": { "type": "string" } },
-                "depends_on": { "type": "array", "items": { "type": "string" } },
-                "parent": { "type": "string", "description": "Create a SubTask under this Parent Task." },
-                "waiting_on": { "type": "string", "description": "External blocker." },
-                "area": { "type": "string", "description": "Optional work-area slug; restricted to the Board's configured areas when set." },
-                "verification": { "type": "string", "description": "Concise checks or commands for agents." },
-                "body": { "type": "string", "description": "Markdown body and acceptance criteria." }
-            }),
-            &["title"],
-        ),
-        tool(
-            "update",
-            "Change a task's title, body, priority, area, verification, or external wait. Does not change status.",
-            json!({
-                "id": { "type": "string" },
-                "title": { "type": "string" },
-                "body": { "type": "string" },
-                "type": { "type": "string", "enum": ["task", "epic", "spike", "chore", "decision"], "description": "New work shape." },
-                "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
-                "waiting_on": { "type": "string" },
-                "clear_waiting": { "type": "boolean" },
-                "area": { "type": "string", "description": "New work-area slug; restricted to the Board's configured areas when set." },
-                "clear_area": { "type": "boolean" },
-                "verification": { "type": "string" },
-                "clear_verification": { "type": "boolean" }
-            }),
-            &["id"],
-        ),
-        tool(
-            "claim",
-            "Claim a specific task.",
-            json!({
-                "id": { "type": "string" },
-                "by": { "type": "string", "description": "Agent identity." },
-                "steal": { "type": "boolean", "description": "Take over a live or stale claim." }
-            }),
-            &["id"],
-        ),
-        tool(
-            "release",
-            "Release a claim and return the task to todo.",
-            json!({
-                "id": { "type": "string" },
-                "by": { "type": "string" },
-                "force": { "type": "boolean", "description": "Release another agent's claim." }
-            }),
-            &["id"],
-        ),
-        tool(
-            "heartbeat",
-            "Extend a claim's lease while working.",
-            json!({
-                "id": { "type": "string" },
-                "by": { "type": "string" }
-            }),
-            &["id"],
-        ),
-        tool(
-            "checkpoint",
-            "Record or update the active work checkpoint on a claimed task.",
-            json!({
-                "id": { "type": "string" },
-                "progress": { "type": "string", "description": "Current progress. Required for the first checkpoint." },
-                "next": { "type": "string", "description": "Next useful action for the next claimant." },
-                "clear_next": { "type": "boolean", "description": "Remove the next action." },
-                "blocker": { "type": "string", "description": "A blocker the next claimant must know about." },
-                "clear_blocker": { "type": "boolean", "description": "Remove the blocker." },
-                "by": { "type": "string", "description": "Agent identity; must match the claim holder." }
-            }),
-            &["id"],
-        ),
-        tool(
-            "finish",
-            "Complete or cancel a task. Done still requires finished dependencies.",
-            json!({
-                "id": { "type": "string" },
-                "status": { "type": "string", "enum": ["done", "cancelled"] },
-                "by": { "type": "string" },
-                "force": { "type": "boolean", "description": "Override a competing live claim; never bypasses dependencies." },
-                "comment": { "type": "string", "description": "Completion note recorded atomically with the status change." }
-            }),
-            &["id", "status"],
-        ),
-        tool(
-            "link",
-            "Add or remove a dependency.",
-            json!({
-                "id": { "type": "string" },
-                "dep_id": { "type": "string" },
-                "action": { "type": "string", "enum": ["add", "remove"] }
-            }),
-            &["id", "dep_id", "action"],
-        ),
-        tool(
-            "delete",
-            "Delete a task. With force=true, clean up dependent tasks first.",
-            json!({
-                "id": { "type": "string" },
-                "by": { "type": "string" },
-                "force": { "type": "boolean" }
-            }),
-            &["id"],
-        ),
-        tool(
-            "label",
-            "Add, remove, or list task labels.",
-            json!({
-                "action": { "type": "string", "enum": ["add", "remove", "list"] },
-                "id": { "type": "string" },
-                "labels": { "type": "array", "items": { "type": "string" } }
-            }),
-            &["action"],
-        ),
-        tool(
-            "batch",
-            "Apply many task operations in one commit, all or none. Same operations as `orbit batch`.",
-            json!({
-                "operations": { "type": "array", "items": { "type": "object" } },
-                "dry_run": { "type": "boolean" },
-                "by": { "type": "string" }
-            }),
-            &["operations"],
-        ),
-        tool(
-            "annotate",
-            "Set a tool's Annotation (a JSON object) on a task, or remove it with value null.",
-            json!({
-                "id": { "type": "string" },
-                "owner": { "type": "string" },
-                "value": { "type": ["object", "null"] }
-            }),
-            &["id", "owner"],
-        ),
-        tool(
-            "comment",
-            "Add or list task comments.",
-            json!({
-                "action": { "type": "string", "enum": ["add", "list"] },
-                "id": { "type": "string" },
-                "body": { "type": "string" },
-                "by": { "type": "string" }
-            }),
-            &["action"],
-        ),
-    ]
-}
-
-fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
-    json!({
-        "name": name,
-        "description": description,
-        "inputSchema": {
-            "type": "object",
-            "properties": properties,
-            "required": required,
-            "additionalProperties": false
-        }
-    })
+    crate::registry::tool_definitions()
 }
 
 fn resource_template() -> Value {
@@ -378,7 +163,8 @@ fn tool_call(
     let text = serde_json::to_string(&tool.envelope)
         .map_err(|error| (-32603, format!("serialize tool result: {error}")))?;
     let mut result = json!({
-        "content": [{ "type": "text", "text": text }]
+        "content": [{ "type": "text", "text": text }],
+        "structuredContent": tool.envelope
     });
     if tool.is_error {
         result["isError"] = json!(true);
@@ -406,21 +192,11 @@ fn dispatch_tool(
             return tool_invalid("`limit` must be at least 1");
         }
     }
-    if let Some(status) = optional_str(arguments, "status") {
-        if name == "list"
-            && !matches!(
-                status.as_str(),
-                "todo" | "in_progress" | "done" | "cancelled"
-            )
-        {
-            return tool_invalid("`status` must be todo, in_progress, done, or cancelled");
-        }
-        if name == "finish" && !matches!(status.as_str(), "done" | "cancelled") {
-            return tool_invalid("`status` must be `done` or `cancelled`");
-        }
-    }
-    if optional_u64(arguments, "priority").is_some_and(|priority| priority > 3) {
-        return tool_invalid("`priority` must be between 0 and 3");
+    if let Some(status) = optional_str(arguments, "status")
+        && name == "finish"
+        && !matches!(status.as_str(), "done" | "cancelled")
+    {
+        return tool_invalid("`status` must be `done` or `cancelled`");
     }
     if name == "update"
         && arguments.get("waiting_on").is_some()
@@ -436,8 +212,23 @@ fn dispatch_tool(
             return tool_invalid("`blocker` and `clear_blocker` are mutually exclusive");
         }
     }
-    if name == "update" && arguments.get("area").is_some() && bool_arg(arguments, "clear_area") {
-        return tool_invalid("`area` and `clear_area` are mutually exclusive");
+    if name == "update"
+        && arguments.get("component").is_some()
+        && bool_arg(arguments, "clear_component")
+    {
+        return tool_invalid("`component` and `clear_component` are mutually exclusive");
+    }
+    if name == "update"
+        && arguments.get("repository").is_some()
+        && bool_arg(arguments, "clear_repository")
+    {
+        return tool_invalid("`repository` and `clear_repository` are mutually exclusive");
+    }
+    if name == "update"
+        && arguments.get("external_id").is_some()
+        && bool_arg(arguments, "clear_external_id")
+    {
+        return tool_invalid("`external_id` and `clear_external_id` are mutually exclusive");
     }
     if name == "update"
         && arguments.get("verification").is_some()
@@ -470,10 +261,10 @@ fn dispatch_tool(
         return tool_invalid("`parent` must be a task id string");
     }
     if arguments
-        .get("repo")
+        .get("repository")
         .is_some_and(|value| !value.is_string())
     {
-        return tool_invalid("`repo` must be a string");
+        return tool_invalid("`repository` must be a string");
     }
     if arguments
         .get("labels")
@@ -487,7 +278,7 @@ fn dispatch_tool(
     {
         return tool_invalid("`exclude_labels` must be an array of strings");
     }
-    for key in ["types", "exclude_types", "areas", "exclude_areas"] {
+    for key in ["types", "exclude_types", "components", "exclude_components"] {
         if arguments.get(key).is_some_and(|value| !value.is_array()) {
             return tool_invalid(format!("`{key}` must be an array of strings"));
         }
@@ -515,9 +306,9 @@ fn dispatch_tool(
                 args.push("--parent".to_string());
                 args.push(parent);
             }
-            if let Some(repo) = optional_str(arguments, "repo") {
-                args.push("--repo".to_string());
-                args.push(repo);
+            if let Some(repository) = optional_str(arguments, "repository") {
+                args.push("--repository".to_string());
+                args.push(repository);
             }
             if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
                 for label in labels {
@@ -555,22 +346,25 @@ fn dispatch_tool(
                     args.push(task_type.to_string());
                 }
             }
-            if let Some(areas) = arguments.get("areas").and_then(Value::as_array) {
-                for area in areas {
-                    let Some(area) = area.as_str() else {
-                        return tool_invalid("`areas` must be an array of strings");
+            if let Some(components) = arguments.get("components").and_then(Value::as_array) {
+                for component in components {
+                    let Some(component) = component.as_str() else {
+                        return tool_invalid("`components` must be an array of strings");
                     };
-                    args.push("--area".to_string());
-                    args.push(area.to_string());
+                    args.push("--component".to_string());
+                    args.push(component.to_string());
                 }
             }
-            if let Some(areas) = arguments.get("exclude_areas").and_then(Value::as_array) {
-                for area in areas {
-                    let Some(area) = area.as_str() else {
-                        return tool_invalid("`exclude_areas` must be an array of strings");
+            if let Some(components) = arguments
+                .get("exclude_components")
+                .and_then(Value::as_array)
+            {
+                for component in components {
+                    let Some(component) = component.as_str() else {
+                        return tool_invalid("`exclude_components` must be an array of strings");
                     };
-                    args.push("--exclude-area".to_string());
-                    args.push(area.to_string());
+                    args.push("--exclude-component".to_string());
+                    args.push(component.to_string());
                 }
             }
             if bool_arg(arguments, "all") {
@@ -583,13 +377,15 @@ fn dispatch_tool(
                 args.push("--status".to_string());
                 args.push(status);
             }
-            if let Some(priority) = optional_u64(arguments, "priority") {
+            if let Some(priority) = optional_str(arguments, "priority") {
                 args.push("--priority".to_string());
-                args.push(priority.to_string());
+                args.push(priority);
             }
-            if let Some(claimed_by) = optional_str(arguments, "claimed_by") {
-                args.push("--claimed-by".to_string());
-                args.push(claimed_by);
+            let assignee = optional_str(arguments, "assignee")
+                .or_else(|| optional_str(arguments, "claimed_by"));
+            if let Some(assignee) = assignee {
+                args.push("--assignee".to_string());
+                args.push(assignee);
             }
             if let Some(label) = optional_str(arguments, "label") {
                 args.push("--label".to_string());
@@ -602,9 +398,9 @@ fn dispatch_tool(
                 args.push("--parent".to_string());
                 args.push(parent);
             }
-            if let Some(repo) = optional_str(arguments, "repo") {
-                args.push("--repo".to_string());
-                args.push(repo);
+            if let Some(repository) = optional_str(arguments, "repository") {
+                args.push("--repository".to_string());
+                args.push(repository);
             }
             if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
                 for label in labels {
@@ -642,22 +438,25 @@ fn dispatch_tool(
                     args.push(task_type.to_string());
                 }
             }
-            if let Some(areas) = arguments.get("areas").and_then(Value::as_array) {
-                for area in areas {
-                    let Some(area) = area.as_str() else {
-                        return tool_invalid("`areas` must be an array of strings");
+            if let Some(components) = arguments.get("components").and_then(Value::as_array) {
+                for component in components {
+                    let Some(component) = component.as_str() else {
+                        return tool_invalid("`components` must be an array of strings");
                     };
-                    args.push("--area".to_string());
-                    args.push(area.to_string());
+                    args.push("--component".to_string());
+                    args.push(component.to_string());
                 }
             }
-            if let Some(areas) = arguments.get("exclude_areas").and_then(Value::as_array) {
-                for area in areas {
-                    let Some(area) = area.as_str() else {
-                        return tool_invalid("`exclude_areas` must be an array of strings");
+            if let Some(components) = arguments
+                .get("exclude_components")
+                .and_then(Value::as_array)
+            {
+                for component in components {
+                    let Some(component) = component.as_str() else {
+                        return tool_invalid("`exclude_components` must be an array of strings");
                     };
-                    args.push("--exclude-area".to_string());
-                    args.push(area.to_string());
+                    args.push("--exclude-component".to_string());
+                    args.push(component.to_string());
                 }
             }
             if bool_arg(arguments, "waiting") {
@@ -697,9 +496,9 @@ fn dispatch_tool(
                 args.push("--type".to_string());
                 args.push(task_type);
             }
-            if let Some(priority) = optional_u64(arguments, "priority") {
+            if let Some(priority) = optional_str(arguments, "priority") {
                 args.push("-p".to_string());
-                args.push(priority.to_string());
+                args.push(priority);
             }
             if let Some(labels) = arguments.get("labels").and_then(Value::as_array) {
                 for label in labels {
@@ -723,13 +522,21 @@ fn dispatch_tool(
                 args.push("--waiting-on".to_string());
                 args.push(waiting_on);
             }
-            if let Some(area) = optional_str(arguments, "area") {
-                args.push("--area".to_string());
-                args.push(area);
+            if let Some(component) = optional_str(arguments, "component") {
+                args.push("--component".to_string());
+                args.push(component);
+            }
+            if let Some(external_id) = optional_str(arguments, "external_id") {
+                args.push("--external-id".to_string());
+                args.push(external_id);
             }
             if let Some(verification) = optional_str(arguments, "verification") {
                 args.push("--verification".to_string());
                 args.push(verification);
+            }
+            if let Some(reporter) = optional_str(arguments, "reporter") {
+                args.push("--reporter".to_string());
+                args.push(reporter);
             }
             if let Some(body) = optional_str(arguments, "body") {
                 args.push("--body".to_string());
@@ -754,9 +561,9 @@ fn dispatch_tool(
                 args.push("--type".to_string());
                 args.push(task_type);
             }
-            if let Some(priority) = optional_u64(arguments, "priority") {
+            if let Some(priority) = optional_str(arguments, "priority") {
                 args.push("--priority".to_string());
-                args.push(priority.to_string());
+                args.push(priority);
             }
             if let Some(waiting_on) = optional_str(arguments, "waiting_on") {
                 args.push("--waiting-on".to_string());
@@ -765,12 +572,26 @@ fn dispatch_tool(
             if bool_arg(arguments, "clear_waiting") {
                 args.push("--clear-waiting".to_string());
             }
-            if let Some(area) = optional_str(arguments, "area") {
-                args.push("--area".to_string());
-                args.push(area);
+            if let Some(component) = optional_str(arguments, "component") {
+                args.push("--component".to_string());
+                args.push(component);
             }
-            if bool_arg(arguments, "clear_area") {
-                args.push("--clear-area".to_string());
+            if bool_arg(arguments, "clear_component") {
+                args.push("--clear-component".to_string());
+            }
+            if let Some(repository) = optional_str(arguments, "repository") {
+                args.push("--repository".to_string());
+                args.push(repository);
+            }
+            if bool_arg(arguments, "clear_repository") {
+                args.push("--clear-repository".to_string());
+            }
+            if let Some(external_id) = optional_str(arguments, "external_id") {
+                args.push("--external-id".to_string());
+                args.push(external_id);
+            }
+            if bool_arg(arguments, "clear_external_id") {
+                args.push("--clear-external-id".to_string());
             }
             if let Some(verification) = optional_str(arguments, "verification") {
                 args.push("--verification".to_string());
@@ -790,8 +611,31 @@ fn dispatch_tool(
                 args.push("--by".to_string());
                 args.push(by);
             }
+            if let Some(kind) = optional_str(arguments, "kind") {
+                args.push("--kind".to_string());
+                args.push(kind);
+            }
             if bool_arg(arguments, "steal") {
                 args.push("--steal".to_string());
+            }
+        }
+        "assign" => {
+            let Some(id) = required_str(arguments, "id") else {
+                return tool_invalid("missing or invalid `id`");
+            };
+            let Some(to) = required_str(arguments, "to") else {
+                return tool_invalid("missing or invalid `to`");
+            };
+            args.push("assign".to_string());
+            args.push(id);
+            args.push("--to".to_string());
+            args.push(to);
+            if let Some(kind) = optional_str(arguments, "kind") {
+                args.push("--kind".to_string());
+                args.push(kind);
+            }
+            if bool_arg(arguments, "force") {
+                args.push("--force".to_string());
             }
         }
         "release" => {
@@ -874,24 +718,111 @@ fn dispatch_tool(
                 args.push(comment);
             }
         }
+        "transition" => {
+            let Some(id) = required_str(arguments, "id") else {
+                return tool_invalid("missing or invalid `id`");
+            };
+            let Some(name) = required_str(arguments, "name") else {
+                return tool_invalid("missing or invalid `name`");
+            };
+            args.push("transition".to_string());
+            args.push(id);
+            args.push(name);
+            if let Some(by) = optional_str(arguments, "by") {
+                args.push("--by".to_string());
+                args.push(by);
+            }
+            if bool_arg(arguments, "force") {
+                args.push("--force".to_string());
+            }
+        }
         "link" => {
             let Some(id) = required_str(arguments, "id") else {
                 return tool_invalid("missing or invalid `id`");
             };
-            let Some(dep_id) = required_str(arguments, "dep_id") else {
-                return tool_invalid("missing or invalid `dep_id`");
-            };
             let Some(action) = required_str(arguments, "action") else {
                 return tool_invalid("missing or invalid `action`");
             };
-            let command = match action.as_str() {
-                "add" => "depend",
-                "remove" => "undepend",
-                _ => return tool_invalid("`action` must be `add` or `remove`"),
-            };
-            args.push(command.to_string());
-            args.push(id);
-            args.push(dep_id);
+            if action == "list" {
+                args.push("link".to_string());
+                args.push("list".to_string());
+                args.push(id);
+            } else {
+                let dep_id = optional_str(arguments, "dep_id");
+                let external = optional_str(arguments, "external");
+                if dep_id.is_none() && external.is_none() {
+                    return tool_invalid("`link` needs `dep_id` or `external`");
+                }
+                if dep_id.is_some() && external.is_some() {
+                    return tool_invalid("`link` takes `dep_id` or `external`, not both");
+                }
+                let kind = optional_str(arguments, "type");
+                let attributes = arguments.get("attributes").and_then(Value::as_object);
+                let url = optional_str(arguments, "url");
+                let blocking = arguments.get("blocking").and_then(Value::as_bool);
+                // Plain depend/undepend shorthand when no typed-link options
+                // are given and the target is a task.
+                let shorthand = dep_id.is_some()
+                    && kind.is_none()
+                    && external.is_none()
+                    && attributes.is_none()
+                    && url.is_none()
+                    && blocking.is_none();
+                if shorthand {
+                    let command = match action.as_str() {
+                        "add" => "depend",
+                        "remove" => "undepend",
+                        _ => return tool_invalid("`action` must be `add`, `remove`, or `list`"),
+                    };
+                    args.push(command.to_string());
+                    args.push(id);
+                    args.push(dep_id.unwrap());
+                } else {
+                    let subcommand = match action.as_str() {
+                        "add" => "add",
+                        "remove" => "remove",
+                        _ => return tool_invalid("`action` must be `add`, `remove`, or `list`"),
+                    };
+                    args.push("link".to_string());
+                    args.push(subcommand.to_string());
+                    args.push(id);
+                    args.push("--type".to_string());
+                    args.push(kind.unwrap_or_else(|| {
+                        if dep_id.is_some() {
+                            "blocks".to_string()
+                        } else {
+                            "relates-to".to_string()
+                        }
+                    }));
+                    if let Some(dep_id) = dep_id {
+                        args.push("--to".to_string());
+                        args.push(dep_id);
+                    }
+                    if let Some(external) = external {
+                        args.push("--external".to_string());
+                        args.push(external);
+                    }
+                    if let Some(url) = url {
+                        args.push("--url".to_string());
+                        args.push(url);
+                    }
+                    match blocking {
+                        Some(true) => args.push("--blocking".to_string()),
+                        Some(false) => args.push("--no-blocking".to_string()),
+                        None => {}
+                    }
+                    if let Some(attributes) = attributes {
+                        for (key, value) in attributes {
+                            let rendered = match value {
+                                Value::String(text) => text.clone(),
+                                other => serde_json::to_string(other).unwrap_or_default(),
+                            };
+                            args.push("--attribute".to_string());
+                            args.push(format!("{key}={rendered}"));
+                        }
+                    }
+                }
+            }
         }
         "delete" => {
             let Some(id) = required_str(arguments, "id") else {
@@ -964,16 +895,16 @@ fn dispatch_tool(
                 args.push(by);
             }
         }
-        "annotate" => {
+        "property" => {
             let Some(id) = required_str(arguments, "id") else {
                 return tool_invalid("missing or invalid `id`");
             };
             let Some(owner) = required_str(arguments, "owner") else {
                 return tool_invalid("missing or invalid `owner`");
             };
-            args.push("annotation".to_string());
+            args.push("property".to_string());
             match arguments.get("value") {
-                None => return tool_invalid("missing `value`; pass null to remove the Annotation"),
+                None => return tool_invalid("missing `value`; pass null to remove the Property"),
                 Some(Value::Null) => {
                     args.extend(["remove".to_string(), id, owner]);
                 }
@@ -1018,7 +949,22 @@ fn dispatch_tool(
                 _ => return tool_invalid("`action` must be `add` or `list`"),
             }
         }
-        other => return tool_invalid(format!("unknown tool `{other}`")),
+        other => match crate::registry::tool_argv(other, arguments) {
+            Ok(argv) => args = argv,
+            Err(message) => return tool_invalid(message),
+        },
+    }
+
+    // `--if-version` and `--idempotency-key` are global CLI flags declared on
+    // the mutation tools' schemas; forward them for custom and registry-driven
+    // tools alike. The CLI itself rejects them where they do not apply.
+    if let Some(version) = optional_str(arguments, "if_version") {
+        args.push("--if-version".to_string());
+        args.push(version);
+    }
+    if let Some(key) = optional_str(arguments, "idempotency_key") {
+        args.push("--idempotency-key".to_string());
+        args.push(key);
     }
 
     let outcome = run_orbit(executable, dir, &args, true);
@@ -1170,6 +1116,33 @@ fn bool_arg(arguments: &Value, key: &str) -> bool {
     arguments.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// MCP tools whose arguments are translated to argv by hand in
+/// [`dispatch_tool`]. Registry-driven tools are not listed here; the
+/// registry parity tests keep both sets in sync with `registry::TOOLS`.
+#[cfg(test)]
+pub(crate) fn custom_tool_names() -> &'static [&'static str] {
+    &[
+        "ready",
+        "list",
+        "get",
+        "create",
+        "update",
+        "claim",
+        "assign",
+        "release",
+        "heartbeat",
+        "checkpoint",
+        "finish",
+        "transition",
+        "link",
+        "delete",
+        "label",
+        "batch",
+        "property",
+        "comment",
+    ]
+}
+
 fn tool_invalid(message: impl Into<String>) -> ToolResponse {
     tool_error("INVALID_ARGUMENT", message)
 }
@@ -1179,13 +1152,18 @@ fn tool_internal(message: impl Into<String>) -> ToolResponse {
 }
 
 fn tool_error(code: &str, message: impl Into<String>) -> ToolResponse {
+    let message = message.into();
     ToolResponse {
         envelope: json!({
             "ok": false,
             "error": {
+                "type": crate::output::problem_type(code),
+                "title": crate::output::problem_title(code),
                 "code": code,
-                "message": message.into(),
-                "retryable": false
+                "message": message,
+                "detail": message,
+                "retryable": false,
+                "hint": crate::output::default_hint(code)
             }
         }),
         is_error: true,
@@ -1206,7 +1184,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 59);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -1218,19 +1196,60 @@ mod tests {
             "create",
             "update",
             "claim",
+            "assign",
             "release",
             "heartbeat",
             "checkpoint",
             "finish",
+            "transition",
+            "submit",
+            "review",
+            "ask",
+            "answer",
             "link",
             "delete",
             "label",
             "comment",
-            "annotate",
+            "property",
             "batch",
+            "tree",
+            "reopen",
+            "prime",
+            "export",
+            "changes",
+            "history",
+            "doctor",
+            "sync",
+            "repo_add",
+            "slug_migrate",
+            "migrate_model",
+            "board_sync",
+            "remote_status",
+            "remote_issues",
+            "remote_auto_push",
+            "triage_context",
+            "triage_apply",
         ] {
             assert!(names.contains(&expected), "{expected}");
         }
+        // Every tool carries MCP safety annotations and a structured output
+        // schema, generated from the command registry.
+        for tool in &tools {
+            let annotations = tool["annotations"].as_object().expect("annotations");
+            for hint in [
+                "readOnlyHint",
+                "destructiveHint",
+                "idempotentHint",
+                "openWorldHint",
+            ] {
+                assert!(annotations.contains_key(hint), "{}: {hint}", tool["name"]);
+            }
+            assert!(tool["outputSchema"].is_object());
+        }
+        let get = tools.iter().find(|tool| tool["name"] == "get").unwrap();
+        assert_eq!(get["annotations"]["readOnlyHint"], true);
+        let delete = tools.iter().find(|tool| tool["name"] == "delete").unwrap();
+        assert_eq!(delete["annotations"]["destructiveHint"], true);
     }
 
     #[test]

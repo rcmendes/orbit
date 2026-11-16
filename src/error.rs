@@ -7,8 +7,6 @@ pub mod code {
     pub const CORRUPT_TASK: &str = "CORRUPT_TASK";
     pub const DANGLING_DEP: &str = "DANGLING_DEP";
     pub const DANGLING_PARENT: &str = "DANGLING_PARENT";
-    pub const NESTED_SUBTASK: &str = "NESTED_SUBTASK";
-    pub const PARENT_MISMATCH: &str = "PARENT_MISMATCH";
     pub const CYCLE_DETECTED: &str = "CYCLE_DETECTED";
     pub const DEPENDENCY_BLOCKED: &str = "DEPENDENCY_BLOCKED";
     pub const SUBTASKS_OPEN: &str = "SUBTASKS_OPEN";
@@ -26,12 +24,17 @@ pub mod code {
     pub const PREFIX_COLLISION: &str = "PREFIX_COLLISION";
     pub const PREFIX_MISMATCH: &str = "PREFIX_MISMATCH";
     pub const INVALID_TYPE: &str = "INVALID_TYPE";
-    pub const INVALID_AREA: &str = "INVALID_AREA";
+    pub const MISSING_REQUIRED_FIELD: &str = "MISSING_REQUIRED_FIELD";
+    pub const PARENT_CYCLE: &str = "PARENT_CYCLE";
+    pub const INVALID_COMPONENT: &str = "INVALID_COMPONENT";
     pub const INVALID_LABEL: &str = "INVALID_LABEL";
-    pub const INVALID_ANNOTATION: &str = "INVALID_ANNOTATION";
+    pub const INVALID_PROPERTY: &str = "INVALID_PROPERTY";
     pub const INVALID_BATCH: &str = "INVALID_BATCH";
     pub const INVALID_SOURCE_KEY: &str = "INVALID_SOURCE_KEY";
     pub const DUPLICATE_SOURCE_KEY: &str = "DUPLICATE_SOURCE_KEY";
+    pub const INVALID_EXTERNAL_ID: &str = "INVALID_EXTERNAL_ID";
+    pub const DUPLICATE_EXTERNAL_ID: &str = "DUPLICATE_EXTERNAL_ID";
+    pub const DUPLICATE_KEY: &str = "DUPLICATE_KEY";
     pub const LABEL_BLOCKED: &str = "LABEL_BLOCKED";
     pub const CORRUPT_COMMENT: &str = "CORRUPT_COMMENT";
     pub const ORPHAN_COMMENT: &str = "ORPHAN_COMMENT";
@@ -79,6 +82,12 @@ pub mod code {
     pub const BOARD_HOST_NOT_CONFIGURED: &str = "BOARD_HOST_NOT_CONFIGURED";
     pub const BOARD_HOST_CONFLICT: &str = "BOARD_HOST_CONFLICT";
     pub const BOARD_SYNC_CONFLICT: &str = "BOARD_SYNC_CONFLICT";
+    pub const CONTRACT_VERSION_UNSUPPORTED: &str = "CONTRACT_VERSION_UNSUPPORTED";
+    pub const PROFILE_UNMET: &str = "PROFILE_UNMET";
+    pub const VERSION_CONFLICT: &str = "VERSION_CONFLICT";
+    pub const INVALID_IDEMPOTENCY_KEY: &str = "INVALID_IDEMPOTENCY_KEY";
+    pub const POLICY_VIOLATION: &str = "POLICY_VIOLATION";
+    pub const ASK_OPEN: &str = "ASK_OPEN";
 }
 
 #[derive(Debug, Clone)]

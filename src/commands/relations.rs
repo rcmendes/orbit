@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::cli::{
     CommentAddArgs, CommentArgs, CommentListArgs, DependArgs, LabelArgs, LabelMutationArgs,
-    UndependArgs,
+    LinkAddArgs, LinkCommand, LinkRemoveArgs, LinkTargetArgs, UndependArgs,
 };
 use crate::comment::Comment;
 use crate::graph::LoadMode;
@@ -107,26 +107,32 @@ pub(super) fn cmd_comment(
 
 fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output::CommandOutput> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
-    graph.get(&args.id)?;
+    // The comment sidecar is named by the immutable internal ID.
+    let id = graph.resolve(&args.id)?;
     let author = resolve_agent(args.by)?;
     let body = resolve_body(args.body, args.body_file)?;
 
     let now = Utc::now();
-    let comments = crate::mutation::append_comment(board, &args.id, &author, &body, now)?;
+    let comments = crate::mutation::append_comment(board, &id, &author, &body, now)?;
     let comment = comments.last().expect("a comment was appended").clone();
     let task = {
-        let task = graph.get_mut(&args.id)?;
+        let task = graph.get_mut(&id)?;
         task.touch(now);
         task.clone()
     };
-    let warning = crate::mutation::save(board, &task, &format!("orbit: comment {}", args.id))?;
+    let warning = crate::mutation::save_as(
+        board,
+        &task,
+        &format!("orbit: comment {id}"),
+        Some(author.as_str()),
+    )?;
     let mut output = crate::output::CommandOutput::new(
         json!({
-            "id": args.id,
+            "id": id,
             "comment": comment,
             "count": comments.len()
         }),
-        format!("commented {} as {author}", args.id),
+        format!("commented {id} as {author}"),
     );
     output.warnings.extend(warning);
     Ok(output)
@@ -134,10 +140,10 @@ fn cmd_comment_add(board: &Board, args: CommentAddArgs) -> Result<crate::output:
 
 fn cmd_comment_list(board: &Board, args: CommentListArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
-    graph.get(&args.id)?;
-    let comments = board.read_comments(&args.id)?;
+    let id = graph.resolve(&args.id)?;
+    let comments = board.read_comments(&id)?;
     let human = if comments.is_empty() {
-        format!("{} has no comments", args.id)
+        format!("{id} has no comments")
     } else {
         comments
             .iter()
@@ -147,7 +153,7 @@ fn cmd_comment_list(board: &Board, args: CommentListArgs) -> Result<crate::outpu
     };
 
     Ok(
-        crate::output::CommandOutput::new(json!({ "id": args.id, "comments": comments }), human)
+        crate::output::CommandOutput::new(json!({ "id": id, "comments": comments }), human)
             .with_meta(json!({ "count": comments.len() })),
     )
 }
@@ -179,6 +185,126 @@ pub(super) fn cmd_depend(board: &Board, args: DependArgs) -> Result<crate::outpu
         format!("{} now depends on {}", args.id, args.dep_id),
         warning,
     ))
+}
+
+pub(super) fn cmd_link(
+    board: &Board,
+    args: crate::cli::LinkArgs,
+) -> Result<crate::output::CommandOutput> {
+    match args.command {
+        LinkCommand::Add(args) => cmd_link_add(board, args),
+        LinkCommand::Remove(args) => cmd_link_remove(board, args),
+        LinkCommand::List(args) => cmd_link_list(board, args),
+    }
+}
+
+fn link_target(
+    to: Option<&str>,
+    external: Option<&str>,
+    url: Option<String>,
+) -> Result<crate::task::LinkTarget> {
+    let mut target = crate::ops::link_target(to, external)?;
+    if let (crate::task::LinkTarget::External(reference), Some(url)) = (&mut target, url) {
+        reference.url = Some(url);
+    }
+    Ok(target)
+}
+
+fn cmd_link_add(board: &Board, args: LinkAddArgs) -> Result<crate::output::CommandOutput> {
+    let kind = crate::task::normalize_link_kind(&args.kind)?;
+    let target = link_target(args.to.as_deref(), args.external.as_deref(), args.url)?;
+    let blocking = if args.no_blocking {
+        Some(false)
+    } else if args.blocking {
+        Some(true)
+    } else {
+        None
+    };
+    let attributes = crate::ops::link_attributes(&args.attribute)?;
+    let link = crate::task::Link {
+        kind,
+        target,
+        blocking,
+        attributes,
+    };
+    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    if !crate::ops::link(&mut graph, &args.id, link, Utc::now())? {
+        let task = graph.get(&args.id)?;
+        return Ok(crate::output::CommandOutput::new(
+            graph::task_detail(&graph, task),
+            format!("{} already has that link", args.id),
+        )
+        .with_meta(json!({ "changed": false })));
+    }
+    let task = graph.get(&args.id)?.clone();
+    let warning = crate::mutation::save(board, &task, &format!("orbit: link {}", args.id))?;
+    Ok(task_output(
+        &graph,
+        &task,
+        format!("linked {}", args.id),
+        warning,
+    ))
+}
+
+fn cmd_link_remove(board: &Board, args: LinkRemoveArgs) -> Result<crate::output::CommandOutput> {
+    let kind = args
+        .kind
+        .as_deref()
+        .map(crate::task::normalize_link_kind)
+        .transpose()?;
+    let target = link_target(args.to.as_deref(), args.external.as_deref(), None)?;
+    let (mut graph, _) = Graph::load(board, LoadMode::Lenient)?;
+    if !crate::ops::unlink(&mut graph, &args.id, kind.as_deref(), &target, Utc::now())? {
+        let task = graph.get(&args.id)?;
+        return Ok(crate::output::CommandOutput::new(
+            graph::task_detail(&graph, task),
+            format!("{} has no matching link", args.id),
+        )
+        .with_meta(json!({ "changed": false })));
+    }
+    let task = graph.get(&args.id)?.clone();
+    let warning = crate::mutation::save(board, &task, &format!("orbit: unlink {}", args.id))?;
+    Ok(task_output(
+        &graph,
+        &task,
+        format!("unlinked {}", args.id),
+        warning,
+    ))
+}
+
+fn cmd_link_list(board: &Board, args: LinkTargetArgs) -> Result<crate::output::CommandOutput> {
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let task = graph.get(&args.id)?;
+    let links: Vec<Value> = task
+        .front
+        .links
+        .iter()
+        .map(crate::task::Link::to_json)
+        .collect();
+    let human = if task.front.links.is_empty() {
+        format!("{} has no links", args.id)
+    } else {
+        task.front
+            .links
+            .iter()
+            .map(|link| {
+                let target = match &link.target {
+                    crate::task::LinkTarget::Task(id) => graph.display_id(id),
+                    other => other.label(),
+                };
+                let mut line = format!("{} {} ({})", link.inward_name(), target, link.kind);
+                if link.is_blocking() {
+                    line.push_str(" [blocking]");
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Ok(
+        crate::output::CommandOutput::new(json!({ "id": args.id, "links": links }), human)
+            .with_meta(json!({ "count": links.len() })),
+    )
 }
 
 pub(super) fn cmd_undepend(

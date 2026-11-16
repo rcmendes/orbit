@@ -5,55 +5,73 @@ use crate::cli::{ListArgs, PrimeArgs, ReadyArgs, ShowArgs, TreeArgs};
 use crate::git::CommitOutcome;
 use crate::graph::LoadMode;
 use crate::setup::COMPLETION_LINE;
-use crate::task::TaskType;
+use crate::task::IdentityKind;
 
 use super::render::*;
 use super::*;
 
-pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutput> {
+/// `--parent` names a Task that must exist; any Task may be a parent
+/// filter, at any depth of the Board hierarchy.
+fn check_parent_filter(graph: &Graph, parent: &str) -> Result<()> {
+    graph.get(parent)?;
+    Ok(())
+}
+
+pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
-    if let Some(priority) = args.priority {
-        validate_priority(priority)?;
-    }
-    let label_filters = normalize_labels(&args.label)?;
-    let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
-    let excluded_labels = normalize_labels(&args.exclude_label)?;
-    let areas = normalize_areas(board, &args.area)?;
-    let excluded_areas = normalize_areas(board, &args.exclude_area)?;
-    let scope = repository_scope(board, args.all)?;
     if let Some(parent) = args.parent.as_deref() {
-        let parent_task = graph.get(parent)?;
-        if parent_task.front.parent.is_some() {
-            return Err(OrbitError::invalid_argument(format!(
-                "{parent} is a SubTask; `--parent` expects a Parent Task"
-            )));
-        }
+        check_parent_filter(&graph, parent)?;
+    }
+    args.task_type = normalize_type_filters(&args.task_type);
+    args.exclude_type = normalize_type_filters(&args.exclude_type);
+    let priority = args
+        .priority
+        .as_deref()
+        .map(|priority| validate_priority(board, priority))
+        .transpose()?;
+    let label_filters = normalize_labels(&args.label)?;
+    let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
+    let excluded_labels = normalize_labels(&args.exclude_label)?;
+    let components = normalize_components(board, &args.component)?;
+    let excluded_components = normalize_components(board, &args.exclude_component)?;
+    let scope = repository_scope(board, args.all)?;
+    if let Some(status) = args.status.as_deref()
+        && graph.workflow.status(status).is_none()
+    {
+        return Err(OrbitError::invalid_argument(format!(
+            "unknown status `{status}`; the workflow defines: {}",
+            graph.workflow.status_names().join(", ")
+        )));
     }
 
     let mut tasks: Vec<&Task> = graph
         .tasks
         .values()
         .filter(|task| {
-            if let Some(status) = args.status {
+            if let Some(status) = args.status.as_deref() {
                 if task.front.status != status {
                     return false;
                 }
-            } else if !args.include_closed && task.front.status.is_terminal() {
+            } else if !args.include_closed && graph.workflow.is_terminal(&task.front.status) {
                 return false;
             }
 
             if let Some(scope) = scope.as_deref()
-                && task.front.repo.as_deref().is_some_and(|repo| repo != scope)
+                && task
+                    .front
+                    .repository
+                    .as_deref()
+                    .is_some_and(|repo| repo != scope)
             {
                 return false;
             }
-            if let Some(priority) = args.priority
-                && task.front.priority != priority
+            if let Some(priority) = &priority
+                && task.front.priority != *priority
             {
                 return false;
             }
-            if let Some(claimed_by) = &args.claimed_by
-                && task.holder() != Some(claimed_by.as_str())
+            if let Some(assignee) = &args.assignee
+                && task.assignee_name() != Some(assignee.as_str())
             {
                 return false;
             }
@@ -63,20 +81,22 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             if args.exclude_type.contains(&task.front.task_type) {
                 return false;
             }
-            if !areas.is_empty()
-                && !areas
+            if !components.is_empty()
+                && !components
                     .iter()
-                    .any(|area| task.front.area.as_deref() == Some(area.as_str()))
+                    .any(|component| task.front.component.as_deref() == Some(component.as_str()))
             {
                 return false;
             }
-            if excluded_areas
+            if excluded_components
                 .iter()
-                .any(|area| task.front.area.as_deref() == Some(area.as_str()))
+                .any(|component| task.front.component.as_deref() == Some(component.as_str()))
             {
                 return false;
             }
-            if !matches_repo(task, repo_filter.as_deref()) || !task.has_labels(&label_filters) {
+            if !matches_repository(task, repository_filter.as_deref())
+                || !task.has_labels(&label_filters)
+            {
                 return false;
             }
             if task.has_any_label(&excluded_labels) {
@@ -96,7 +116,7 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             {
                 return false;
             }
-            !args.waiting || task.front.waiting_on.is_some()
+            !args.waiting || task.external_blockers().next().is_some()
         })
         .collect();
 
@@ -122,22 +142,23 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
     )
 }
 
-pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOutput> {
+pub(super) fn cmd_ready(
+    board: &Board,
+    mut args: ReadyArgs,
+    if_version: Option<&str>,
+) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
-    let label_filters = normalize_labels(&args.label)?;
-    let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
-    let excluded_labels = normalize_labels(&args.exclude_label)?;
-    let areas = normalize_areas(board, &args.area)?;
-    let excluded_areas = normalize_areas(board, &args.exclude_area)?;
-    let scope = repository_scope(board, args.all)?;
     if let Some(parent) = args.parent.as_deref() {
-        let parent_task = graph.get(parent)?;
-        if parent_task.front.parent.is_some() {
-            return Err(OrbitError::invalid_argument(format!(
-                "{parent} is a SubTask; `--parent` expects a Parent Task"
-            )));
-        }
+        check_parent_filter(&graph, parent)?;
     }
+    args.task_type = normalize_type_filters(&args.task_type);
+    args.exclude_type = normalize_type_filters(&args.exclude_type);
+    let label_filters = normalize_labels(&args.label)?;
+    let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
+    let excluded_labels = normalize_labels(&args.exclude_label)?;
+    let components = normalize_components(board, &args.component)?;
+    let excluded_components = normalize_components(board, &args.exclude_component)?;
+    let scope = repository_scope(board, args.all)?;
 
     let filters = ReadyFilters {
         parent: args.parent.as_deref(),
@@ -145,10 +166,10 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
         excluded: &excluded_labels,
         types: &args.task_type,
         excluded_types: &args.exclude_type,
-        areas: &areas,
-        excluded_areas: &excluded_areas,
+        components: &components,
+        excluded_components: &excluded_components,
         scope: scope.as_deref(),
-        repo: repo_filter.as_deref(),
+        repository: repository_filter.as_deref(),
     };
     if args.claim {
         let agent = resolve_agent(args.by)?;
@@ -161,12 +182,27 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
         }
 
         let id = ready[0].id.clone();
+        // `--if-version` guards the Task `ready` picked: the caller read its
+        // `updated_at` from `orbit show`/`list` and the pick must be
+        // unchanged since. Checked inside the same exclusive scope.
+        if let Some(expected) = if_version {
+            let expected_at = crate::concurrency::parse_version(expected)?;
+            let task = graph.get(&id)?;
+            if task.front.updated_at != expected_at {
+                return Err(crate::concurrency::version_conflict(
+                    &id,
+                    expected_at,
+                    task.front.updated_at,
+                ));
+            }
+        }
         let result = crate::mutation::execute_in(
             board,
             graph,
             &id,
             crate::mutation::Lifecycle::Claim {
                 agent: &agent,
+                kind: IdentityKind::Agent,
                 steal: false,
             },
             Utc::now(),
@@ -196,7 +232,7 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
     } else {
         ready
             .iter()
-            .map(format_summary)
+            .map(|task| format_summary(task, &graph))
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -210,7 +246,7 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
 pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.id)?;
-    let comments = board.read_comments(&args.id)?;
+    let comments = board.read_comments(&task.id)?;
     let remote = crate::remote::details_visible(board, &graph);
     Ok(crate::output::CommandOutput::new(
         graph::task_detail_with_comments(&graph, task, &comments),
@@ -221,28 +257,47 @@ pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::C
 pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let root = graph.get(&args.id)?;
-    if root.front.parent.is_some() {
+    if root.front.parent.is_some() && graph.children(&root.id).is_empty() {
         return Err(OrbitError::invalid_argument(format!(
             "{} is a SubTask; `orbit tree` expects a Parent Task",
             root.id
         )));
     }
 
-    let children = graph.children(&root.id);
-    let mut tasks = Vec::with_capacity(children.len() + 1);
-    tasks.push(root.clone());
-    tasks.extend(children.into_iter().cloned());
+    // Depth-first preorder: the root, then every descendant level by level,
+    // each SubTask listed before its own SubTasks.
+    fn visit<'a>(
+        graph: &'a Graph,
+        task: &'a Task,
+        level: usize,
+        seen: &mut std::collections::HashSet<String>,
+        entries: &mut Vec<(&'a Task, usize)>,
+    ) {
+        entries.push((task, level));
+        for child in graph.children(&task.id) {
+            if seen.insert(child.id.clone()) {
+                visit(graph, child, level + 1, seen, entries);
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    let mut seen = std::collections::HashSet::from([root.id.clone()]);
+    visit(&graph, root, 0, &mut seen, &mut entries);
 
+    let tasks: Vec<&Task> = entries.iter().map(|(task, _)| *task).collect();
     let summaries: Vec<Value> = tasks
         .iter()
         .map(|task| graph::task_summary(&graph, task))
         .collect();
     let count = summaries.len();
 
-    let mut human = format_tree_line(root, &graph, true);
-    for child in &tasks[1..] {
-        human.push('\n');
-        human.push_str(&format_tree_line(child, &graph, false));
+    let mut human = String::new();
+    for (task, level) in &entries {
+        if !human.is_empty() {
+            human.push('\n');
+        }
+        human.push_str(&" ".repeat(level * 2));
+        human.push_str(&format_tree_line(task, &graph, *level == 0));
     }
 
     Ok(crate::output::CommandOutput::new(
@@ -255,9 +310,10 @@ pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::C
 pub(super) fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let label_filters = normalize_labels(&args.label)?;
-    let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
-    let matches =
-        |task: &Task| task.has_labels(&label_filters) && matches_repo(task, repo_filter.as_deref());
+    let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
+    let matches = |task: &Task| {
+        task.has_labels(&label_filters) && matches_repository(task, repository_filter.as_deref())
+    };
     let counts = graph.counts_where(matches);
     let agent = optional_agent(args.by).unwrap_or_else(|| "unknown (set ORBIT_AGENT)".to_string());
     let instructions = format!(
@@ -267,7 +323,7 @@ Use the CLI; never edit task files directly.\n\
 - `orbit heartbeat <id> --by <agent>` extends the lease while working.\n\
 - `orbit checkpoint <id> --by <agent> --progress \"...\"` leaves a handoff that survives release and takeover.\n\
 {COMPLETION_LINE}\n\
-- `orbit add \"title\" -p N --depends-on <id>` creates work.\n\
+- `orbit add \"title\" -p high --depends-on <id>` creates work.\n\
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.\n\
 - A Parent Task whose SubTasks are all resolved appears under close candidates; close it explicitly when the family is done.\n\
 - `orbit show <id>` reads the full body."
@@ -311,8 +367,8 @@ Use the CLI; never edit task files directly.\n\
     if !label_filters.is_empty() {
         human.push_str(&format!("scope: {}\n", label_filters.join(", ")));
     }
-    if let Some(repo) = &repo_filter {
-        human.push_str(&format!("repository: {repo}\n"));
+    if let Some(repository) = &repository_filter {
+        human.push_str(&format!("repository: {repository}\n"));
     }
     human.push_str(&format!(
         "counts: total={} ready={} stale={} in_progress={} waiting={} blocked={}\n",
@@ -328,7 +384,7 @@ Use the CLI; never edit task files directly.\n\
         human.push_str("  (none)\n");
     } else {
         for task in &ready_tasks {
-            human.push_str(&format!("  {}\n", format_summary(task)));
+            human.push_str(&format!("  {}\n", format_summary(task, &graph)));
         }
     }
     human.push_str("close candidates:\n");
@@ -336,7 +392,10 @@ Use the CLI; never edit task files directly.\n\
         human.push_str("  (none)\n");
     } else {
         for task in &close_candidate_tasks {
-            human.push_str(&format!("  {}  (ready to close)\n", format_summary(task)));
+            human.push_str(&format!(
+                "  {}  (ready to close)\n",
+                format_summary(task, &graph)
+            ));
         }
     }
     human.push_str("stale claims:\n");
@@ -344,7 +403,7 @@ Use the CLI; never edit task files directly.\n\
         human.push_str("  (none)\n");
     } else {
         for (task, summary) in stale_tasks.iter().zip(&stale) {
-            human.push_str(&format!("  {}\n", format_summary(task)));
+            human.push_str(&format!("  {}\n", format_summary(task, &graph)));
             push_summary_checkpoint(&mut human, summary);
         }
     }
@@ -354,7 +413,7 @@ Use the CLI; never edit task files directly.\n\
             "agent": agent,
             "instructions": instructions,
             "labels": label_filters,
-            "repo": repo_filter,
+            "repository": repository_filter,
             "counts": counts,
             "ready": ready,
             "close_candidates": close_candidates,
@@ -394,7 +453,7 @@ pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> 
 
     let task_count = tasks.len();
     let snapshot = json!({
-        "schema_version": 3,
+        "schema_version": 5,
         "board": {
             "branch": board.config.board.branch,
             "prefix": board.config.id.prefix,
@@ -405,7 +464,7 @@ pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> 
     });
     Ok(crate::output::CommandOutput::new(
         snapshot,
-        format!("exported {task_count} tasks and {comment_count} comments (schema 3)"),
+        format!("exported {task_count} tasks and {comment_count} comments (schema 5)"),
     ))
 }
 
@@ -429,7 +488,7 @@ pub(super) fn cmd_sync(board: &Board) -> Result<crate::output::CommandOutput> {
 
 /// The Repository scope for `list`/`ready`: the member Repository the command
 /// runs in, or `None` at the Board's root or with `--all`. A Task without a
-/// `repo` is Board-wide and always stays in scope.
+/// `repository` is Board-wide and always stays in scope.
 fn repository_scope(board: &Board, all: bool) -> Result<Option<String>> {
     if all {
         return Ok(None);
@@ -437,17 +496,24 @@ fn repository_scope(board: &Board, all: bool) -> Result<Option<String>> {
     crate::repository::current_scope(board)
 }
 
+fn normalize_type_filters(types: &[String]) -> Vec<String> {
+    types
+        .iter()
+        .map(|ty| crate::hierarchy::normalize_type_name(ty))
+        .collect()
+}
+
 #[derive(Clone, Copy)]
 struct ReadyFilters<'a> {
     parent: Option<&'a str>,
     labels: &'a [String],
     excluded: &'a [String],
-    types: &'a [TaskType],
-    excluded_types: &'a [TaskType],
-    areas: &'a [String],
-    excluded_areas: &'a [String],
+    types: &'a [String],
+    excluded_types: &'a [String],
+    components: &'a [String],
+    excluded_components: &'a [String],
     scope: Option<&'a str>,
-    repo: Option<&'a str>,
+    repository: Option<&'a str>,
 }
 
 fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Task> {
@@ -457,14 +523,19 @@ fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Tas
         excluded,
         types,
         excluded_types,
-        areas,
-        excluded_areas,
+        components,
+        excluded_components,
         scope,
-        repo,
+        repository,
     } = filters;
-    ready.retain(|task| matches_repo(task, repo));
+    ready.retain(|task| matches_repository(task, repository));
     if let Some(scope) = scope {
-        ready.retain(|task| task.front.repo.as_deref().is_none_or(|repo| repo == scope));
+        ready.retain(|task| {
+            task.front
+                .repository
+                .as_deref()
+                .is_none_or(|repo| repo == scope)
+        });
     }
     if let Some(parent) = parent {
         ready.retain(|task| task.front.parent.as_deref() == Some(parent));
@@ -481,21 +552,21 @@ fn ready_for_filters(mut ready: Vec<Task>, filters: ReadyFilters<'_>) -> Vec<Tas
     if !excluded_types.is_empty() {
         ready.retain(|task| !excluded_types.contains(&task.front.task_type));
     }
-    if !areas.is_empty() {
+    if !components.is_empty() {
         ready.retain(|task| {
             task.front
-                .area
+                .component
                 .as_deref()
-                .is_some_and(|area| areas.iter().any(|candidate| candidate == area))
+                .is_some_and(|component| components.iter().any(|candidate| candidate == component))
         });
     }
-    if !excluded_areas.is_empty() {
+    if !excluded_components.is_empty() {
         ready.retain(|task| {
-            !task
-                .front
-                .area
-                .as_deref()
-                .is_some_and(|area| excluded_areas.iter().any(|candidate| candidate == area))
+            !task.front.component.as_deref().is_some_and(|component| {
+                excluded_components
+                    .iter()
+                    .any(|candidate| candidate == component)
+            })
         });
     }
     ready

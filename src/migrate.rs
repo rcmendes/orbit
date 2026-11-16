@@ -105,7 +105,14 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
         graph
             .tasks
             .values()
-            .map(|task| task.front.depends_on.len() + usize::from(task.front.parent.is_some()))
+            .map(|task| {
+                task.front
+                    .links
+                    .iter()
+                    .filter(|link| link.target_task().is_some())
+                    .count()
+                    + usize::from(task.front.parent.is_some())
+            })
             .sum()
     } else {
         0
@@ -115,10 +122,10 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
     let mut claims = Vec::new();
     if changed {
         for task in graph.tasks.values() {
-            let Some(claim) = task.front.claim.as_ref() else {
+            let (Some(assignee), Some(lease)) = (&task.front.assignee, &task.front.lease) else {
                 continue;
             };
-            if !claim.is_live(now) {
+            if !lease.is_live(now) {
                 continue;
             }
             let Some(to) = old_to_new.get(&task.id) else {
@@ -127,8 +134,8 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
             claims.push(ClaimMapping {
                 from: task.id.clone(),
                 to: to.clone(),
-                holder: claim.holder.clone(),
-                lease_until: claim.lease_until,
+                holder: assignee.name.clone(),
+                lease_until: lease.lease_until,
             });
         }
         claims.sort_by(|left, right| left.from.cmp(&right.from));
@@ -187,7 +194,7 @@ fn detect_collisions(old_to_new: &BTreeMap<String, String>) -> Vec<Collision> {
 
 /// Doctor-equivalent issues that make a migration unsafe. Strict loading already
 /// covers task parsing and graph structure; this adds the checks doctor performs
-/// over comments, parent/ID agreement, and the checked-out branch.
+/// over comments and the checked-out branch.
 pub fn health_issues(board: &Board, graph: &Graph) -> Result<Vec<Issue>> {
     health_issues_inner(board, graph, true)
 }
@@ -195,7 +202,6 @@ pub fn health_issues(board: &Board, graph: &Graph) -> Result<Vec<Issue>> {
 fn health_issues_inner(board: &Board, graph: &Graph, check_branch: bool) -> Result<Vec<Issue>> {
     let mut issues = Vec::new();
     crate::health::comment_files(board, graph, true, &mut issues)?;
-    crate::health::parent_id_agreement(board, graph, &mut issues);
     if check_branch {
         crate::health::branch_mismatch(board, &mut issues);
     }
@@ -353,11 +359,17 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
             Some(parent) => Some(mapped(&old_to_new, parent)?.to_string()),
             None => None,
         };
-        migrated.front.depends_on = original
+        migrated.front.links = original
             .front
-            .depends_on
+            .links
             .iter()
-            .map(|dependency| mapped(&old_to_new, dependency).map(str::to_string))
+            .map(|link| {
+                let mut link = link.clone();
+                if let Some(target) = link.target_task() {
+                    link.target = task::LinkTarget::Task(mapped(&old_to_new, target)?.to_string());
+                }
+                Ok(link)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let rendered = task::render_task(&migrated)?;

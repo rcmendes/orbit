@@ -82,8 +82,8 @@ without writing ids.
 
 To let Orbit create missing fields, explicitly run
 `orbit remote connect --fields --create-fields`. It creates **Area** as a single-select
-field whose options are the Board's `board.areas` (or the canonical `board`,
-`cli`, `mcp`, `setup`, `docs`, `release` set when the Board defines no Areas),
+field whose options are the Board's `board.components` (or the canonical `board`,
+`cli`, `mcp`, `setup`, `docs`, `release` set when the Board defines no Components),
 and **Verification** as a text field. Existing fields with those names are
 reused and are not changed. Before creating anything, Orbit verifies that the
 authenticated `gh` user has an active organization administrator membership.
@@ -289,8 +289,8 @@ What triggers a push:
   with GitHub `state_reason: completed`; `cancelled` closes it with
   `state_reason: not_planned`; reopen reopens it.
 
-What does not trigger a push: priority, type, `waiting_on`, claims,
-heartbeats, checkpoints, comments, and dependency relationships. Those
+What does not trigger a push: priority, type, links, claims,
+heartbeats, checkpoints, comments, and Remote Issue relationships. Those
 fields either have no GitHub representation or remain explicit. `orbit
 remote *`, `orbit sync`, `orbit board *`, `doctor`, migrations, and `delete`
 are also excluded. `orbit triage apply` is included because it changes
@@ -685,6 +685,10 @@ No additional Orbit configuration is required. See
 
 SubTasks and dependencies are previewed as GitHub sub-issues and blocked-by
 relationships when both linked Issues live in the **same** Remote Project.
+Each Orbit `parent` edge becomes one sub-issue edge between the two linked
+Issues, so a Board whose `board.hierarchy` nests deeper syncs every level of
+its SubTask chain the same way; how deep GitHub itself nests sub-issues is
+GitHub's concern, not Orbit's.
 `--apply` adds supported relationships and removes a same-project
 relationship only when it was present at the last successful sync baseline
 and has since disappeared from the Task graph. Cross-project relationships
@@ -727,9 +731,9 @@ excludes it from synchronization until reattachment.
 `--json` output keeps the historical `github` object (`repo`, `number`,
 `last_sync`) next to the provider-neutral `remote` link for compatibility.
 
-`area` values are free-form lowercase slugs on the Board; each Board
-restricts them through `board.areas` (empty accepts any slug). A Board with
-configured Areas should create its GitHub Area field with matching options
+Component values are free-form lowercase slugs on the Board; each Board
+restricts them through `board.components` (empty accepts any slug). A Board with
+configured Components should create its GitHub Area field with matching options
 so pushed values resolve.
 
 ## Testing

@@ -80,7 +80,7 @@ fn triage_context_reports_local_task_without_remote_link() {
     assert_eq!(ctx["data"]["id"], id);
     assert!(ctx["data"]["remote"].is_null());
     assert!(ctx["data"]["github"].is_null());
-    assert_eq!(ctx["data"]["metadata_capabilities"]["area"], true);
+    assert_eq!(ctx["data"]["metadata_capabilities"]["component"], true);
     assert_eq!(ctx["data"]["metadata_capabilities"]["verification"], true);
     assert_eq!(ctx["data"]["metadata_capabilities"]["labels"], true);
     let labels = ctx["data"]["canonical_labels"].as_array().unwrap();
@@ -96,7 +96,7 @@ fn triage_review_and_apply_work_on_local_tasks_without_publish_step() {
     fs::write(
         &proposal,
         r#"{
-  "area": "cli",
+  "component": "cli",
   "labels_add": ["bug"],
   "labels_remove": ["needs-triage"]
 }"#,
@@ -112,7 +112,7 @@ fn triage_review_and_apply_work_on_local_tasks_without_publish_step() {
         "--json",
     ]);
     assert_eq!(review["data"]["apply_ready"], true);
-    assert_eq!(review["data"]["changes"]["area"]["to"], "cli");
+    assert_eq!(review["data"]["changes"]["component"]["to"], "cli");
     assert_eq!(review["data"]["changes"]["labels"]["add"], json!(["bug"]));
     let note = review["data"]["sync_note"].as_str().unwrap();
     assert!(note.contains("Local"), "{note}");
@@ -132,7 +132,7 @@ fn triage_review_and_apply_work_on_local_tasks_without_publish_step() {
     assert!(applied["data"]["sync_command"].is_null());
 
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert_eq!(show["data"]["area"], "cli");
+    assert_eq!(show["data"]["component"], "cli");
     assert_eq!(show["data"]["labels"], json!(["bug"]));
 }
 
@@ -149,7 +149,7 @@ fn triage_linked_task_reports_remote_link_and_publish_command() {
     assert_eq!(ctx["data"]["remote"]["tracker"], "github");
     assert_eq!(ctx["data"]["remote"]["project"], "acme/widget");
     assert_eq!(ctx["data"]["remote"]["id"], "7");
-    assert_eq!(ctx["data"]["metadata_capabilities"]["area"], true);
+    assert_eq!(ctx["data"]["metadata_capabilities"]["component"], true);
     assert_eq!(ctx["data"]["metadata_capabilities"]["verification"], true);
     assert_eq!(ctx["data"]["metadata_capabilities"]["labels"], true);
 
@@ -197,7 +197,7 @@ fn triage_context_includes_guidance_and_canonical_labels() {
     fs::create_dir_all(&guidance_dir).unwrap();
     fs::write(
         guidance_dir.join("project-guidance.md"),
-        "## Work areas (`area`)\n\nShared guidance for agents.\n",
+        "## Components (`component`)\n\nShared guidance for agents.\n",
     )
     .unwrap();
 
@@ -210,7 +210,7 @@ fn triage_context_includes_guidance_and_canonical_labels() {
         ctx["data"]["project_guidance"]
             .as_str()
             .unwrap()
-            .contains("Work areas")
+            .contains("Components")
     );
     let labels = ctx["data"]["canonical_labels"].as_array().unwrap();
     assert!(labels.iter().any(|v| v == "needs-triage"));
@@ -230,7 +230,7 @@ fn triage_review_previews_proposed_metadata_without_applying() {
         &proposal,
         r#"{
   "rationale": "CLI-facing workflow",
-  "area": "cli",
+  "component": "cli",
   "labels_add": ["bug"],
   "labels_remove": ["needs-triage"]
 }"#,
@@ -249,11 +249,11 @@ fn triage_review_previews_proposed_metadata_without_applying() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(review["data"]["apply_ready"], true);
-    assert_eq!(review["data"]["changes"]["area"]["to"], "cli");
+    assert_eq!(review["data"]["changes"]["component"]["to"], "cli");
     assert_eq!(review["data"]["changes"]["labels"]["add"], json!(["bug"]));
 
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert!(show["data"]["area"].is_null());
+    assert!(show["data"]["component"].is_null());
     assert_eq!(show["data"]["labels"], json!(["needs-triage"]));
 }
 
@@ -275,11 +275,11 @@ fn triage_review_reads_proposal_from_stdin_without_applying_in_json_mode() {
             "-",
             "--json",
         ],
-        r#"{"area":"cli","labels_add":["bug"],"labels_remove":["needs-triage"]}"#,
+        r#"{"component":"cli","labels_add":["bug"],"labels_remove":["needs-triage"]}"#,
     );
 
     assert_eq!(status, 0, "{review}");
-    assert_eq!(review["data"]["changes"]["area"]["to"], "cli");
+    assert_eq!(review["data"]["changes"]["component"]["to"], "cli");
     assert_eq!(review["data"]["changes"]["labels"]["add"], json!(["bug"]));
     assert_eq!(repo.read_task(&id), before);
 }
@@ -295,7 +295,7 @@ fn triage_review_renders_field_diff_and_does_not_prompt_without_a_tty() {
     fs::write(
         &proposal,
         r#"{
-  "area": "cli",
+  "component": "cli",
   "verification": "cargo test triage",
   "labels_add": ["bug"],
   "labels_remove": ["needs-triage"]
@@ -320,7 +320,7 @@ fn triage_review_renders_field_diff_and_does_not_prompt_without_a_tty() {
         !preview.contains("Apply these Orbit changes?"),
         "non-TTY review must not prompt: {preview}"
     );
-    assert!(preview.contains("Area: (unset) -> cli"), "{preview}");
+    assert!(preview.contains("Component: (unset) -> cli"), "{preview}");
     assert!(
         preview.contains("Verification: (unset) -> cargo test triage"),
         "{preview}"
@@ -417,7 +417,7 @@ fn triage_apply_requires_explicit_approval() {
     repo.init();
     let id = adopt_linked(&repo, &fixture);
     let proposal = repo.path().join("proposal.json");
-    fs::write(&proposal, r#"{"area": "cli"}"#).unwrap();
+    fs::write(&proposal, r#"{"component": "cli"}"#).unwrap();
 
     let (status, value) = repo.json_with_env(
         &[
@@ -472,7 +472,7 @@ fn triage_apply_writes_orbit_only_and_preserves_github_title() {
     fs::write(
         &proposal,
         r#"{
-  "area": "cli",
+  "component": "cli",
   "verification": "cargo test triage",
   "labels_add": ["ready-for-agent"],
   "labels_remove": ["needs-triage"]
@@ -496,7 +496,7 @@ fn triage_apply_writes_orbit_only_and_preserves_github_title() {
     assert!(applied["data"]["sync_required"].as_bool().unwrap());
 
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert_eq!(show["data"]["area"], "cli");
+    assert_eq!(show["data"]["component"], "cli");
     assert_eq!(show["data"]["verification"], "cargo test triage");
     assert_eq!(show["data"]["labels"], json!(["ready-for-agent"]));
     assert_eq!(show["data"]["title"], "GitHub title");
@@ -512,7 +512,7 @@ fn triage_uncertainty_without_changes_leaves_metadata_unchanged() {
     let proposal = repo.path().join("proposal.json");
     fs::write(
         &proposal,
-        r#"{"uncertainty": "Not enough detail in the issue body to classify area."}"#,
+        r#"{"uncertainty": "Not enough detail in the issue body to classify component."}"#,
     )
     .unwrap();
 
@@ -558,7 +558,7 @@ fn basic_mode_triage_exposes_only_label_capability() {
         &["triage", "context", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(context["data"]["metadata_capabilities"]["area"], false);
+    assert_eq!(context["data"]["metadata_capabilities"]["component"], false);
     assert_eq!(
         context["data"]["metadata_capabilities"]["verification"],
         false
@@ -566,7 +566,7 @@ fn basic_mode_triage_exposes_only_label_capability() {
     assert_eq!(context["data"]["metadata_capabilities"]["labels"], true);
 
     let proposal = repo.path().join("proposal.json");
-    fs::write(&proposal, r#"{"area":"cli","labels_add":["bug"]}"#).unwrap();
+    fs::write(&proposal, r#"{"component":"cli","labels_add":["bug"]}"#).unwrap();
     let (status, value) = repo.json_with_env(
         &[
             "triage",
@@ -582,7 +582,7 @@ fn basic_mode_triage_exposes_only_label_capability() {
     assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
     let message = value["error"]["message"].as_str().unwrap();
     assert!(message.contains("does not map"), "{message}");
-    assert!(message.contains("area"), "{message}");
+    assert!(message.contains("component"), "{message}");
 
     fs::write(&proposal, r#"{"labels_add":["bug"]}"#).unwrap();
     let applied = repo.ok_json_with_env(
@@ -701,14 +701,14 @@ fn triage_apply_accepts_state_transition_with_category() {
 }
 
 #[test]
-fn triage_apply_accepts_area_only_proposal() {
+fn triage_apply_accepts_component_only_proposal() {
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture = write_fixture(&fixture_dir);
     let repo = TestRepo::new();
     repo.init();
     let id = adopt_linked(&repo, &fixture);
     let proposal = repo.path().join("proposal.json");
-    fs::write(&proposal, r#"{"area": "cli"}"#).unwrap();
+    fs::write(&proposal, r#"{"component": "cli"}"#).unwrap();
 
     let applied = repo.ok_json_with_env(
         &[
@@ -725,7 +725,7 @@ fn triage_apply_accepts_area_only_proposal() {
     assert_eq!(applied["data"]["applied"], true);
 
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert_eq!(show["data"]["area"], "cli");
+    assert_eq!(show["data"]["component"], "cli");
     assert_eq!(show["data"]["labels"], json!(["needs-triage"]));
 }
 
@@ -737,7 +737,7 @@ fn triage_apply_reports_commit_failure_after_publishing_metadata() {
     repo.init();
     let id = adopt_linked(&repo, &fixture);
     let proposal = repo.path().join("proposal.json");
-    fs::write(&proposal, r#"{"area": "cli"}"#).unwrap();
+    fs::write(&proposal, r#"{"component": "cli"}"#).unwrap();
     let hooks = repo.path().join("failing-hooks");
     fs::create_dir(&hooks).unwrap();
     let hook = hooks.join("pre-commit");
@@ -774,7 +774,7 @@ fn triage_apply_reports_commit_failure_after_publishing_metadata() {
             .any(|value| value.as_str().unwrap().starts_with("COMMIT_FAILED:"))
     );
     assert_eq!(
-        repo.ok_json(&["show", &id, "--json"])["data"]["area"],
+        repo.ok_json(&["show", &id, "--json"])["data"]["component"],
         "cli"
     );
 }
@@ -798,7 +798,7 @@ fn triage_linked_task_resolves_mapped_fields_without_a_remote_client() {
     assert_eq!(ctx["data"]["remote"]["tracker"], "github");
     assert_eq!(ctx["data"]["remote"]["project"], "acme/widget");
     assert_eq!(ctx["data"]["remote"]["id"], "7");
-    assert_eq!(ctx["data"]["metadata_capabilities"]["area"], true);
+    assert_eq!(ctx["data"]["metadata_capabilities"]["component"], true);
     assert_eq!(ctx["data"]["metadata_capabilities"]["verification"], true);
     assert_eq!(ctx["data"]["metadata_capabilities"]["labels"], true);
     assert!(

@@ -15,6 +15,7 @@ use crate::cli::{
 };
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{Graph, LoadMode};
+use crate::remote::Status;
 use crate::remote::catalog::{self, RemoteIssueCatalog};
 use crate::remote::execution::{self, CreateFollowUp, SyncOutcome};
 use crate::remote::link::{active_link, github_compat_json, link_json, link_view};
@@ -25,7 +26,7 @@ use crate::remote::port::{BoardResolver, RemoteAdapter, RemoteResolver};
 use crate::remote::{
     RemoteProject, configured_projects, parse_issue_ref, parse_remote_project, relationships, sync,
 };
-use crate::task::{self, Status, Task};
+use crate::task::{self, Task};
 
 pub fn run(board: &Board, args: RemoteArgs) -> Result<crate::output::CommandOutput> {
     match args.command {
@@ -134,9 +135,8 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
             })
             .collect();
         let dependencies: Vec<_> = task
-            .front
-            .depends_on
-            .iter()
+            .blocking_links()
+            .filter_map(|link| link.target_task())
             .filter_map(|id| graph.tasks.get(id))
             .filter_map(|dependency| {
                 github_link(dependency).map(|dep_link| (dependency.clone(), dep_link))
@@ -190,6 +190,7 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
                     sync::OrbitSyncView { task, link },
                     &issue,
                     direction,
+                    &graph.workflow,
                 );
                 let pull_count = count_pull_changes(&plan);
                 let push_count = count_push_changes(&plan);
@@ -691,7 +692,8 @@ fn connect_origin(
     let setup = match client.validate_org_fields(organization, &effective.issue_fields) {
         Ok(setup) => setup,
         Err(_) if create_fields => {
-            let area_options = crate::github::client::area_field_options(&board.config.board.areas);
+            let area_options =
+                crate::github::client::area_field_options(&board.config.board.components);
             match client.create_org_fields(organization, &effective.issue_fields, &area_options) {
                 Ok(setup) => setup,
                 Err(create_error) => {
@@ -897,8 +899,8 @@ fn auto_push_enabled(board: &Board) -> bool {
 /// IssueSnapshot shape while the engine works in Orbit terms.
 fn github_issue_json(issue: &RemoteIssue) -> Value {
     let (state, state_reason) = match issue.status {
-        task::Status::Done => ("closed", "completed"),
-        task::Status::Cancelled => ("closed", "not_planned"),
+        Status::Done => ("closed", "completed"),
+        Status::Cancelled => ("closed", "not_planned"),
         _ => ("open", ""),
     };
     let refs = |refs: &[RemoteIssueRef]| {
@@ -942,7 +944,8 @@ fn cmd_connect_fields(
     let org = effective.require_organization()?;
     let client = client_from_env()?;
     let setup = if create_fields {
-        let area_options = crate::github::client::area_field_options(&board.config.board.areas);
+        let area_options =
+            crate::github::client::area_field_options(&board.config.board.components);
         client.create_org_fields(org, &effective.issue_fields, &area_options)?
     } else {
         client.validate_org_fields(org, &effective.issue_fields)?
@@ -1211,12 +1214,12 @@ fn cmd_link(board: &Board, args: RemoteLinkArgs) -> Result<crate::output::Comman
         baseline: None,
     });
     task.front.updated_at = Utc::now();
-    crate::remote::execution::set_baseline(&mut task, &issue);
+    crate::remote::execution::set_baseline(&mut task, &issue, &graph.workflow);
     let include_fields = match project.tracker.as_str() {
         "github" => !github_config(board).mode.is_basic(),
         _ => true,
     };
-    apply_issue_to_task(&mut task, &issue, include_fields)?;
+    apply_issue_to_task(&mut task, &issue, include_fields, &graph.workflow)?;
     sync::validate_orbit_metadata(&task)?;
     let outcome = persist_task(board, &task, &format!("orbit: remote link {}", task.id))?;
     let human = format!(
@@ -1254,7 +1257,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
     for id in &args.tasks {
         let task = graph.get(id)?;
         let unmapped: Vec<&str> = [
-            ("area", !mapped.area && task.front.area.is_some()),
+            ("area", !mapped.area && task.front.component.is_some()),
             (
                 "verification",
                 !mapped.verification && task.front.verification.is_some(),
@@ -1275,10 +1278,10 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
             Some(format!(
                 "task {id} already links to a Remote Issue; use `orbit remote sync {id}` instead"
             ))
-        } else if task.front.status.is_terminal() && !args.include_closed {
+        } else if graph.workflow.is_terminal(&task.front.status) && !args.include_closed {
             Some(format!(
                 "task {id} is {}; pass --include-closed to export done and cancelled Tasks",
-                task.front.status.as_str()
+                task.front.status
             ))
         } else if !unmapped.is_empty() {
             Some(unmapped_metadata_error(task, &create_project, &unmapped))
@@ -1293,7 +1296,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
     let mut human = Vec::new();
     let mut warnings = Vec::new();
     for (mut task, rejected) in plans {
-        let issue_state = if task.front.status.is_terminal() {
+        let issue_state = if graph.workflow.is_terminal(&task.front.status) {
             "closed"
         } else {
             "open"
@@ -1305,7 +1308,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
                 "title": task.front.title,
                 "body": task.body,
                 "labels": task.front.labels,
-                "area": task.front.area.as_deref(),
+                "area": task.front.component.as_deref(),
                 "verification": task.front.verification,
                 "status": task.front.status,
                 "issue_state": issue_state,
@@ -1325,7 +1328,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
             "title": task.front.title,
             "body": task.body,
             "labels": task.front.labels,
-            "area": task.front.area.as_deref(),
+            "area": task.front.component.as_deref(),
             "verification": task.front.verification,
             "status": task.front.status,
             "issue_state": issue_state,
@@ -1354,7 +1357,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
                     "title": task.front.title,
                     "body": task.body,
                     "labels": task.front.labels,
-                    "area": task.front.area.as_deref(),
+                    "area": task.front.component.as_deref(),
                     "verification": task.front.verification,
                     "status": task.front.status,
                     "issue_state": issue_state,
@@ -1442,7 +1445,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
             "title": task.front.title,
             "body": task.body,
             "labels": task.front.labels,
-            "area": task.front.area.as_deref(),
+            "area": task.front.component.as_deref(),
             "verification": task.front.verification,
             "status": task.front.status,
             "issue_state": issue_state,
@@ -1523,7 +1526,7 @@ fn format_create_preview(task: &Task, repository: &str, issue_state: &str) -> St
         } else {
             task.front.labels.join(", ")
         },
-        task.front.area.as_deref().unwrap_or("(none)"),
+        task.front.component.as_deref().unwrap_or("(none)"),
         task.front.verification.as_deref().unwrap_or("(none)"),
         task.front.status.as_str(),
         issue_state,
@@ -2151,7 +2154,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
                     "remote_status": issue.status,
                     "differences": differences,
                 }));
-                if task.front.status.is_terminal() {
+                if graph.workflow.is_terminal(&task.front.status) {
                     terminal_tasks.push(json!({
                         "identity": identity,
                         "task": task.id,
@@ -2190,12 +2193,23 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
             .keys()
             .cloned()
             .collect::<std::collections::HashSet<_>>();
+        // Imported Tasks take sequential project keys like `orbit add`.
+        let key_state = crate::key::load(board)?;
+        let key_prefix = key_state.prefix.clone();
+        let mut next_key = key_state.next_key.max(crate::key::max_number(&graph) + 1);
         let mut writes = Vec::new();
         for (project, candidate) in candidates {
             let (task, created, identity) = match candidate {
                 ImportCandidate::Create(issue) => {
                     let identity = format!("{}:{}#{}", project.tracker, issue.project, issue.id);
-                    let task = create_imported_task(board, &project, &issue, &mut reserved_ids)?;
+                    let task = create_imported_task(
+                        board,
+                        &project,
+                        &issue,
+                        &mut reserved_ids,
+                        &key_prefix,
+                        &mut next_key,
+                    )?;
                     (task, true, identity)
                 }
                 ImportCandidate::Link(issue, task) => {
@@ -2210,7 +2224,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
                         active: true,
                         baseline: None,
                     });
-                    execution::set_baseline(&mut task, &issue);
+                    execution::set_baseline(&mut task, &issue, &graph.workflow);
                     (task, false, identity)
                 }
             };
@@ -2231,6 +2245,16 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
             }));
         }
         if !writes.is_empty() {
+            // Persist the key high-water mark only when Creates allocated keys.
+            if next_key != key_state.next_key {
+                crate::key::save(
+                    board,
+                    &crate::key::KeyState {
+                        prefix: key_prefix,
+                        next_key,
+                    },
+                )?;
+            }
             commit_warning = crate::mutation::commit(board, "orbit: import Remote Issues")?;
         }
     }
@@ -2274,7 +2298,7 @@ fn task_issue_differences(task: &Task, issue: &RemoteIssue) -> Vec<Value> {
         ("body", json!(task.body), json!(issue.body)),
         ("labels", json!(task.front.labels), json!(issue.labels)),
         ("status", json!(task.front.status), json!(issue.status)),
-        ("area", json!(task.front.area), json!(issue.area)),
+        ("area", json!(task.front.component), json!(issue.area)),
         (
             "verification",
             json!(task.front.verification),
@@ -2293,6 +2317,8 @@ fn create_imported_task(
     project: &RemoteProject,
     issue: &RemoteIssue,
     reserved_ids: &mut std::collections::HashSet<String>,
+    key_prefix: &str,
+    next_key: &mut u64,
 ) -> Result<Task> {
     let id = loop {
         let id = task::generate_id(&board.config.id.prefix, board.config.id.length);
@@ -2314,7 +2340,7 @@ fn create_imported_task(
         .as_deref()
         .map(|area| {
             let normalized = area.trim().to_lowercase();
-            if !task::is_valid_area(&normalized) {
+            if !task::is_valid_component(&normalized) {
                 return Err(OrbitError::invalid_argument(
                     "area must be a short lowercase slug of letters, digits, and `-`",
                 ));
@@ -2327,15 +2353,24 @@ fn create_imported_task(
         id,
         front: crate::task::TaskFrontmatter {
             title: issue.title.trim().to_string(),
-            status: issue.status,
-            task_type: crate::task::TaskType::Task,
-            priority: board.config.board.default_priority,
+            status: issue.status.orbit_name(&board.workflow()?),
+            key: Some({
+                let key = format!("{key_prefix}-{}", *next_key);
+                *next_key += 1;
+                key
+            }),
+            key_aliases: Vec::new(),
+            resolution: issue.status.is_terminal().then(|| match issue.status {
+                Status::Done => "completed".to_string(),
+                _ => "cancelled".to_string(),
+            }),
+            task_type: "task".to_string(),
+            priority: board.config.board.default_priority.clone(),
             labels,
-            depends_on: Vec::new(),
+            links: Vec::new(),
             parent: None,
-            waiting_on: None,
             checkpoint: None,
-            area,
+            component: area,
             verification,
             github: None,
             remote: Some(crate::remote::RemoteLink {
@@ -2346,18 +2381,21 @@ fn create_imported_task(
                 active: true,
                 baseline: None,
             }),
-            repo: None,
-            claim: None,
-            stray_claim_times: None,
+            repository: None,
+            external_id: None,
+            assignee: None,
+            lease: None,
+            reporter: None,
+            stray_lease_times: None,
             source_key: None,
-            annotations: std::collections::BTreeMap::new(),
+            properties: std::collections::BTreeMap::new(),
             created_at: now,
             updated_at: now,
             extra: std::collections::BTreeMap::new(),
         },
         body: issue.body.clone(),
     };
-    execution::set_baseline(&mut task, issue);
+    execution::set_baseline(&mut task, issue, &board.workflow()?);
     Ok(task)
 }
 
@@ -2590,6 +2628,7 @@ fn cmd_reattach(board: &Board, args: RemoteMutationArgs) -> Result<crate::output
         },
         &issue,
         SyncDirection::Both,
+        &board.workflow()?,
     );
     let preview = json!({
         "task": task.id,
@@ -2813,16 +2852,21 @@ fn format_preview_value(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "<unprintable>".to_string())
 }
 
-fn apply_issue_to_task(task: &mut Task, issue: &RemoteIssue, include_fields: bool) -> Result<()> {
+fn apply_issue_to_task(
+    task: &mut Task,
+    issue: &RemoteIssue,
+    include_fields: bool,
+    workflow: &crate::workflow::Workflow,
+) -> Result<()> {
     task.front.title = issue.title.clone();
     task.body = issue.body.clone();
     // `RemoteIssue.labels` already excludes adapter-managed markers.
     task.front.labels = issue.labels.clone();
     if include_fields {
-        task.front.area = match &issue.area {
+        task.front.component = match &issue.area {
             Some(area) => {
                 let normalized = area.trim().to_ascii_lowercase();
-                if !task::is_valid_area(&normalized) {
+                if !task::is_valid_component(&normalized) {
                     return Err(OrbitError::invalid_argument(
                         "area must be a short lowercase slug of letters, digits, and `-`",
                     ));
@@ -2833,8 +2877,17 @@ fn apply_issue_to_task(task: &mut Task, issue: &RemoteIssue, include_fields: boo
         };
         task.front.verification = issue.verification.clone();
     }
-    // The adapter already mapped the Remote Issue onto Orbit's Status.
-    task.front.status = issue.status;
-    execution::set_baseline(task, issue);
+    // The adapter already mapped the Remote Issue onto Orbit's Status; the
+    // workflow resolves the canonical bucket to this Board's status name.
+    task.front.status = issue.status.orbit_name(workflow);
+    task.front.resolution = if issue.status.is_terminal() {
+        Some(match issue.status {
+            Status::Done => "completed".to_string(),
+            _ => "cancelled".to_string(),
+        })
+    } else {
+        None
+    };
+    execution::set_baseline(task, issue, workflow);
     Ok(())
 }

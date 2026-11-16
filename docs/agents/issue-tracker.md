@@ -68,13 +68,19 @@ tracker terms rather than inventing a second model:
   `orbit add "..." --type epic`. Put the scope, decisions, and acceptance
   criteria in its body.
 
-`kind` is structural (`task` or `subtask`). `type` is the work shape (`task`,
-`epic`, `spike`, `chore`, or `decision`) and is metadata only. `epic` is refused
-on a SubTask. See [ADR 0010](../adr/0010-structural-type-field.md).
+`kind` is structural (`task` or `subtask`). `type` is the Issue type from the
+Board's `board.types` (`epic`, `story`, `task`, `bug`, `sub-task` by default)
+and decides where in `board.hierarchy` the Issue may sit: a child must be on a
+strictly deeper level than its parent. See [ADR 0010](../adr/0010-structural-type-field.md)
+and [ADR 0022](../adr/0022-issue-model-and-platform-architecture.md).
 
 The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
 `--exclude-label epic` still works on older boards. New work should use
 `--type epic` and `--exclude-type epic`.
+
+On a Board with the `mattpocock` profile applied (`orbit setup mattpocock`),
+the skills' `bug` and `enhancement` categories are Issue types — `bug` and
+`story` — not labels; see [triage-labels.md](./triage-labels.md).
 
 ## Conventions
 
@@ -82,10 +88,14 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
   `heartbeat`, `done`, `cancel`, and `comment` (for example `--by opencode`).
 - Never edit task files or YAML frontmatter directly. State, label, and comment
   changes go through the CLI.
-- `orbit ready --json` returns `data.tasks`, each with `id`, `title`, `priority`,
-  `labels`, `blocking`, and claim fields.
+- `orbit ready --json` returns `data.tasks`, each with `id`, `key`, `title`,
+  `priority`, `labels`, `blocking`, and claim fields.
+- Every Issue has a sequential project key (`ORB-12`) allocated at creation;
+  it resolves anywhere a Task ID does (`orbit show ORB-12`, `--parent ORB-3`),
+  case-insensitively. The immutable `id` in JSON remains the file name; `key`
+  and `key_aliases` carry the handles. Human `list`/`show` lead with the key.
 - `orbit show <ID> --json` returns the full task, including `body`, `labels`,
-  `kind`, `type`, `area`, `verification`, `parent`, `subtasks`, `dependents`, and `comments`.
+  `kind`, `type`, `component`, `verification`, `parent`, `subtasks`, `dependents`, and `comments`.
 - `orbit list` prints an aligned table for humans. When the Board has remote
   material, an `ISSUE` column shows `-` for a Local Task, `#N` for a Linked
   Task, and `~#N` for detached provenance; use `--linked` or `--local` to
@@ -93,7 +103,8 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
   presentation only; parse `--json` in automation. `orbit ready` and `orbit
   tree` use compact summary lines for the same reason.
 - Break a feature into SubTasks with `orbit add "<title>" --parent <parent-id>`.
-  SubTasks are one level deep. Use `--depends-on` only for real blockers between
+  SubTasks nest as deep as `board.hierarchy` allows. Use `--depends-on` only
+  for real blockers between
   units of work; the Parent Task waits for its SubTasks automatically.
 - Use `orbit ready --parent <id>` as the frontier for one epic or spec. A Parent
   Task is not Ready while any SubTask is open.
@@ -109,7 +120,7 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
 - Inside a member Repository, `orbit ready` and `orbit list` scope to it plus
   Board-wide Tasks; `--all` widens to the whole Board.
 
-## Labels
+## Labels and triage state
 
 Labels are lowercase strings stored on the task. Add and remove them with:
 
@@ -119,11 +130,22 @@ orbit label remove <ID> <label>...
 orbit label list
 ```
 
-The canonical triage state labels are `needs-triage`, `needs-info`,
-`ready-for-agent`, `ready-for-human`, and `wontfix`. The category labels are `bug`
-and `enhancement`; these stay labels, not Types. `needs-triage`, `needs-info`, and `ready-for-human` are **hold
-labels**: tasks carrying one are not Ready and cannot be claimed until the label is
-removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.
+The canonical triage vocabulary is the five roles `needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, and `wontfix`, plus the category roles
+`bug` and `enhancement`. How a role is recorded depends on the Board's
+profile — see [triage-labels.md](./triage-labels.md) for the mapping:
+
+- With the `mattpocock` profile applied, the state roles are workflow
+  statuses reached through `orbit transition <ID> <role>` (`Triage`,
+  `Needs Info`, `Ready`, and `Cancelled` with resolution `Won't Do`),
+  `ready-for-human` is a `human` assignee kind, and `bug`/`enhancement` are
+  the `bug`/`story` Issue types. Only the `Ready` status lists in
+  `orbit ready`; the other statuses are never Ready and cannot be claimed.
+- Without a profile, the roles remain labels: `needs-triage`, `needs-info`,
+  and `ready-for-human` are **hold labels** that keep a task out of
+  `orbit ready` and block claims until removed; `ready-for-agent`, `bug`,
+  and `enhancement` are neutral; `wontfix` is a label plus
+  `orbit cancel <ID> --by <agent>`.
 
 ## Comments
 
@@ -157,16 +179,43 @@ readiness or claim eligibility. On a done or cancelled task the latest checkpoin
 stays as archived history and new checkpoints are refused; use a comment for notes
 after closing.
 
+## Review, evidence, and asks
+
+Work moves through review on the `standard` and `agentic` workflows:
+
+```bash
+orbit submit <ID> --by <agent> --command "cargo test" --exit-code 0 \
+  --commit <sha> --file <path>... --note "..."
+orbit review <ID> --verdict approve --by <reviewer>
+orbit review <ID> --verdict request-changes --reason "..." --by <reviewer>
+```
+
+`submit` needs at least one evidence flag and lands the task in `in_review`;
+the evidence lands on the `evidence` Property and the submitter on
+`orbit.review`. `request-changes` requires `--reason` and returns the task to
+its author. A `[policy]` rule with `distinct_from = ["author"]` on
+`request_changes` refuses a reviewer who is the author. When the only
+violations are `max_attempts`, the task escalates to `needs_human` through the
+workflow's `escalate` edge instead of failing.
+
+`orbit ask <ID> "<question>"` records an open Ask and moves the task to
+`needs_human` when the `ask` edge allows; the open Ask blocks readiness,
+`claim`, `done`, and every transition except `answer` (`ASK_OPEN`) until
+`orbit answer <ID> "<answer>"` records the reply and restores the recorded
+status.
+
 ## When a skill says "publish to the issue tracker"
 
 Create one task per ticket, blockers first, and capture the returned `data.id`:
 
 ```bash
-orbit add "<title>" -p <0-3> --body-file - --depends-on <blocker-id>...
+orbit add "<title>" -p <priority-name> --body-file - --depends-on <blocker-id>...
 ```
 
-Feed the Markdown body on stdin. Add `--label ready-for-agent` to publish a ticket
-that is ready for an agent, or add it afterward with `orbit label add`. If the
+Feed the Markdown body on stdin. On a Board with the `mattpocock` profile, a
+ticket that is ready for an agent starts in `Triage` and moves with
+`orbit transition <ID> ready-for-agent`; on an unprofiled Board, add
+`--label ready-for-agent` (or `orbit label add` afterward). If the
 source is an existing issue or spec, create each ticket as a SubTask with
 `--parent <source-id>`; otherwise create top-level Tasks. Use `--type epic` when
 publishing a spec or epic parent. Then use the returned ID for any dependent
@@ -176,7 +225,8 @@ ticket. To add a blocking edge later:
 orbit depend <dependent-id> <blocker-id>
 ```
 
-Orbit has no label registry. Parentage is one level deep: create a SubTask with
+Orbit has no label registry. Parentage follows the Board's `board.hierarchy`
+(default `epic` > `story`/`task`/`bug` > `sub-task`): create a SubTask with
 `orbit add --parent <id>`, and use `--depends-on` only for real blockers. Labels
 are free-form strings, comments are per-task threads, and blocking edges are
 `--depends-on`. Put parent context and acceptance criteria in the body; use labels
@@ -186,13 +236,17 @@ for state and category, and comments for triage notes.
 
 Orbit is the tracker. Matt Pocock's engineering skills own the triage state
 machine: gathering context, verifying the claim, grilling, writing the agent
-brief, and maintaining `.out-of-scope/`.
+brief, and maintaining `.out-of-scope/`. The five roles map onto Orbit through
+the Board's profile — see [triage-labels.md](./triage-labels.md).
 
 `orbit triage` is a deterministic metadata primitive for any Task, Local or
-Linked. It sets `area`, task-level `verification`, and the canonical labels in
+Linked. It sets `component`, task-level `verification`, and the canonical labels in
 [`triage-labels.md`](./triage-labels.md). It does not verify a claim, grill,
 write a brief, or update `.out-of-scope/`. The commands are in
-[`triage-workflow.md`](./triage-workflow.md).
+[`triage-workflow.md`](./triage-workflow.md). Triage *state* (which role a
+Task carries) is a workflow transition under the `mattpocock` profile;
+`orbit triage` still owns the metadata fields and publishes them to Linked
+Tasks.
 
 Before you implement a `ready-for-agent` ticket, read the agent brief. The
 template is in [`agent-brief.md`](./agent-brief.md).
@@ -203,16 +257,27 @@ commands are in [Wayfinding operations](#wayfinding-operations).
 
 ## Triage operations
 
+On a Board with the `mattpocock` profile, triage state is a workflow status:
+
 - **Unlabeled:** `orbit list --unlabeled --json`
-- **Needs triage:** `orbit list --label needs-triage --json`
-- **Needs info:** `orbit list --label needs-info --json`
-- **Ready for agents:** `orbit list --label ready-for-agent --json`
-- **Category:** add `bug` or `enhancement` with `orbit label add`.
-- **State transition:** remove the old state label, add the new one.
-- **Wontfix:** add the `wontfix` label and close with
-  `orbit cancel <ID> --by <agent>`.
+- **Needs triage:** `orbit list --status Triage --json` (or
+  `orbit transition <ID> needs-triage` to file one there)
+- **Needs info:** `orbit list --status "Needs Info" --json`
+- **Ready for agents:** `orbit ready --json` (the `Ready` status, unblocked)
+- **Category:** `bug`/`enhancement` are Issue types — `orbit add --type bug`,
+  `orbit update <ID> --type story`
+- **State transition:** `orbit transition <ID> needs-triage|needs-info|ready-for-agent|ready-for-human|wontfix`
+- **Wontfix:** `orbit transition <ID> wontfix` closes the Task with resolution
+  `Won't Do`; `orbit reopen <ID>` returns it to `Triage`.
+- **Human work:** `orbit transition <ID> ready-for-human`, then
+  `orbit assign <ID> --to <name>` (assignee kind `human`).
 - **Comments:** `orbit comment add <ID> --by <agent> --body ...`; read with
   `orbit comment list <ID>` or `orbit show <ID> --json`.
+
+On an unprofiled Board the same roles are labels instead: filter with
+`orbit list --label <role> --json`, move state by removing the old role label
+and adding the new one, and close `wontfix` with `orbit cancel <ID> --by
+<agent>`.
 
 Remote Tracker sync and Triage require Orbit 0.9.0 or newer. For Linked Tasks,
 use the structured workflow in
@@ -227,8 +292,8 @@ orbit show <ID> --json
 
 Use `orbit list --all --include-closed --json` to inspect the whole board.
 `orbit ready --json` lists only
-unclaimed tasks whose dependencies are done or cancelled and which carry no hold
-label.
+unclaimed tasks in the workflow's ready status whose dependencies are in a
+closed status category and which carry no hold label.
 
 ## Claiming and completing work
 
@@ -284,7 +349,7 @@ Blocking edges stay `--depends-on` / `orbit depend`. Resolution stays
 
 - **Dependency**: `--depends-on <dependency-id>` at creation or
   `orbit depend <task-id> <dependency-id>` later creates a real Dependency: the
-  first Task cannot become Ready until the second is `done` or `cancelled`. Use it
+  first Task cannot become Ready until the second is in a closed status category. Use it
   only when one child must wait for another. Never use `depend` to record
   parentage; `--parent` does that, and the map waits for its SubTasks
   automatically.
@@ -308,5 +373,5 @@ Blocking edges stay `--depends-on` / `orbit depend`. Resolution stays
   ```
 
 - **Resolve**: `orbit done <id> --by <agent>` or `orbit cancel <id> --by <agent>`
-  each SubTask as its work lands. The map becomes Ready when every SubTask is
-  done or cancelled, and `orbit done` closes it.
+  each SubTask as its work lands. The map becomes Ready when every SubTask is in a closed
+  status category, and `orbit done` closes it.

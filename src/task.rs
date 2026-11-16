@@ -12,72 +12,75 @@ pub const DEFAULT_PREFIX: &str = "orb-";
 pub const DEFAULT_ID_LENGTH: usize = 6;
 pub const MAX_LABEL_LENGTH: usize = 32;
 pub const MAX_VERIFICATION_LENGTH: usize = 2000;
-pub const MAX_REPO_LENGTH: usize = 128;
+pub const MAX_REPOSITORY_LENGTH: usize = 128;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum Status {
-    Todo,
-    #[value(name = "in_progress", alias = "in-progress")]
-    InProgress,
-    Done,
-    Cancelled,
+/// The Issue type assumed when a file has no `type:` key. Boards configure
+/// the real vocabulary through `board.types`; `task` is only the fallback a
+/// pre-types file parses to, and `board.default_type` decides what `add`
+/// writes (ADR 0022).
+pub fn default_task_type() -> String {
+    "task".to_string()
 }
 
-impl Status {
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Status::Done | Status::Cancelled)
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Status::Todo => "todo",
-            Status::InProgress => "in_progress",
-            Status::Done => "done",
-            Status::Cancelled => "cancelled",
-        }
-    }
+/// The Board's default Priority name when `board.default_priority` is absent.
+/// Must stay a member of [`default_priorities`].
+pub fn default_priority() -> String {
+    "medium".to_string()
 }
 
-/// Structural shape of a Task. `kind` remains derived (`task` or `subtask`);
-/// `type` is metadata and does not affect readiness or lifecycle.
+/// The default ordered Priority vocabulary: names from most to least
+/// important. A Board replaces or renames it through `board.priorities`.
+pub fn default_priorities() -> Vec<String> {
+    ["highest", "high", "medium", "low"]
+        .iter()
+        .map(|name| name.to_string())
+        .collect()
+}
+
+/// Whether an assignee is a person or an agent (ADR 0022). Informational
+/// only: the lease, not the kind, decides claim semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum TaskType {
+pub enum IdentityKind {
     #[default]
-    Task,
-    Epic,
-    Spike,
-    Chore,
-    Decision,
+    Agent,
+    Human,
 }
 
-impl TaskType {
+impl std::fmt::Display for IdentityKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl IdentityKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            TaskType::Task => "task",
-            TaskType::Epic => "epic",
-            TaskType::Spike => "spike",
-            TaskType::Chore => "chore",
-            TaskType::Decision => "decision",
+            IdentityKind::Agent => "agent",
+            IdentityKind::Human => "human",
         }
     }
 }
 
-pub fn default_priority() -> u8 {
-    2
+/// A named actor on the Board: the assignee of a Task or its reporter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identity {
+    pub name: String,
+    #[serde(default)]
+    pub kind: IdentityKind,
 }
 
-/// Who holds a Task and until when. Times are optional so hand-edited files with a
-/// partial claim still load; `orbit doctor` reports them as incomplete.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Claim {
-    pub holder: String,
+/// A time-bounded lease held by the assignee (ADR 0022). An assignee may
+/// carry no lease at all — that is how humans take work. Times are optional
+/// so hand-edited files with a partial lease still load; `orbit doctor`
+/// reports them as incomplete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lease {
     pub claimed_at: Option<DateTime<Utc>>,
     pub lease_until: Option<DateTime<Utc>>,
 }
 
-impl Claim {
+impl Lease {
     pub fn is_live(&self, now: DateTime<Utc>) -> bool {
         self.lease_until.is_some_and(|until| until > now)
     }
@@ -91,10 +94,11 @@ impl Claim {
     }
 }
 
-/// Claim times found in a file without a `claimed_by`. Kept so such hand-edited files
-/// rewrite unchanged and `orbit doctor` can still report them.
+/// Lease times found in a file without an `assignee`. Kept so such
+/// hand-edited files rewrite unchanged and `orbit doctor` can still report
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StrayClaimTimes {
+pub struct StrayLeaseTimes {
     pub claimed_at: Option<DateTime<Utc>>,
     pub lease_until: Option<DateTime<Utc>>,
 }
@@ -184,16 +188,15 @@ impl RemoteLink {
     }
 }
 
-/// Largest serialized size of one owner's Annotation, in bytes.
-pub const ANNOTATION_MAX_BYTES: usize = 8192;
-const ANNOTATION_OWNER_MAX: usize = 40;
+/// Largest serialized size of one owner's Property, in bytes.
+pub const PROPERTY_MAX_BYTES: usize = 8192;
+const PROPERTY_OWNER_MAX: usize = 40;
 
-/// Checks one Annotation: a lowercase-slug owner and a JSON object of bounded size.
-pub fn validate_annotation(owner: &str, value: &serde_json::Value) -> Result<()> {
-    let invalid =
-        |message: String| OrbitError::new(crate::error::code::INVALID_ANNOTATION, message);
+/// Checks one Property: a lowercase-slug owner and a JSON object of bounded size.
+pub fn validate_property(owner: &str, value: &serde_json::Value) -> Result<()> {
+    let invalid = |message: String| OrbitError::new(crate::error::code::INVALID_PROPERTY, message);
     let slug = !owner.is_empty()
-        && owner.len() <= ANNOTATION_OWNER_MAX
+        && owner.len() <= PROPERTY_OWNER_MAX
         && owner
             .bytes()
             .next()
@@ -203,20 +206,18 @@ pub fn validate_annotation(owner: &str, value: &serde_json::Value) -> Result<()>
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
     if !slug {
         return Err(invalid(format!(
-            "annotation owner '{owner}' must be a lowercase slug of at most {ANNOTATION_OWNER_MAX} characters"
+            "property owner '{owner}' must be a lowercase slug of at most {PROPERTY_OWNER_MAX} characters"
         )));
     }
     if !value.is_object() {
-        return Err(invalid(format!(
-            "annotation '{owner}' must be a JSON object"
-        )));
+        return Err(invalid(format!("property '{owner}' must be a JSON object")));
     }
     let size = serde_json::to_string(value)
         .map(|text| text.len())
         .unwrap_or(usize::MAX);
-    if size > ANNOTATION_MAX_BYTES {
+    if size > PROPERTY_MAX_BYTES {
         return Err(invalid(format!(
-            "annotation '{owner}' is {size} bytes; the limit is {ANNOTATION_MAX_BYTES}"
+            "property '{owner}' is {size} bytes; the limit is {PROPERTY_MAX_BYTES}"
         )));
     }
     Ok(())
@@ -224,6 +225,235 @@ pub fn validate_annotation(owner: &str, value: &serde_json::Value) -> Result<()>
 
 /// Longest Source Key, in characters.
 pub const SOURCE_KEY_MAX: usize = 200;
+
+/// Canonical link type: the owner Task is blocked by the link's target.
+/// `blocks` links block readiness and take part in cycle checks unless
+/// `blocking: false` overrides the default.
+pub const LINK_TYPE_BLOCKS: &str = "blocks";
+/// Symmetric association between two Tasks or a Task and an external reference.
+pub const LINK_TYPE_RELATES_TO: &str = "relates-to";
+/// The target duplicates the owner Task.
+pub const LINK_TYPE_DUPLICATES: &str = "duplicates";
+/// The target was discovered from the owner Task.
+pub const LINK_TYPE_DISCOVERED_FROM: &str = "discovered-from";
+/// Orbit's name for the `waiting_on` convenience: an external blocker recorded
+/// through `add --waiting-on` / `update --waiting-on`.
+pub const LINK_TYPE_WAITING_ON: &str = "waiting-on";
+
+/// Longest link type name, in characters.
+pub const LINK_TYPE_MAX: usize = 64;
+
+/// The other end of a [`Link`]: an Orbit Task ID or an external reference.
+/// Serializes untagged: a bare string is a Task ID, a map is external.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LinkTarget {
+    /// An Orbit Task ID.
+    Task(String),
+    /// A reference outside this Board (another tracker, a URL-backed issue, ...).
+    External(ExternalRef),
+}
+
+/// An issue living outside the Board. `system` names the tracker or service
+/// (`jira`, `github`, ...), `id` its identity there, `url` an optional
+/// canonical link.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExternalRef {
+    pub system: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+impl ExternalRef {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        for (name, value) in [("system", self.system.as_str()), ("id", self.id.as_str())] {
+            if value.trim().is_empty() {
+                return Err(format!("link target external.{name} must not be empty"));
+            }
+        }
+        if self.url.as_ref().is_some_and(|url| url.trim().is_empty()) {
+            return Err("link target external.url must not be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl LinkTarget {
+    /// The Orbit Task ID when the target is internal.
+    pub fn task_id(&self) -> Option<&str> {
+        match self {
+            Self::Task(id) => Some(id),
+            Self::External(_) => None,
+        }
+    }
+
+    /// Target equality for link operations: external references match on
+    /// `system` + `id`, ignoring `url` (a URL is metadata, not identity).
+    pub fn same_reference(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Task(a), Self::Task(b)) => a == b,
+            (Self::External(a), Self::External(b)) => a.system == b.system && a.id == b.id,
+            _ => false,
+        }
+    }
+
+    /// Display label: the Task ID, or `system:id` for an external reference.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Task(id) => id.clone(),
+            Self::External(reference) => format!("{}:{}", reference.system, reference.id),
+        }
+    }
+}
+
+/// A typed relation between this Task and another Task or an external
+/// reference. The link is stored on the inward end: `type` names the
+/// relation the *target* has toward the owner, so `blocks` on Task T
+/// targeting D reads "D blocks T" — the same edge `depends_on` used to hold.
+///
+/// `blocking` overrides the type's default: `blocks` defaults to blocking,
+/// every other type to non-blocking. Blocking links drive readiness and
+/// cycle checks; non-blocking links never do. `attributes` carries arbitrary
+/// Board- or tool-owned data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Link {
+    /// Link type: `blocks`, `relates-to`, `duplicates`, `discovered-from`,
+    /// `waiting-on`, or a Board-defined custom slug. Serialized as `type`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub target: LinkTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<bool>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attributes: BTreeMap<String, serde_yaml_ng::Value>,
+}
+
+impl Link {
+    /// A blocking `blocks` link to an Orbit Task — what `depends_on` stored.
+    pub fn dependency(target: &str) -> Self {
+        Self {
+            kind: LINK_TYPE_BLOCKS.to_string(),
+            target: LinkTarget::Task(target.to_string()),
+            blocking: None,
+            attributes: BTreeMap::new(),
+        }
+    }
+
+    /// A blocking link to an external reference — what `waiting_on` stored.
+    /// `text` is the free-form blocker description.
+    pub fn waiting_on(text: &str) -> Self {
+        Self {
+            kind: LINK_TYPE_WAITING_ON.to_string(),
+            target: LinkTarget::External(ExternalRef {
+                system: "external".to_string(),
+                id: text.to_string(),
+                url: None,
+            }),
+            blocking: Some(true),
+            attributes: BTreeMap::new(),
+        }
+    }
+
+    /// Whether the link participates in readiness and cycle checks.
+    pub fn is_blocking(&self) -> bool {
+        self.blocking
+            .unwrap_or_else(|| self.kind == LINK_TYPE_BLOCKS)
+    }
+
+    /// The internal Task ID this link points at, when it has one.
+    pub fn target_task(&self) -> Option<&str> {
+        self.target.task_id()
+    }
+
+    /// Whether the target is an external reference.
+    pub fn is_external(&self) -> bool {
+        matches!(self.target, LinkTarget::External(_))
+    }
+
+    /// How the owner Task sees the link (the inward name of the type).
+    pub fn inward_name(&self) -> String {
+        match self.kind.as_str() {
+            LINK_TYPE_BLOCKS => "is blocked by".to_string(),
+            LINK_TYPE_RELATES_TO => "relates to".to_string(),
+            LINK_TYPE_DUPLICATES => "is duplicated by".to_string(),
+            LINK_TYPE_DISCOVERED_FROM => "is the origin of".to_string(),
+            _ => self.kind.clone(),
+        }
+    }
+
+    /// How the target sees the link (the outward name of the type).
+    pub fn outward_name(&self) -> String {
+        match self.kind.as_str() {
+            LINK_TYPE_BLOCKS => "blocks".to_string(),
+            LINK_TYPE_RELATES_TO => "relates to".to_string(),
+            LINK_TYPE_DUPLICATES => "duplicates".to_string(),
+            LINK_TYPE_DISCOVERED_FROM => "discovered from".to_string(),
+            _ => self.kind.clone(),
+        }
+    }
+
+    /// JSON shape returned by `show`/`list`: the stored fields plus the
+    /// resolved blocking flag and both directional names.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": self.kind,
+            "target": self.target,
+            "blocking": self.is_blocking(),
+            "inward": self.inward_name(),
+            "outward": self.outward_name(),
+            "attributes": self.attributes,
+        })
+    }
+}
+
+/// Normalizes a link type to its canonical lowercase kebab slug and checks
+/// it is a valid type name. Accepts the spaced display forms ("relates to",
+/// "discovered from") and maps them onto the canonical slugs.
+pub fn normalize_link_kind(input: &str) -> Result<String> {
+    let kind = input
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+        .replace('_', "-");
+    let valid = !kind.is_empty()
+        && kind.len() <= LINK_TYPE_MAX
+        && kind
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && kind
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    if !valid {
+        return Err(OrbitError::new(
+            crate::error::code::INVALID_ARGUMENT,
+            format!(
+                "invalid link type `{input}`; use a short lowercase slug such as `blocks` or `relates-to`"
+            ),
+        ));
+    }
+    Ok(kind)
+}
+
+/// Longest External ID, in characters.
+pub const EXTERNAL_ID_MAX: usize = 200;
+
+/// Checks an External ID: the Task's identity in an external system, unique
+/// per Board. Same shape rules as a Source Key.
+pub fn validate_external_id(id: &str) -> Result<()> {
+    if id.is_empty() || id.len() > EXTERNAL_ID_MAX || !id.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(OrbitError::new(
+            crate::error::code::INVALID_EXTERNAL_ID,
+            format!(
+                "external id must be 1 to {EXTERNAL_ID_MAX} printable ASCII characters without spaces"
+            ),
+        ));
+    }
+    Ok(())
+}
 
 /// Checks a Source Key: 1 to 200 printable, non-whitespace ASCII characters.
 pub fn validate_source_key(key: &str) -> Result<()> {
@@ -242,23 +472,37 @@ pub fn validate_source_key(key: &str) -> Result<()> {
 #[derive(Serialize, Deserialize)]
 struct RawFrontmatter {
     title: String,
-    status: Status,
-    #[serde(default, rename = "type")]
-    task_type: TaskType,
+    status: String,
+    /// The Issue's sequential project key (`ORB-12`); absent on Tasks that
+    /// predate keys or were never allocated one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    /// Former keys that still resolve to this Task after a Board-sync re-key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    key_aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolution: Option<String>,
+    #[serde(default = "default_task_type", rename = "type")]
+    task_type: String,
     #[serde(default = "default_priority")]
-    priority: u8,
+    priority: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     labels: Vec<String>,
+    /// Legacy dependency list, read once into `links` and never written back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     depends_on: Vec<String>,
+    /// Legacy free-text external blocker, read once into `links`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    waiting_on: Option<String>,
+    /// Typed links replacing `depends_on`/`waiting_on` (ADR 0022).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    links: Vec<Link>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    waiting_on: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     checkpoint: Option<Checkpoint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    area: Option<String>,
+    component: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     verification: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -266,7 +510,21 @@ struct RawFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     remote: Option<RemoteLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    repo: Option<String>,
+    repository: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_id: Option<String>,
+    /// The assignee: who is responsible for the Task, human or agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    assignee: Option<Identity>,
+    /// The optional time-bounded lease held by the assignee; absent for
+    /// lease-less (human) assignments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lease: Option<Lease>,
+    /// Who created the Task; set at creation and never changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reporter: Option<String>,
+    /// Legacy claim fields, read once into `assignee`/`lease` and never
+    /// written back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -276,7 +534,7 @@ struct RawFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_key: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    annotations: BTreeMap<String, serde_json::Value>,
+    properties: BTreeMap<String, serde_json::Value>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     #[serde(flatten)]
@@ -285,37 +543,83 @@ struct RawFrontmatter {
 
 impl From<RawFrontmatter> for TaskFrontmatter {
     fn from(raw: RawFrontmatter) -> Self {
-        let (claimed_at, lease_until) = (raw.claimed_at, raw.lease_until);
-        let claim = raw.claimed_by.map(|holder| Claim {
-            holder,
-            claimed_at,
-            lease_until,
-        });
-        let stray_claim_times = (claim.is_none()
-            && (claimed_at.is_some() || lease_until.is_some()))
-        .then_some(StrayClaimTimes {
-            claimed_at,
-            lease_until,
-        });
+        // Legacy `claimed_by`/`claimed_at`/`lease_until` keys upgrade into
+        // `assignee`/`lease` on read; the legacy keys are never written back.
+        let mut assignee = raw.assignee;
+        let mut lease = raw.lease;
+        // Legacy `claimed_by` upgrades into `assignee`; its flat times upgrade
+        // into `lease` only when no `lease:` map was written.
+        if assignee.is_none()
+            && let Some(name) = raw.claimed_by
+        {
+            assignee = Some(Identity {
+                name,
+                kind: IdentityKind::Agent,
+            });
+            if lease.is_none() {
+                lease = Some(Lease {
+                    claimed_at: raw.claimed_at,
+                    lease_until: raw.lease_until,
+                });
+            }
+        }
+        // A lease without an assignee is stray times: keep them so the file
+        // rewrites unchanged and `orbit doctor` can report them.
+        let stray_lease_times = if assignee.is_none() {
+            let times = lease.take().map(|lease| StrayLeaseTimes {
+                claimed_at: lease.claimed_at.or(raw.claimed_at),
+                lease_until: lease.lease_until.or(raw.lease_until),
+            });
+            times.or_else(|| {
+                (raw.claimed_at.is_some() || raw.lease_until.is_some()).then_some(StrayLeaseTimes {
+                    claimed_at: raw.claimed_at,
+                    lease_until: raw.lease_until,
+                })
+            })
+        } else {
+            None
+        };
+        // Legacy `depends_on`/`waiting_on` keys upgrade into `links` on read;
+        // `links` itself is written back, the legacy keys never are.
+        let mut links = raw.links;
+        for dep in raw.depends_on {
+            let link = Link::dependency(&dep);
+            if !links.contains(&link) {
+                links.push(link);
+            }
+        }
+        if let Some(waiting) = raw.waiting_on
+            && !waiting.trim().is_empty()
+        {
+            let link = Link::waiting_on(waiting.trim());
+            if !links.contains(&link) {
+                links.push(link);
+            }
+        }
         Self {
             title: raw.title,
             status: raw.status,
+            key: raw.key,
+            key_aliases: raw.key_aliases,
+            resolution: raw.resolution,
             task_type: raw.task_type,
             priority: raw.priority,
             labels: raw.labels,
-            depends_on: raw.depends_on,
+            links,
             parent: raw.parent,
-            waiting_on: raw.waiting_on,
             checkpoint: raw.checkpoint,
-            area: raw.area,
+            component: raw.component,
             verification: raw.verification,
             github: raw.github,
             remote: raw.remote,
-            repo: raw.repo,
-            claim,
-            stray_claim_times,
+            repository: raw.repository,
+            external_id: raw.external_id,
+            assignee,
+            lease,
+            reporter: raw.reporter,
+            stray_lease_times,
             source_key: raw.source_key,
-            annotations: raw.annotations,
+            properties: raw.properties,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
             extra: raw.extra,
@@ -325,31 +629,40 @@ impl From<RawFrontmatter> for TaskFrontmatter {
 
 impl From<TaskFrontmatter> for RawFrontmatter {
     fn from(front: TaskFrontmatter) -> Self {
-        let (claimed_by, claimed_at, lease_until) = match (front.claim, front.stray_claim_times) {
-            (Some(claim), _) => (Some(claim.holder), claim.claimed_at, claim.lease_until),
-            (None, Some(stray)) => (None, stray.claimed_at, stray.lease_until),
-            (None, None) => (None, None, None),
+        // Lease times write back flat (`claimed_at`/`lease_until`) only for
+        // stray times with no assignee; a real lease serializes as `lease:`.
+        let (claimed_at, lease_until) = match (&front.lease, &front.stray_lease_times) {
+            (None, Some(stray)) => (stray.claimed_at, stray.lease_until),
+            _ => (None, None),
         };
         Self {
             title: front.title,
             status: front.status,
+            key: front.key,
+            key_aliases: front.key_aliases,
+            resolution: front.resolution,
             task_type: front.task_type,
             priority: front.priority,
             labels: front.labels,
-            depends_on: front.depends_on,
+            depends_on: Vec::new(),
+            waiting_on: None,
+            links: front.links,
             parent: front.parent,
-            waiting_on: front.waiting_on,
             checkpoint: front.checkpoint,
-            area: front.area,
+            component: front.component,
             verification: front.verification.clone(),
             github: front.github,
             remote: front.remote,
-            repo: front.repo,
-            claimed_by,
+            repository: front.repository,
+            external_id: front.external_id,
+            assignee: front.assignee,
+            lease: front.lease,
+            reporter: front.reporter,
+            claimed_by: None,
             claimed_at,
             lease_until,
             source_key: front.source_key,
-            annotations: front.annotations,
+            properties: front.properties,
             created_at: front.created_at,
             updated_at: front.updated_at,
             extra: front.extra,
@@ -361,29 +674,58 @@ impl From<TaskFrontmatter> for RawFrontmatter {
 #[serde(from = "RawFrontmatter", into = "RawFrontmatter")]
 pub struct TaskFrontmatter {
     pub title: String,
-    pub status: Status,
-    pub task_type: TaskType,
-    pub priority: u8,
+    /// The workflow status name; resolved against the Board's
+    /// [`crate::workflow::Workflow`] for its category.
+    pub status: String,
+    /// The Issue's sequential project key (`ORB-12`), allocated under the
+    /// Board lock at creation. It is a handle, not the identity: the Task ID
+    /// (the file name) is immutable and never changes. A Board-sync key
+    /// collision re-keys the Issue and moves the old key into
+    /// `key_aliases` so it keeps resolving (ADR 0022).
+    pub key: Option<String>,
+    /// Former project keys that still resolve to this Task, recorded when a
+    /// Board sync re-keys it. Sorted and deduplicated.
+    pub key_aliases: Vec<String>,
+    /// The resolution recorded by the closing transition that set `status`;
+    /// cleared when the Task reopens or transitions to an open status.
+    pub resolution: Option<String>,
+    /// The Board-configured Issue type name (`epic`, `story`, `task`, `bug`,
+    /// `sub-task`, or a custom `board.types` entry). Stored as a string so the
+    /// vocabulary is per-Board; membership is checked by `Graph::validate`.
+    pub task_type: String,
+    /// A Priority name from the Board's `board.priorities` list; Tasks sort
+    /// by the name's ordinal in that list, not by the name itself.
+    pub priority: String,
     pub labels: Vec<String>,
-    pub depends_on: Vec<String>,
+    /// Typed links to other Tasks or external references (ADR 0022).
+    pub links: Vec<Link>,
     pub parent: Option<String>,
-    pub waiting_on: Option<String>,
     pub checkpoint: Option<Checkpoint>,
-    /// Optional work-area slug; each Board restricts it through `board.areas`.
-    pub area: Option<String>,
+    /// Optional work Component slug; each Board restricts it through
+    /// `board.components`.
+    pub component: Option<String>,
     pub verification: Option<String>,
     /// Legacy GitHub Issue link; `orbit migrate` rewrites it to `remote`.
     pub github: Option<GitHubLink>,
     /// Provider-neutral Remote Issue link (ADR 0018).
     pub remote: Option<RemoteLink>,
     /// The member Repository this Task belongs to; absent means Board-wide.
-    pub repo: Option<String>,
-    pub claim: Option<Claim>,
-    pub stray_claim_times: Option<StrayClaimTimes>,
+    pub repository: Option<String>,
+    /// The Task's identity in an external system; unique per Board.
+    pub external_id: Option<String>,
+    /// Who is responsible for the Task: a human or agent identity (ADR 0022).
+    pub assignee: Option<Identity>,
+    /// The assignee's optional time-bounded lease; absent for lease-less
+    /// (human) assignments.
+    pub lease: Option<Lease>,
+    /// Who created the Task; set at creation and never changed.
+    pub reporter: Option<String>,
+    pub stray_lease_times: Option<StrayLeaseTimes>,
     /// Caller-chosen identity that makes `add` retry-safe; unique per Board.
     pub source_key: Option<String>,
-    /// Tool-owned data keyed by owner slug; Orbit stores it but never interprets it.
-    pub annotations: BTreeMap<String, serde_json::Value>,
+    /// Tool-owned data namespaced by owner slug; Orbit stores it but never
+    /// interprets it.
+    pub properties: BTreeMap<String, serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub extra: BTreeMap<String, serde_yaml_ng::Value>,
@@ -397,6 +739,17 @@ pub struct Task {
 }
 
 impl Task {
+    /// The Issue's project key (`ORB-12`), when one was allocated.
+    pub fn key(&self) -> Option<&str> {
+        self.front.key.as_deref()
+    }
+
+    /// The handle humans and agents should quote: the project key when the
+    /// Task has one, the immutable Task ID otherwise.
+    pub fn display_id(&self) -> &str {
+        self.front.key.as_deref().unwrap_or(&self.id)
+    }
+
     pub fn parent_id(&self) -> Option<&str> {
         self.front.parent.as_deref()
     }
@@ -409,8 +762,9 @@ impl Task {
         if self.is_subtask() { "subtask" } else { "task" }
     }
 
-    pub fn task_type(&self) -> TaskType {
-        self.front.task_type
+    /// The Task's configured Issue type name.
+    pub fn task_type(&self) -> &str {
+        &self.front.task_type
     }
 
     pub fn github_link(&self) -> Option<&GitHubLink> {
@@ -468,26 +822,73 @@ impl Task {
         changed
     }
 
-    /// Adds a dependency edge. Returns true when the edge is new; an existing
-    /// edge leaves the Task untouched.
-    pub fn add_dependency(&mut self, dep: &str, now: DateTime<Utc>) -> bool {
-        if self.front.depends_on.iter().any(|existing| existing == dep) {
+    /// Adds a typed link. Returns true when the link is new; an identical
+    /// link (same type and target) leaves the Task untouched.
+    pub fn add_link(&mut self, link: Link, now: DateTime<Utc>) -> bool {
+        if self.front.links.iter().any(|existing| {
+            existing.kind == link.kind && existing.target.same_reference(&link.target)
+        }) {
             return false;
         }
-        self.front.depends_on.push(dep.to_string());
+        self.front.links.push(link);
         self.touch(now);
         true
     }
 
-    /// Removes a dependency edge. Returns true when an edge was removed.
-    pub fn remove_dependency(&mut self, dep: &str, now: DateTime<Utc>) -> bool {
-        let before = self.front.depends_on.len();
-        self.front.depends_on.retain(|existing| existing != dep);
-        let changed = self.front.depends_on.len() != before;
+    /// Removes links matching `kind` (when given) and `target`. Returns true
+    /// when at least one link was removed.
+    pub fn remove_links(
+        &mut self,
+        kind: Option<&str>,
+        target: &LinkTarget,
+        now: DateTime<Utc>,
+    ) -> bool {
+        let before = self.front.links.len();
+        self.front.links.retain(|link| {
+            !link.target.same_reference(target)
+                || (kind.is_some() && Some(link.kind.as_str()) != kind)
+        });
+        let changed = self.front.links.len() != before;
         if changed {
             self.touch(now);
         }
         changed
+    }
+
+    /// Removes every link pointing at `id`, whatever its type.
+    pub fn remove_links_to(&mut self, id: &str, now: DateTime<Utc>) -> bool {
+        let before = self.front.links.len();
+        self.front
+            .links
+            .retain(|link| link.target_task() != Some(id));
+        let changed = self.front.links.len() != before;
+        if changed {
+            self.touch(now);
+        }
+        changed
+    }
+
+    /// Links that take part in readiness and cycle checks.
+    pub fn blocking_links(&self) -> impl Iterator<Item = &Link> {
+        self.front.links.iter().filter(|link| link.is_blocking())
+    }
+
+    /// Blocking links whose target lives outside the Board.
+    pub fn external_blockers(&self) -> impl Iterator<Item = &Link> {
+        self.blocking_links().filter(|link| link.is_external())
+    }
+
+    /// Display labels for external blockers: the bare id for the `external`
+    /// system `--waiting-on` writes, `system:id` for named systems.
+    pub fn waiting_labels(&self) -> Vec<String> {
+        self.external_blockers()
+            .map(|link| match &link.target {
+                LinkTarget::External(reference) if reference.system == "external" => {
+                    reference.id.clone()
+                }
+                _ => link.target.label(),
+            })
+            .collect()
     }
 }
 
@@ -525,16 +926,55 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             "task {id} has an empty title"
         )));
     }
-    if front.priority > 3 {
+    if front.status.trim().is_empty() {
         return Err(OrbitError::corrupt_task(format!(
-            "task {id} has priority {}; expected 0-3",
+            "task {id} has an empty status"
+        )));
+    }
+    // Keys resolve case-insensitively; store the canonical uppercase form.
+    if let Some(key) = &mut front.key {
+        *key = key.to_uppercase();
+    }
+    for alias in &mut front.key_aliases {
+        *alias = alias.to_uppercase();
+    }
+    if let Some(key) = &front.key
+        && !crate::key::is_key_shaped(key)
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has invalid key `{key}`"
+        )));
+    }
+    front.key_aliases.sort();
+    front.key_aliases.dedup();
+    for alias in &front.key_aliases {
+        if !crate::key::is_key_shaped(alias) {
+            return Err(OrbitError::corrupt_task(format!(
+                "task {id} has invalid key alias `{alias}`"
+            )));
+        }
+    }
+    front.priority = front.priority.trim().to_lowercase();
+    if !is_valid_label(&front.priority) {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has invalid priority `{}`",
             front.priority
         )));
     }
-    if front.depends_on.iter().any(|dep| dep.trim().is_empty()) {
+    front.task_type = front.task_type.trim().to_lowercase();
+    if !is_valid_label(&front.task_type) {
         return Err(OrbitError::corrupt_task(format!(
-            "task {id} has an empty dependency id"
+            "task {id} has invalid type `{}`",
+            front.task_type
         )));
+    }
+    for link in &mut front.links {
+        link.kind = normalize_link_kind(&link.kind).map_err(|error| {
+            OrbitError::corrupt_task(format!("task {id} has an invalid link: {}", error.message))
+        })?;
+        if let Err(reason) = validate_link(link) {
+            return Err(OrbitError::corrupt_task(format!("task {id}: {reason}")));
+        }
     }
     if front
         .parent
@@ -543,6 +983,20 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
     {
         return Err(OrbitError::corrupt_task(format!(
             "task {id} has an empty parent id"
+        )));
+    }
+    if let Some(assignee) = &front.assignee
+        && assignee.name.trim().is_empty()
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an empty assignee name"
+        )));
+    }
+    if let Some(reporter) = &front.reporter
+        && reporter.trim().is_empty()
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an empty reporter"
         )));
     }
     if let Some(checkpoint) = &front.checkpoint
@@ -565,18 +1019,18 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             "task {id} has an invalid remote link: {reason}"
         )));
     }
-    if let Some(repo) = &front.repo
-        && !is_valid_repo(repo)
+    if let Some(repository) = &front.repository
+        && !is_valid_repository(repository)
     {
         return Err(OrbitError::corrupt_task(format!(
-            "task {id} has an invalid repo `{repo}`"
+            "task {id} has an invalid repository `{repository}`"
         )));
     }
-    if let Some(area) = &front.area
-        && !is_valid_area(area)
+    if let Some(component) = &front.component
+        && !is_valid_component(component)
     {
         return Err(OrbitError::corrupt_task(format!(
-            "task {id} has an invalid area `{area}`"
+            "task {id} has an invalid component `{component}`"
         )));
     }
 
@@ -606,6 +1060,28 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
         front,
         body: body.to_string(),
     })
+}
+
+/// Checks one stored link: a usable type name, a non-empty target, and a
+/// bounded attributes map.
+fn validate_link(link: &Link) -> std::result::Result<(), String> {
+    match &link.target {
+        LinkTarget::Task(id) => {
+            if id.trim().is_empty() {
+                return Err("link target task id must not be empty".to_string());
+            }
+        }
+        LinkTarget::External(reference) => reference.validate()?,
+    }
+    let attributes_size = serde_yaml_ng::to_string(&link.attributes)
+        .map(|text| text.len())
+        .unwrap_or(usize::MAX);
+    if attributes_size > PROPERTY_MAX_BYTES {
+        return Err(format!(
+            "link attributes are {attributes_size} bytes; the limit is {PROPERTY_MAX_BYTES}"
+        ));
+    }
+    Ok(())
 }
 
 pub fn render_task(task: &Task) -> Result<String> {
@@ -670,85 +1146,64 @@ pub fn is_valid_id(id: &str, prefix: &str) -> bool {
         return false;
     };
 
-    match rest.split_once('.') {
-        None => is_valid_rand(rest),
-        Some((parent, child)) => {
-            !parent.is_empty()
-                && !child.is_empty()
-                && !child.contains('.')
-                && is_valid_rand(parent)
-                && is_valid_rand(child)
-        }
-    }
+    // Dotted IDs remain readable for Boards written before IDs decoupled
+    // from `parent` (ADR 0022); `orbit slug migrate` rewrites them flat.
+    rest.split('.').all(is_valid_rand)
 }
 
 fn is_valid_rand(value: &str) -> bool {
     (6..=8).contains(&value.len()) && value.bytes().all(|byte| ID_ALPHABET.contains(&byte))
 }
 
-/// Returns the Parent Task encoded in a SubTask ID, if the ID is valid.
-pub fn parent_id_from_id(id: &str, prefix: &str) -> Option<String> {
-    let rest = id.strip_prefix(prefix)?;
-    let (parent, child) = rest.split_once('.')?;
-    if parent.is_empty()
-        || child.is_empty()
-        || child.contains('.')
-        || !is_valid_rand(parent)
-        || !is_valid_rand(child)
-    {
-        return None;
-    }
-    Some(format!("{prefix}{parent}"))
-}
-
-/// A per-Board Area name: a short lowercase slug. Boards that configure
-/// `board.areas` restrict values to that list; others accept any valid name.
-pub fn is_valid_area(area: &str) -> bool {
-    !area.is_empty()
-        && area.len() <= MAX_LABEL_LENGTH
-        && area
+/// A Task's Component: a short lowercase slug. Boards that configure
+/// `board.components` restrict values to that list; others accept any valid
+/// name.
+pub fn is_valid_component(component: &str) -> bool {
+    !component.is_empty()
+        && component.len() <= MAX_LABEL_LENGTH
+        && component
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && area
+        && component
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphanumeric())
 }
 
-/// Normalizes an Area value to its lowercase slug and validates it against
-/// the Board's `board.areas` list. An empty `allowed` list means the Board
-/// defines no Areas, so any short lowercase slug is accepted.
-pub fn normalize_area(input: &str, allowed: &[String]) -> Result<String> {
-    let area = input.trim().to_ascii_lowercase();
-    if !is_valid_area(&area) {
+/// Normalizes a Component value to its lowercase slug and validates it against
+/// the Board's `board.components` list. An empty `allowed` list means the
+/// Board defines no Components, so any short lowercase slug is accepted.
+pub fn normalize_component(input: &str, allowed: &[String]) -> Result<String> {
+    let component = input.trim().to_ascii_lowercase();
+    if !is_valid_component(&component) {
         return Err(OrbitError::new(
-            crate::error::code::INVALID_AREA,
+            crate::error::code::INVALID_COMPONENT,
             format!(
-                "invalid area `{input}`; use a short lowercase slug of letters, digits, and `-`"
+                "invalid component `{input}`; use a short lowercase slug of letters, digits, and `-`"
             ),
         ));
     }
-    if !allowed.is_empty() && !allowed.iter().any(|candidate| candidate == &area) {
+    if !allowed.is_empty() && !allowed.iter().any(|candidate| candidate == &component) {
         return Err(OrbitError::new(
-            crate::error::code::INVALID_AREA,
+            crate::error::code::INVALID_COMPONENT,
             format!(
-                "unknown area `{area}`; expected one of: {}",
+                "unknown component `{component}`; expected one of: {}",
                 allowed.join(", ")
             ),
         ));
     }
-    Ok(area)
+    Ok(component)
 }
 
 /// A Task's member Repository: a short name or `owner/name` identity. Kept
 /// permissive so local folder names and remote `owner/repo` forms both fit.
-pub fn is_valid_repo(repo: &str) -> bool {
-    !repo.is_empty()
-        && repo.len() <= MAX_REPO_LENGTH
-        && repo
+pub fn is_valid_repository(repository: &str) -> bool {
+    !repository.is_empty()
+        && repository.len() <= MAX_REPOSITORY_LENGTH
+        && repository
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
-        && repo
+        && repository
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphanumeric())
@@ -786,10 +1241,6 @@ pub fn generate_id(prefix: &str, len: usize) -> String {
     format!("{prefix}{}", generate_rand(len))
 }
 
-pub fn generate_subtask_id(parent_id: &str, len: usize) -> String {
-    format!("{parent_id}.{}", generate_rand(len))
-}
-
 fn generate_rand(len: usize) -> String {
     let mut rng = rand::rng();
     let mut id = String::with_capacity(len);
@@ -814,25 +1265,30 @@ mod tests {
             id: "orb-a7b2c9".to_string(),
             front: TaskFrontmatter {
                 title: "Build the CLI router".to_string(),
-                status: Status::Todo,
-                task_type: TaskType::Task,
-                priority: 1,
+                status: "todo".to_string(),
+                key: None,
+                key_aliases: Vec::new(),
+                resolution: None,
+                task_type: "task".to_string(),
+                priority: "high".to_string(),
                 labels: Vec::new(),
-                depends_on: vec!["orb-f14c02".to_string()],
+                links: vec![Link::dependency("orb-f14c02")],
                 parent: None,
-                waiting_on: None,
                 checkpoint: None,
-                area: None,
+                component: None,
                 verification: None,
                 github: None,
                 remote: None,
-                repo: None,
-                claim: None,
-                stray_claim_times: None,
+                repository: None,
+                external_id: None,
+                assignee: None,
+                lease: None,
+                reporter: None,
+                stray_lease_times: None,
                 created_at: now(),
                 updated_at: now(),
                 source_key: None,
-                annotations: BTreeMap::new(),
+                properties: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: "Body line.\n\n---\n\nA horizontal rule is not a delimiter.".to_string(),
@@ -849,7 +1305,7 @@ mod tests {
         assert_eq!(parsed.front.title, task.front.title);
         assert_eq!(parsed.front.status, task.front.status);
         assert_eq!(parsed.front.priority, task.front.priority);
-        assert_eq!(parsed.front.depends_on, task.front.depends_on);
+        assert_eq!(parsed.front.links, task.front.links);
         assert_eq!(parsed.body, task.body);
     }
 
@@ -858,7 +1314,7 @@ mod tests {
         let content = r#"---
 title: Keep me
 status: todo
-priority: 2
+priority: medium
 created_at: 2026-10-23T12:00:00Z
 updated_at: 2026-10-23T12:00:00Z
 future_field: keep this
@@ -882,7 +1338,7 @@ Body.
 title: Synced Task
 status: todo
 type: task
-priority: 2
+priority: medium
 github:
   repo: acme/app
   number: 42
@@ -922,7 +1378,7 @@ The end.
 
     #[test]
     fn parses_crlf_files() {
-        let content = "---\r\ntitle: Test\r\nstatus: todo\r\npriority: 2\r\ncreated_at: 2026-10-23T12:00:00Z\r\nupdated_at: 2026-10-23T12:00:00Z\r\n---\r\n\r\nBody.\r\n";
+        let content = "---\r\ntitle: Test\r\nstatus: todo\r\npriority: medium\r\ncreated_at: 2026-10-23T12:00:00Z\r\nupdated_at: 2026-10-23T12:00:00Z\r\n---\r\n\r\nBody.\r\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         assert_eq!(task.front.title, "Test");
         assert_eq!(task.body, "Body.\r\n");
@@ -933,7 +1389,7 @@ The end.
         let content = r#"---
 title: Bad
 status: todo
-priority: 9
+priority: "not a priority!"
 created_at: 2026-10-23T12:00:00Z
 updated_at: 2026-10-23T12:00:00Z
 ---
@@ -948,28 +1404,17 @@ updated_at: 2026-10-23T12:00:00Z
         assert!(is_valid_id("orb-a7b2c9d", "orb-"));
         assert!(is_valid_id("orb-a7b2c9.d4b3df", "orb-"));
         assert!(is_valid_id("orb-5q7bbn.d4b3df", "orb-"));
+        assert!(is_valid_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"));
+        assert!(is_valid_id("orb-a7b2c9.d4b3df.e5f6a7.h8j9km", "orb-"));
         assert!(!is_valid_id("orb-a7b2c", "orb-"));
         assert!(!is_valid_id("orb-a7b2c9i", "orb-"));
         assert!(!is_valid_id("task-a7b2c9", "orb-"));
-        assert!(!is_valid_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"));
         assert!(!is_valid_id("orb-a7b2c9.", "orb-"));
         assert!(!is_valid_id("orb-.d4b3df", "orb-"));
         assert!(!is_valid_id("orb-a7b2c9..d4b3df", "orb-"));
-    }
-
-    #[test]
-    fn parent_id_from_id_reads_only_one_level() {
-        assert_eq!(
-            parent_id_from_id("orb-a7b2c9.d4b3df", "orb-"),
-            Some("orb-a7b2c9".to_string())
-        );
-        assert_eq!(
-            parent_id_from_id("orb-5q7bbn.d4b3df", "orb-"),
-            Some("orb-5q7bbn".to_string())
-        );
-        assert_eq!(parent_id_from_id("orb-a7b2c9", "orb-"), None);
-        assert_eq!(parent_id_from_id("orb-a7b2c9.", "orb-"), None);
-        assert_eq!(parent_id_from_id("orb-a7b2c9.d4b3df.e5f6a7", "orb-"), None);
+        assert!(!is_valid_id("orb-a7b2c9.d4b3df.", "orb-"));
+        assert!(!is_valid_id("orb-a7b2c9.d4b3df.e5f6a", "orb-"));
+        assert!(!is_valid_id("orb-a7b2c9.d4b3df.e5f6a7i", "orb-"));
     }
 
     #[test]
@@ -977,9 +1422,8 @@ updated_at: 2026-10-23T12:00:00Z
         for _ in 0..100 {
             let id = generate_id("orb-", 6);
             assert!(is_valid_id(&id, "orb-"), "{id}");
-            let child = generate_subtask_id(&id, 6);
-            assert!(child.starts_with(&format!("{id}.")), "{child}");
-            assert!(is_valid_id(&child, "orb-"), "{child}");
+            // IDs never encode the parent (ADR 0022): generated IDs are flat.
+            assert!(!id.contains('.'));
         }
     }
 
@@ -988,7 +1432,7 @@ updated_at: 2026-10-23T12:00:00Z
         let content = r#"---
 title: Labels
 status: todo
-priority: 2
+priority: medium
 labels:
 - Bug
 - needs-triage
@@ -1017,32 +1461,61 @@ Body.
     }
 
     #[test]
-    fn claim_round_trips_byte_identical_and_keeps_unknown_fields() {
-        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: 2\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
+    fn legacy_claim_keys_upgrade_to_assignee_and_lease() {
+        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: medium\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
-        assert_eq!(task.holder(), Some("alice"));
+        let assignee = task.front.assignee.as_ref().unwrap();
+        assert_eq!(assignee.name, "alice");
+        assert_eq!(assignee.kind, IdentityKind::Agent);
+        let lease = task.front.lease.as_ref().unwrap();
+        assert!(lease.is_live(now()));
+        // The legacy keys are never written back.
+        let rendered = render_task(&task).unwrap();
+        assert!(rendered.contains("assignee:"));
+        assert!(rendered.contains("lease:"));
+        assert!(!rendered.contains("claimed_by:"));
+        assert!(rendered.contains("owner_note: keep me"));
+    }
+
+    #[test]
+    fn assignee_without_lease_still_loads() {
+        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: medium\nassignee:\n  name: alice\n  kind: agent\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        assert!(task.front.lease.is_none());
+        let rendered = render_task(&task).unwrap();
+        assert_eq!(rendered, content);
+    }
+
+    #[test]
+    fn human_assignee_without_lease_round_trips() {
+        let content = "---\ntitle: t\nstatus: ready\ntype: task\npriority: medium\nassignee:\n  name: bob\n  kind: human\nreporter: alice\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        assert_eq!(task.front.reporter.as_deref(), Some("alice"));
+        assert!(task.front.lease.is_none());
         assert_eq!(render_task(&task).unwrap(), content);
     }
 
     #[test]
-    fn partial_claim_still_loads() {
-        let content = "---\ntitle: t\nstatus: in_progress\nclaimed_by: alice\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+    fn stray_lease_times_survive_a_round_trip() {
+        let content = "---\ntitle: t\nstatus: todo\ntype: task\npriority: medium\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
-        let claim = task.front.claim.unwrap();
-        assert!(!claim.has_times() && !claim.is_live(now()) && !claim.is_stale(now()));
+        assert!(task.front.assignee.is_none() && task.front.stray_lease_times.is_some());
+        assert_eq!(render_task(&task).unwrap(), content);
     }
 
     #[test]
-    fn stray_claim_times_survive_a_round_trip() {
-        let content = "---\ntitle: t\nstatus: todo\ntype: task\npriority: 2\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+    fn lease_without_assignee_becomes_stray_times() {
+        let content = "---\ntitle: t\nstatus: todo\nlease:\n  claimed_at: 2026-10-23T12:00:00Z\n  lease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
-        assert!(task.front.claim.is_none() && task.front.stray_claim_times.is_some());
-        assert_eq!(render_task(&task).unwrap(), content);
+        assert!(task.front.assignee.is_none());
+        assert!(task.front.lease.is_none());
+        let stray = task.front.stray_lease_times.as_ref().unwrap();
+        assert_eq!(stray.claimed_at, Some(now()));
     }
 
     #[test]
     fn checkpoint_round_trips_and_preserves_unknown_fields() {
-        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: 2\ncheckpoint:\n  by: alice\n  at: 2026-10-23T12:00:00Z\n  progress: Parser done\n  next: Wire the CLI\n  blocker: Waiting on review\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
+        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: medium\ncheckpoint:\n  by: alice\n  at: 2026-10-23T12:00:00Z\n  progress: Parser done\n  next: Wire the CLI\n  blocker: Waiting on review\nassignee:\n  name: alice\n  kind: agent\nlease:\n  claimed_at: 2026-10-23T12:00:00Z\n  lease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         let checkpoint = task.front.checkpoint.as_ref().unwrap();
         assert_eq!(checkpoint.by, "alice");

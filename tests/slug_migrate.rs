@@ -172,7 +172,8 @@ fn migrate_rewrites_ids_references_comments_and_commits_once() {
     assert_eq!(value["data"]["changed"], true);
     assert_eq!(value["data"]["commit"].as_str().unwrap().len(), 40);
     assert!(new_parent.starts_with("atlas-"), "{new_parent}");
-    assert!(new_child.starts_with(&format!("{new_parent}.")));
+    // IDs stay flat across the rename; the `parent` field carries the edge.
+    assert!(!new_child.contains('.'), "{new_child}");
 
     assert!(!repo.task_path(&parent).exists());
     assert!(!repo.task_path(&child).exists());
@@ -186,7 +187,14 @@ fn migrate_rewrites_ids_references_comments_and_commits_once() {
     let child_body = normalize_newlines(repo.read_task(&new_child));
     assert!(child_body.contains(&format!("parent: {new_parent}")));
     let dependent_body = normalize_newlines(repo.read_task(&new_dependent));
-    assert!(dependent_body.contains(&format!("depends_on:\n- {new_parent}")));
+    assert!(
+        dependent_body.contains("- type: blocks"),
+        "{dependent_body}"
+    );
+    assert!(
+        dependent_body.contains(&format!("target: {new_parent}")),
+        "{dependent_body}"
+    );
 
     assert!(!board.join(format!("comments/{parent}.md")).exists());
     let comments_path = board.join(format!("comments/{new_parent}.md"));
@@ -270,7 +278,7 @@ fn live_claims_require_force_and_force_lists_the_holders() {
         .iter()
         .find(|task| task["id"] == new_id)
         .unwrap();
-    assert_eq!(task["claimed_by"], "alice");
+    assert_eq!(task["assignee"], "alice");
     assert_eq!(task["status"], "in_progress");
     assert_eq!(commit_count(&repo, &board), claimed + 1);
 }
@@ -309,25 +317,25 @@ fn migrate_refuses_an_unhealthy_board_without_changing_it() {
 }
 
 #[test]
-fn migrate_refuses_a_parent_id_mismatch() {
+fn migrate_refuses_a_hierarchy_violation() {
     let repo = TestRepo::new();
     repo.init();
     let parent = repo.add("Parent", &[]);
-    let other = repo.add("Other parent", &[]);
     let child = repo.add("Child", &["--parent", &parent]);
+    // `epic` sits at the top of the hierarchy and cannot be a child.
     let content = repo
         .read_task(&child)
-        .replace(&format!("parent: {parent}"), &format!("parent: {other}"));
+        .replace("type: sub-task", "type: epic");
     repo.write_task(&child, &content);
 
     let (status, value) = repo.err_json(&["slug", "migrate", "atlas", "--json"]);
 
+    // Strict loading rejects the Board before the migration plan runs.
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "MIGRATION_BLOCKED");
-    assert_eq!(value["error"]["details"]["reason"], "unhealthy");
+    assert_eq!(value["error"]["code"], "BOARD_CORRUPT");
     assert_eq!(
         value["error"]["details"]["issues"][0]["code"],
-        "PARENT_MISMATCH"
+        "INVALID_TYPE"
     );
     assert!(repo.task_path(&child).exists());
 }
@@ -410,6 +418,57 @@ fn migrate_rewrites_a_legacy_prefix_without_a_dash() {
 }
 
 #[test]
+fn slug_migrate_maps_every_segment_of_a_nested_subtask_id() {
+    use orbit_tracker::board::Board;
+    use orbit_tracker::graph::{Graph, LoadMode};
+    use orbit_tracker::migrate;
+
+    let repo = TestRepo::new();
+    repo.init();
+
+    // A three-segment chain cannot pass Strict loading until Task 4 relaxes
+    // validation, so build the plan from a Lenient load: `slug migrate` maps
+    // IDs segment-agnostically and this exercises that path directly.
+    for (id, title, parent) in [
+        ("orb-a0b1c2", "Release", None),
+        ("orb-a0b1c2.d4b3df", "Feature", Some("orb-a0b1c2")),
+        (
+            "orb-a0b1c2.d4b3df.e5f6g7",
+            "Step",
+            Some("orb-a0b1c2.d4b3df"),
+        ),
+    ] {
+        let parent_line = parent.map(|p| format!("parent: {p}\n")).unwrap_or_default();
+        repo.write_task(
+            id,
+            &format!(
+                "---\ntitle: {title}\nstatus: todo\n{parent_line}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n"
+            ),
+        );
+    }
+
+    let board = Board::at_root(repo.board_path(), Vec::new()).unwrap();
+    let (graph, _) = Graph::load(&board, LoadMode::Lenient).unwrap();
+    assert!(graph.tasks.contains_key("orb-a0b1c2.d4b3df.e5f6g7"));
+
+    let plan = migrate::plan(&board, &graph, "atlas").unwrap();
+
+    for id in [
+        "orb-a0b1c2",
+        "orb-a0b1c2.d4b3df",
+        "orb-a0b1c2.d4b3df.e5f6g7",
+    ] {
+        let mapping = plan
+            .mappings
+            .iter()
+            .find(|mapping| mapping.from == id)
+            .unwrap_or_else(|| panic!("no mapping for {id}"));
+        assert_eq!(mapping.to, format!("atlas-{}", &id["orb-".len()..]), "{id}");
+    }
+    assert_eq!(plan.subtask_count, 2);
+}
+
+#[test]
 fn migrate_flushes_pending_heartbeat_writes_before_the_single_commit() {
     let repo = TestRepo::new();
     repo.init();
@@ -453,5 +512,5 @@ fn migrate_flushes_pending_heartbeat_writes_before_the_single_commit() {
         .iter()
         .find(|task| task["id"] == new_id)
         .unwrap();
-    assert_eq!(task["claimed_by"], "alice");
+    assert_eq!(task["assignee"], "alice");
 }

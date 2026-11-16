@@ -15,7 +15,7 @@ _Avoid_: Project name, namespace
 The Board may also accept legacy prefixes from imported Tasks in `id.accepted_prefixes`; new Task IDs continue to use the one primary Slug.
 
 **Slug migration**:
-An explicit, one-commit rewrite of every Task and SubTask ID from the Board's current prefix to a new Slug. It preserves random suffixes and rewrites structured `parent` and `depends_on` references, comment filenames, and Orbit comment headers. It never rewrites task bodies, checkpoint text, comment text, Git history, or external links.
+An explicit, one-commit rewrite of every Task and SubTask ID from the Board's current prefix to a new Slug. It preserves random suffixes and rewrites structured `parent` and internal `links` targets, comment filenames, and Orbit comment headers. It never rewrites task bodies, checkpoint text, comment text, Git history, or external links.
 _Avoid_: Multi-prefix mode, alias table
 
 **SubTask**:
@@ -23,8 +23,21 @@ A Task that belongs to exactly one Parent Task. A SubTask is claimable and compl
 _Avoid_: Child task, checklist item, step
 
 **Parent Task**:
-A Task that groups SubTasks and whose completion depends on them.
+A role, not a kind: any Task that has SubTasks. A Parent Task's completion
+depends on them, so a Task can be a SubTask and a Parent Task at once.
 _Avoid_: Epic (as a synonym for every Parent Task), story
+
+**Depth**:
+How many `parent` hops a Task sits below a top-level Task: a top-level Task is
+depth 0, its SubTask depth 1, that SubTask's SubTask depth 2.
+_Avoid_: Level, nesting
+
+**Issue Hierarchy**:
+The Board setting `board.hierarchy`: the ordered levels of Issue types a
+`parent` edge may cross. A child's type must sit on a strictly deeper level
+than its parent's; the number of levels bounds the depth. Default:
+`epic` > `story`/`task`/`bug` > `sub-task`.
+_Avoid_: Max depth, nesting limit
 
 **Close Candidate**:
 A non-terminal Parent Task with at least one SubTask and no open SubTasks.
@@ -36,12 +49,15 @@ The structural position of a Task: `task` or `subtask`. Kind is derived from `pa
 _Avoid_: Category, issue type
 
 **Type**:
-The work shape of a Task: `task`, `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness. `epic` is allowed only on a top-level Task.
+The Issue type of a Task, configured per Board under `board.types` (`epic`,
+`story`, `task`, `bug`, `sub-task` by default; `board.default_type` picks the
+default). The type decides where in the Issue Hierarchy the Task may sit; it
+is not the same as Kind.
 _Avoid_: Kind, category, label
 
-**Area**:
-An optional, single classification of where work primarily lands. Each Board defines its own Areas; a Board that defines none accepts any short lowercase name. Area is shared metadata for filtering and agent routing; it is not personal or session-local state.
-_Avoid_: Label, component tag, free-form tag
+**Component**:
+An optional, single classification of where work primarily lands. Each Board defines its own Components; a Board that defines none accepts any short lowercase name. Component is shared metadata for filtering and agent routing; it is not personal or session-local state.
+_Avoid_: Label, area tag, free-form tag
 
 **Verification**:
 Optional, concise checks or commands agents should run for a Task, stored separately from narrative acceptance criteria in the body. Project-wide defaults live in [`docs/agents/project-guidance.md`](./agents/project-guidance.md); Task-level `verification` adds to or narrows those defaults.
@@ -55,16 +71,40 @@ _Avoid_: Transaction, script, bulk edit
 An optional caller-chosen string that names a Task in the system that asked for it. It is unique per Board; adding a Task with a Source Key that already exists returns that Task instead of creating another, so a retried add creates no duplicate.
 _Avoid_: External ID, idempotency token, alias
 
-**Annotation**:
-Structured data that one tool attaches to a Task under the tool's name, its owner. Orbit stores, returns, and shows it but never interprets it: an Annotation never affects Ready, Blocked, Claim eligibility, or Status, and it is never synchronized with a Remote Tracker.
+**Project key**:
+The Issue's sequential human handle, `PREFIX-N` such as `ORB-12`, allocated under the exclusive Board lock at creation and persisted in `keys.toml`. It resolves anywhere a Task ID does — `orbit show ORB-12` works — but it is a handle, not the identity: the Task ID (the file name) is immutable and never changes. Tasks that predate keys have none.
+_Avoid_: Task ID, slug, issue number
+
+**Key alias**:
+A former project key recorded on a Task's `key_aliases` when a Board sync re-keys it after a cross-clone key collision. An alias resolves only when no live key claims it, so the old key keeps reaching the Issue.
+_Avoid_: Redirect, rename
+
+**Property**:
+Structured data that one tool attaches to a Task under the tool's name, its owner. Orbit stores, returns, and shows it but never interprets it: a Property never affects Ready, Blocked, Claim eligibility, or Status, and it is never synchronized with a Remote Tracker.
 _Avoid_: Metadata, custom field, namespace, extra
 
 **Status**:
-The stored lifecycle position of a Task: `todo`, `in_progress`, `done`, or `cancelled`.
+The stored lifecycle position of a Task: a name defined by the Board's Workflow. Every Status belongs to a Status Category (`todo`, `active`, `done`, or `canceled`), which carries the derived semantics such as terminal and Ready eligibility.
 _Avoid_: State, phase
 
+**Workflow**:
+The Board's declarative lifecycle definition in `config.toml`: named Statuses with categories, named Transitions between them, the initial Status, and exactly one Ready Status. Boards pick a shipped template (`minimal`, `standard`, `agentic`) or define `[workflow]` statuses and transitions directly.
+_Avoid_: State machine, lifecycle config
+
+**Status Category**:
+The semantic bucket a Status belongs to — `todo`, `active`, `done`, or `canceled` — defined by the Workflow. Commands read the category, never the status name, to decide whether work is terminal, claimable, or closable.
+_Avoid_: Status group, phase
+
+**Transition**:
+A named edge in the Workflow from one or more source Statuses to a target Status. `orbit show` lists the Transitions valid from the current Status as `allowed_transitions`; `orbit transition` runs one by name. A Transition into a closed Status records its Resolution on the Task.
+_Avoid_: Command, edge
+
+**Resolution**:
+The outcome a closing Transition records on the Task — for example `completed` or `cancelled`. It is set when the Task enters a `done` or `canceled` Status and cleared when it returns to an open Status.
+_Avoid_: Close reason, result
+
 **Priority**:
-The stored ordering weight of a Task, from P0 (highest) to P3 (lowest).
+The stored ordering weight of a Task: a name from the Board's ordered `board.priorities` list (`highest`, `high`, `medium`, `low` by default). Tasks sort by the name's ordinal, so a Board can rename or reorder priorities.
 _Avoid_: Rank, severity
 
 **Label**:
@@ -80,15 +120,16 @@ An append-only, authored, timestamped note attached to a Task.
 _Avoid_: Note, message
 
 **Dependency**:
-Another Task that must be `done` or `cancelled` before this Task can become Ready.
+Another Task in a closed Status Category (`done` or `canceled`) is required before this Task can become Ready; an open Dependency blocks it.
 _Avoid_: Blocker, prerequisite, parent
 
 **Ready**:
-A condition of a Task that is `todo`, has no Claim (including no Stale Claim), is not Waiting, carries no Hold Label, and whose every Dependency is `done` or `cancelled`. Ready is derived, never stored.
+
+A condition of a Task sitting in the Workflow's Ready Status — the one Status marked `ready` — with no Assignee, not Waiting, no Hold Label, no open Dependency, and no open descendant. Ready is derived, never stored.
 _Avoid_: Unblocked, available, actionable
 
 **Blocked**:
-A condition of a Task with at least one Dependency that is neither `done` nor `cancelled`. Blocked is derived, never stored.
+A condition of a Task with at least one Dependency that is not in a closed Status Category. Blocked is derived, never stored.
 _Avoid_: Blocked status, waiting
 
 **Waiting**:
@@ -96,27 +137,39 @@ A condition of a Task that cannot proceed because of something outside the depen
 _Avoid_: Blocked, on hold
 
 **Done**:
-The terminal Status for a Task whose work is complete. Counts as resolved for dependent Tasks.
+A Status in the `done` Status Category for a Task whose work is complete. Counts as resolved for dependent Tasks.
 _Avoid_: Closed, complete
 
 **Cancelled**:
-The terminal Status for a Task that was abandoned without completing its work. Counts as resolved for dependent Tasks.
+A Status in the `canceled` Status Category for a Task that was abandoned without completing its work. Counts as resolved for dependent Tasks. The shipped templates name it `cancelled`; custom Workflows may use any name in the `canceled` category.
 _Avoid_: Deleted, closed, wontfix
 
+**Assignee**:
+The human or agent identity responsible for a Task. An assignee may hold a Lease or none — `orbit assign` sets one without a lease, which is how humans take work.
+_Avoid_: Claimant, owner, holder
+
+**Identity Kind**:
+Whether an assignee is a `human` or an `agent`. Informational only; the lease, not the kind, decides claim semantics.
+_Avoid_: Role, type
+
+**Reporter**:
+The identity that created a Task, recorded at creation and never changed.
+_Avoid_: Author, creator, submitter
+
 **Claim**:
-Exclusive, time-bounded responsibility for a Task, held by one Agent.
+Taking responsibility for a Task as its assignee together with a fresh Lease. Repeating a claim by the current assignee renews the lease; `--steal` takes over another assignee's lease.
 _Avoid_: Assignment, lock, reservation
 
 **Lease**:
-The time window during which a Claim is valid.
+The time window during which a claim's lease is valid; extended by heartbeat. An assignee without a lease cannot heartbeat.
 _Avoid_: Timeout, TTL
 
 **Checkpoint**:
-The claim holder's latest handoff note on a Task: current progress, the next useful action, and any blocker. A Checkpoint survives release, takeover, and reopen, never affects readiness or Claim eligibility, and stays as archived history after the Task is done or cancelled.
+The assignee's latest handoff note on a Task: current progress, the next useful action, and any blocker. A Checkpoint survives release, takeover, and reopen, never affects readiness or Claim eligibility, and stays as archived history after the Task is done or cancelled.
 _Avoid_: Status update, progress log, assignment note
 
 **Stale**:
-A condition of a Task whose Claim's Lease has expired but the Claim has not been released. A Stale Task is not Ready; it can be released or stolen.
+A condition of a Task whose assignee's Lease has expired but the assignment has not been released. A Stale Task is not Ready; it can be released or stolen, and the previous assignee can still record a Checkpoint until takeover.
 _Avoid_: Expired claim, abandoned
 
 **Agent**:
@@ -242,6 +295,75 @@ warning; Board commands then refuse with `BOARD_NOT_MIGRATED` until a one-time
 `orbit migrate` converts it to the current layout.
 _Avoid_: Old mode, compatibility board
 
+**Profile**:
+A declarative TOML document that translates a plugin's vocabulary onto a Board:
+its `requires`/`optional` Capabilities, a minimum contract version, a Workflow
+template or custom `[workflow]`, hold and role names, vocabulary mappings, and
+optional `board.*` overrides. `orbit setup <plugin>` resolves a Profile from the
+shipped built-ins, `profiles/<name>.toml` in the Board, the Orbit folder, the
+repository, `~/.config/orbit/profiles/`, or an explicit path, negotiates its
+requirements, and applies it to `config.toml` idempotently. A Profile never adds
+code.
+_Avoid_: Preset, theme, plugin binary
+
+**Applied Profile**:
+The `[[profiles]]` record a Profile leaves in `config.toml`: its name, source,
+minimum contract, required and optional capabilities, holds, roles, and
+vocabulary. `orbit doctor` re-checks the record's requirements against the
+running binary and reports `PROFILE_UNMET` when they are not met;
+`orbit capabilities` lists applied profile names.
+_Avoid_: Installed plugin, profile state
+
+**Policy rule**:
+A `[[policy.rules]]` entry in `config.toml` (or contributed by an applied
+Profile) that guards Workflow transitions: required fields, required evidence
+Properties, a WIP limit, a max-attempts cap, reviewer/assignee distinctness, a
+readiness lint that also gates `ready` and `claim`, and post-functions that add
+labels or Properties after a governed transition. Rules scope by transition,
+target Status, Issue type, labels, and applied profiles; a violation fails the
+operation with `POLICY_VIOLATION`.
+_Avoid_: Guard clause, hook, validator function
+
+**In Review**:
+The `active`-category Status the `submit` transition lands on in the shipped `standard` and `agentic` Workflows. Work sits there until `orbit review` records an `approve` (closing the Task) or `request-changes` (returning it to the author) verdict.
+_Avoid_: Pending review, QA
+
+**Review evidence**:
+The structured proof `orbit submit` records on the `evidence` Property: commands with their exit code, the verified commit, touched files, and an optional note, each stamped with the submitter. `[policy]` `require_properties` rules can demand it before work enters review.
+_Avoid_: Test output dump, logs
+
+**Ask**:
+An open question recorded on the `orbit` Property's `ask` entry by `orbit ask`, carrying the question, asker, and the Status to return to. An unanswered Ask blocks readiness, `claim`, `done`, and every transition except `answer` (`ASK_OPEN`) until `orbit answer` records the reply; when the Workflow's `ask` edge allows, the Task also moves to the `needs_human` hold.
+_Avoid_: Comment, blocker
+
+**Escalation**:
+Routing a Task to a hold Status for human attention: `orbit ask` moves it to `needs_human` (or the Workflow's `ask` target), an agent's `escalate` transition lands on `needs_decision` in the `agentic` template, and a `request_changes` verdict whose only `[policy]` violations are `max_attempts` reroutes through `escalate` and records `orbit.escalation`.
+_Avoid_: Blocked (a derived waiting condition), priority change
+
+**Capability**:
+A named feature an Orbit binary provides — `workflow`, `issue-types`,
+`hierarchy`, `priorities`, `links`, `components`, `properties`, `external-id`,
+`assignee`, `reporter`, `lease`, `keys`, `idempotency`, `batch`, `policy`,
+`remote`, `workspace`, `mcp`, `setup`, `profiles`, `doctor` — reported by
+`orbit capabilities` and negotiated by Profiles through `requires`/`optional`.
+_Avoid_: Feature flag, module (modules are Board-enabled subsystems)
+
+**Change feed**:
+The named events (`issue.created`, `issue.transitioned`, `issue.commented`,
+`board.changed`, ...) that `orbit changes` and `orbit history` derive by
+replaying the Board folder's Git history, oldest commit first. Every meaningful
+Board mutation lands as one `orbit: <verb> <id>` commit, so the feed survives
+Board-host merges across clones. `orbit changes --since <cursor>` returns only
+events from commits newer than the cursor.
+_Avoid_: Audit log, webhook stream, event store
+
+**Board event**:
+One entry of the Change feed: a kind, the Issue it touched (when any), the
+actor, a trace id (the producing commit, shared by every event that commit
+emitted), the commit itself, and kind-specific detail such as a status
+transition's `from`/`to`.
+_Avoid_: Notification, log line
+
 ## Compatibility vocabulary
 
 Beads, Linear, and Matt Pocock's skills call the unit an **Issue**, a child a
@@ -257,15 +379,18 @@ imported:
 The `epic` label is legacy. Orbit does not infer `type: epic` from it, and
 `--exclude-label epic` still works for boards created before the Type field.
 
-See [ADR 0009](./adr/0009-keep-task-vocabulary.md) for why Orbit keeps its own
-vocabulary and translates at the boundary, and [ADR 0010](./adr/0010-structural-type-field.md)
-for the Type field.
+See [ADR 0022](./adr/0022-issue-model-and-platform-architecture.md), which
+supersedes [ADR 0009](./adr/0009-keep-task-vocabulary.md): the platform rebuild
+makes **Issue** the canonical vocabulary, with Issue types and a configurable
+hierarchy replacing Task/SubTask. [ADR 0010](./adr/0010-structural-type-field.md)
+records the earlier Type field.
 
 ## See also
 
 - [`SPEC.md`](./SPEC.md) for behavior, commands, and the JSON contract.
 - [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
-- [`docs/adr/0009-keep-task-vocabulary.md`](./adr/0009-keep-task-vocabulary.md) for the Task/Issue naming decision.
+- [`docs/adr/0009-keep-task-vocabulary.md`](./adr/0009-keep-task-vocabulary.md) for the Task/Issue naming decision (superseded by ADR 0022).
+- [`docs/adr/0022-issue-model-and-platform-architecture.md`](./adr/0022-issue-model-and-platform-architecture.md) for the platform rebuild: Issue vocabulary, workflow, keys, and layering.
 - [`docs/adr/0010-structural-type-field.md`](./adr/0010-structural-type-field.md) for the Type field.
 - [`docs/adr/0012-orbit-folder.md`](./adr/0012-orbit-folder.md) for the Orbit folder, storage modes, discovery, and legacy migration.
 - [`docs/adr/0013-claim-checkpoints.md`](./adr/0013-claim-checkpoints.md) for checkpoint storage and lifecycle.

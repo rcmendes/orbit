@@ -16,7 +16,13 @@ pub(super) fn cmd_slug(board: &Board, args: SlugArgs) -> Result<crate::output::C
 
 fn cmd_slug_show(board: &Board) -> Result<crate::output::CommandOutput> {
     let ids = board.task_ids()?;
-    let subtasks = ids.iter().filter(|id| id.contains('.')).count();
+    // SubTasks are Tasks with a `parent`; IDs no longer encode the edge.
+    let (graph, _) = Graph::load(board, LoadMode::Lenient)?;
+    let subtasks = graph
+        .tasks
+        .values()
+        .filter(|task| task.is_subtask())
+        .count();
     let comment_files = board.comment_ids()?.len();
     let slug = slug::slug_of_prefix(&board.config.id.prefix);
 

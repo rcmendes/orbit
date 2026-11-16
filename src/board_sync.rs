@@ -9,14 +9,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::board::{Board, Config};
 use crate::board_host;
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
-use crate::task::{self, Claim, Status, StrayClaimTimes, Task, TaskFrontmatter};
+use crate::task::{self, Identity, Lease, StrayLeaseTimes, Task, TaskFrontmatter};
+use crate::workflow::Workflow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeSide {
@@ -227,6 +228,8 @@ fn reconcile(
         &remote_tree,
         resolutions,
         Utc::now(),
+        &board.workflow()?,
+        &crate::key::load(board)?,
     )?;
     if !outcome.conflicts.is_empty() {
         return Err(OrbitError::new(
@@ -336,12 +339,17 @@ enum FileKind {
     Task,
     Comments,
     Config,
+    /// `keys.toml`: the Issue-key allocator state; merges by maximum.
+    Keys,
     Other,
 }
 
 fn classify(path: &str) -> (FileKind, String) {
     if path == "config.toml" {
         return (FileKind::Config, "config".to_string());
+    }
+    if path == crate::key::STATE_FILE {
+        return (FileKind::Keys, "keys".to_string());
     }
     for (prefix, kind) in [
         ("tasks/", FileKind::Task),
@@ -427,50 +435,66 @@ where
     }
 }
 
-/// Set-aware variant of `pick` for `depends_on`: order and duplicates do not
-/// make two equal dependency lists conflict.
-fn pick_depends_on(
-    base: Option<Vec<String>>,
-    local: Vec<String>,
-    remote: Vec<String>,
+/// Identity of a link for merging: type plus target. Attributes and the
+/// blocking override are the link's value, so editing them merges as a
+/// three-way field change while two sides adding different links union.
+fn link_key(link: &crate::task::Link) -> String {
+    let target = serde_json::to_string(&link.target).unwrap_or_default();
+    format!("{}|{target}", link.kind)
+}
+
+fn find_link(links: &[crate::task::Link], key: &str) -> Option<crate::task::Link> {
+    links.iter().find(|link| link_key(link) == key).cloned()
+}
+
+/// Links merge per (type, target): each side's set of link identities is
+/// three-way merged, so concurrent additions union and concurrent edits to
+/// the same link conflict like any other field.
+fn merge_links(
+    base: Option<&[crate::task::Link]>,
+    local: &[crate::task::Link],
+    remote: &[crate::task::Link],
     field: &str,
     outcome: &mut MergeOutcome,
-) -> Vec<String> {
-    let canonical = |mut list: Vec<String>| {
-        list.sort();
-        list.dedup();
-        list
-    };
-    pick(
-        base.map(canonical),
-        canonical(local),
-        canonical(remote),
-        field,
-        outcome,
-    )
+) -> Vec<crate::task::Link> {
+    let mut keys: BTreeSet<String> = BTreeSet::new();
+    for links in [base, Some(local), Some(remote)].into_iter().flatten() {
+        keys.extend(links.iter().map(link_key));
+    }
+    let mut merged = Vec::new();
+    for key in keys {
+        if let Some(link) = pick(
+            base.map(|links| find_link(links, &key)),
+            find_link(local, &key),
+            find_link(remote, &key),
+            field,
+            outcome,
+        ) {
+            merged.push(link);
+        }
+    }
+    merged
 }
 
 #[derive(Clone)]
-struct ClaimSide {
-    claim: Option<Claim>,
-    stray: Option<StrayClaimTimes>,
+struct AssignmentSide {
+    assignee: Option<Identity>,
+    lease: Option<Lease>,
+    stray: Option<StrayLeaseTimes>,
 }
 
-impl ClaimSide {
+impl AssignmentSide {
     fn of(front: Option<&TaskFrontmatter>) -> Self {
         Self {
-            claim: front.and_then(|front| front.claim.clone()),
-            stray: front.and_then(|front| front.stray_claim_times.clone()),
+            assignee: front.and_then(|front| front.assignee.clone()),
+            lease: front.and_then(|front| front.lease.clone()),
+            stray: front.and_then(|front| front.stray_lease_times.clone()),
         }
     }
 
     fn eq(&self, other: &Self) -> bool {
-        self.claim == other.claim && self.stray == other.stray
+        self.assignee == other.assignee && self.lease == other.lease && self.stray == other.stray
     }
-}
-
-fn claim_identity(claim: &Claim) -> (Option<DateTime<Utc>>, &str) {
-    (claim.claimed_at, claim.holder.as_str())
 }
 
 fn later_time(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
@@ -483,12 +507,12 @@ fn later_time(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<Date
 }
 
 fn later_stray(
-    a: &Option<StrayClaimTimes>,
-    b: &Option<StrayClaimTimes>,
-) -> Option<StrayClaimTimes> {
+    a: &Option<StrayLeaseTimes>,
+    b: &Option<StrayLeaseTimes>,
+) -> Option<StrayLeaseTimes> {
     match (a, b) {
         (Some(a), Some(b)) => {
-            let key = |s: &StrayClaimTimes| (s.claimed_at, s.lease_until);
+            let key = |s: &StrayLeaseTimes| (s.claimed_at, s.lease_until);
             Some(if key(a) >= key(b) {
                 a.clone()
             } else {
@@ -501,16 +525,35 @@ fn later_stray(
     }
 }
 
-/// The earlier of two Claims wins; a missing timestamp sorts last and the
-/// holder name breaks exact ties deterministically.
-fn earlier_claim<'a>(local: &'a Claim, remote: &'a Claim) -> (&'a Claim, &'a Claim) {
+/// The earlier of two assignments wins; a missing lease start sorts last
+/// and the assignee name breaks exact ties deterministically.
+fn earlier_assignment<'a>(
+    local: &'a AssignmentSide,
+    remote: &'a AssignmentSide,
+) -> (&'a AssignmentSide, &'a AssignmentSide) {
     let local_key = (
-        local.claimed_at.unwrap_or(DateTime::<Utc>::MAX_UTC),
-        local.holder.as_str(),
+        local
+            .lease
+            .as_ref()
+            .and_then(|lease| lease.claimed_at)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC),
+        local
+            .assignee
+            .as_ref()
+            .map(|assignee| assignee.name.as_str())
+            .unwrap_or(""),
     );
     let remote_key = (
-        remote.claimed_at.unwrap_or(DateTime::<Utc>::MAX_UTC),
-        remote.holder.as_str(),
+        remote
+            .lease
+            .as_ref()
+            .and_then(|lease| lease.claimed_at)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC),
+        remote
+            .assignee
+            .as_ref()
+            .map(|assignee| assignee.name.as_str())
+            .unwrap_or(""),
     );
     if local_key <= remote_key {
         (local, remote)
@@ -519,28 +562,41 @@ fn earlier_claim<'a>(local: &'a Claim, remote: &'a Claim) -> (&'a Claim, &'a Cla
     }
 }
 
-fn claim_notice(task: &str, winner: &Claim, loser: Option<&Claim>) -> ClaimNotice {
+fn assignment_notice(
+    task: &str,
+    winner: &AssignmentSide,
+    loser: Option<&AssignmentSide>,
+) -> ClaimNotice {
+    let name = winner
+        .assignee
+        .as_ref()
+        .map(|assignee| assignee.name.as_str())
+        .unwrap_or("unknown");
+    let claimed = winner
+        .lease
+        .as_ref()
+        .and_then(|lease| lease.claimed_at)
+        .map(|at| at.to_rfc3339())
+        .unwrap_or_else(|| "unknown".into());
     let body = match loser {
-        Some(loser) => format!(
-            "claim conflict on {task}: the earlier claim by {} (claimed {}) won over {} (claimed {})",
-            winner.holder,
-            winner
-                .claimed_at
+        Some(loser) => {
+            let loser_name = loser
+                .assignee
+                .as_ref()
+                .map(|assignee| assignee.name.as_str())
+                .unwrap_or("unknown");
+            let loser_claimed = loser
+                .lease
+                .as_ref()
+                .and_then(|lease| lease.claimed_at)
                 .map(|at| at.to_rfc3339())
-                .unwrap_or_else(|| "unknown".into()),
-            loser.holder,
-            loser
-                .claimed_at
-                .map(|at| at.to_rfc3339())
-                .unwrap_or_else(|| "unknown".into()),
-        ),
+                .unwrap_or_else(|| "unknown".into());
+            format!(
+                "claim conflict on {task}: the earlier assignment to {name} (claimed {claimed}) won over {loser_name} (claimed {loser_claimed})"
+            )
+        }
         None => format!(
-            "claim conflict on {task}: kept the claim by {} (claimed {}); the other side had released it",
-            winner.holder,
-            winner
-                .claimed_at
-                .map(|at| at.to_rfc3339())
-                .unwrap_or_else(|| "unknown".into()),
+            "claim conflict on {task}: kept the assignment to {name} (claimed {claimed}); the other side had released it"
         ),
     };
     ClaimNotice {
@@ -549,73 +605,82 @@ fn claim_notice(task: &str, winner: &Claim, loser: Option<&Claim>) -> ClaimNotic
     }
 }
 
-/// Claim merge: the earlier Claim wins and the loser is told; a Claim always
-/// beats a release when both sides changed it differently. A Task whose
-/// merged status is terminal keeps no Claim.
-fn merge_claim(
+/// Assignment merge: the earlier assignment wins and the loser is told; an
+/// assignment always beats a release when both sides changed it differently.
+/// A Task whose merged status is terminal keeps no assignee or lease.
+fn merge_assignment(
     id: &str,
-    status: Status,
-    base: &ClaimSide,
-    local: &ClaimSide,
-    remote: &ClaimSide,
+    status: &str,
+    workflow: &Workflow,
+    base: &AssignmentSide,
+    local: &AssignmentSide,
+    remote: &AssignmentSide,
     outcome: &mut MergeOutcome,
-) -> ClaimSide {
-    if status.is_terminal() {
-        return ClaimSide {
-            claim: None,
+) -> AssignmentSide {
+    if workflow.is_terminal(status) {
+        return AssignmentSide {
+            assignee: None,
+            lease: None,
             stray: later_stray(&local.stray, &remote.stray),
         };
     }
-    // The same claim on both sides keeps the freshest lease.
-    if let (Some(local_claim), Some(remote_claim)) = (&local.claim, &remote.claim)
-        && claim_identity(local_claim) == claim_identity(remote_claim)
+    // The same assignee on both sides keeps the freshest lease.
+    if let (Some(local_assignee), Some(remote_assignee)) = (&local.assignee, &remote.assignee)
+        && local_assignee == remote_assignee
     {
-        let mut claim = local_claim.clone();
-        claim.lease_until = later_time(local_claim.lease_until, remote_claim.lease_until);
-        return ClaimSide {
-            claim: Some(claim),
+        let lease = match (&local.lease, &remote.lease) {
+            (Some(local_lease), Some(remote_lease)) => Some(Lease {
+                claimed_at: local_lease.claimed_at.or(remote_lease.claimed_at),
+                lease_until: later_time(local_lease.lease_until, remote_lease.lease_until),
+            }),
+            (Some(local_lease), None) => Some(local_lease.clone()),
+            (None, Some(remote_lease)) => Some(remote_lease.clone()),
+            (None, None) => None,
+        };
+        return AssignmentSide {
+            assignee: local.assignee.clone(),
+            lease,
             stray: None,
         };
     }
-    if local.claim.is_none() && remote.claim.is_none() {
-        return ClaimSide {
-            claim: None,
+    if local.assignee.is_none() && remote.assignee.is_none() {
+        return AssignmentSide {
+            assignee: None,
+            lease: None,
             stray: later_stray(&local.stray, &remote.stray),
         };
     }
-    // Ordinary three-way: only one side touched the claim.
+    // Ordinary three-way: only one side touched the assignment.
     if local.eq(base) {
         return remote.clone();
     }
     if remote.eq(base) {
         return local.clone();
     }
-    // Both sides changed the claim differently.
-    match (&local.claim, &remote.claim) {
-        (Some(local_claim), Some(remote_claim)) => {
-            let (winner, loser) = earlier_claim(local_claim, remote_claim);
-            outcome.notices.push(claim_notice(id, winner, Some(loser)));
-            ClaimSide {
-                claim: Some(winner.clone()),
+    // Both sides changed the assignment differently.
+    match (&local.assignee, &remote.assignee) {
+        (Some(_), Some(_)) => {
+            let (winner, loser) = earlier_assignment(local, remote);
+            outcome
+                .notices
+                .push(assignment_notice(id, winner, Some(loser)));
+            AssignmentSide {
+                assignee: winner.assignee.clone(),
+                lease: winner.lease.clone(),
                 stray: None,
             }
         }
-        (Some(local_claim), None) => {
-            outcome.notices.push(claim_notice(id, local_claim, None));
-            ClaimSide {
-                claim: Some(local_claim.clone()),
-                stray: None,
-            }
+        (Some(_), None) => {
+            outcome.notices.push(assignment_notice(id, local, None));
+            local.clone()
         }
-        (None, Some(remote_claim)) => {
-            outcome.notices.push(claim_notice(id, remote_claim, None));
-            ClaimSide {
-                claim: Some(remote_claim.clone()),
-                stray: None,
-            }
+        (None, Some(_)) => {
+            outcome.notices.push(assignment_notice(id, remote, None));
+            remote.clone()
         }
-        (None, None) => ClaimSide {
-            claim: None,
+        (None, None) => AssignmentSide {
+            assignee: None,
+            lease: None,
             stray: later_stray(&local.stray, &remote.stray),
         },
     }
@@ -628,6 +693,7 @@ fn merge_task(
     base: Option<Task>,
     local: Task,
     remote: Task,
+    workflow: &Workflow,
     outcome: &mut MergeOutcome,
 ) -> Result<String> {
     let base_front = base.as_ref().map(|task| &task.front);
@@ -640,24 +706,44 @@ fn merge_task(
         &key("title"),
         outcome,
     );
+    // The project key merges like any field; a same-key collision across
+    // *different* Tasks is resolved after the merge by re-keying.
+    let issue_key = pick(
+        base_front.map(|f| f.key.clone()),
+        local.front.key.clone(),
+        remote.front.key.clone(),
+        &key("key"),
+        outcome,
+    );
+    // Key aliases only ever accumulate (a re-key appends, never removes),
+    // so the merge is a sorted union of both sides.
+    let mut key_aliases: Vec<String> = local
+        .front
+        .key_aliases
+        .iter()
+        .chain(remote.front.key_aliases.iter())
+        .cloned()
+        .collect();
+    key_aliases.sort();
+    key_aliases.dedup();
     let status = pick(
-        base_front.map(|f| f.status),
-        local.front.status,
-        remote.front.status,
+        base_front.map(|f| f.status.clone()),
+        local.front.status.clone(),
+        remote.front.status.clone(),
         &key("status"),
         outcome,
     );
     let task_type = pick(
-        base_front.map(|f| f.task_type),
-        local.front.task_type,
-        remote.front.task_type,
+        base_front.map(|f| f.task_type.clone()),
+        local.front.task_type.clone(),
+        remote.front.task_type.clone(),
         &key("type"),
         outcome,
     );
     let priority = pick(
-        base_front.map(|f| f.priority),
-        local.front.priority,
-        remote.front.priority,
+        base_front.map(|f| f.priority.clone()),
+        local.front.priority.clone(),
+        remote.front.priority.clone(),
         &key("priority"),
         outcome,
     );
@@ -668,11 +754,11 @@ fn merge_task(
         &key("labels"),
         outcome,
     );
-    let depends_on = pick_depends_on(
-        base_front.map(|f| f.depends_on.clone()),
-        local.front.depends_on.clone(),
-        remote.front.depends_on.clone(),
-        &key("depends_on"),
+    let links = merge_links(
+        base_front.map(|f| f.links.as_slice()),
+        &local.front.links,
+        &remote.front.links,
+        &key("links"),
         outcome,
     );
     let parent = pick(
@@ -682,13 +768,6 @@ fn merge_task(
         &key("parent"),
         outcome,
     );
-    let waiting_on = pick(
-        base_front.map(|f| f.waiting_on.clone()),
-        local.front.waiting_on.clone(),
-        remote.front.waiting_on.clone(),
-        &key("waiting_on"),
-        outcome,
-    );
     let checkpoint = pick(
         base_front.map(|f| f.checkpoint.clone()),
         local.front.checkpoint.clone(),
@@ -696,11 +775,11 @@ fn merge_task(
         &key("checkpoint"),
         outcome,
     );
-    let area = pick(
-        base_front.map(|f| f.area.clone()),
-        local.front.area.clone(),
-        remote.front.area.clone(),
-        &key("area"),
+    let component = pick(
+        base_front.map(|f| f.component.clone()),
+        local.front.component.clone(),
+        remote.front.component.clone(),
+        &key("component"),
         outcome,
     );
     let verification = pick(
@@ -724,11 +803,18 @@ fn merge_task(
         &key("remote"),
         outcome,
     );
-    let repo = pick(
-        base_front.map(|f| f.repo.clone()),
-        local.front.repo.clone(),
-        remote.front.repo.clone(),
-        &key("repo"),
+    let repository = pick(
+        base_front.map(|f| f.repository.clone()),
+        local.front.repository.clone(),
+        remote.front.repository.clone(),
+        &key("repository"),
+        outcome,
+    );
+    let external_id = pick(
+        base_front.map(|f| f.external_id.clone()),
+        local.front.external_id.clone(),
+        remote.front.external_id.clone(),
+        &key("external_id"),
         outcome,
     );
     let created_at = pick(
@@ -747,12 +833,27 @@ fn merge_task(
         outcome,
     );
 
-    let claim = merge_claim(
+    let resolution = pick(
+        base_front.map(|f| f.resolution.clone()),
+        local.front.resolution.clone(),
+        remote.front.resolution.clone(),
+        &key("resolution"),
+        outcome,
+    );
+    let assignment = merge_assignment(
         id,
-        status,
-        &ClaimSide::of(base_front),
-        &ClaimSide::of(Some(&local.front)),
-        &ClaimSide::of(Some(&remote.front)),
+        &status,
+        workflow,
+        &AssignmentSide::of(base_front),
+        &AssignmentSide::of(Some(&local.front)),
+        &AssignmentSide::of(Some(&remote.front)),
+        outcome,
+    );
+    let reporter = pick(
+        base_front.map(|f| f.reporter.clone()),
+        local.front.reporter.clone(),
+        remote.front.reporter.clone(),
+        &key("reporter"),
         outcome,
     );
 
@@ -792,31 +893,31 @@ fn merge_task(
         &key("source_key"),
         outcome,
     );
-    // Annotations merge per owner, like unknown keys.
+    // Properties merge per owner, like unknown keys.
     let mut owners: BTreeSet<String> = BTreeSet::new();
     for source in [
-        base_front.map(|f| f.annotations.keys()),
-        Some(local.front.annotations.keys()),
-        Some(remote.front.annotations.keys()),
+        base_front.map(|f| f.properties.keys()),
+        Some(local.front.properties.keys()),
+        Some(remote.front.properties.keys()),
     ]
     .into_iter()
     .flatten()
     {
         owners.extend(source.cloned());
     }
-    let mut annotations = BTreeMap::new();
+    let mut properties = BTreeMap::new();
     for owner in owners {
-        let base_value = base_front.map(|f| f.annotations.get(&owner).cloned());
-        let local_value = local.front.annotations.get(&owner).cloned();
-        let remote_value = remote.front.annotations.get(&owner).cloned();
+        let base_value = base_front.map(|f| f.properties.get(&owner).cloned());
+        let local_value = local.front.properties.get(&owner).cloned();
+        let remote_value = remote.front.properties.get(&owner).cloned();
         if let Some(value) = pick(
             base_value,
             local_value,
             remote_value,
-            &key(&format!("annotations.{owner}")),
+            &key(&format!("properties.{owner}")),
             outcome,
         ) {
-            annotations.insert(owner, value);
+            properties.insert(owner, value);
         }
     }
 
@@ -825,22 +926,27 @@ fn merge_task(
         front: task::TaskFrontmatter {
             title,
             status,
+            key: issue_key,
+            key_aliases,
+            resolution,
             task_type,
             priority,
             labels,
-            depends_on,
+            links,
             parent,
-            waiting_on,
             checkpoint,
-            area,
+            component,
             verification,
             github,
             remote: remote_link,
-            repo,
-            claim: claim.claim,
-            stray_claim_times: claim.stray,
+            repository,
+            external_id,
+            assignee: assignment.assignee,
+            lease: assignment.lease,
+            reporter,
+            stray_lease_times: assignment.stray,
             source_key,
-            annotations,
+            properties,
             created_at,
             updated_at,
             extra,
@@ -861,6 +967,147 @@ fn read_tree(root: &Path, revision: &str) -> Result<BTreeMap<String, String>> {
     Ok(tree)
 }
 
+/// Lenient `keys.toml` shape for merging: either field may be absent.
+#[derive(Debug, Deserialize)]
+struct KeyStatePartial {
+    prefix: Option<String>,
+    next_key: Option<u64>,
+}
+
+fn parse_key_state_partial(content: &str) -> Option<KeyStatePartial> {
+    toml::from_str(content).ok()
+}
+
+fn render_key_state(prefix: &str, next_key: u64) -> Result<String> {
+    toml::to_string_pretty(&crate::key::KeyState {
+        prefix: prefix.to_string(),
+        next_key,
+    })
+    .map_err(|error| OrbitError::config(format!("serialize keys.toml: {error}")))
+}
+
+/// Merge two diverged `keys.toml` contents: the higher `next_key` wins so no
+/// handed-out key is reused, and the prefix must agree — a prefix split is
+/// a real conflict.
+fn merge_keys_file(local: Option<&str>, remote: Option<&str>) -> std::result::Result<String, ()> {
+    let parse = |content: Option<&str>| content.and_then(parse_key_state_partial);
+    let (Some(local), Some(remote)) = (parse(local), parse(remote)) else {
+        return Err(());
+    };
+    if let (Some(local_prefix), Some(remote_prefix)) = (&local.prefix, &remote.prefix)
+        && local_prefix != remote_prefix
+    {
+        return Err(());
+    }
+    let prefix = local
+        .prefix
+        .or(remote.prefix)
+        .unwrap_or_else(|| crate::key::DEFAULT_KEY_PREFIX.to_string());
+    let next_key = local
+        .next_key
+        .into_iter()
+        .chain(remote.next_key)
+        .max()
+        .unwrap_or(1);
+    render_key_state(&prefix, next_key).map_err(|_| ())
+}
+
+/// The allocator state the merged tree implies: the merged `keys.toml` when
+/// present and parseable, else the local Board's loaded state.
+fn merged_key_state(outcome: &MergeOutcome, fallback: &crate::key::KeyState) -> (String, u64) {
+    if let Some(content) = outcome
+        .files
+        .get(crate::key::STATE_FILE)
+        .and_then(|content| content.as_deref())
+        && let Some(partial) = parse_key_state_partial(content)
+    {
+        let prefix = partial
+            .prefix
+            .filter(|prefix| !prefix.is_empty())
+            .unwrap_or_else(|| fallback.prefix.clone());
+        let next_key = partial.next_key.unwrap_or(fallback.next_key);
+        return (prefix, next_key);
+    }
+    (fallback.prefix.clone(), fallback.next_key)
+}
+
+/// Re-key Tasks that ended the merge sharing one project key. The Task with
+/// the lowest internal ID keeps the key — a deterministic rule both clones
+/// compute identically — and every other Task takes the next free number
+/// with the contested key recorded as an alias, so the old key keeps
+/// resolving (ADR 0022). `keys.toml` is raised to cover the re-keyed
+/// numbers.
+fn resolve_key_collisions(
+    outcome: &mut MergeOutcome,
+    key_state: &crate::key::KeyState,
+) -> Result<()> {
+    // Collect merged Task files carrying a live key.
+    let mut by_key: BTreeMap<String, Vec<(String, Task)>> = BTreeMap::new();
+    let mut max_number = 0u64;
+    for (path, content) in &outcome.files {
+        let Some(content) = content else { continue };
+        let Some(stem) = path
+            .strip_prefix("tasks/")
+            .and_then(|rest| rest.strip_suffix(".md"))
+        else {
+            continue;
+        };
+        if stem.contains('/') || stem.starts_with('.') {
+            continue;
+        }
+        let Ok(task) = task::parse_task(stem.to_string(), content) else {
+            continue;
+        };
+        for key_str in crate::key::task_keys(&task.front) {
+            if let Some(number) = crate::key::key_number(key_str) {
+                max_number = max_number.max(number);
+            }
+        }
+        if let Some(key) = &task.front.key {
+            by_key
+                .entry(crate::key::normalize(key))
+                .or_default()
+                .push((path.clone(), task));
+        }
+    }
+    if by_key.values().all(|entries| entries.len() < 2) {
+        return Ok(());
+    }
+
+    let (prefix, mut next) = merged_key_state(outcome, key_state);
+    next = next.max(max_number + 1);
+    let start_next = next;
+
+    for entries in by_key.into_values() {
+        if entries.len() < 2 {
+            continue;
+        }
+        let mut entries = entries;
+        entries.sort_by(|left, right| left.1.id.cmp(&right.1.id));
+        for (path, mut task) in entries.into_iter().skip(1) {
+            let old = task.front.key.clone().unwrap_or_else(|| task.id.clone());
+            let new_key = crate::key::rekey(&mut task, &old, next, &prefix);
+            next += 1;
+            let rendered = task::render_task(&task)?;
+            outcome.files.insert(path, Some(rendered));
+            outcome.notices.push(ClaimNotice {
+                task: task.id.clone(),
+                body: format!(
+                    "key conflict resolved on board sync: {old} is held by another Issue; this Issue was re-keyed to {new_key} ({old} stays recorded as an alias)"
+                ),
+            });
+        }
+    }
+
+    if next > start_next {
+        outcome.files.insert(
+            crate::key::STATE_FILE.to_string(),
+            Some(render_key_state(&prefix, next)?),
+        );
+    }
+    Ok(())
+}
+
 /// Merge the trees of `local` and `remote` three-way against `base`
 /// (empty for unrelated histories). Every union path resolves to merged
 /// content (`Some`) or deletion (`None`); unmerged divergences land in
@@ -871,6 +1118,8 @@ fn merge_trees(
     remote: &BTreeMap<String, String>,
     resolutions: &BTreeMap<String, MergeSide>,
     notice_time: DateTime<Utc>,
+    workflow: &Workflow,
+    key_state: &crate::key::KeyState,
 ) -> Result<MergeOutcome> {
     let mut outcome = MergeOutcome {
         files: BTreeMap::new(),
@@ -887,9 +1136,15 @@ fn merge_trees(
             base.get(path).cloned(),
             local.get(path).cloned(),
             remote.get(path).cloned(),
+            workflow,
             &mut outcome,
         )?;
     }
+
+    // Diverged clones can hand the same project key to different Issues;
+    // re-key all but one (deterministically) and record the old key as an
+    // alias so it keeps resolving (ADR 0022).
+    resolve_key_collisions(&mut outcome, key_state)?;
 
     // Tell every claim loser on their Task's comment sidecar. The notices
     // stay on the outcome so the report can surface them too.
@@ -921,6 +1176,7 @@ fn resolve_path(
     base: Option<String>,
     local: Option<String>,
     remote: Option<String>,
+    workflow: &Workflow,
     outcome: &mut MergeOutcome,
 ) -> Result<()> {
     if local == remote {
@@ -960,7 +1216,8 @@ fn resolve_path(
                 .and_then(|c| task::parse_task(id.clone(), c).ok());
             match (local_task, remote_task) {
                 (Some(local_task), Some(remote_task)) => {
-                    let content = merge_task(&id, base_task, local_task, remote_task, outcome)?;
+                    let content =
+                        merge_task(&id, base_task, local_task, remote_task, workflow, outcome)?;
                     outcome.files.insert(path.to_string(), Some(content));
                 }
                 _ => {
@@ -980,6 +1237,21 @@ fn resolve_path(
                     outcome.files.insert(path.to_string(), Some(content));
                 }
                 Err(()) => {
+                    let chosen = file_conflict(outcome, &field, local, remote);
+                    outcome.files.insert(path.to_string(), chosen);
+                }
+            }
+        }
+        FileKind::Keys => {
+            // The allocator high-water mark merges by maximum so neither
+            // side's handed-out keys are reused; a prefix divergence is a
+            // real conflict.
+            match merge_keys_file(local.as_deref(), remote.as_deref()) {
+                Ok(content) => {
+                    outcome.files.insert(path.to_string(), Some(content));
+                }
+                Err(()) => {
+                    let (_, field) = classify(path);
                     let chosen = file_conflict(outcome, &field, local, remote);
                     outcome.files.insert(path.to_string(), chosen);
                 }
@@ -1064,9 +1336,16 @@ mod tests {
         "2026-01-01T00:00:00Z".parse().unwrap()
     }
 
+    fn key_state() -> crate::key::KeyState {
+        crate::key::KeyState {
+            prefix: "ORB".to_string(),
+            next_key: 1,
+        }
+    }
+
     const TASK_PATH: &str = "tasks/orbit-test.md";
 
-    fn task_content(title: &str, priority: u8, status_and_claim: &str) -> String {
+    fn task_content(title: &str, priority: &str, status_and_claim: &str) -> String {
         format!(
             "---\ntitle: {title}\npriority: {priority}\n{status_and_claim}\ncreated_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\nTask body\n"
         )
@@ -1079,6 +1358,8 @@ mod tests {
             &tree(&[(TASK_PATH, host)]),
             &parse_resolutions(resolutions).unwrap(),
             now(),
+            &Workflow::standard(),
+            &key_state(),
         )
         .unwrap()
     }
@@ -1093,21 +1374,21 @@ mod tests {
 
     #[test]
     fn different_fields_merge() {
-        let base = task_content("Original", 2, "status: todo");
-        let local = task_content("Local title", 2, "status: todo");
-        let host = task_content("Original", 3, "status: todo");
+        let base = task_content("Original", "medium", "status: todo");
+        let local = task_content("Local title", "medium", "status: todo");
+        let host = task_content("Original", "low", "status: todo");
         let merged = merge_tasks(&base, &local, &host, &[]);
         assert!(merged.conflicts.is_empty());
         let task = merged_task(&merged);
         assert_eq!(task.front.title, "Local title");
-        assert_eq!(task.front.priority, 3);
+        assert_eq!(task.front.priority, "low");
     }
 
     #[test]
     fn same_field_conflicts_until_resolved_to_either_side() {
-        let base = task_content("Original", 2, "status: todo");
-        let local = task_content("Local title", 2, "status: todo");
-        let host = task_content("Host title", 2, "status: todo");
+        let base = task_content("Original", "medium", "status: todo");
+        let local = task_content("Local title", "medium", "status: todo");
+        let host = task_content("Host title", "medium", "status: todo");
         let unresolved = merge_tasks(&base, &local, &host, &[]);
         assert_eq!(unresolved.conflicts.len(), 1);
         assert_eq!(unresolved.conflicts[0].field, "orbit-test.title");
@@ -1119,9 +1400,9 @@ mod tests {
         }
     }
 
-    fn task_with(annotations: &str) -> Task {
+    fn task_with(properties: &str) -> Task {
         let content = format!(
-            "---\ntitle: T\nstatus: todo\n{annotations}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\nbody\n"
+            "---\ntitle: T\nstatus: todo\n{properties}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\nbody\n"
         );
         task::parse_task("orb-aaaaaa".to_string(), &content).unwrap()
     }
@@ -1157,6 +1438,8 @@ mod tests {
             &tree(&[(path, &host)]),
             &BTreeMap::new(),
             now(),
+            &Workflow::standard(),
+            &key_state(),
         )
         .unwrap();
         assert!(merged.conflicts.is_empty());
@@ -1169,21 +1452,21 @@ mod tests {
 
     #[test]
     fn earlier_claim_wins_and_loser_receives_a_comment() {
-        let base = task_content("Claimed", 2, "status: todo");
+        let base = task_content("Claimed", "medium", "status: todo");
         let local = task_content(
             "Claimed",
-            2,
+            "medium",
             "status: in_progress\nclaimed_by: local\nclaimed_at: 2025-03-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z",
         );
         let host = task_content(
             "Claimed",
-            2,
+            "medium",
             "status: in_progress\nclaimed_by: host\nclaimed_at: 2025-02-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z",
         );
         for (local, host) in [(&local, &host), (&host, &local)] {
             let merged = merge_tasks(&base, local, host, &[]);
             assert!(merged.conflicts.is_empty());
-            assert_eq!(merged_task(&merged).front.claim.unwrap().holder, "host");
+            assert_eq!(merged_task(&merged).front.assignee.unwrap().name, "host");
             assert_eq!(merged.notices.len(), 1);
             let comments =
                 comment::parse_comments(merged.files["comments/orbit-test.md"].as_deref().unwrap())
@@ -1198,18 +1481,18 @@ mod tests {
     fn finished_task_drops_host_claim() {
         let base = task_content(
             "Finished",
-            2,
+            "medium",
             "status: in_progress\nclaimed_by: local\nclaimed_at: 2025-02-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z",
         );
-        let local = task_content("Finished", 2, "status: done");
+        let local = task_content("Finished", "medium", "status: done");
         let host = base
             .replace("claimed_by: local", "claimed_by: host")
             .replace("2025-02-01", "2025-03-01");
         let merged = merge_tasks(&base, &local, &host, &[]);
         assert!(merged.conflicts.is_empty());
         let task = merged_task(&merged);
-        assert_eq!(task.front.status, Status::Done);
-        assert!(task.front.claim.is_none());
+        assert_eq!(task.front.status, "done");
+        assert!(task.front.assignee.is_none());
     }
 
     #[test]
@@ -1217,22 +1500,49 @@ mod tests {
         let base = tree(&[(TASK_PATH, "original")]);
         let local = tree(&[(TASK_PATH, "edited")]);
         let host = BTreeMap::new();
-        let merged = merge_trees(&base, &local, &host, &BTreeMap::new(), now()).unwrap();
+        let merged = merge_trees(
+            &base,
+            &local,
+            &host,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+            &key_state(),
+        )
+        .unwrap();
         assert_eq!(merged.conflicts.len(), 1);
         assert_eq!(merged.conflicts[0].field, "orbit-test");
         assert_eq!(merged.conflicts[0].host, "(deleted)");
         let resolutions = parse_resolutions(&["orbit-test=host".to_string()]).unwrap();
-        let merged = merge_trees(&base, &local, &host, &resolutions, now()).unwrap();
+        let merged = merge_trees(
+            &base,
+            &local,
+            &host,
+            &resolutions,
+            now(),
+            &Workflow::standard(),
+            &key_state(),
+        )
+        .unwrap();
         assert!(merged.conflicts.is_empty());
         assert_eq!(merged.files[TASK_PATH], None);
-        let both_deleted = merge_trees(&base, &host, &host, &BTreeMap::new(), now()).unwrap();
+        let both_deleted = merge_trees(
+            &base,
+            &host,
+            &host,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+            &key_state(),
+        )
+        .unwrap();
         assert!(!both_deleted.files.contains_key(TASK_PATH));
     }
 
     #[test]
     fn unparseable_task_conflicts_as_a_whole_task() {
-        let base = task_content("Original", 2, "status: todo");
-        let host = task_content("Host", 2, "status: todo");
+        let base = task_content("Original", "medium", "status: todo");
+        let host = task_content("Host", "medium", "status: todo");
         let merged = merge_tasks(&base, "not a task", &host, &[]);
         assert_eq!(merged.conflicts.len(), 1);
         assert_eq!(merged.conflicts[0].field, "orbit-test");
@@ -1245,8 +1555,16 @@ mod tests {
     fn unrelated_trees_merge_different_tasks() {
         let local = tree(&[("tasks/orbit-local.md", "local task")]);
         let remote = tree(&[("tasks/orbit-host.md", "host task")]);
-        let merged =
-            merge_trees(&BTreeMap::new(), &local, &remote, &BTreeMap::new(), now()).unwrap();
+        let merged = merge_trees(
+            &BTreeMap::new(),
+            &local,
+            &remote,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+            &key_state(),
+        )
+        .unwrap();
         assert!(merged.conflicts.is_empty());
         assert_eq!(
             merged.files["tasks/orbit-local.md"].as_deref(),
@@ -1258,16 +1576,74 @@ mod tests {
         );
     }
 
+    fn keyed_task_content(key: &str) -> String {
+        format!(
+            "---\ntitle: T\nstatus: todo\nkey: {key}\ncreated_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\nbody\n"
+        )
+    }
+
     #[test]
-    fn merge_keeps_annotations_from_both_sides() {
+    fn diverged_key_assignments_are_rekeyed_with_aliases() {
+        // Unrelated histories: each clone handed ORB-1 to a different Task.
+        let local = tree(&[("tasks/orb-aaaaaa.md", keyed_task_content("ORB-1").as_str())]);
+        let remote = tree(&[("tasks/orb-bbbbbb.md", keyed_task_content("ORB-1").as_str())]);
+        let merged = merge_trees(
+            &BTreeMap::new(),
+            &local,
+            &remote,
+            &BTreeMap::new(),
+            now(),
+            &Workflow::standard(),
+            &key_state(),
+        )
+        .unwrap();
+        assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
+
+        // `orb-aaaaaa` sorts before `orb-bbbbbb`, so it keeps ORB-1.
+        let keeper = task::parse_task(
+            "orb-aaaaaa".to_string(),
+            merged.files["tasks/orb-aaaaaa.md"].as_deref().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(keeper.front.key.as_deref(), Some("ORB-1"));
+        assert!(keeper.front.key_aliases.is_empty());
+        let loser = task::parse_task(
+            "orb-bbbbbb".to_string(),
+            merged.files["tasks/orb-bbbbbb.md"].as_deref().unwrap(),
+        )
+        .unwrap();
+        // The loser takes ORB-2, records ORB-1 as an alias, and keeps its
+        // immutable Task ID.
+        assert_eq!(loser.id, "orb-bbbbbb");
+        assert_eq!(loser.front.key.as_deref(), Some("ORB-2"));
+        assert_eq!(loser.front.key_aliases, vec!["ORB-1".to_string()]);
+        assert!(merged.files.contains_key(crate::key::STATE_FILE));
+        assert!(
+            merged
+                .notices
+                .iter()
+                .any(|notice| notice.body.contains("re-keyed"))
+        );
+    }
+
+    #[test]
+    fn merge_keeps_properties_from_both_sides() {
         let base = task_with("");
-        let local = task_with("annotations:\n  ci:\n    passed: true\n");
-        let remote = task_with("annotations:\n  planner:\n    order: 1\n");
+        let local = task_with("properties:\n  ci:\n    passed: true\n");
+        let remote = task_with("properties:\n  planner:\n    order: 1\n");
         let mut outcome = outcome();
-        let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
+        let merged = merge_task(
+            "orb-aaaaaa",
+            Some(base),
+            local,
+            remote,
+            &Workflow::standard(),
+            &mut outcome,
+        )
+        .unwrap();
         let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
         assert_eq!(
-            serde_json::to_value(&parsed.front.annotations).unwrap(),
+            serde_json::to_value(&parsed.front.properties).unwrap(),
             serde_json::json!({"ci": {"passed": true}, "planner": {"order": 1}})
         );
         assert!(outcome.conflicts.is_empty());
@@ -1279,7 +1655,15 @@ mod tests {
         let local = task_with("source_key: planner:plan-7:step-1\n");
         let remote = task_with("");
         let mut outcome = outcome();
-        let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
+        let merged = merge_task(
+            "orb-aaaaaa",
+            Some(base),
+            local,
+            remote,
+            &Workflow::standard(),
+            &mut outcome,
+        )
+        .unwrap();
         let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
         assert_eq!(
             parsed.front.source_key.as_deref(),

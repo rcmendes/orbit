@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::board::{self, Board, Config, Discovery};
-use crate::cli::BoardMigrateArgs as MigrateArgs;
+use crate::cli::MigrateArgs;
 use crate::error::{OrbitError, Result, code};
 use crate::git::CommitOutcome;
 use crate::output::CommandOutput;
@@ -19,13 +19,13 @@ const MIGRATE_MESSAGE: &str = "orbit: migrate board";
 struct ContentStats {
     tasks_scanned: usize,
     github_links: usize,
-    repo_labels: usize,
+    repository_labels: usize,
     remote_links: usize,
     /// Remote Projects the Board will have after migration: existing
     /// `[remote.projects]` entries plus the `[github]` repositories that are
     /// not already configured.
     remote_projects: usize,
-    areas: Vec<String>,
+    components: Vec<String>,
     config_changes: Vec<String>,
 }
 
@@ -58,9 +58,9 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
     let layout = plan_layout(&board, &discovery)?;
     let stats = plan_content(&board)?;
     let content_needed = stats.github_links > 0
-        || stats.repo_labels > 0
+        || stats.repository_labels > 0
         || !stats.config_changes.is_empty()
-        || stats.areas_needed();
+        || stats.components_needed();
 
     if !needs_layout && !content_needed {
         return Ok(CommandOutput::new(
@@ -84,15 +84,15 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
         "needs_layout": needs_layout,
         "tasks": stats.tasks_scanned,
         "github_links": stats.github_links,
-        "repo_labels": stats.repo_labels,
+        "repository_labels": stats.repository_labels,
         "remote_projects": stats.remote_projects,
-        "areas": stats.areas,
+        "components": stats.components,
         "config_changes": stats.config_changes,
         "applied": args.apply,
         "commit": Value::Null,
     });
     let human = format!(
-        "orbit migrate {} the Board at {}\n  layout: {}\n  tasks: {} scanned, {} github link(s), {} repo label(s)\n",
+        "orbit migrate {} the Board at {}\n  layout: {}\n  tasks: {} scanned, {} github link(s), {} repository label(s)\n",
         if args.apply {
             "applied to"
         } else {
@@ -102,7 +102,7 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
         layout_target(&layout, &board).display(),
         stats.tasks_scanned,
         stats.github_links,
-        stats.repo_labels,
+        stats.repository_labels,
     );
 
     if !args.apply {
@@ -126,8 +126,8 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
 }
 
 impl ContentStats {
-    fn areas_needed(&self) -> bool {
-        !self.areas.is_empty()
+    fn components_needed(&self) -> bool {
+        !self.components.is_empty()
     }
 }
 
@@ -320,7 +320,7 @@ fn plan_content(board: &Board) -> Result<ContentStats> {
     stats.remote_projects = projects.len();
 
     let tasks_dir = board.root.join("tasks");
-    let mut areas = std::collections::BTreeSet::new();
+    let mut components = std::collections::BTreeSet::new();
     for (id, path) in task_files(&tasks_dir)? {
         let content = std::fs::read_to_string(&path)
             .map_err(|e| OrbitError::io(format!("read {}", path.display()), e))?;
@@ -338,14 +338,14 @@ fn plan_content(board: &Board) -> Result<ContentStats> {
             .iter()
             .any(|label| label.starts_with("repo:"))
         {
-            stats.repo_labels += 1;
+            stats.repository_labels += 1;
         }
-        if let Some(area) = &task.front.area {
-            areas.insert(area.clone());
+        if let Some(component) = &task.front.component {
+            components.insert(component.clone());
         }
     }
-    if config.board.areas.is_empty() && !areas.is_empty() {
-        stats.areas = areas.into_iter().collect();
+    if config.board.components.is_empty() && !components.is_empty() {
+        stats.components = components.iter().cloned().collect();
     }
     Ok(stats)
 }
@@ -697,7 +697,7 @@ fn git_out(cwd: &Path, args: &[&str]) -> Result<String> {
 
 /// Rewrites `config.toml` and Task files in place:
 /// `github:` → `remote:`, `repo:*` labels → `repo`, `[github]` → `[remote]`,
-/// `board.storage` removed, `board.areas` seeded from Area values in use.
+/// `board.storage` removed, `board.components` seeded from Component values in use.
 fn migrate_content(root: &Path) -> Result<ContentStats> {
     let mut stats = ContentStats::default();
     let mut config = Config::load(root)?;
@@ -732,9 +732,9 @@ fn migrate_content(root: &Path) -> Result<ContentStats> {
         stats.config_changes.push("github→remote".to_string());
     }
 
-    // Seed `board.areas` from the Area values Tasks actually use.
+    // Seed `board.components` from the Component values Tasks actually use.
     let tasks_dir = root.join("tasks");
-    let mut areas = std::collections::BTreeSet::new();
+    let mut components = std::collections::BTreeSet::new();
     for (id, path) in task_files(&tasks_dir)? {
         let content = std::fs::read_to_string(&path)
             .map_err(|e| OrbitError::io(format!("read {}", path.display()), e))?;
@@ -764,7 +764,7 @@ fn migrate_content(root: &Path) -> Result<ContentStats> {
             stats.github_links += 1;
             changed = true;
         }
-        // `repo:*` labels → the `repo` field.
+        // `repo:*` labels → the `repository` field.
         let repo_label = task
             .front
             .labels
@@ -772,19 +772,19 @@ fn migrate_content(root: &Path) -> Result<ContentStats> {
             .find_map(|label| label.strip_prefix("repo:"))
             .map(|name| name.to_string());
         if repo_label.is_some() {
-            if task.front.repo.is_none()
+            if task.front.repository.is_none()
                 && let Some(name) = &repo_label
             {
-                task.front.repo = Some(name.clone());
+                task.front.repository = Some(name.clone());
             }
             task.front
                 .labels
                 .retain(|label| !label.starts_with("repo:"));
-            stats.repo_labels += 1;
+            stats.repository_labels += 1;
             changed = true;
         }
-        if let Some(area) = &task.front.area {
-            areas.insert(area.clone());
+        if let Some(component) = &task.front.component {
+            components.insert(component.clone());
         }
 
         if changed {
@@ -794,11 +794,11 @@ fn migrate_content(root: &Path) -> Result<ContentStats> {
             }
         }
     }
-    if config.board.areas.is_empty() && !areas.is_empty() {
-        config.board.areas = areas.iter().cloned().collect();
+    if config.board.components.is_empty() && !components.is_empty() {
+        config.board.components = components.iter().cloned().collect();
         config_changed = true;
-        stats.areas = areas.iter().cloned().collect();
-        stats.config_changes.push("board.areas".to_string());
+        stats.components = components.iter().cloned().collect();
+        stats.config_changes.push("board.components".to_string());
     }
     if config_changed {
         config.validate()?;

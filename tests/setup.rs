@@ -921,7 +921,7 @@ fn setup_hooks_are_claude_only() {
 fn prime_hook_json_emits_the_session_start_envelope() {
     let repo = TestRepo::new();
     repo.init();
-    repo.add("Ready task", &["-p", "0"]);
+    repo.add("Ready task", &["-p", "highest"]);
 
     let output = repo.orbit(&["prime", "--hook-json", "--by", "claude"]);
     assert!(output.status.success());

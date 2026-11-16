@@ -284,6 +284,50 @@ pub fn execute_in(
     })
 }
 
+/// The result of a custom Board op (`orbit submit`, `review`, `ask`,
+/// `answer`): the op's own outcome value plus the usual write/commit
+/// plumbing.
+pub struct OpResult<T> {
+    pub graph: Graph,
+    pub task: Task,
+    pub outcome: T,
+    pub changed: bool,
+    pub warnings: Vec<String>,
+}
+
+/// Executes a Board op against a freshly loaded snapshot, then writes the
+/// Task and commits `orbit: <verb> <id>` when the op reports a change.
+/// Ops that need richer outcomes than [`Lifecycle`] — review verdicts,
+/// escalations, Ask answers — go through here so CLI and MCP share one
+/// persistence path.
+pub fn run_op<T>(
+    board: &Board,
+    id: &str,
+    verb: &str,
+    op: impl FnOnce(&mut Graph) -> Result<(T, bool)>,
+) -> Result<OpResult<T>> {
+    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (outcome, changed) = op(&mut graph)?;
+    let resolved = graph.resolve(id)?;
+    let task = graph.get(&resolved)?.clone();
+    let mut warnings = Vec::new();
+    if changed {
+        write_task(board, &task)?;
+        if let Some(warning) =
+            commit_warning(board.commit(&format!("orbit: {verb} {resolved}"), false)?)
+        {
+            warnings.push(warning);
+        }
+    }
+    Ok(OpResult {
+        graph,
+        task,
+        outcome,
+        changed,
+        warnings,
+    })
+}
+
 /// Reopens a Task and, when needed, its completed ancestor Tasks in one scope.
 pub fn reopen(board: &Board, id: &str, force: bool, now: DateTime<Utc>) -> Result<MutationResult> {
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;

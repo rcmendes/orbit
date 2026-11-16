@@ -179,6 +179,31 @@ readiness or claim eligibility. On a done or cancelled task the latest checkpoin
 stays as archived history and new checkpoints are refused; use a comment for notes
 after closing.
 
+## Review, evidence, and asks
+
+Work moves through review on the `standard` and `agentic` workflows:
+
+```bash
+orbit submit <ID> --by <agent> --command "cargo test" --exit-code 0 \
+  --commit <sha> --file <path>... --note "..."
+orbit review <ID> --verdict approve --by <reviewer>
+orbit review <ID> --verdict request-changes --reason "..." --by <reviewer>
+```
+
+`submit` needs at least one evidence flag and lands the task in `in_review`;
+the evidence lands on the `evidence` Property and the submitter on
+`orbit.review`. `request-changes` requires `--reason` and returns the task to
+its author. A `[policy]` rule with `distinct_from = ["author"]` on
+`request_changes` refuses a reviewer who is the author. When the only
+violations are `max_attempts`, the task escalates to `needs_human` through the
+workflow's `escalate` edge instead of failing.
+
+`orbit ask <ID> "<question>"` records an open Ask and moves the task to
+`needs_human` when the `ask` edge allows; the open Ask blocks readiness,
+`claim`, `done`, and every transition except `answer` (`ASK_OPEN`) until
+`orbit answer <ID> "<answer>"` records the reply and restores the recorded
+status.
+
 ## When a skill says "publish to the issue tracker"
 
 Create one task per ticket, blockers first, and capture the returned `data.id`:

@@ -203,7 +203,7 @@ fn golden_claim() {
         json!({
             "ok": true,
             "data": {
-                "allowed_transitions": ["claim", "release", "done", "cancel"],
+                "allowed_transitions": ["claim", "release", "submit", "ask", "escalate", "done", "cancel"],
                 "assignee": "devin",
                 "assignee_kind": "agent",
                 "blocking": [],
@@ -262,7 +262,7 @@ fn golden_show() {
         json!({
             "ok": true,
             "data": {
-                "allowed_transitions": ["claim", "release", "done", "cancel"],
+                "allowed_transitions": ["claim", "release", "submit", "ask", "escalate", "done", "cancel"],
                 "assignee": "devin",
                 "assignee_kind": "agent",
                 "blocking": [],
@@ -453,8 +453,8 @@ fn capabilities_reports_contract_modules_and_workflow() {
     assert_eq!(workflow["source"], "template");
     assert_eq!(workflow["template"], "standard");
     assert_eq!(workflow["initial"], "ready");
-    assert_eq!(workflow["statuses"].as_array().unwrap().len(), 5);
-    assert_eq!(workflow["transitions"].as_array().unwrap().len(), 7);
+    assert_eq!(workflow["statuses"].as_array().unwrap().len(), 7);
+    assert_eq!(workflow["transitions"].as_array().unwrap().len(), 13);
 }
 
 #[test]

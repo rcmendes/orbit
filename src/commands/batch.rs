@@ -171,6 +171,43 @@ enum Operation {
         #[serde(default)]
         force: bool,
     },
+    Submit {
+        id: String,
+        if_version: Option<String>,
+        by: Option<String>,
+        kind: Option<crate::task::IdentityKind>,
+        #[serde(default)]
+        command: Vec<String>,
+        exit_code: Option<i64>,
+        commit: Option<String>,
+        #[serde(default)]
+        file: Vec<String>,
+        note: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
+    Review {
+        id: String,
+        if_version: Option<String>,
+        verdict: String,
+        reason: Option<String>,
+        by: Option<String>,
+        kind: Option<crate::task::IdentityKind>,
+        #[serde(default)]
+        force: bool,
+    },
+    Ask {
+        id: String,
+        if_version: Option<String>,
+        question: String,
+        by: Option<String>,
+    },
+    Answer {
+        id: String,
+        if_version: Option<String>,
+        answer: String,
+        by: Option<String>,
+    },
     Comment {
         id: String,
         if_version: Option<String>,
@@ -203,6 +240,10 @@ impl Operation {
             Operation::Cancel { .. } => "cancel",
             Operation::Reopen { .. } => "reopen",
             Operation::Transition { .. } => "transition",
+            Operation::Submit { .. } => "submit",
+            Operation::Review { .. } => "review",
+            Operation::Ask { .. } => "ask",
+            Operation::Answer { .. } => "answer",
             Operation::Comment { .. } => "comment",
             Operation::Property { .. } => "property",
         }
@@ -573,6 +614,96 @@ impl Applier<'_> {
                     now,
                 )?;
                 Ok((id, outcome == crate::transition::Outcome::Changed, false))
+            }
+            Operation::Submit {
+                id,
+                if_version,
+                by,
+                kind,
+                command,
+                exit_code,
+                commit,
+                file,
+                note,
+                force,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let by = self.agent(by)?;
+                let evidence = crate::review::Evidence {
+                    commands: command,
+                    exit_code,
+                    commit,
+                    files: file,
+                    note,
+                };
+                let changed = crate::ops::submit(
+                    &mut self.graph,
+                    &id,
+                    &by,
+                    kind.unwrap_or_default(),
+                    &evidence,
+                    force,
+                    now,
+                )?;
+                Ok((id, changed, false))
+            }
+            Operation::Review {
+                id,
+                if_version,
+                verdict,
+                reason,
+                by,
+                kind,
+                force,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let verdict = match verdict.as_str() {
+                    "approve" => crate::review::Verdict::Approve,
+                    "request-changes" | "request_changes" => crate::review::Verdict::RequestChanges,
+                    other => {
+                        return Err(OrbitError::invalid_argument(format!(
+                            "unknown review verdict `{other}`; expected approve or request-changes"
+                        )));
+                    }
+                };
+                let by = self.agent(by)?;
+                let outcome = crate::ops::review(
+                    &mut self.graph,
+                    &id,
+                    verdict,
+                    reason.as_deref(),
+                    &by,
+                    kind.unwrap_or_default(),
+                    force,
+                    now,
+                )?;
+                Ok((id, outcome.changed, false))
+            }
+            Operation::Ask {
+                id,
+                if_version,
+                question,
+                by,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let by = self.agent(by)?;
+                let outcome = crate::ops::ask(&mut self.graph, &id, &question, &by, now)?;
+                Ok((id, outcome.changed, false))
+            }
+            Operation::Answer {
+                id,
+                if_version,
+                answer,
+                by,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let by = self.agent(by)?;
+                let outcome = crate::ops::answer(&mut self.graph, &id, &answer, &by, now)?;
+                Ok((id, outcome.changed, false))
             }
             Operation::Comment {
                 id,

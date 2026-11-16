@@ -180,9 +180,17 @@ fn export_of_an_empty_board_has_the_schema_envelope() {
 fn export_at_depth_two_keeps_the_nested_parent() {
     let repo = TestRepo::new();
     repo.init();
-    repo.set_max_subtask_depth(2);
-    let parent = repo.add("Feature", &[]);
-    let child = repo.ok_json(&["add", "Part", "--parent", parent.as_str(), "--json"])["data"]["id"]
+    // epic > task > sub-task reaches depth two on the default hierarchy.
+    let parent = repo.add("Feature", &["--type", "epic"]);
+    let child = repo.ok_json(&[
+        "add",
+        "Part",
+        "--parent",
+        parent.as_str(),
+        "--type",
+        "task",
+        "--json",
+    ])["data"]["id"]
         .as_str()
         .unwrap()
         .to_string();

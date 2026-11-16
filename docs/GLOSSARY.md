@@ -32,10 +32,11 @@ How many `parent` hops a Task sits below a top-level Task: a top-level Task is
 depth 0, its SubTask depth 1, that SubTask's SubTask depth 2.
 _Avoid_: Level, nesting
 
-**Max SubTask Depth**:
-The Board setting `board.max_subtask_depth`: the deepest a SubTask may sit,
-from 1 (SubTasks cannot own SubTasks, the default) to 4. Omitting the setting
-keeps the one-level default.
+**Issue Hierarchy**:
+The Board setting `board.hierarchy`: the ordered levels of Issue types a
+`parent` edge may cross. A child's type must sit on a strictly deeper level
+than its parent's; the number of levels bounds the depth. Default:
+`epic` > `story`/`task`/`bug` > `sub-task`.
 _Avoid_: Max depth, nesting limit
 
 **Close Candidate**:
@@ -48,7 +49,10 @@ The structural position of a Task: `task` or `subtask`. Kind is derived from `pa
 _Avoid_: Category, issue type
 
 **Type**:
-The work shape of a Task: `task`, `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness. `epic` is allowed only on a top-level Task.
+The Issue type of a Task, configured per Board under `board.types` (`epic`,
+`story`, `task`, `bug`, `sub-task` by default; `board.default_type` picks the
+default). The type decides where in the Issue Hierarchy the Task may sit; it
+is not the same as Kind.
 _Avoid_: Kind, category, label
 
 **Area**:

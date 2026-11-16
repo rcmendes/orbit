@@ -26,7 +26,7 @@ fn type_defaults_to_task_and_is_serialized() {
 }
 
 #[test]
-fn epic_is_top_level_only() {
+fn epic_cannot_be_a_child() {
     let repo = TestRepo::new();
     repo.init();
 
@@ -55,8 +55,8 @@ fn epic_is_top_level_only() {
     assert_eq!(show["data"]["kind"], "task");
     assert_eq!(show["data"]["parent"], serde_json::Value::Null);
 
-    let updated = repo.ok_json(&["update", epic.as_str(), "--type", "spike", "--json"]);
-    assert_eq!(updated["data"]["type"], "spike");
+    let updated = repo.ok_json(&["update", epic.as_str(), "--type", "story", "--json"]);
+    assert_eq!(updated["data"]["type"], "story");
 }
 
 #[test]
@@ -66,11 +66,10 @@ fn type_filters_scope_list_and_ready() {
 
     let task = repo.add("Task", &[]);
     let epic = repo.add("Epic", &["--type", "epic"]);
-    let spike = repo.add("Spike", &["--type", "spike"]);
-    let chore = repo.add("Chore", &["--type", "chore"]);
-    let decision = repo.add("Decision", &["--type", "decision"]);
+    let story = repo.add("Story", &["--type", "story"]);
+    let bug = repo.add("Bug", &["--type", "bug"]);
 
-    let list = repo.ok_json(&["list", "--type", "epic", "--type", "spike", "--json"]);
+    let list = repo.ok_json(&["list", "--type", "epic", "--type", "story", "--json"]);
     assert_eq!(list["data"]["count"], 2);
     let ids: Vec<&str> = list["data"]["tasks"]
         .as_array()
@@ -79,10 +78,10 @@ fn type_filters_scope_list_and_ready() {
         .filter_map(|entry| entry["id"].as_str())
         .collect();
     assert!(ids.contains(&epic.as_str()));
-    assert!(ids.contains(&spike.as_str()));
+    assert!(ids.contains(&story.as_str()));
 
     let list = repo.ok_json(&["list", "--exclude-type", "task", "--json"]);
-    assert_eq!(list["data"]["count"], 4);
+    assert_eq!(list["data"]["count"], 3);
     let ids: Vec<&str> = list["data"]["tasks"]
         .as_array()
         .unwrap()
@@ -90,8 +89,7 @@ fn type_filters_scope_list_and_ready() {
         .filter_map(|entry| entry["id"].as_str())
         .collect();
     assert!(!ids.contains(&task.as_str()));
-    assert!(ids.contains(&chore.as_str()));
-    assert!(ids.contains(&decision.as_str()));
+    assert!(ids.contains(&bug.as_str()));
 
     let ready = repo.ok_json(&["ready", "--exclude-type", "epic", "--json"]);
     let ids: Vec<&str> = ready["data"]["tasks"]
@@ -101,11 +99,11 @@ fn type_filters_scope_list_and_ready() {
         .filter_map(|entry| entry["id"].as_str())
         .collect();
     assert!(!ids.contains(&epic.as_str()));
-    assert!(ids.contains(&spike.as_str()));
+    assert!(ids.contains(&story.as_str()));
 
-    let ready = repo.ok_json(&["ready", "--type", "decision", "--json"]);
+    let ready = repo.ok_json(&["ready", "--type", "bug", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], decision.as_str());
+    assert_eq!(ready["data"]["tasks"][0]["id"], bug.as_str());
 }
 
 #[test]
@@ -137,7 +135,9 @@ fn doctor_reports_epic_subtask() {
 
     let parent = repo.add("Feature", &[]);
     let child = repo.add("Part", &["--parent", parent.as_str()]);
-    let content = repo.read_task(&child).replace("type: task", "type: epic");
+    let content = repo
+        .read_task(&child)
+        .replace("type: sub-task", "type: epic");
     repo.write_task(&child, &content);
 
     let (status, value) = repo.json(&["doctor", "--json"]);

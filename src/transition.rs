@@ -7,8 +7,6 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 
 use crate::error::{OrbitError, code};
-#[cfg(test)]
-use crate::task::TaskType;
 use crate::task::{Checkpoint, Claim, Status, Task};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -569,7 +567,7 @@ mod tests {
             front: TaskFrontmatter {
                 title: "t".to_string(),
                 status,
-                task_type: TaskType::Task,
+                task_type: "task".to_string(),
                 priority: "medium".to_string(),
                 labels: Vec::new(),
                 links: vec![crate::task::Link::waiting_on("vendor")],

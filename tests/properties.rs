@@ -1,6 +1,6 @@
 use chrono::{TimeZone, Utc};
 use orbit_tracker::graph::Graph;
-use orbit_tracker::task::{Link, Status, Task, TaskFrontmatter, TaskType};
+use orbit_tracker::task::{Link, Status, Task, TaskFrontmatter};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, HashSet};
 
@@ -11,7 +11,7 @@ fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
         front: TaskFrontmatter {
             title: "property task".to_string(),
             status,
-            task_type: TaskType::Task,
+            task_type: "task".to_string(),
             priority: "medium".to_string(),
             labels: Vec::new(),
             links: dependencies

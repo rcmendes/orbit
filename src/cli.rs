@@ -4,7 +4,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
-use crate::task::{Status, TaskType};
+use crate::task::Status;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -345,15 +345,18 @@ pub struct AddArgs {
     #[arg(short = 'p', long, value_name = "NAME")]
     pub priority: Option<String>,
 
-    /// Work shape: task, epic, spike, chore, or decision.
-    #[arg(long = "type", value_name = "TYPE", value_enum)]
-    pub task_type: Option<TaskType>,
+    /// Issue type name from the Board's `board.types`
+    /// (epic, story, task, bug, sub-task by default).
+    #[arg(long = "type", value_name = "TYPE")]
+    pub task_type: Option<String>,
 
     /// Make the new task wait for an existing task. Repeatable.
     #[arg(long = "depends-on", value_name = "ID", action = clap::ArgAction::Append)]
     pub depends_on: Vec<String>,
 
-    /// Create a SubTask under this Parent Task. SubTasks are one level deep by default.
+    /// Nest the new Task under this parent. The Board's `board.hierarchy`
+    /// decides which types may parent which; `--type` picks the child's type
+    /// (the leaf type, `sub-task` by default, when omitted).
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
@@ -405,13 +408,13 @@ pub struct ListArgs {
     #[arg(long)]
     pub waiting: bool,
 
-    /// Filter by work shape. Repeatable; matches any listed type.
-    #[arg(long = "type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
-    pub task_type: Vec<TaskType>,
+    /// Filter by Issue type. Repeatable; matches any listed type.
+    #[arg(long = "type", value_name = "TYPE", action = clap::ArgAction::Append)]
+    pub task_type: Vec<String>,
 
-    /// Exclude work shapes. Repeatable; excludes any listed type.
-    #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
-    pub exclude_type: Vec<TaskType>,
+    /// Exclude Issue types. Repeatable; excludes any listed type.
+    #[arg(long = "exclude-type", value_name = "TYPE", action = clap::ArgAction::Append)]
+    pub exclude_type: Vec<String>,
 
     /// Filter by work area slug. Repeatable; matches any listed area.
     #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
@@ -437,7 +440,7 @@ pub struct ListArgs {
     #[arg(long, conflicts_with_all = ["label", "repo"])]
     pub unlabeled: bool,
 
-    /// Filter to SubTasks of this Parent Task.
+    /// Filter to direct children of this parent Task.
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
@@ -470,7 +473,7 @@ pub struct ReadyArgs {
     #[arg(long, value_name = "N")]
     pub limit: Option<usize>,
 
-    /// Only Ready SubTasks of this Parent Task.
+    /// Only Ready direct children of this parent Task.
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
@@ -484,13 +487,13 @@ pub struct ReadyArgs {
     #[arg(long)]
     pub all: bool,
 
-    /// Only Ready tasks with one of these work shapes. Repeatable.
-    #[arg(long = "type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
-    pub task_type: Vec<TaskType>,
+    /// Only Ready tasks with one of these Issue types. Repeatable.
+    #[arg(long = "type", value_name = "TYPE", action = clap::ArgAction::Append)]
+    pub task_type: Vec<String>,
 
-    /// Exclude Ready tasks with any of these work shapes. Repeatable.
-    #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
-    pub exclude_type: Vec<TaskType>,
+    /// Exclude Ready tasks with any of these Issue types. Repeatable.
+    #[arg(long = "exclude-type", value_name = "TYPE", action = clap::ArgAction::Append)]
+    pub exclude_type: Vec<String>,
 
     /// Only Ready tasks with any listed work area. Repeatable.
     #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
@@ -676,9 +679,9 @@ pub struct UpdateArgs {
     #[arg(long, value_name = "NAME")]
     pub priority: Option<String>,
 
-    /// New work shape: task, epic, spike, chore, or decision.
-    #[arg(long = "type", value_name = "TYPE", value_enum)]
-    pub task_type: Option<TaskType>,
+    /// New Issue type name from the Board's `board.types`.
+    #[arg(long = "type", value_name = "TYPE")]
+    pub task_type: Option<String>,
 
     /// New external blocker.
     #[arg(

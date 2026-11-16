@@ -172,7 +172,8 @@ fn migrate_rewrites_ids_references_comments_and_commits_once() {
     assert_eq!(value["data"]["changed"], true);
     assert_eq!(value["data"]["commit"].as_str().unwrap().len(), 40);
     assert!(new_parent.starts_with("atlas-"), "{new_parent}");
-    assert!(new_child.starts_with(&format!("{new_parent}.")));
+    // IDs stay flat across the rename; the `parent` field carries the edge.
+    assert!(!new_child.contains('.'), "{new_child}");
 
     assert!(!repo.task_path(&parent).exists());
     assert!(!repo.task_path(&child).exists());
@@ -316,25 +317,25 @@ fn migrate_refuses_an_unhealthy_board_without_changing_it() {
 }
 
 #[test]
-fn migrate_refuses_a_parent_id_mismatch() {
+fn migrate_refuses_a_hierarchy_violation() {
     let repo = TestRepo::new();
     repo.init();
     let parent = repo.add("Parent", &[]);
-    let other = repo.add("Other parent", &[]);
     let child = repo.add("Child", &["--parent", &parent]);
+    // `epic` sits at the top of the hierarchy and cannot be a child.
     let content = repo
         .read_task(&child)
-        .replace(&format!("parent: {parent}"), &format!("parent: {other}"));
+        .replace("type: sub-task", "type: epic");
     repo.write_task(&child, &content);
 
     let (status, value) = repo.err_json(&["slug", "migrate", "atlas", "--json"]);
 
+    // Strict loading rejects the Board before the migration plan runs.
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "MIGRATION_BLOCKED");
-    assert_eq!(value["error"]["details"]["reason"], "unhealthy");
+    assert_eq!(value["error"]["code"], "BOARD_CORRUPT");
     assert_eq!(
         value["error"]["details"]["issues"][0]["code"],
-        "PARENT_MISMATCH"
+        "INVALID_TYPE"
     );
     assert!(repo.task_path(&child).exists());
 }

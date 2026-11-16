@@ -1266,10 +1266,10 @@ fn nested_subtask_relationships_sync_at_depth_two() {
     let repo = TestRepo::new();
     repo.init();
     write_github_config(&repo);
-    repo.set_max_subtask_depth(2);
     let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
 
-    let parent = repo.add("Release", &[]);
+    // epic > task > sub-task reaches depth two on the default hierarchy.
+    let parent = repo.add("Release", &["--type", "epic"]);
     repo.ok_json_with_env(
         &[
             "remote",
@@ -1280,7 +1280,7 @@ fn nested_subtask_relationships_sync_at_depth_two() {
         ],
         &env,
     );
-    let child = repo.add("Feature", &["--parent", parent.as_str()]);
+    let child = repo.add("Feature", &["--parent", parent.as_str(), "--type", "task"]);
     repo.ok_json_with_env(
         &["remote", "link", child.as_str(), "acme/widget#43", "--json"],
         &env,

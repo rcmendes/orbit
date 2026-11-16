@@ -2327,7 +2327,7 @@ fn create_imported_task(
         front: crate::task::TaskFrontmatter {
             title: issue.title.trim().to_string(),
             status: issue.status,
-            task_type: crate::task::TaskType::Task,
+            task_type: "task".to_string(),
             priority: board.config.board.default_priority.clone(),
             labels,
             links: Vec::new(),

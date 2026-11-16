@@ -3,7 +3,6 @@ use serde_json::json;
 
 use crate::cli::{AddArgs, DeleteArgs, UpdateArgs};
 use crate::graph::LoadMode;
-use crate::task::TaskType;
 use crate::transition::FieldUpdate;
 
 use super::*;
@@ -41,11 +40,10 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
 
     let priority = &task.front.priority;
     let title = &task.front.title;
-    let task_type = task.front.task_type;
-    let type_prefix = if task_type == TaskType::Task {
+    let type_prefix = if task.front.task_type == board.config.board.default_type {
         String::new()
     } else {
-        format!("{}  ", task_type.as_str())
+        format!("{}  ", task.front.task_type)
     };
     let human = match &task.front.parent {
         Some(parent) => {

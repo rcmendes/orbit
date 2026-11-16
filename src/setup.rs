@@ -2413,7 +2413,7 @@ From any member Repository, these commands resolve the shared Board across the G
 - `orbit checkpoint <id> --by <agent> --progress \"...\" [--next \"...\"] [--blocker \"...\"]` records a handoff that survives release and takeover.
 {COMPLETION_LINE}
 - `orbit add \"title\" -p high --depends-on <id>` creates work.
-- `orbit add \"title\" --parent <id>` creates a SubTask. A spec or epic is a top-level Task with `--type epic`; its issues are SubTasks. `type` is metadata: task, epic, spike, chore, decision. Epic is top-level only. SubTasks are one level deep by default; raise `board.max_subtask_depth` to nest further, and the parent waits for them.
+- `orbit add \"title\" --parent <id>` creates a child Issue. Issue types and the parent hierarchy are configured per Board under `board.types` and `board.hierarchy` (default: `epic` above `story`/`task`/`bug` above `sub-task`); a child must sit below its parent in the hierarchy, `--parent` without `--type` files a `sub-task`, and the parent waits for every descendant to resolve.
 - Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
@@ -2485,8 +2485,8 @@ We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdo
 - To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change.
 - To create work, run `orbit add \"Title\" -p high --depends-on <ID>`.
 - Orbit calls the unit a Task. A skill's \"issue\" is a Task; a \"sub-issue\" is a SubTask; an \"epic\" or \"spec\" is a top-level Task with `--type epic`.
-- To publish tickets under an existing issue or spec, run `orbit add \"Title\" --parent <PARENT_ID>`; SubTasks are one level deep by default — raise `board.max_subtask_depth` to nest further — and the parent waits for them.
-- `type` is metadata: task, epic, spike, chore, decision. Epic is top-level only. `bug` and `enhancement` stay labels.
+- To publish tickets under an existing issue or spec, run `orbit add \"Title\" --parent <PARENT_ID>`; the parent waits for every descendant to resolve.
+- `type` is a Board-configured Issue type (default vocabulary: epic, story, task, bug, sub-task). `bug` and `enhancement` stay labels.
 - Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.

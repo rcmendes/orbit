@@ -11,7 +11,6 @@ use crate::cli::BatchArgs;
 use crate::comment;
 use crate::graph::LoadMode;
 use crate::ops::{NewTask, TaskUpdate};
-use crate::task::TaskType;
 use crate::transition::FieldUpdate;
 
 use super::*;
@@ -32,7 +31,7 @@ enum Operation {
         key: Option<String>,
         title: String,
         #[serde(rename = "type")]
-        task_type: Option<TaskType>,
+        task_type: Option<String>,
         parent: Option<String>,
         #[serde(default)]
         labels: Vec<String>,
@@ -53,7 +52,7 @@ enum Operation {
         body: Option<String>,
         priority: Option<String>,
         #[serde(rename = "type")]
-        task_type: Option<TaskType>,
+        task_type: Option<String>,
         waiting_on: Option<String>,
         #[serde(default)]
         clear_waiting: bool,
@@ -581,7 +580,7 @@ mod tests {
             front: TaskFrontmatter {
                 title: id.to_string(),
                 status: Status::Todo,
-                task_type: TaskType::Task,
+                task_type: "task".to_string(),
                 priority: "medium".to_string(),
                 labels: Vec::new(),
                 links: Vec::new(),

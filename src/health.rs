@@ -56,48 +56,6 @@ fn header_matches(path: &Path, id: &str) -> Result<bool> {
     Ok(comment::has_header(&content, id))
 }
 
-/// Flags tasks whose `parent` disagrees with the parent encoded in their ID.
-/// Skip this entirely when the board has a prefix mismatch: the IDs then use
-/// the observed prefix and every SubTask would be flagged.
-pub fn parent_id_agreement(board: &Board, graph: &Graph, issues: &mut Vec<Issue>) {
-    for task in graph.tasks.values() {
-        let encoded_parent = board.config.id.parent_id(&task.id);
-        match (&task.front.parent, encoded_parent) {
-            (Some(parent), Some(encoded)) if parent != &encoded => {
-                issues.push(Issue::new(
-                    code::PARENT_MISMATCH,
-                    Some(&task.id),
-                    format!(
-                        "{} has parent {parent} but its ID encodes {encoded}",
-                        task.id
-                    ),
-                ));
-            }
-            (None, Some(encoded)) => {
-                issues.push(Issue::new(
-                    code::PARENT_MISMATCH,
-                    Some(&task.id),
-                    format!(
-                        "{} is a SubTask ID but has no parent; expected {encoded}",
-                        task.id
-                    ),
-                ));
-            }
-            (Some(parent), None) => {
-                issues.push(Issue::new(
-                    code::PARENT_MISMATCH,
-                    Some(&task.id),
-                    format!(
-                        "{} has parent {parent} but its ID is not a SubTask ID",
-                        task.id
-                    ),
-                ));
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Flags a Board checked out on a branch other than `board.config.board.branch`.
 pub fn branch_mismatch(board: &Board, issues: &mut Vec<Issue>) {
     match git::current_branch(&board.root) {

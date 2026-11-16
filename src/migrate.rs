@@ -194,7 +194,7 @@ fn detect_collisions(old_to_new: &BTreeMap<String, String>) -> Vec<Collision> {
 
 /// Doctor-equivalent issues that make a migration unsafe. Strict loading already
 /// covers task parsing and graph structure; this adds the checks doctor performs
-/// over comments, parent/ID agreement, and the checked-out branch.
+/// over comments and the checked-out branch.
 pub fn health_issues(board: &Board, graph: &Graph) -> Result<Vec<Issue>> {
     health_issues_inner(board, graph, true)
 }
@@ -202,7 +202,6 @@ pub fn health_issues(board: &Board, graph: &Graph) -> Result<Vec<Issue>> {
 fn health_issues_inner(board: &Board, graph: &Graph, check_branch: bool) -> Result<Vec<Issue>> {
     let mut issues = Vec::new();
     crate::health::comment_files(board, graph, true, &mut issues)?;
-    crate::health::parent_id_agreement(board, graph, &mut issues);
     if check_branch {
         crate::health::branch_mismatch(board, &mut issues);
     }

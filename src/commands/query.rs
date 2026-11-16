@@ -5,29 +5,24 @@ use crate::cli::{ListArgs, PrimeArgs, ReadyArgs, ShowArgs, TreeArgs};
 use crate::git::CommitOutcome;
 use crate::graph::LoadMode;
 use crate::setup::COMPLETION_LINE;
-use crate::task::TaskType;
 
 use super::render::*;
 use super::*;
 
-/// `--parent` names a Task that must exist. A Board that allows only one
-/// SubTask level also keeps its historical rule that the filter names a
-/// Parent Task, never a SubTask.
+/// `--parent` names a Task that must exist; any Task may be a parent
+/// filter, at any depth of the Board hierarchy.
 fn check_parent_filter(graph: &Graph, parent: &str) -> Result<()> {
-    let parent_task = graph.get(parent)?;
-    if graph.max_subtask_depth == 1 && parent_task.front.parent.is_some() {
-        return Err(OrbitError::invalid_argument(format!(
-            "{parent} is a SubTask; `--parent` expects a Parent Task"
-        )));
-    }
+    graph.get(parent)?;
     Ok(())
 }
 
-pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::CommandOutput> {
+pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     if let Some(parent) = args.parent.as_deref() {
         check_parent_filter(&graph, parent)?;
     }
+    args.task_type = normalize_type_filters(&args.task_type);
+    args.exclude_type = normalize_type_filters(&args.exclude_type);
     let priority = args
         .priority
         .as_deref()
@@ -132,11 +127,16 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
     )
 }
 
-pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output::CommandOutput> {
+pub(super) fn cmd_ready(
+    board: &Board,
+    mut args: ReadyArgs,
+) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     if let Some(parent) = args.parent.as_deref() {
         check_parent_filter(&graph, parent)?;
     }
+    args.task_type = normalize_type_filters(&args.task_type);
+    args.exclude_type = normalize_type_filters(&args.exclude_type);
     let label_filters = normalize_labels(&args.label)?;
     let repo_filter = normalize_repo_filter(args.repo.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
@@ -201,7 +201,7 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
     } else {
         ready
             .iter()
-            .map(format_summary)
+            .map(|task| format_summary(task, &graph))
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -352,7 +352,7 @@ Use the CLI; never edit task files directly.\n\
         human.push_str("  (none)\n");
     } else {
         for task in &ready_tasks {
-            human.push_str(&format!("  {}\n", format_summary(task)));
+            human.push_str(&format!("  {}\n", format_summary(task, &graph)));
         }
     }
     human.push_str("close candidates:\n");
@@ -360,7 +360,10 @@ Use the CLI; never edit task files directly.\n\
         human.push_str("  (none)\n");
     } else {
         for task in &close_candidate_tasks {
-            human.push_str(&format!("  {}  (ready to close)\n", format_summary(task)));
+            human.push_str(&format!(
+                "  {}  (ready to close)\n",
+                format_summary(task, &graph)
+            ));
         }
     }
     human.push_str("stale claims:\n");
@@ -368,7 +371,7 @@ Use the CLI; never edit task files directly.\n\
         human.push_str("  (none)\n");
     } else {
         for (task, summary) in stale_tasks.iter().zip(&stale) {
-            human.push_str(&format!("  {}\n", format_summary(task)));
+            human.push_str(&format!("  {}\n", format_summary(task, &graph)));
             push_summary_checkpoint(&mut human, summary);
         }
     }
@@ -461,13 +464,20 @@ fn repository_scope(board: &Board, all: bool) -> Result<Option<String>> {
     crate::repository::current_scope(board)
 }
 
+fn normalize_type_filters(types: &[String]) -> Vec<String> {
+    types
+        .iter()
+        .map(|ty| crate::hierarchy::normalize_type_name(ty))
+        .collect()
+}
+
 #[derive(Clone, Copy)]
 struct ReadyFilters<'a> {
     parent: Option<&'a str>,
     labels: &'a [String],
     excluded: &'a [String],
-    types: &'a [TaskType],
-    excluded_types: &'a [TaskType],
+    types: &'a [String],
+    excluded_types: &'a [String],
     areas: &'a [String],
     excluded_areas: &'a [String],
     scope: Option<&'a str>,

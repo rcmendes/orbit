@@ -335,7 +335,7 @@ mod tests {
         DesiredRelation, MappedFields, RelationChange, RemoteIssueFields, RemoteIssueSummary,
         RemoteIssueUpdate, RemoteRelations,
     };
-    use crate::task::{TaskFrontmatter, TaskType, default_priority};
+    use crate::task::{TaskFrontmatter, default_priority};
     use chrono::TimeZone;
     use std::collections::BTreeMap;
 
@@ -391,7 +391,7 @@ mod tests {
             front: TaskFrontmatter {
                 title: title.into(),
                 status,
-                task_type: TaskType::Task,
+                task_type: "task".to_string(),
                 priority: default_priority(),
                 labels: vec!["bug".into()],
                 links: Vec::new(),

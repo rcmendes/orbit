@@ -10,14 +10,16 @@ use crate::commands::{normalize_labels, normalize_waiting, parse_area_option, va
 use crate::error::{OrbitError, Result, code};
 use crate::graph::Graph;
 use crate::mutation::TerminalKind;
-use crate::task::{self, Status, Task, TaskFrontmatter, TaskType};
+use crate::task::{self, Status, Task, TaskFrontmatter};
 use crate::transition::{ClaimGate, FieldUpdate, Outcome, TransitionError};
 
 /// Fields for a new Task. Values are raw and validated by [`add`].
 pub struct NewTask {
     pub title: String,
     pub priority: Option<String>,
-    pub task_type: Option<TaskType>,
+    /// Issue type name; `None` resolves to `board.default_type`, or to the
+    /// hierarchy's leaf type when `parent` is set.
+    pub task_type: Option<String>,
     pub labels: Vec<String>,
     pub depends_on: Vec<String>,
     pub parent: Option<String>,
@@ -63,7 +65,54 @@ pub fn add(
         Some(priority) => validate_priority(board, priority)?,
         None => board.config.board.default_priority.clone(),
     };
-    let task_type = new.task_type.unwrap_or(TaskType::Task);
+    let parent = match new.parent {
+        Some(parent_id) => {
+            let parent_task = graph.get(&parent_id)?;
+            if parent_task.front.status.is_terminal() {
+                return Err(OrbitError::invalid_argument(format!(
+                    "parent {parent_id} is {}; a child Task needs an active parent",
+                    parent_task.front.status.as_str()
+                )));
+            }
+            Some((parent_id, parent_task.front.task_type.clone()))
+        }
+        None => None,
+    };
+    let parent_id = parent.as_ref().map(|(id, _)| id.clone());
+
+    let task_type = match new.task_type {
+        Some(task_type) => {
+            let task_type = crate::hierarchy::normalize_type_name(&task_type);
+            if task_type.is_empty() {
+                return Err(OrbitError::invalid_argument("type must not be empty"));
+            }
+            if !graph.hierarchy.is_known_type(&task_type) {
+                return Err(crate::hierarchy::unknown_type_error(
+                    &graph.hierarchy,
+                    &task_type,
+                ));
+            }
+            task_type
+        }
+        // `--parent` without `--type` files a leaf child: the deepest level's
+        // first type, `sub-task` in the default model.
+        None => match &parent {
+            Some(_) => graph.hierarchy.default_child_type().to_string(),
+            None => board.config.board.default_type.clone(),
+        },
+    };
+
+    if let Some((parent_id, parent_type)) = &parent
+        && let Some(reason) = graph
+            .hierarchy
+            .parent_rule_violation(&task_type, parent_type)
+    {
+        return Err(OrbitError::new(
+            code::INVALID_TYPE,
+            format!("cannot add {task_type} under {parent_id}: {reason}"),
+        ));
+    }
+
     let labels = normalize_labels(&new.labels)?;
 
     // `depends_on` ids become blocking `blocks` links; `waiting_on` becomes a
@@ -83,42 +132,7 @@ pub fn add(
         links.push(task::Link::waiting_on(waiting));
     }
 
-    let parent = match new.parent {
-        Some(parent_id) => {
-            let parent_task = graph.get(&parent_id)?;
-            if parent_task.front.status.is_terminal() {
-                return Err(OrbitError::invalid_argument(format!(
-                    "parent {parent_id} is {}; a SubTask needs an active Parent Task",
-                    parent_task.front.status.as_str()
-                )));
-            }
-            if graph.depth(&parent_id) + 1 > usize::from(graph.max_subtask_depth) {
-                let rule = if graph.max_subtask_depth == 1 {
-                    "SubTasks are one level deep; raise board.max_subtask_depth to nest further"
-                        .to_string()
-                } else {
-                    format!(
-                        "SubTasks are limited to {} levels by board.max_subtask_depth",
-                        graph.max_subtask_depth
-                    )
-                };
-                return Err(OrbitError::invalid_argument(format!(
-                    "parent {parent_id} is a SubTask; {rule}"
-                )));
-            }
-            Some(parent_id)
-        }
-        None => None,
-    };
-
-    if parent.is_some() && task_type == TaskType::Epic {
-        return Err(OrbitError::new(
-            code::INVALID_TYPE,
-            "epic type is only allowed on a top-level Task",
-        ));
-    }
-
-    if let Some(parent_id) = &parent
+    if let Some(parent_id) = &parent_id
         && links
             .iter()
             .any(|link| link.is_blocking() && link.target_task() == Some(parent_id.as_str()))
@@ -140,9 +154,9 @@ pub fn add(
     for (owner, value) in &new.annotations {
         task::validate_annotation(owner, value)?;
     }
-    let id = generate_unique_id(graph, board, parent.as_deref())?;
+    let id = generate_unique_id(graph, board)?;
 
-    graph.insert(Task {
+    let task = Task {
         id: id.clone(),
         front: TaskFrontmatter {
             title,
@@ -151,7 +165,7 @@ pub fn add(
             priority,
             labels,
             links,
-            parent,
+            parent: parent_id,
             checkpoint: None,
             area,
             verification,
@@ -167,13 +181,19 @@ pub fn add(
             extra: Default::default(),
         },
         body: new.body,
-    });
+    };
+    let missing = graph.hierarchy.missing_required_fields(&task);
+    if !missing.is_empty() {
+        return Err(crate::hierarchy::missing_field_error(&id, &missing));
+    }
+    graph.insert(task);
     Ok(AddOutcome { id, matched: false })
 }
 
 /// A fresh Task ID that is neither on disk nor already in the Graph (a Batch
-/// may have added Tasks that are not written yet).
-fn generate_unique_id(graph: &Graph, board: &Board, parent: Option<&str>) -> Result<String> {
+/// may have added Tasks that are not written yet). IDs never encode the
+/// parent: `parent` is an ordinary field (ADR 0022).
+fn generate_unique_id(graph: &Graph, board: &Board) -> Result<String> {
     let config = &board.config.id;
     for attempt in 0..50 {
         let length = if attempt < 40 {
@@ -181,10 +201,7 @@ fn generate_unique_id(graph: &Graph, board: &Board, parent: Option<&str>) -> Res
         } else {
             (config.length + 2).min(8)
         };
-        let id = match parent {
-            Some(parent) => task::generate_subtask_id(parent, length),
-            None => task::generate_id(&config.prefix, length),
-        };
+        let id = task::generate_id(&config.prefix, length);
         if !board.task_path(&id).exists() && !graph.tasks.contains_key(&id) {
             return Ok(id);
         }
@@ -228,7 +245,9 @@ pub struct TaskUpdate {
     pub title: Option<String>,
     pub body: Option<String>,
     pub priority: Option<String>,
-    pub task_type: Option<TaskType>,
+    /// New Issue type name; must keep the Task's `parent` edge and its
+    /// children's edges valid under the Board hierarchy.
+    pub task_type: Option<String>,
     pub waiting_on: FieldUpdate<String>,
     pub area: FieldUpdate<String>,
     pub verification: FieldUpdate<String>,
@@ -248,12 +267,48 @@ pub fn update(
         .map(|priority| validate_priority(board, priority))
         .transpose()?;
     let current = graph.get(id)?;
-    let next_type = change.task_type.unwrap_or(current.front.task_type);
-    if next_type == TaskType::Epic && current.front.parent.is_some() {
+    let next_type = match &change.task_type {
+        Some(task_type) => {
+            let task_type = crate::hierarchy::normalize_type_name(task_type);
+            if task_type.is_empty() {
+                return Err(OrbitError::invalid_argument("type must not be empty"));
+            }
+            if !graph.hierarchy.is_known_type(&task_type) {
+                return Err(crate::hierarchy::unknown_type_error(
+                    &graph.hierarchy,
+                    &task_type,
+                ));
+            }
+            task_type
+        }
+        None => current.front.task_type.clone(),
+    };
+    // The new type must keep the edge to the parent and the edges from every
+    // child valid under the Board hierarchy.
+    if let Some(parent_id) = &current.front.parent
+        && let Ok(parent) = graph.get(parent_id)
+        && let Some(reason) = graph
+            .hierarchy
+            .parent_rule_violation(&next_type, &parent.front.task_type)
+    {
         return Err(OrbitError::new(
             code::INVALID_TYPE,
-            "epic type is only allowed on a top-level Task",
+            format!("cannot make {id} type `{next_type}` under {parent_id}: {reason}"),
         ));
+    }
+    for child in graph.children(id) {
+        if let Some(reason) = graph
+            .hierarchy
+            .parent_rule_violation(&child.front.task_type, &next_type)
+        {
+            return Err(OrbitError::new(
+                code::INVALID_TYPE,
+                format!(
+                    "cannot make {id} type `{next_type}`; child {} has type `{}`: {reason}",
+                    child.id, child.front.task_type
+                ),
+            ));
+        }
     }
     let title = match change.title {
         Some(title) => {
@@ -289,6 +344,7 @@ pub fn update(
         other => other,
     };
 
+    let hierarchy = graph.hierarchy.clone();
     let task = graph.get_mut(id)?;
     let before = (task.front.clone(), task.body.clone());
     if let Some(title) = title {
@@ -300,14 +356,18 @@ pub fn update(
     if let Some(priority) = priority {
         task.front.priority = priority;
     }
-    if let Some(task_type) = change.task_type {
-        task.front.task_type = task_type;
+    if change.task_type.is_some() {
+        task.front.task_type = next_type.clone();
     }
     apply_waiting_links(&mut task.front.links, waiting_change);
     apply_field(&mut task.front.area, area);
     apply_field(&mut task.front.verification, verification);
     let changed = front_differs(&before.0, &task.front) || before.1 != task.body;
     task.touch(now);
+    let missing = hierarchy.missing_required_fields(task);
+    if !missing.is_empty() {
+        return Err(crate::hierarchy::missing_field_error(id, &missing));
+    }
     Ok(changed)
 }
 
@@ -520,7 +580,7 @@ pub fn claim(
     let gate = ClaimGate {
         hold_labels: graph.hold_labels(task),
         blocking: graph.blocking_ids(task),
-        open_subtasks: graph.open_children(id),
+        open_subtasks: graph.open_descendants(id),
     };
     graph
         .get_mut(id)?
@@ -567,13 +627,13 @@ pub fn finish(
     kind: TerminalKind,
     now: DateTime<Utc>,
 ) -> Result<FinishOutcome> {
-    let open_children = graph.open_children(id);
-    if !open_children.is_empty() && !force {
+    let open_descendants = graph.open_descendants(id);
+    if !open_descendants.is_empty() && !force {
         return Err(OrbitError::new(
             code::SUBTASKS_OPEN,
-            format!("{id} has open SubTasks: {}", open_children.join(", ")),
+            format!("{id} has open SubTasks: {}", open_descendants.join(", ")),
         )
-        .with_details(serde_json::json!({"task": id, "subtasks": open_children})));
+        .with_details(serde_json::json!({"task": id, "subtasks": open_descendants})));
     }
     let blocking = graph.blocking_ids(graph.get(id)?);
     if matches!(kind, TerminalKind::Done) && !blocking.is_empty() {

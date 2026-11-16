@@ -243,20 +243,21 @@ reads it from stdin so long bodies never hit shell quoting.
 
 Priority is a name from the Board's `board.priorities` list, ordered most
 important first (highest, high, medium, low by default); the default comes
-from `board.default_priority`. --type sets the work shape: task (default), epic,
-spike, chore, or decision. Type is metadata and does not affect readiness.
---depends-on is repeatable and creates blocking edges at creation time.
---waiting-on records a blocker that lives outside the Board, such as an upstream
-release.
+from `board.default_priority`. --type sets the Issue type; the Board
+configures the vocabulary under `board.types` and the parent hierarchy under
+`board.hierarchy` (epic > story/task/bug > sub-task by default). The type
+decides where in the hierarchy the Issue may sit. --depends-on is repeatable
+and creates blocking edges at creation time. --waiting-on records a blocker
+that lives outside the Board, such as an upstream release.
 
---parent creates a SubTask under an existing Parent Task. The SubTask ID is the
-parent ID, a dot, and a fresh suffix (for example orb-a7b2c9.d4b3df). SubTasks are
-one level deep by default; raise board.max_subtask_depth to nest further. A spec
-or epic is a top-level Parent Task created with --type epic;
-its tickets are SubTasks. Epic is refused on a SubTask. When an external tracker
-or skill says \"sub-issue\", use --parent. Parentage is not a dependency: the
-Parent Task waits for its SubTasks, not the other way around. A SubTask can still
-have real --depends-on edges. Closing a Parent Task with open SubTasks is refused;
+--parent files the Issue under an existing parent when the Board hierarchy
+allows the edge; without --type the child takes the leaf type (`sub-task` by
+default). IDs are flat and never encode the parent. A spec or epic is a
+top-level Issue created with --type epic; its issues sit below it in the
+hierarchy. When an external tracker or skill says \"sub-issue\", use
+--parent. Parentage is not a dependency: the parent waits for every
+descendant to resolve, at any configured depth. A child can still have real
+--depends-on edges. Closing a parent with open descendants is refused;
 --force cancels them.
 
 --source-key gives the Task a caller-chosen identity, unique per Board. An add
@@ -470,8 +471,8 @@ the scoped view for an epic, spec, or feature; non-task types appear before the
 title. The root may be any Task with SubTasks, including a SubTask that has its
 own.
 
-SubTasks are one level deep by default; raise board.max_subtask_depth to nest
-further. `--json` returns data.root, data.tasks (root first, descendants
+The depth `tree` shows is whatever the Board's `board.hierarchy` configures.
+`--json` returns data.root, data.tasks (root first, descendants
 depth-first), and data.count; each row has the same shape as `list` and `ready`.
 The root line shows resolved/total progress and is marked ready to close when
 every SubTask is done or cancelled.";
@@ -655,7 +656,7 @@ Examples:
   orbit update orb-a7b2c9 --priority highest
 
   # Change the work shape
-  orbit update orb-a7b2c9 --type spike
+  orbit update orb-a7b2c9 --type bug
 
   # Record that an external blocker is gone
   orbit update orb-a7b2c9 --clear-waiting

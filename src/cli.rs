@@ -540,19 +540,19 @@ pub struct ReadyArgs {
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 }
 
 #[derive(Debug, Args)]
 pub struct TreeArgs {
-    /// Parent Task ID, for example orb-a7b2c9.
+    /// Parent Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 }
 
 #[derive(Debug, Args)]
 pub struct ClaimArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -574,7 +574,7 @@ pub struct ClaimArgs {
 
 #[derive(Debug, Args)]
 pub struct AssignArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// The assignee's name — a person or an agent.
@@ -592,7 +592,7 @@ pub struct AssignArgs {
 
 #[derive(Debug, Args)]
 pub struct ReleaseArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -606,7 +606,7 @@ pub struct ReleaseArgs {
 
 #[derive(Debug, Args)]
 pub struct HeartbeatArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -616,7 +616,7 @@ pub struct HeartbeatArgs {
 
 #[derive(Debug, Args)]
 pub struct CheckpointArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Current progress. Required when recording the first checkpoint.
@@ -646,7 +646,7 @@ pub struct CheckpointArgs {
 
 #[derive(Debug, Args)]
 pub struct DoneArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -668,7 +668,7 @@ pub struct DoneArgs {
 
 #[derive(Debug, Args)]
 pub struct CancelArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -690,7 +690,7 @@ pub struct CancelArgs {
 
 #[derive(Debug, Args)]
 pub struct ReopenArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Reopen even when a dependent task is already done.
@@ -700,7 +700,7 @@ pub struct ReopenArgs {
 
 #[derive(Debug, Args)]
 pub struct TransitionArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Workflow transition name, for example promote or block.
@@ -717,7 +717,7 @@ pub struct TransitionArgs {
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// New title.
@@ -792,7 +792,7 @@ pub struct UpdateArgs {
 
 #[derive(Debug, Args)]
 pub struct DependArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// The task that must finish first.
@@ -802,7 +802,7 @@ pub struct DependArgs {
 
 #[derive(Debug, Args)]
 pub struct UndependArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// The dependency to remove.
@@ -840,7 +840,7 @@ pub enum LinkCommand {
 
 #[derive(Debug, Args)]
 pub struct LinkAddArgs {
-    /// Task ID, for example orb-a7b2c9. The link is stored on this task.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12. The link is stored on this task.
     pub id: String,
 
     /// Link type: blocks, relates-to, duplicates, discovered-from, or a
@@ -848,7 +848,7 @@ pub struct LinkAddArgs {
     #[arg(long = "type", value_name = "TYPE", default_value = "relates-to")]
     pub kind: String,
 
-    /// Link target: an Orbit Task ID.
+    /// Link target: an Orbit Task ID or project key.
     #[arg(
         long,
         value_name = "ID",
@@ -880,14 +880,14 @@ pub struct LinkAddArgs {
 
 #[derive(Debug, Args)]
 pub struct LinkRemoveArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Only remove links of this type. Omit to match every type.
     #[arg(long = "type", value_name = "TYPE")]
     pub kind: Option<String>,
 
-    /// Link target: an Orbit Task ID.
+    /// Link target: an Orbit Task ID or project key.
     #[arg(
         long,
         value_name = "ID",
@@ -903,13 +903,13 @@ pub struct LinkRemoveArgs {
 
 #[derive(Debug, Args)]
 pub struct LinkTargetArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 }
 
 #[derive(Debug, Args)]
 pub struct DeleteArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -953,7 +953,7 @@ pub enum LabelCommand {
 
 #[derive(Debug, Args)]
 pub struct LabelMutationArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// One or more lowercase labels.
@@ -995,7 +995,7 @@ pub enum PropertyCommand {
 
 #[derive(Debug, Args)]
 pub struct PropertySetArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Owner: the lowercase slug naming the tool, for example ci.
@@ -1008,7 +1008,7 @@ pub struct PropertySetArgs {
 
 #[derive(Debug, Args)]
 pub struct PropertyRemoveArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Owner whose Property is removed.
@@ -1040,7 +1040,7 @@ pub enum CommentCommand {
 
 #[derive(Debug, Args)]
 pub struct CommentAddArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Comment body. Use "-" to read stdin.
@@ -1058,7 +1058,7 @@ pub struct CommentAddArgs {
 
 #[derive(Debug, Args)]
 pub struct CommentListArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 }
 

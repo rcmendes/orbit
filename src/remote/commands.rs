@@ -2193,12 +2193,23 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
             .keys()
             .cloned()
             .collect::<std::collections::HashSet<_>>();
+        // Imported Tasks take sequential project keys like `orbit add`.
+        let key_state = crate::key::load(board)?;
+        let key_prefix = key_state.prefix.clone();
+        let mut next_key = key_state.next_key.max(crate::key::max_number(&graph) + 1);
         let mut writes = Vec::new();
         for (project, candidate) in candidates {
             let (task, created, identity) = match candidate {
                 ImportCandidate::Create(issue) => {
                     let identity = format!("{}:{}#{}", project.tracker, issue.project, issue.id);
-                    let task = create_imported_task(board, &project, &issue, &mut reserved_ids)?;
+                    let task = create_imported_task(
+                        board,
+                        &project,
+                        &issue,
+                        &mut reserved_ids,
+                        &key_prefix,
+                        &mut next_key,
+                    )?;
                     (task, true, identity)
                 }
                 ImportCandidate::Link(issue, task) => {
@@ -2234,6 +2245,16 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
             }));
         }
         if !writes.is_empty() {
+            // Persist the key high-water mark only when Creates allocated keys.
+            if next_key != key_state.next_key {
+                crate::key::save(
+                    board,
+                    &crate::key::KeyState {
+                        prefix: key_prefix,
+                        next_key,
+                    },
+                )?;
+            }
             commit_warning = crate::mutation::commit(board, "orbit: import Remote Issues")?;
         }
     }
@@ -2296,6 +2317,8 @@ fn create_imported_task(
     project: &RemoteProject,
     issue: &RemoteIssue,
     reserved_ids: &mut std::collections::HashSet<String>,
+    key_prefix: &str,
+    next_key: &mut u64,
 ) -> Result<Task> {
     let id = loop {
         let id = task::generate_id(&board.config.id.prefix, board.config.id.length);
@@ -2331,6 +2354,12 @@ fn create_imported_task(
         front: crate::task::TaskFrontmatter {
             title: issue.title.trim().to_string(),
             status: issue.status.orbit_name(&board.workflow()?),
+            key: Some({
+                let key = format!("{key_prefix}-{}", *next_key);
+                *next_key += 1;
+                key
+            }),
+            key_aliases: Vec::new(),
             resolution: issue.status.is_terminal().then(|| match issue.status {
                 Status::Done => "completed".to_string(),
                 _ => "cancelled".to_string(),

@@ -39,6 +39,8 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
     }
 
     crate::mutation::create_task(board, &task)?;
+    // Persist the key high-water mark in the same commit as the new Task.
+    crate::key::persist(board, &graph)?;
 
     let priority = &task.front.priority;
     let title = &task.front.title;
@@ -47,11 +49,15 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
     } else {
         format!("{}  ", task.front.task_type)
     };
+    let display = task.display_id();
     let human = match &task.front.parent {
         Some(parent) => {
-            format!("created {id}  {priority}  {type_prefix}{title}  (subtask of {parent})")
+            format!(
+                "created {display}  {priority}  {type_prefix}{title}  (subtask of {})",
+                graph.display_id(parent)
+            )
         }
-        None => format!("created {id}  {priority}  {type_prefix}{title}"),
+        None => format!("created {display}  {priority}  {type_prefix}{title}"),
     };
     let warning = crate::mutation::commit(board, &format!("orbit: add {id}"))?;
     Ok(task_output(&graph, &task, human, warning).with_meta(json!({ "matched": false })))
@@ -128,18 +134,20 @@ pub(super) fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::outpu
     let (mut graph, _) = Graph::load(board, LoadMode::Lenient)?;
     let caller = optional_agent(args.by);
     let now = Utc::now();
+    // File removal needs the immutable internal ID, not a project key.
+    let id = graph.resolve(&args.id)?;
 
     graph
-        .get(&args.id)?
+        .get(&id)?
         .authorize_live(caller.as_deref(), args.force, now)?;
 
     let child_ids: Vec<String> = graph
-        .children(&args.id)
+        .children(&id)
         .iter()
         .map(|task| task.id.clone())
         .collect();
     if !child_ids.is_empty() && !args.force {
-        return Err(subtasks_exist_error(&args.id, &child_ids));
+        return Err(subtasks_exist_error(&id, &child_ids));
     }
 
     let mut deleted_ids = Vec::new();
@@ -147,23 +155,23 @@ pub(super) fn cmd_delete(board: &Board, args: DeleteArgs) -> Result<crate::outpu
     delete_subtree(
         board,
         &mut graph,
-        &args.id,
+        &id,
         args.force,
         now,
         &mut deleted_ids,
         &mut cleaned_ids,
     )?;
 
-    let warning = crate::mutation::commit(board, &format!("orbit: delete {}", args.id))?;
+    let warning = crate::mutation::commit(board, &format!("orbit: delete {id}"))?;
     let subtasks_deleted = deleted_ids.len().saturating_sub(1);
     let human = if subtasks_deleted == 0 {
-        format!("deleted {}", args.id)
+        format!("deleted {id}")
     } else {
-        format!("deleted {} and {} SubTask(s)", args.id, subtasks_deleted)
+        format!("deleted {id} and {} SubTask(s)", subtasks_deleted)
     };
     let mut output = crate::output::CommandOutput::new(
         json!({
-            "id": args.id,
+            "id": id,
             "deleted": true,
             "deleted_ids": deleted_ids,
             "cleaned": cleaned_ids,

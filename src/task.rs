@@ -473,6 +473,13 @@ pub fn validate_source_key(key: &str) -> Result<()> {
 struct RawFrontmatter {
     title: String,
     status: String,
+    /// The Issue's sequential project key (`ORB-12`); absent on Tasks that
+    /// predate keys or were never allocated one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    /// Former keys that still resolve to this Task after a Board-sync re-key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    key_aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resolution: Option<String>,
     #[serde(default = "default_task_type", rename = "type")]
@@ -592,6 +599,8 @@ impl From<RawFrontmatter> for TaskFrontmatter {
         Self {
             title: raw.title,
             status: raw.status,
+            key: raw.key,
+            key_aliases: raw.key_aliases,
             resolution: raw.resolution,
             task_type: raw.task_type,
             priority: raw.priority,
@@ -629,6 +638,8 @@ impl From<TaskFrontmatter> for RawFrontmatter {
         Self {
             title: front.title,
             status: front.status,
+            key: front.key,
+            key_aliases: front.key_aliases,
             resolution: front.resolution,
             task_type: front.task_type,
             priority: front.priority,
@@ -666,6 +677,15 @@ pub struct TaskFrontmatter {
     /// The workflow status name; resolved against the Board's
     /// [`crate::workflow::Workflow`] for its category.
     pub status: String,
+    /// The Issue's sequential project key (`ORB-12`), allocated under the
+    /// Board lock at creation. It is a handle, not the identity: the Task ID
+    /// (the file name) is immutable and never changes. A Board-sync key
+    /// collision re-keys the Issue and moves the old key into
+    /// `key_aliases` so it keeps resolving (ADR 0022).
+    pub key: Option<String>,
+    /// Former project keys that still resolve to this Task, recorded when a
+    /// Board sync re-keys it. Sorted and deduplicated.
+    pub key_aliases: Vec<String>,
     /// The resolution recorded by the closing transition that set `status`;
     /// cleared when the Task reopens or transitions to an open status.
     pub resolution: Option<String>,
@@ -719,6 +739,17 @@ pub struct Task {
 }
 
 impl Task {
+    /// The Issue's project key (`ORB-12`), when one was allocated.
+    pub fn key(&self) -> Option<&str> {
+        self.front.key.as_deref()
+    }
+
+    /// The handle humans and agents should quote: the project key when the
+    /// Task has one, the immutable Task ID otherwise.
+    pub fn display_id(&self) -> &str {
+        self.front.key.as_deref().unwrap_or(&self.id)
+    }
+
     pub fn parent_id(&self) -> Option<&str> {
         self.front.parent.as_deref()
     }
@@ -899,6 +930,29 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
         return Err(OrbitError::corrupt_task(format!(
             "task {id} has an empty status"
         )));
+    }
+    // Keys resolve case-insensitively; store the canonical uppercase form.
+    if let Some(key) = &mut front.key {
+        *key = key.to_uppercase();
+    }
+    for alias in &mut front.key_aliases {
+        *alias = alias.to_uppercase();
+    }
+    if let Some(key) = &front.key
+        && !crate::key::is_key_shaped(key)
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has invalid key `{key}`"
+        )));
+    }
+    front.key_aliases.sort();
+    front.key_aliases.dedup();
+    for alias in &front.key_aliases {
+        if !crate::key::is_key_shaped(alias) {
+            return Err(OrbitError::corrupt_task(format!(
+                "task {id} has invalid key alias `{alias}`"
+            )));
+        }
     }
     front.priority = front.priority.trim().to_lowercase();
     if !is_valid_label(&front.priority) {
@@ -1212,6 +1266,8 @@ mod tests {
             front: TaskFrontmatter {
                 title: "Build the CLI router".to_string(),
                 status: "todo".to_string(),
+                key: None,
+                key_aliases: Vec::new(),
                 resolution: None,
                 task_type: "task".to_string(),
                 priority: "high".to_string(),

@@ -73,6 +73,9 @@ pub fn add(
     };
     let parent = match new.parent {
         Some(parent_id) => {
+            // `parent` stores the immutable internal ID; a project key or
+            // alias resolves to it here.
+            let parent_id = graph.resolve(&parent_id)?;
             let parent_task = graph.get(&parent_id)?;
             if graph.workflow.is_terminal(&parent_task.front.status) {
                 return Err(OrbitError::invalid_argument(format!(
@@ -125,9 +128,8 @@ pub fn add(
     // blocking `waiting-on` link to an external reference.
     let mut links: Vec<task::Link> = Vec::new();
     for dep in new.depends_on {
-        if !graph.tasks.contains_key(&dep) {
-            return Err(OrbitError::not_found(&dep));
-        }
+        // Link targets store internal IDs; resolve keys and aliases first.
+        let dep = graph.resolve(&dep)?;
         let link = task::Link::dependency(&dep);
         if !links.contains(&link) {
             links.push(link);
@@ -177,12 +179,17 @@ pub fn add(
         task::validate_property(owner, value)?;
     }
     let id = generate_unique_id(graph, board)?;
+    // The sequential project key is allocated under the same exclusive Board
+    // lock the caller holds; `keys.toml` persists the high-water mark.
+    let key = crate::key::allocate(graph, board)?;
 
     let task = Task {
         id: id.clone(),
         front: TaskFrontmatter {
             title,
             status: graph.workflow.initial_status().to_string(),
+            key: Some(key),
+            key_aliases: Vec::new(),
             resolution: None,
             task_type,
             priority,
@@ -474,7 +481,15 @@ pub fn label(
 /// Adds a typed link from `id` to `link.target`. An identical link is
 /// unchanged (`Ok(false)`). Blocking links to Orbit Tasks reject cycles and
 /// links on terminal Tasks; non-blocking links only need the target to exist.
-pub fn link(graph: &mut Graph, id: &str, link: task::Link, now: DateTime<Utc>) -> Result<bool> {
+pub fn link(graph: &mut Graph, id: &str, mut link: task::Link, now: DateTime<Utc>) -> Result<bool> {
+    // Both ends store immutable internal IDs; resolve project keys and
+    // aliases before any check or write.
+    let resolved_id = graph.resolve(id)?;
+    let id = resolved_id.as_str();
+    if let Some(target) = link.target_task() {
+        let resolved = graph.resolve(target)?;
+        link.target = task::LinkTarget::Task(resolved);
+    }
     {
         let task = graph.get(id)?;
         if let Some(target) = link.target_task() {
@@ -529,7 +544,11 @@ pub fn unlink(
     target: &task::LinkTarget,
     now: DateTime<Utc>,
 ) -> Result<bool> {
-    Ok(graph.get_mut(id)?.remove_links(kind, target, now))
+    let target = match target {
+        task::LinkTarget::Task(target) => task::LinkTarget::Task(graph.resolve(target)?),
+        other => other.clone(),
+    };
+    Ok(graph.get_mut(id)?.remove_links(kind, &target, now))
 }
 
 /// Makes `id` wait for `on` through a blocking `blocks` link.
@@ -592,7 +611,8 @@ pub fn link_attributes(pairs: &[String]) -> Result<BTreeMap<String, serde_yaml_n
 
 /// Removes blocking links from `id` to `on`. Non-blocking links stay.
 pub fn undepend(graph: &mut Graph, id: &str, on: &str, now: DateTime<Utc>) -> Result<bool> {
-    let target = task::LinkTarget::Task(on.to_string());
+    let on = graph.resolve(on)?;
+    let target = task::LinkTarget::Task(on);
     let task = graph.get_mut(id)?;
     let before = task.front.links.len();
     task.front

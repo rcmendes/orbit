@@ -202,10 +202,11 @@ struct Applier<'a> {
 }
 
 impl Applier<'_> {
-    /// A Task ID from a reference, resolving `key:` against this Batch, then the Board.
+    /// A Task ID from a reference, resolving `key:` against this Batch, then
+    /// the Board's Source Keys, project keys, and aliases.
     fn resolve(&self, reference: &str) -> Result<String> {
         let Some(key) = reference.strip_prefix(KEY_PREFIX) else {
-            return Ok(reference.to_string());
+            return self.graph.resolve(reference);
         };
         if let Some(id) = self.keys.get(key) {
             return Ok(id.clone());
@@ -625,6 +626,10 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
         for (id, author, body) in &run.comments {
             crate::mutation::append_comment(board, id, author, body, Utc::now())?;
         }
+        // Persist the key high-water mark with the Batch's Task files.
+        if !run.created.is_empty() {
+            crate::key::persist(board, &run.graph)?;
+        }
         // Commit even when nothing was written now: a re-run after a crash
         // before the commit must publish the files the first run left behind.
         if !heartbeat_only {
@@ -667,6 +672,8 @@ mod tests {
             front: TaskFrontmatter {
                 title: id.to_string(),
                 status: "todo".to_string(),
+                key: None,
+                key_aliases: Vec::new(),
                 resolution: None,
                 task_type: "task".to_string(),
                 priority: "medium".to_string(),

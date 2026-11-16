@@ -600,7 +600,7 @@ fn human_output_is_available_without_json() {
     let output = repo.orbit(&["add", "Human task"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("created orb-"), "{stdout}");
+    assert!(stdout.contains("created ORB-"), "{stdout}");
 
     let output = repo.orbit(&["ready"]);
     assert!(output.status.success());

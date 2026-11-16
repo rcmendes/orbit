@@ -182,7 +182,7 @@ fn tool_definitions() -> Vec<Value> {
         tool(
             "get",
             "Read one task, including its Markdown body and dependents.",
-            json!({ "id": { "type": "string", "description": "Task id, for example orb-a7b2c9." } }),
+            json!({ "id": { "type": "string", "description": "Task ID or project key, for example orb-a7b2c9 or ORB-12." } }),
             &["id"],
         ),
         tool(
@@ -309,7 +309,7 @@ fn tool_definitions() -> Vec<Value> {
             "Add, remove, or list typed links. Without `type`/`external`, add/remove manage the blocking `blocks` link between two tasks (depend/undepend).",
             json!({
                 "id": { "type": "string" },
-                "dep_id": { "type": "string", "description": "Orbit Task ID target; omit when `external` is given or action is `list`." },
+                "dep_id": { "type": "string", "description": "Orbit Task ID or project key target; omit when `external` is given or action is `list`." },
                 "external": { "type": "string", "description": "External reference target as SYSTEM:ID, for example jira:PROJ-123." },
                 "action": { "type": "string", "enum": ["add", "remove", "list"] },
                 "type": { "type": "string", "description": "Link type: blocks, relates-to, duplicates, discovered-from, or a custom slug. Defaults to blocks for task targets." },

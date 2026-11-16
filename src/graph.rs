@@ -95,6 +95,12 @@ pub struct Counts {
 
 pub struct Graph {
     pub tasks: HashMap<String, Task>,
+    /// Normalized project key (`ORB-12`) → Task ID. Live keys only; aliases
+    /// live in `aliases` and never shadow a live key (ADR 0022).
+    keys: HashMap<String, String>,
+    /// Normalized former key → Task ID, recorded when a Board sync re-keys
+    /// an Issue. Consulted only after `keys` misses.
+    aliases: HashMap<String, String>,
     non_ready_labels: Vec<String>,
     /// The Board's Issue model: type vocabulary, required fields, and the
     /// ordered parent hierarchy (ADR 0022).
@@ -127,16 +133,41 @@ impl Graph {
         non_ready_labels: Vec<String>,
         workflow: Workflow,
     ) -> Self {
+        let tasks: HashMap<String, Task> = tasks
+            .into_iter()
+            .map(|task| (task.id.clone(), task))
+            .collect();
+        let (keys, aliases) = Self::build_key_indices(&tasks);
         Self {
-            tasks: tasks
-                .into_iter()
-                .map(|task| (task.id.clone(), task))
-                .collect(),
+            tasks,
+            keys,
+            aliases,
             non_ready_labels,
             hierarchy: Hierarchy::default(),
             workflow,
             priorities: task::default_priorities(),
         }
+    }
+
+    /// Key and alias lookup tables, built in Task-ID order so duplicate
+    /// entries resolve deterministically (the first Task ID wins; `validate`
+    /// reports the duplication).
+    fn build_key_indices(
+        tasks: &HashMap<String, Task>,
+    ) -> (HashMap<String, String>, HashMap<String, String>) {
+        let mut ordered: Vec<&Task> = tasks.values().collect();
+        ordered.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut keys = HashMap::new();
+        let mut aliases = HashMap::new();
+        for task in ordered {
+            for (key, id) in crate::key::key_entries(task) {
+                keys.entry(key).or_insert(id);
+            }
+            for (alias, id) in crate::key::alias_entries(task) {
+                aliases.entry(alias).or_insert(id);
+            }
+        }
+        (keys, aliases)
     }
 
     /// A Priority's ordinal in the Board's ordered list: lower sorts first.
@@ -219,8 +250,11 @@ impl Graph {
         }
 
         let workflow = board.workflow()?;
+        let (keys, aliases) = Self::build_key_indices(&tasks);
         let graph = Self {
             tasks,
+            keys,
+            aliases,
             non_ready_labels: board.config.board.non_ready_labels.clone(),
             hierarchy: Hierarchy::from_config(&board.config.board)?,
             workflow,
@@ -238,8 +272,39 @@ impl Graph {
         Ok((graph, issues))
     }
 
+    /// Resolves a user-supplied reference to the immutable internal Task ID:
+    /// an internal ID passes through, a live project key (`ORB-12`, any
+    /// case) wins next, and a recorded key alias resolves last — an alias
+    /// never shadows another Task's live key (ADR 0022).
+    pub fn resolve(&self, reference: &str) -> Result<String> {
+        if self.tasks.contains_key(reference) {
+            return Ok(reference.to_string());
+        }
+        let normalized = crate::key::normalize(reference);
+        if let Some(id) = self.keys.get(&normalized) {
+            return Ok(id.clone());
+        }
+        if let Some(id) = self.aliases.get(&normalized) {
+            return Ok(id.clone());
+        }
+        Err(OrbitError::not_found(reference))
+    }
+
+    /// The display handle for a Task ID or reference: its project key when
+    /// it has one, the ID otherwise. Unresolvable references render as given.
+    pub fn display_id(&self, reference: &str) -> String {
+        self.resolve(reference)
+            .ok()
+            .and_then(|id| self.tasks.get(&id))
+            .map(|task| task.display_id().to_string())
+            .unwrap_or_else(|| reference.to_string())
+    }
+
     pub fn get(&self, id: &str) -> Result<&Task> {
-        self.tasks.get(id).ok_or_else(|| OrbitError::not_found(id))
+        let resolved = self.resolve(id)?;
+        self.tasks
+            .get(resolved.as_str())
+            .ok_or_else(|| OrbitError::not_found(id))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Task> {
@@ -247,19 +312,31 @@ impl Graph {
     }
 
     pub fn get_mut(&mut self, id: &str) -> Result<&mut Task> {
+        let resolved = self.resolve(id)?;
         self.tasks
-            .get_mut(id)
+            .get_mut(resolved.as_str())
             .ok_or_else(|| OrbitError::not_found(id))
     }
 
-    /// Inserts a Task keyed by its own id so the map cannot be desynced.
+    /// Inserts a Task keyed by its own id so the map cannot be desynced, and
+    /// registers its project key and aliases for resolution.
     pub fn insert(&mut self, task: Task) {
+        for (key, id) in crate::key::key_entries(&task) {
+            self.keys.entry(key).or_insert(id);
+        }
+        for (alias, id) in crate::key::alias_entries(&task) {
+            self.aliases.entry(alias).or_insert(id);
+        }
         self.tasks.insert(task.id.clone(), task);
     }
 
-    /// Removes and returns the Task, if present.
+    /// Removes and returns the Task, if present. Key indices are rebuilt so
+    /// a deleted Task's keys and aliases stop resolving.
     pub fn remove(&mut self, id: &str) -> Option<Task> {
-        self.tasks.remove(id)
+        let resolved = self.resolve(id).ok()?;
+        let task = self.tasks.remove(resolved.as_str())?;
+        (self.keys, self.aliases) = Self::build_key_indices(&self.tasks);
+        Some(task)
     }
 
     pub fn validate(&self) -> Vec<Issue> {
@@ -351,6 +428,28 @@ impl Graph {
                     }
                 }
             }
+        }
+
+        for key in crate::key::duplicate_keys(self) {
+            let carriers: Vec<&str> = self
+                .tasks
+                .values()
+                .filter(|task| {
+                    task.front
+                        .key
+                        .as_deref()
+                        .is_some_and(|candidate| crate::key::normalize(candidate) == key)
+                })
+                .map(|task| task.id.as_str())
+                .collect();
+            issues.push(Issue::new(
+                code::DUPLICATE_KEY,
+                carriers.first().copied(),
+                format!(
+                    "project key {key} is on more than one task: {}",
+                    carriers.join(", ")
+                ),
+            ));
         }
 
         if let Some(cycle) = self.find_parent_cycle() {
@@ -494,8 +593,11 @@ impl Graph {
             .collect()
     }
 
-    /// Tasks holding any link that targets `id`, whatever its type.
+    /// Tasks holding any link that targets `id`, whatever its type. `id`
+    /// may be an internal ID, project key, or alias.
     pub fn dependents(&self, id: &str) -> Vec<&Task> {
+        let resolved = self.resolve(id).unwrap_or_else(|_| id.to_string());
+        let id = resolved.as_str();
         let mut dependents: Vec<&Task> = self
             .tasks
             .values()
@@ -525,6 +627,8 @@ impl Graph {
     }
 
     pub fn children(&self, id: &str) -> Vec<&Task> {
+        let resolved = self.resolve(id).unwrap_or_else(|_| id.to_string());
+        let id = resolved.as_str();
         let mut children: Vec<&Task> = self
             .tasks
             .values()
@@ -565,6 +669,8 @@ impl Graph {
     /// Every ancestor of `id`, nearest parent first. Stops at a missing Task
     /// or a parent cycle.
     pub fn ancestors(&self, id: &str) -> Vec<String> {
+        let resolved = self.resolve(id).unwrap_or_else(|_| id.to_string());
+        let id = resolved.as_str();
         let mut ancestors = Vec::new();
         let mut seen = HashSet::from([id.to_string()]);
         let mut current = id;
@@ -584,6 +690,8 @@ impl Graph {
     /// Every descendant of `id` in depth-first order: each SubTask is listed
     /// before its own SubTasks, and siblings keep `children` order.
     pub fn descendants(&self, id: &str) -> Vec<String> {
+        let resolved = self.resolve(id).unwrap_or_else(|_| id.to_string());
+        let id = resolved.as_str();
         fn visit(graph: &Graph, id: &str, seen: &mut HashSet<String>, out: &mut Vec<String>) {
             for child in graph.children(id) {
                 if seen.insert(child.id.clone()) {
@@ -675,6 +783,12 @@ impl Graph {
     }
 
     pub fn would_create_cycle(&self, task_id: &str, dep_id: &str) -> Option<Vec<String>> {
+        let task_id = self
+            .resolve(task_id)
+            .unwrap_or_else(|_| task_id.to_string());
+        let dep_id = self.resolve(dep_id).unwrap_or_else(|_| dep_id.to_string());
+        let task_id = task_id.as_str();
+        let dep_id = dep_id.as_str();
         if task_id == dep_id {
             return Some(vec![task_id.to_string(), dep_id.to_string()]);
         }
@@ -928,7 +1042,7 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         serde_json::Value::String(waiting_labels.join(", "))
     };
 
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "id": task.id,
         "title": task.front.title,
         "status": task.front.status,
@@ -981,7 +1095,10 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "updated_at": task.front.updated_at,
         "ready": graph.is_ready(task),
         "blocking": graph.blocking_ids(task),
-    })
+    });
+    value["key"] = serde_json::json!(task.front.key);
+    value["key_aliases"] = serde_json::json!(task.front.key_aliases);
+    value
 }
 
 pub fn task_detail(graph: &Graph, task: &Task) -> serde_json::Value {
@@ -1022,6 +1139,8 @@ mod tests {
             front: TaskFrontmatter {
                 title: id.to_string(),
                 status: status.to_string(),
+                key: None,
+                key_aliases: Vec::new(),
                 resolution: None,
                 task_type: "task".to_string(),
                 priority: default_priority(),

@@ -231,7 +231,7 @@ pub(super) fn cmd_ready(
 pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.id)?;
-    let comments = board.read_comments(&args.id)?;
+    let comments = board.read_comments(&task.id)?;
     let remote = crate::remote::details_visible(board, &graph);
     Ok(crate::output::CommandOutput::new(
         graph::task_detail_with_comments(&graph, task, &comments),
@@ -438,7 +438,7 @@ pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> 
 
     let task_count = tasks.len();
     let snapshot = json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "board": {
             "branch": board.config.board.branch,
             "prefix": board.config.id.prefix,
@@ -449,7 +449,7 @@ pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> 
     });
     Ok(crate::output::CommandOutput::new(
         snapshot,
-        format!("exported {task_count} tasks and {comment_count} comments (schema 4)"),
+        format!("exported {task_count} tasks and {comment_count} comments (schema 5)"),
     ))
 }
 

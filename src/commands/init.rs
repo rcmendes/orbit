@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use crate::cli::InitArgs;
+use crate::graph::LoadMode;
 use crate::slug;
 
 use super::*;
@@ -993,6 +994,10 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
     for (path, bytes) in tasks.into_iter().chain(comments) {
         crate::atomic::write_atomic(&path, &bytes, false)?;
     }
+    // Child Boards can carry the same project keys (`ORB-1`, …); keep the
+    // lowest internal ID on each contested key, re-key the rest, and record
+    // the old key as an alias — the same rule Board sync applies (ADR 0022).
+    notes.extend(resolve_merged_key_collisions(board)?);
     board.save_config("orbit: merge child Board prefixes", |current| {
         current.id.accepted_prefixes = config.id.accepted_prefixes;
         Ok(())
@@ -1001,6 +1006,37 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
         relocate_child_board(anchor, child)?;
     }
     board.commit("orbit: merge child Boards", false)?;
+    Ok(notes)
+}
+
+/// Re-key project-key collisions the child-Board merge just wrote, and
+/// persist the raised `keys.toml` high-water mark. Runs under the exclusive
+/// Board lock `apply_child_merge` already holds.
+fn resolve_merged_key_collisions(board: &Board) -> Result<Vec<String>> {
+    let (graph, _) = Graph::load(board, LoadMode::Lenient)?;
+    if crate::key::duplicate_keys(&graph).is_empty() {
+        return Ok(Vec::new());
+    }
+    let state = crate::key::load(board)?;
+    let mut next = state.next_key.max(crate::key::max_number(&graph) + 1);
+    let mut tasks = graph.tasks;
+    let rekeyed = crate::key::rekey_collisions(&mut tasks, &state.prefix, &mut next);
+    let mut notes = Vec::with_capacity(rekeyed.len());
+    for (id, old, new_key) in rekeyed {
+        let task = tasks.get(&id).expect("a re-keyed Task is present");
+        let content = crate::task::render_task(task)?;
+        crate::atomic::write_atomic(&board.task_path(&id), content.as_bytes(), false)?;
+        notes.push(format!(
+            "re-keyed {old} to {new_key}: the key is held by another Issue after the Board merge"
+        ));
+    }
+    crate::key::save(
+        board,
+        &crate::key::KeyState {
+            prefix: state.prefix,
+            next_key: next,
+        },
+    )?;
     Ok(notes)
 }
 

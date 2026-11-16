@@ -84,8 +84,12 @@ The `epic` label is legacy: Orbit does not infer `type: epic` from it, and
   `heartbeat`, `done`, `cancel`, and `comment` (for example `--by opencode`).
 - Never edit task files or YAML frontmatter directly. State, label, and comment
   changes go through the CLI.
-- `orbit ready --json` returns `data.tasks`, each with `id`, `title`, `priority`,
-  `labels`, `blocking`, and claim fields.
+- `orbit ready --json` returns `data.tasks`, each with `id`, `key`, `title`,
+  `priority`, `labels`, `blocking`, and claim fields.
+- Every Issue has a sequential project key (`ORB-12`) allocated at creation;
+  it resolves anywhere a Task ID does (`orbit show ORB-12`, `--parent ORB-3`),
+  case-insensitively. The immutable `id` in JSON remains the file name; `key`
+  and `key_aliases` carry the handles. Human `list`/`show` lead with the key.
 - `orbit show <ID> --json` returns the full task, including `body`, `labels`,
   `kind`, `type`, `component`, `verification`, `parent`, `subtasks`, `dependents`, and `comments`.
 - `orbit list` prints an aligned table for humans. When the Board has remote

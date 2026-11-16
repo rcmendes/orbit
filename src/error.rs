@@ -34,6 +34,7 @@ pub mod code {
     pub const DUPLICATE_SOURCE_KEY: &str = "DUPLICATE_SOURCE_KEY";
     pub const INVALID_EXTERNAL_ID: &str = "INVALID_EXTERNAL_ID";
     pub const DUPLICATE_EXTERNAL_ID: &str = "DUPLICATE_EXTERNAL_ID";
+    pub const DUPLICATE_KEY: &str = "DUPLICATE_KEY";
     pub const LABEL_BLOCKED: &str = "LABEL_BLOCKED";
     pub const CORRUPT_COMMENT: &str = "CORRUPT_COMMENT";
     pub const ORPHAN_COMMENT: &str = "ORPHAN_COMMENT";

@@ -349,6 +349,15 @@ impl TestRepo {
         std::fs::read_to_string(self.task_path(id)).unwrap()
     }
 
+    /// The Issue's project key (`ORB-12`) as `show --json` reports it; the
+    /// immutable internal ID remains `id`. Human output leads with the key.
+    pub fn key(&self, id: &str) -> String {
+        self.ok_json(&["show", id, "--json"])["data"]["key"]
+            .as_str()
+            .unwrap_or_else(|| panic!("show {id} returned no key"))
+            .to_string()
+    }
+
     pub fn read(&self, relative: &str) -> String {
         std::fs::read_to_string(self.path().join(relative)).unwrap()
     }

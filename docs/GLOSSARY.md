@@ -71,6 +71,14 @@ _Avoid_: Transaction, script, bulk edit
 An optional caller-chosen string that names a Task in the system that asked for it. It is unique per Board; adding a Task with a Source Key that already exists returns that Task instead of creating another, so a retried add creates no duplicate.
 _Avoid_: External ID, idempotency token, alias
 
+**Project key**:
+The Issue's sequential human handle, `PREFIX-N` such as `ORB-12`, allocated under the exclusive Board lock at creation and persisted in `keys.toml`. It resolves anywhere a Task ID does — `orbit show ORB-12` works — but it is a handle, not the identity: the Task ID (the file name) is immutable and never changes. Tasks that predate keys have none.
+_Avoid_: Task ID, slug, issue number
+
+**Key alias**:
+A former project key recorded on a Task's `key_aliases` when a Board sync re-keys it after a cross-clone key collision. An alias resolves only when no live key claims it, so the old key keeps reaching the Issue.
+_Avoid_: Redirect, rename
+
 **Property**:
 Structured data that one tool attaches to a Task under the tool's name, its owner. Orbit stores, returns, and shows it but never interprets it: a Property never affects Ready, Blocked, Claim eligibility, or Status, and it is never synchronized with a Remote Tracker.
 _Avoid_: Metadata, custom field, namespace, extra

@@ -34,7 +34,7 @@ fn properties_appear_in_show_list_and_export() {
     );
 
     let export = repo.ok_json(&["export", "--json"]);
-    assert_eq!(export["data"]["schema_version"], 4);
+    assert_eq!(export["data"]["schema_version"], 5);
     assert_eq!(
         export["data"]["tasks"][0]["properties"],
         json!({"ci": {"passed": true}})

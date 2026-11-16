@@ -269,15 +269,18 @@ imported:
 The `epic` label is legacy. Orbit does not infer `type: epic` from it, and
 `--exclude-label epic` still works for boards created before the Type field.
 
-See [ADR 0009](./adr/0009-keep-task-vocabulary.md) for why Orbit keeps its own
-vocabulary and translates at the boundary, and [ADR 0010](./adr/0010-structural-type-field.md)
-for the Type field.
+See [ADR 0022](./adr/0022-issue-model-and-platform-architecture.md), which
+supersedes [ADR 0009](./adr/0009-keep-task-vocabulary.md): the platform rebuild
+makes **Issue** the canonical vocabulary, with Issue types and a configurable
+hierarchy replacing Task/SubTask. [ADR 0010](./adr/0010-structural-type-field.md)
+records the earlier Type field.
 
 ## See also
 
 - [`SPEC.md`](./SPEC.md) for behavior, commands, and the JSON contract.
 - [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
-- [`docs/adr/0009-keep-task-vocabulary.md`](./adr/0009-keep-task-vocabulary.md) for the Task/Issue naming decision.
+- [`docs/adr/0009-keep-task-vocabulary.md`](./adr/0009-keep-task-vocabulary.md) for the Task/Issue naming decision (superseded by ADR 0022).
+- [`docs/adr/0022-issue-model-and-platform-architecture.md`](./adr/0022-issue-model-and-platform-architecture.md) for the platform rebuild: Issue vocabulary, workflow, keys, and layering.
 - [`docs/adr/0010-structural-type-field.md`](./adr/0010-structural-type-field.md) for the Type field.
 - [`docs/adr/0012-orbit-folder.md`](./adr/0012-orbit-folder.md) for the Orbit folder, storage modes, discovery, and legacy migration.
 - [`docs/adr/0013-claim-checkpoints.md`](./adr/0013-claim-checkpoints.md) for checkpoint storage and lifecycle.

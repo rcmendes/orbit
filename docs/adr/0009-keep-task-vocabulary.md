@@ -4,8 +4,14 @@
 > Orbit still keeps Task, SubTask, and Parent Task and still introduces no new
 > kind; what changed is that nesting depth is a per-Board setting
 > (`board.max_subtask_depth`, default one level) rather than a fixed rule.
+>
+> **Superseded by [ADR 0022](./0022-issue-model-and-platform-architecture.md).**
+> Task is renamed to Issue across storage, JSON, MCP, and the CLI; Issue types
+> and a configurable hierarchy replace the Task/SubTask structure. This
+> document is kept for history.
 
-- Status: Accepted
+- Status: Superseded by [ADR 0022](./0022-issue-model-and-platform-architecture.md) —
+  Issue becomes the canonical vocabulary.
 - Date: 2026-10-24
 
 ## Context

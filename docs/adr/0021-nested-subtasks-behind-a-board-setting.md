@@ -4,6 +4,11 @@ status: accepted
 
 # ADR 0021: Nested SubTasks behind a Board setting
 
+> **Superseded in part by [ADR 0022](./0022-issue-model-and-platform-architecture.md):**
+> `board.max_subtask_depth` and the structural SubTask kind are replaced by
+> Issue types and a configurable hierarchy; the nesting-depth idea survives as
+> the hierarchy's configurable maximum depth.
+
 Board owners want a hierarchy like Jira's epic, story, and sub-task or Linear's
 sub-issues: a Task, its SubTasks, and their SubTasks. ADR 0007 fixed SubTasks
 at one level deep and ADR 0009 cited that fixed rule as a reason Orbit's

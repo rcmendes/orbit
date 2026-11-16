@@ -47,9 +47,12 @@ enum Operation {
         reporter: Option<String>,
         #[serde(default)]
         properties: BTreeMap<String, Value>,
+        /// Rejected: an `add` creates the Task, so there is no version yet.
+        if_version: Option<String>,
     },
     Update {
         id: String,
+        if_version: Option<String>,
         title: Option<String>,
         body: Option<String>,
         priority: Option<String>,
@@ -73,6 +76,7 @@ enum Operation {
     },
     Label {
         id: String,
+        if_version: Option<String>,
         #[serde(default)]
         add: Vec<String>,
         #[serde(default)]
@@ -80,14 +84,17 @@ enum Operation {
     },
     Depend {
         id: String,
+        if_version: Option<String>,
         on: String,
     },
     Undepend {
         id: String,
+        if_version: Option<String>,
         on: String,
     },
     Link {
         id: String,
+        if_version: Option<String>,
         #[serde(rename = "type")]
         kind: Option<String>,
         to: Option<String>,
@@ -100,6 +107,7 @@ enum Operation {
     },
     Unlink {
         id: String,
+        if_version: Option<String>,
         #[serde(rename = "type")]
         kind: Option<String>,
         to: Option<String>,
@@ -107,6 +115,7 @@ enum Operation {
     },
     Claim {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         kind: Option<crate::task::IdentityKind>,
         #[serde(default)]
@@ -114,6 +123,7 @@ enum Operation {
     },
     Assign {
         id: String,
+        if_version: Option<String>,
         to: String,
         kind: Option<crate::task::IdentityKind>,
         #[serde(default)]
@@ -121,16 +131,19 @@ enum Operation {
     },
     Heartbeat {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
     },
     Release {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         #[serde(default)]
         force: bool,
     },
     Done {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         comment: Option<String>,
         #[serde(default)]
@@ -138,6 +151,7 @@ enum Operation {
     },
     Cancel {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         comment: Option<String>,
         #[serde(default)]
@@ -145,11 +159,13 @@ enum Operation {
     },
     Reopen {
         id: String,
+        if_version: Option<String>,
         #[serde(default)]
         force: bool,
     },
     Transition {
         id: String,
+        if_version: Option<String>,
         name: String,
         by: Option<String>,
         #[serde(default)]
@@ -157,11 +173,13 @@ enum Operation {
     },
     Comment {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         body: String,
     },
     Property {
         id: String,
+        if_version: Option<String>,
         owner: String,
         value: Option<Value>,
     },
@@ -199,9 +217,33 @@ struct Applier<'a> {
     keys: BTreeMap<String, String>,
     comments: Vec<(String, String, String)>,
     default_by: Option<String>,
+    /// `updated_at` of every Task as the Batch found it; `if_version`
+    /// compares against this snapshot, not the in-memory state earlier
+    /// operations may already have touched.
+    versions: HashMap<String, chrono::DateTime<Utc>>,
 }
 
 impl Applier<'_> {
+    /// `if_version` guards the Task's `updated_at` as of batch start. The
+    /// `id` is the resolved internal ID.
+    fn check_version(&self, id: &str, expected: Option<&str>) -> Result<()> {
+        let Some(expected) = expected else {
+            return Ok(());
+        };
+        let expected_at = crate::concurrency::parse_version(expected)?;
+        match self.versions.get(id) {
+            Some(actual) if *actual == expected_at => Ok(()),
+            Some(actual) => Err(crate::concurrency::version_conflict(
+                id,
+                expected_at,
+                *actual,
+            )),
+            None => Err(OrbitError::invalid_argument(format!(
+                "if_version cannot guard {id}: the Task did not exist when the batch started"
+            ))),
+        }
+    }
+
     /// A Task ID from a reference, resolving `key:` against this Batch, then
     /// the Board's Source Keys, project keys, and aliases.
     fn resolve(&self, reference: &str) -> Result<String> {
@@ -251,7 +293,13 @@ impl Applier<'_> {
                 external_id,
                 reporter,
                 properties,
+                if_version,
             } => {
+                if if_version.is_some() {
+                    return Err(OrbitError::invalid_argument(
+                        "if_version does not apply to `add`; the Task does not exist yet",
+                    ));
+                }
                 let parent = parent.map(|p| self.resolve(&p)).transpose()?;
                 let depends_on = depends_on
                     .iter()
@@ -303,8 +351,10 @@ impl Applier<'_> {
                 clear_repository,
                 external_id,
                 clear_external_id,
+                if_version,
             } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let field = |value: Option<String>, clear: bool| {
                     if clear {
                         FieldUpdate::Clear
@@ -326,23 +376,32 @@ impl Applier<'_> {
                 let changed = crate::ops::update(&mut self.graph, self.board, &id, change, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Label { id, add, remove } => {
+            Operation::Label {
+                id,
+                if_version,
+                add,
+                remove,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let changed = crate::ops::label(&mut self.graph, &id, &add, &remove, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Depend { id, on } => {
+            Operation::Depend { id, if_version, on } => {
                 let (id, on) = (self.resolve(&id)?, self.resolve(&on)?);
+                self.check_version(&id, if_version.as_deref())?;
                 let changed = crate::ops::depend(&mut self.graph, &id, &on, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Undepend { id, on } => {
+            Operation::Undepend { id, if_version, on } => {
                 let (id, on) = (self.resolve(&id)?, self.resolve(&on)?);
+                self.check_version(&id, if_version.as_deref())?;
                 let changed = crate::ops::undepend(&mut self.graph, &id, &on, now)?;
                 Ok((id, changed, false))
             }
             Operation::Link {
                 id,
+                if_version,
                 kind,
                 to,
                 external,
@@ -351,6 +410,7 @@ impl Applier<'_> {
                 attributes,
             } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let to = to.map(|target| self.resolve(&target)).transpose()?;
                 let kind = crate::task::normalize_link_kind(
                     kind.as_deref().unwrap_or(crate::task::LINK_TYPE_RELATES_TO),
@@ -372,11 +432,13 @@ impl Applier<'_> {
             }
             Operation::Unlink {
                 id,
+                if_version,
                 kind,
                 to,
                 external,
             } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let to = to.map(|target| self.resolve(&target)).transpose()?;
                 let kind = kind
                     .as_deref()
@@ -389,11 +451,13 @@ impl Applier<'_> {
             }
             Operation::Claim {
                 id,
+                if_version,
                 by,
                 kind,
                 steal,
             } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let by = self.agent(by)?;
                 let changed = crate::ops::claim(
                     &mut self.graph,
@@ -408,11 +472,13 @@ impl Applier<'_> {
             }
             Operation::Assign {
                 id,
+                if_version,
                 to,
                 kind,
                 force,
             } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let changed = crate::ops::assign(
                     &mut self.graph,
                     &id,
@@ -423,38 +489,60 @@ impl Applier<'_> {
                 )?;
                 Ok((id, changed, false))
             }
-            Operation::Heartbeat { id, by } => {
+            Operation::Heartbeat { id, if_version, by } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let by = self.agent(by)?;
                 let changed = crate::ops::heartbeat(&mut self.graph, self.board, &id, &by, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Release { id, by, force } => {
+            Operation::Release {
+                id,
+                if_version,
+                by,
+                force,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let by = self.optional(by);
                 let changed = crate::ops::release(&mut self.graph, &id, by.as_deref(), force, now)?;
                 Ok((id, changed, false))
             }
             Operation::Done {
                 id,
-                by,
-                comment,
-                force,
-            } => self.finish(id, by, comment, force, crate::mutation::TerminalKind::Done),
-            Operation::Cancel {
-                id,
+                if_version,
                 by,
                 comment,
                 force,
             } => self.finish(
                 id,
+                if_version,
+                by,
+                comment,
+                force,
+                crate::mutation::TerminalKind::Done,
+            ),
+            Operation::Cancel {
+                id,
+                if_version,
+                by,
+                comment,
+                force,
+            } => self.finish(
+                id,
+                if_version,
                 by,
                 comment,
                 force,
                 crate::mutation::TerminalKind::Cancelled,
             ),
-            Operation::Reopen { id, force } => {
+            Operation::Reopen {
+                id,
+                if_version,
+                force,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 // An open Task is already where reopen leads; a re-run must not fail on it.
                 if !self
                     .graph
@@ -468,11 +556,13 @@ impl Applier<'_> {
             }
             Operation::Transition {
                 id,
+                if_version,
                 name,
                 by,
                 force,
             } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let caller = self.optional(by);
                 let outcome = crate::ops::transition(
                     &mut self.graph,
@@ -484,15 +574,27 @@ impl Applier<'_> {
                 )?;
                 Ok((id, outcome == crate::transition::Outcome::Changed, false))
             }
-            Operation::Comment { id, by, body } => {
+            Operation::Comment {
+                id,
+                if_version,
+                by,
+                body,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 self.graph.get(&id)?;
                 let author = self.agent(by)?;
                 self.queue_comment(&id, author, body)?;
                 Ok((id, true, false))
             }
-            Operation::Property { id, owner, value } => {
+            Operation::Property {
+                id,
+                if_version,
+                owner,
+                value,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let changed = crate::ops::property(&mut self.graph, &id, &owner, value, now)?;
                 Ok((id, changed, false))
             }
@@ -502,12 +604,14 @@ impl Applier<'_> {
     fn finish(
         &mut self,
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         comment: Option<String>,
         force: bool,
         kind: crate::mutation::TerminalKind,
     ) -> Result<(String, bool, bool)> {
         let id = self.resolve(&id)?;
+        self.check_version(&id, if_version.as_deref())?;
         let caller = self.optional(by.clone());
         if let Some(body) = comment {
             let author = self.agent(by)?;
@@ -577,6 +681,11 @@ fn read_input(file: &str) -> Result<BatchInput> {
 pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output::CommandOutput> {
     let input = read_input(&args.file)?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let versions: HashMap<String, chrono::DateTime<Utc>> = graph
+        .tasks
+        .iter()
+        .map(|(id, task)| (id.clone(), task.front.updated_at))
+        .collect();
     let before: HashMap<String, String> = graph
         .tasks
         .iter()
@@ -595,6 +704,7 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
         comments: Vec::new(),
         created: Vec::new(),
         default_by: args.by,
+        versions,
     };
     let mut results = Vec::with_capacity(input.operations.len());
     for (index, operation) in input.operations.into_iter().enumerate() {

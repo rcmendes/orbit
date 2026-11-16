@@ -145,6 +145,7 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
 pub(super) fn cmd_ready(
     board: &Board,
     mut args: ReadyArgs,
+    if_version: Option<&str>,
 ) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     if let Some(parent) = args.parent.as_deref() {
@@ -181,6 +182,20 @@ pub(super) fn cmd_ready(
         }
 
         let id = ready[0].id.clone();
+        // `--if-version` guards the Task `ready` picked: the caller read its
+        // `updated_at` from `orbit show`/`list` and the pick must be
+        // unchanged since. Checked inside the same exclusive scope.
+        if let Some(expected) = if_version {
+            let expected_at = crate::concurrency::parse_version(expected)?;
+            let task = graph.get(&id)?;
+            if task.front.updated_at != expected_at {
+                return Err(crate::concurrency::version_conflict(
+                    &id,
+                    expected_at,
+                    task.front.updated_at,
+                ));
+            }
+        }
         let result = crate::mutation::execute_in(
             board,
             graph,

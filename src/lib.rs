@@ -8,6 +8,7 @@ pub mod capabilities;
 pub mod cli;
 pub mod commands;
 pub mod comment;
+pub mod concurrency;
 pub mod contract;
 pub mod doctor;
 pub mod error;

@@ -84,6 +84,8 @@ pub mod code {
     pub const BOARD_SYNC_CONFLICT: &str = "BOARD_SYNC_CONFLICT";
     pub const CONTRACT_VERSION_UNSUPPORTED: &str = "CONTRACT_VERSION_UNSUPPORTED";
     pub const PROFILE_UNMET: &str = "PROFILE_UNMET";
+    pub const VERSION_CONFLICT: &str = "VERSION_CONFLICT";
+    pub const INVALID_IDEMPOTENCY_KEY: &str = "INVALID_IDEMPOTENCY_KEY";
 }
 
 #[derive(Debug, Clone)]

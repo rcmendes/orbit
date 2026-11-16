@@ -28,6 +28,19 @@ pub struct Cli {
     #[arg(global = true, long = "no-sync", hide = true)]
     pub no_sync: bool,
 
+    /// Run the mutation only when the Task's version still matches VERSION —
+    /// the `updated_at` value `orbit show <id>` reports. A stale version
+    /// fails with a retryable VERSION_CONFLICT. Applies to Task mutations
+    /// (`update`, `claim`, `done`, `link add`, ...); `orbit batch` takes a
+    /// per-operation `if_version` instead.
+    #[arg(global = true, long = "if-version", value_name = "VERSION")]
+    pub if_version: Option<String>,
+
+    /// Idempotency key for this write: repeating the call with the same key
+    /// returns the first recorded result instead of running again.
+    #[arg(global = true, long = "idempotency-key", value_name = "KEY")]
+    pub idempotency_key: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }

@@ -141,6 +141,9 @@ pub(crate) fn default_hint(error_code: &str) -> String {
         code::PROFILE_UNMET => {
             "Upgrade Orbit, or apply a profile whose requirements this binary meets (`orbit setup <plugin>`).".to_string()
         }
+        code::VERSION_CONFLICT => {
+            "Re-read the Task (`orbit show <id>`) and retry with its current `updated_at` as --if-version.".to_string()
+        }
         code::DEPENDENCY_BLOCKED | code::SUBTASKS_OPEN | code::LABEL_BLOCKED => {
             "Resolve the blocking Issues listed in details first.".to_string()
         }

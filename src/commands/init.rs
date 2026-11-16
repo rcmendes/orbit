@@ -509,7 +509,7 @@ fn render_init_human(report: &InitReport<'_>) -> String {
     }
     human.push_str(&format!(
         "  {:<33}# create work on the Board\n",
-        "orbit add \"First task\" -p 1"
+        "orbit add \"First task\" -p high"
     ));
     if !report.clients.is_empty() {
         let agent = report

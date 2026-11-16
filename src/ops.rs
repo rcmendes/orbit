@@ -18,7 +18,7 @@ use crate::transition::{ClaimGate, FieldUpdate, Outcome, TransitionError};
 /// Fields for a new Task. Values are raw and validated by [`add`].
 pub struct NewTask {
     pub title: String,
-    pub priority: Option<u8>,
+    pub priority: Option<String>,
     pub task_type: Option<TaskType>,
     pub labels: Vec<String>,
     pub depends_on: Vec<String>,
@@ -62,8 +62,10 @@ pub fn add(
         return Err(OrbitError::invalid_argument("title must not be empty"));
     }
 
-    let priority = new.priority.unwrap_or(board.config.board.default_priority);
-    validate_priority(priority)?;
+    let priority = match &new.priority {
+        Some(priority) => validate_priority(board, priority)?,
+        None => board.config.board.default_priority.clone(),
+    };
     let task_type = new.task_type.unwrap_or(TaskType::Task);
     let labels = normalize_labels(&new.labels)?;
 
@@ -234,7 +236,7 @@ pub fn property(
 pub struct TaskUpdate {
     pub title: Option<String>,
     pub body: Option<String>,
-    pub priority: Option<u8>,
+    pub priority: Option<String>,
     pub task_type: Option<TaskType>,
     pub waiting_on: FieldUpdate<String>,
     pub component: FieldUpdate<String>,
@@ -251,9 +253,11 @@ pub fn update(
     change: TaskUpdate,
     now: DateTime<Utc>,
 ) -> Result<bool> {
-    if let Some(priority) = change.priority {
-        validate_priority(priority)?;
-    }
+    let priority = change
+        .priority
+        .as_deref()
+        .map(|priority| validate_priority(board, priority))
+        .transpose()?;
     let current = graph.get(id)?;
     let next_type = change.task_type.unwrap_or(current.front.task_type);
     if next_type == TaskType::Epic && current.front.parent.is_some() {
@@ -320,7 +324,7 @@ pub fn update(
     if let Some(body) = change.body {
         task.body = body;
     }
-    if let Some(priority) = change.priority {
+    if let Some(priority) = priority {
         task.front.priority = priority;
     }
     if let Some(task_type) = change.task_type {

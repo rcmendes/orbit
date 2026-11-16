@@ -170,7 +170,7 @@ fn create_claim_heartbeat_and_finish_round_trip() {
         "create",
         json!({
             "title": "MCP task",
-            "priority": 1,
+            "priority": "high",
             "body": "Made over MCP"
         }),
     );
@@ -423,11 +423,11 @@ fn update_claim_and_release_are_available() {
     let updated = client.call(
         50,
         "update",
-        json!({ "id": id, "title": "Changed", "priority": 0 }),
+        json!({ "id": id, "title": "Changed", "priority": "highest" }),
     );
     let updated = tool_envelope(&updated);
     assert_eq!(updated["data"]["title"], "Changed");
-    assert_eq!(updated["data"]["priority"], 0);
+    assert_eq!(updated["data"]["priority"], "highest");
 
     let claimed = client.call(51, "claim", json!({ "id": id, "by": "claude" }));
     let claimed = tool_envelope(&claimed);

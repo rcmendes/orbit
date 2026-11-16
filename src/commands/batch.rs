@@ -39,7 +39,7 @@ enum Operation {
         #[serde(default)]
         depends_on: Vec<String>,
         body: Option<String>,
-        priority: Option<u8>,
+        priority: Option<String>,
         repository: Option<String>,
         waiting_on: Option<String>,
         component: Option<String>,
@@ -52,7 +52,7 @@ enum Operation {
         id: String,
         title: Option<String>,
         body: Option<String>,
-        priority: Option<u8>,
+        priority: Option<String>,
         #[serde(rename = "type")]
         task_type: Option<TaskType>,
         waiting_on: Option<String>,
@@ -530,7 +530,7 @@ mod tests {
                 title: id.to_string(),
                 status: Status::Todo,
                 task_type: TaskType::Task,
-                priority: 2,
+                priority: "medium".to_string(),
                 labels: Vec::new(),
                 depends_on: Vec::new(),
                 parent: None,

@@ -2648,7 +2648,7 @@ fn auto_push_creates_an_issue_and_tracks_status_and_labels() {
     let (_fixture_dir, fixture) = auto_push_fixture();
     let env = [("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())];
 
-    let add = repo.ok_json_with_env(&["add", "Auto-created task", "-p", "1", "--json"], &env);
+    let add = repo.ok_json_with_env(&["add", "Auto-created task", "-p", "high", "--json"], &env);
     let id = add["data"]["id"].as_str().unwrap().to_string();
     let created = fixture_issue(&fixture, 1);
     assert_eq!(created["title"], "Auto-created task");
@@ -2720,7 +2720,7 @@ fn auto_push_pushes_mapped_fields_but_not_priority_changes() {
     let id = add["data"]["id"].as_str().unwrap().to_string();
     let before = fixture_issue(&fixture, 1)["updated_at"].clone();
 
-    repo.ok_json_with_env(&["update", &id, "--priority", "0", "--json"], &env);
+    repo.ok_json_with_env(&["update", &id, "--priority", "highest", "--json"], &env);
     let after_priority = fixture_issue(&fixture, 1);
     assert_eq!(after_priority["updated_at"], before);
     assert_eq!(after_priority["title"], "Field task");

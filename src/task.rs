@@ -64,8 +64,19 @@ impl TaskType {
     }
 }
 
-pub fn default_priority() -> u8 {
-    2
+/// The Board's default Priority name when `board.default_priority` is absent.
+/// Must stay a member of [`default_priorities`].
+pub fn default_priority() -> String {
+    "medium".to_string()
+}
+
+/// The default ordered Priority vocabulary: names from most to least
+/// important. A Board replaces or renames it through `board.priorities`.
+pub fn default_priorities() -> Vec<String> {
+    ["highest", "high", "medium", "low"]
+        .iter()
+        .map(|name| name.to_string())
+        .collect()
 }
 
 /// Who holds a Task and until when. Times are optional so hand-edited files with a
@@ -260,7 +271,7 @@ struct RawFrontmatter {
     #[serde(default, rename = "type")]
     task_type: TaskType,
     #[serde(default = "default_priority")]
-    priority: u8,
+    priority: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     labels: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -381,7 +392,9 @@ pub struct TaskFrontmatter {
     pub title: String,
     pub status: Status,
     pub task_type: TaskType,
-    pub priority: u8,
+    /// A Priority name from the Board's `board.priorities` list; Tasks sort
+    /// by the name's ordinal in that list, not by the name itself.
+    pub priority: String,
     pub labels: Vec<String>,
     pub depends_on: Vec<String>,
     pub parent: Option<String>,
@@ -547,9 +560,10 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             "task {id} has an empty title"
         )));
     }
-    if front.priority > 3 {
+    front.priority = front.priority.trim().to_lowercase();
+    if !is_valid_label(&front.priority) {
         return Err(OrbitError::corrupt_task(format!(
-            "task {id} has priority {}; expected 0-3",
+            "task {id} has invalid priority `{}`",
             front.priority
         )));
     }
@@ -826,7 +840,7 @@ mod tests {
                 title: "Build the CLI router".to_string(),
                 status: Status::Todo,
                 task_type: TaskType::Task,
-                priority: 1,
+                priority: "high".to_string(),
                 labels: Vec::new(),
                 depends_on: vec!["orb-f14c02".to_string()],
                 parent: None,
@@ -869,7 +883,7 @@ mod tests {
         let content = r#"---
 title: Keep me
 status: todo
-priority: 2
+priority: medium
 created_at: 2026-10-23T12:00:00Z
 updated_at: 2026-10-23T12:00:00Z
 future_field: keep this
@@ -893,7 +907,7 @@ Body.
 title: Synced Task
 status: todo
 type: task
-priority: 2
+priority: medium
 github:
   repo: acme/app
   number: 42
@@ -933,7 +947,7 @@ The end.
 
     #[test]
     fn parses_crlf_files() {
-        let content = "---\r\ntitle: Test\r\nstatus: todo\r\npriority: 2\r\ncreated_at: 2026-10-23T12:00:00Z\r\nupdated_at: 2026-10-23T12:00:00Z\r\n---\r\n\r\nBody.\r\n";
+        let content = "---\r\ntitle: Test\r\nstatus: todo\r\npriority: medium\r\ncreated_at: 2026-10-23T12:00:00Z\r\nupdated_at: 2026-10-23T12:00:00Z\r\n---\r\n\r\nBody.\r\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         assert_eq!(task.front.title, "Test");
         assert_eq!(task.body, "Body.\r\n");
@@ -944,7 +958,7 @@ The end.
         let content = r#"---
 title: Bad
 status: todo
-priority: 9
+priority: "not a priority!"
 created_at: 2026-10-23T12:00:00Z
 updated_at: 2026-10-23T12:00:00Z
 ---
@@ -1017,7 +1031,7 @@ updated_at: 2026-10-23T12:00:00Z
         let content = r#"---
 title: Labels
 status: todo
-priority: 2
+priority: medium
 labels:
 - Bug
 - needs-triage
@@ -1047,7 +1061,7 @@ Body.
 
     #[test]
     fn claim_round_trips_byte_identical_and_keeps_unknown_fields() {
-        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: 2\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
+        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: medium\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         assert_eq!(task.holder(), Some("alice"));
         assert_eq!(render_task(&task).unwrap(), content);
@@ -1063,7 +1077,7 @@ Body.
 
     #[test]
     fn stray_claim_times_survive_a_round_trip() {
-        let content = "---\ntitle: t\nstatus: todo\ntype: task\npriority: 2\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+        let content = "---\ntitle: t\nstatus: todo\ntype: task\npriority: medium\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         assert!(task.front.claim.is_none() && task.front.stray_claim_times.is_some());
         assert_eq!(render_task(&task).unwrap(), content);
@@ -1071,7 +1085,7 @@ Body.
 
     #[test]
     fn checkpoint_round_trips_and_preserves_unknown_fields() {
-        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: 2\ncheckpoint:\n  by: alice\n  at: 2026-10-23T12:00:00Z\n  progress: Parser done\n  next: Wire the CLI\n  blocker: Waiting on review\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
+        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: medium\ncheckpoint:\n  by: alice\n  at: 2026-10-23T12:00:00Z\n  progress: Parser done\n  next: Wire the CLI\n  blocker: Waiting on review\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         let checkpoint = task.front.checkpoint.as_ref().unwrap();
         assert_eq!(checkpoint.by, "alice");

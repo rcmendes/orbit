@@ -569,7 +569,7 @@ mod tests {
                 title: "t".to_string(),
                 status,
                 task_type: TaskType::Task,
-                priority: 2,
+                priority: "medium".to_string(),
                 labels: Vec::new(),
                 depends_on: Vec::new(),
                 parent: None,

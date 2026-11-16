@@ -2331,7 +2331,7 @@ fn create_imported_task(
             title: issue.title.trim().to_string(),
             status: issue.status,
             task_type: crate::task::TaskType::Task,
-            priority: board.config.board.default_priority,
+            priority: board.config.board.default_priority.clone(),
             labels,
             depends_on: Vec::new(),
             parent: None,

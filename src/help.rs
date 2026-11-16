@@ -31,7 +31,7 @@ Repositories outside the anchor join with `orbit repo add`.";
 pub const ROOT_EXAMPLES: &str = "\
 Typical agent loop:
   orbit init
-  orbit add \"Build the CLI router\" -p 1 --label ready-for-agent
+  orbit add \"Build the CLI router\" -p high --label ready-for-agent
   orbit ready --claim --by claude
   orbit heartbeat orb-a7b2c9 --by claude
   orbit checkpoint orb-a7b2c9 --by claude --progress \"Parser done\" --next \"Wire the CLI\"
@@ -241,8 +241,9 @@ Creates a task in the todo state and prints its ID (use --json to capture
 data.id). The body holds Markdown context and acceptance criteria; --body-file -
 reads it from stdin so long bodies never hit shell quoting.
 
-Priority runs from 0 (highest) to 3 (lowest); the default comes from the Board
-config (2 unless changed). --type sets the work shape: task (default), epic,
+Priority is a name from the Board's `board.priorities` list, ordered most
+important first (highest, high, medium, low by default); the default comes
+from `board.default_priority`. --type sets the work shape: task (default), epic,
 spike, chore, or decision. Type is metadata and does not affect readiness.
 --depends-on is repeatable and creates blocking edges at creation time.
 --waiting-on records a blocker that lives outside the Board, such as an upstream
@@ -265,10 +266,10 @@ true) instead of creating a second one, so a retried add is safe.";
 pub const ADD_EXAMPLES: &str = "\
 Examples:
   # File a high-priority bug with a Markdown body
-  orbit add \"Login rejects valid tokens\" -p 1 --label bug --body-file ticket.md
+  orbit add \"Login rejects valid tokens\" -p high --label bug --body-file ticket.md
 
   # Create work that waits for a blocker task to finish
-  orbit add \"Publish the release\" -p 1 --depends-on orb-a7b2c9
+  orbit add \"Publish the release\" -p high --depends-on orb-a7b2c9
 
   # Make a scripted add safe to retry
   orbit add \"Step 3\" --source-key planner:plan-7:step-3
@@ -654,7 +655,7 @@ have their own commands. --type epic is refused on a SubTask.";
 pub const UPDATE_EXAMPLES: &str = "\
 Examples:
   # Reprioritize work
-  orbit update orb-a7b2c9 --priority 0
+  orbit update orb-a7b2c9 --priority highest
 
   # Change the work shape
   orbit update orb-a7b2c9 --type spike

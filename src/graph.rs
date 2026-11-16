@@ -96,10 +96,17 @@ pub struct Graph {
     non_ready_labels: Vec<String>,
     /// Maximum SubTask nesting depth from `board.max_subtask_depth` (1–4).
     pub max_subtask_depth: u8,
+    /// Ordered Priority names from `board.priorities`, most important first.
+    /// Tasks sort by the name's ordinal; a name outside the list sorts last.
+    pub priorities: Vec<String>,
 }
 
 impl Graph {
     pub fn from_tasks(tasks: Vec<Task>) -> Self {
+        Self::from_tasks_with_priorities(tasks, task::default_priorities())
+    }
+
+    pub fn from_tasks_with_priorities(tasks: Vec<Task>, priorities: Vec<String>) -> Self {
         Self {
             tasks: tasks
                 .into_iter()
@@ -107,6 +114,7 @@ impl Graph {
                 .collect(),
             non_ready_labels: Vec::new(),
             max_subtask_depth: 1,
+            priorities,
         }
     }
 
@@ -118,7 +126,17 @@ impl Graph {
                 .collect(),
             non_ready_labels,
             max_subtask_depth: 1,
+            priorities: task::default_priorities(),
         }
+    }
+
+    /// A Priority's ordinal in the Board's ordered list: lower sorts first.
+    /// A name the Board no longer configures sorts after every known name.
+    pub fn priority_ordinal(&self, priority: &str) -> usize {
+        self.priorities
+            .iter()
+            .position(|name| name == priority)
+            .unwrap_or(self.priorities.len())
     }
 
     pub fn load(board: &Board, mode: LoadMode) -> Result<(Self, Vec<Issue>)> {
@@ -195,6 +213,7 @@ impl Graph {
             tasks,
             non_ready_labels: board.config.board.non_ready_labels.clone(),
             max_subtask_depth: board.config.board.max_subtask_depth,
+            priorities: board.config.board.priorities.clone(),
         };
         let validation = graph.validate();
         if mode == LoadMode::Strict && !validation.is_empty() {
@@ -498,11 +517,16 @@ impl Graph {
             .filter(|task| self.eligible_for_close(task))
             .collect();
         candidates.sort_by(|left, right| {
-            (left.front.priority, left.front.created_at, left.id.as_str()).cmp(&(
-                right.front.priority,
-                right.front.created_at,
-                right.id.as_str(),
-            ))
+            (
+                self.priority_ordinal(&left.front.priority),
+                left.front.created_at,
+                left.id.as_str(),
+            )
+                .cmp(&(
+                    self.priority_ordinal(&right.front.priority),
+                    right.front.created_at,
+                    right.id.as_str(),
+                ))
         });
         candidates
     }
@@ -515,11 +539,16 @@ impl Graph {
             .cloned()
             .collect();
         ready.sort_by(|left, right| {
-            (left.front.priority, left.front.created_at, left.id.as_str()).cmp(&(
-                right.front.priority,
-                right.front.created_at,
-                right.id.as_str(),
-            ))
+            (
+                self.priority_ordinal(&left.front.priority),
+                left.front.created_at,
+                left.id.as_str(),
+            )
+                .cmp(&(
+                    self.priority_ordinal(&right.front.priority),
+                    right.front.created_at,
+                    right.id.as_str(),
+                ))
         });
         ready
     }
@@ -1078,13 +1107,30 @@ mod tests {
     #[test]
     fn ready_tasks_sort_by_priority_then_age() {
         let mut high = task("orb-aaaaaa", Status::Todo, &[]);
-        high.front.priority = 0;
+        high.front.priority = "highest".to_string();
         let mut low = task("orb-bbbbbb", Status::Todo, &[]);
-        low.front.priority = 3;
+        low.front.priority = "low".to_string();
 
         let graph = Graph::from_tasks(vec![low, high]);
         let ready = graph.ready_tasks();
         assert_eq!(ready[0].id, "orb-aaaaaa");
+    }
+
+    #[test]
+    fn priority_ordinal_follows_the_board_order() {
+        let mut graph = Graph::from_tasks(vec![]);
+        graph.priorities = vec!["p0".to_string(), "p1".to_string(), "p2".to_string()];
+        assert_eq!(graph.priority_ordinal("p0"), 0);
+        assert_eq!(graph.priority_ordinal("p2"), 2);
+        // A name the Board does not configure sorts after every known name.
+        assert_eq!(graph.priority_ordinal("unknown"), 3);
+
+        let mut first = task("orb-aaaaaa", Status::Todo, &[]);
+        first.front.priority = "p2".to_string();
+        let mut second = task("orb-bbbbbb", Status::Todo, &[]);
+        second.front.priority = "p0".to_string();
+        let graph = Graph::from_tasks_with_priorities(vec![first, second], graph.priorities);
+        assert_eq!(graph.ready_tasks()[0].id, "orb-bbbbbb");
     }
 
     #[test]

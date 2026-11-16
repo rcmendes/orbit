@@ -170,10 +170,27 @@ impl Config {
         if self.board.lease_minutes <= 0 {
             return Err(OrbitError::config("board.lease_minutes must be positive"));
         }
-        if self.board.default_priority > 3 {
-            return Err(OrbitError::config(
-                "board.default_priority must be between 0 and 3",
-            ));
+        if self.board.priorities.is_empty() {
+            return Err(OrbitError::config("board.priorities must not be empty"));
+        }
+        let mut seen_priorities = std::collections::BTreeSet::new();
+        for priority in &self.board.priorities {
+            if !task::is_valid_label(priority) {
+                return Err(OrbitError::config(format!(
+                    "board.priorities contains invalid priority `{priority}`"
+                )));
+            }
+            if !seen_priorities.insert(priority.as_str()) {
+                return Err(OrbitError::config(format!(
+                    "board.priorities contains duplicate priority `{priority}`"
+                )));
+            }
+        }
+        if !self.board.priorities.contains(&self.board.default_priority) {
+            return Err(OrbitError::config(format!(
+                "board.default_priority `{}` is not in board.priorities",
+                self.board.default_priority
+            )));
         }
         if !(1..=4).contains(&self.board.max_subtask_depth) {
             return Err(OrbitError::config(
@@ -282,7 +299,11 @@ pub struct BoardConfig {
     #[serde(default = "default_lease")]
     pub lease_minutes: i64,
     #[serde(default = "task::default_priority")]
-    pub default_priority: u8,
+    pub default_priority: String,
+    /// Ordered Priority names, most important first. Tasks store a name and
+    /// sort by its position here; renaming or reordering changes the order.
+    #[serde(default = "task::default_priorities")]
+    pub priorities: Vec<String>,
     #[serde(default = "default_non_ready_labels")]
     pub non_ready_labels: Vec<String>,
     /// How many SubTask levels a Board allows: 1 keeps the historical
@@ -340,6 +361,7 @@ impl Default for BoardConfig {
             components: Vec::new(),
             lease_minutes: default_lease(),
             default_priority: task::default_priority(),
+            priorities: task::default_priorities(),
             non_ready_labels: default_non_ready_labels(),
             max_subtask_depth: default_max_subtask_depth(),
             auto_commit: true,
@@ -2265,7 +2287,11 @@ mod tests {
         assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
 
         let mut config = Config::default();
-        config.board.default_priority = 9;
+        config.board.default_priority = "urgent".to_string();
+        assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
+
+        let mut config = Config::default();
+        config.board.priorities = vec!["high".to_string(), "high".to_string()];
         assert_eq!(config.validate().unwrap_err().code, code::CONFIG_ERROR);
 
         let mut config = Config::default();

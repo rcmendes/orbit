@@ -377,10 +377,10 @@ criteria in the body; use labels for triage state.
 
 ```bash
 # A high-priority bug with a Markdown body
-orbit add "Login rejects valid tokens" -p 1 --label bug --body-file ticket.md
+orbit add "Login rejects valid tokens" -p high --label bug --body-file ticket.md
 
 # Work that must wait for a blocker
-orbit add "Publish the release" -p 1 --depends-on orb-a7b2c9
+orbit add "Publish the release" -p high --depends-on orb-a7b2c9
 
 # A ticket waiting on something outside the Board
 orbit add "Upgrade the parser" --waiting-on "upstream 2.4" --body-file -
@@ -389,10 +389,10 @@ orbit add "Upgrade the parser" --waiting-on "upstream 2.4" --body-file -
 orbit add "Spec: SSO login" --type epic --body-file spec.md
 
 # Publish several tickets, blockers first; each add prints the new ID
-orbit add "Design the schema" -p 0 --label ready-for-agent
-# created orb-f14c02  P0  Design the schema
-orbit add "Ship the API" -p 1 --depends-on orb-f14c02 --label ready-for-agent
-# created orb-a7b2c9  P1  Ship the API
+orbit add "Design the schema" -p highest --label ready-for-agent
+# created orb-f14c02  highest  Design the schema
+orbit add "Ship the API" -p high --depends-on orb-f14c02 --label ready-for-agent
+# created orb-a7b2c9  high  Ship the API
 
 # Make a scripted add safe to retry: a second add with the same Source Key
 # returns the first Task (meta.matched: true) instead of creating another
@@ -400,7 +400,7 @@ orbit add "Step 3" --source-key planner:plan-7:step-3
 
 # Break a feature into a SubTask
 orbit add "API: add the endpoint" --parent orb-a7b2c9 --label repo:api
-# created orb-a7b2c9.b3c4d5  P2  API: add the endpoint  (subtask of orb-a7b2c9)
+# created orb-a7b2c9.b3c4d5  medium  API: add the endpoint  (subtask of orb-a7b2c9)
 ```
 
 `--parent` creates a SubTask under an existing Parent Task. The SubTask ID is the
@@ -413,6 +413,12 @@ done or cancelled.
 `--type` sets the work shape: `task` (default), `epic`, `spike`, `chore`, or
 `decision`. Type is metadata and does not affect readiness. `epic` is refused on a
 SubTask. `bug` and `enhancement` remain labels, not Types.
+
+`-p`/`--priority` takes a Priority name from the Board's `board.priorities`
+list — `highest`, `high`, `medium`, `low` by default, ordered most important
+first. Tasks store the name and sort by its position, so a Board can rename or
+reorder priorities in `config.toml`; the default comes from
+`board.default_priority`.
 
 A spec or epic is a top-level Task with `type: epic`; its tickets are SubTasks.
 This is also the compatibility mapping for Beads and Matt Pocock's skills:
@@ -448,7 +454,7 @@ without touching status, claims, labels, or dependencies. `--type epic` is refus
 blocker was resolved.
 
 ```bash
-orbit update orb-a7b2c9 --priority 0
+orbit update orb-a7b2c9 --priority highest
 orbit update orb-a7b2c9 --type spike
 orbit update orb-a7b2c9 --body-file refined-spec.md
 orbit update orb-a7b2c9 --clear-waiting
@@ -603,15 +609,15 @@ orbit list --all --json             # every Repository, from inside a member
 Human output with `--group` looks like this:
 
 ```text
-╭───────────────────┬────────┬────┬──────┬───────┬─────────────────────────────┬─────────────────────────────┬────────────╮
-│ ID                │ STATUS │ P  │ TYPE │ ISSUE │ TITLE                       │ LABELS                      │ CLAIMED BY │
-├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9  Spec: SSO login across api, web, infra                                   epic · todo · P1 · ready-for-agent │
-├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ orb-a7b2c9.z21c2w │ todo   │ P0 │ task │ #12   │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
-│ orb-a7b2c9.hxdmqt │ todo   │ P1 │ task │ -     │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
-│ orb-a7b2c9.c5qmed │ todo   │ P2 │ task │ -     │ web: login redirect         │ ready-for-agent, repo:web   │            │
-╰───────────────────┴────────┴────┴──────┴───────┴─────────────────────────────┴─────────────────────────────┴────────────╯
+╭───────────────────┬────────┬──────────┬──────┬───────┬─────────────────────────────┬─────────────────────────────┬────────────╮
+│ ID                │ STATUS │ PRIORITY │ TYPE │ ISSUE │ TITLE                       │ LABELS                      │ CLAIMED BY │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9  Spec: SSO login across api, web, infra                                   epic · todo · high · ready-for-agent │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ orb-a7b2c9.z21c2w │ todo   │ highest  │ task │ #12   │ infra: register OIDC client │ ready-for-agent, repo:infra │            │
+│ orb-a7b2c9.hxdmqt │ todo   │ high     │ task │ -     │ api: OIDC callback          │ ready-for-agent, repo:api   │            │
+│ orb-a7b2c9.c5qmed │ todo   │ medium   │ task │ -     │ web: login redirect         │ ready-for-agent, repo:web   │            │
+╰───────────────────┴────────┴──────────┴──────┴───────┴─────────────────────────────┴─────────────────────────────┴────────────╯
 ```
 
 The table is intentionally not a machine interface. Column widths grow with the
@@ -1154,7 +1160,7 @@ orbit remote sync orb-a7b2c9 --direction push --apply
 ### A solo maintainer triages a new report
 
 ```bash
-orbit add "Login rejects valid tokens" -p 1 --label bug --label needs-triage --body-file report.md
+orbit add "Login rejects valid tokens" -p high --label bug --label needs-triage --body-file report.md
 # ... investigate, then decide:
 orbit label add orb-a7b2c9 ready-for-agent
 orbit label remove orb-a7b2c9 needs-triage
@@ -1198,11 +1204,11 @@ Use `release --force` instead when the task should go back to the queue unclaime
 ### A release train with ordered work
 
 ```bash
-orbit add "Design the schema" -p 0 --label ready-for-agent
-# created orb-f14c02  P0  Design the schema
-orbit add "Ship the API" -p 1 --depends-on orb-f14c02 --label ready-for-agent
-# created orb-a7b2c9  P1  Ship the API
-orbit add "Publish the SDK" -p 1 --depends-on orb-a7b2c9 --label ready-for-agent
+orbit add "Design the schema" -p highest --label ready-for-agent
+# created orb-f14c02  highest  Design the schema
+orbit add "Ship the API" -p high --depends-on orb-f14c02 --label ready-for-agent
+# created orb-a7b2c9  high  Ship the API
+orbit add "Publish the SDK" -p high --depends-on orb-a7b2c9 --label ready-for-agent
 ```
 
 `orbit ready` returns only the first task. Completing it makes the next one ready
@@ -1213,7 +1219,7 @@ in the same order.
 ```bash
 # the feature
 orbit add "SSO login across api, web, infra" --body-file feature.md
-# created orb-a7b2c9  P2  SSO login across api, web, infra
+# created orb-a7b2c9  medium  SSO login across api, web, infra
 
 # one SubTask per repository
 orbit add "api: OIDC callback" --parent orb-a7b2c9 --label repo:api

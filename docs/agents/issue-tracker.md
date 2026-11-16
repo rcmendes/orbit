@@ -163,7 +163,7 @@ after closing.
 Create one task per ticket, blockers first, and capture the returned `data.id`:
 
 ```bash
-orbit add "<title>" -p <0-3> --body-file - --depends-on <blocker-id>...
+orbit add "<title>" -p <priority-name> --body-file - --depends-on <blocker-id>...
 ```
 
 Feed the Markdown body on stdin. Add `--label ready-for-agent` to publish a ticket

@@ -14,7 +14,7 @@ fn concurrent_ready_claims_are_distinct() {
     repo.set_lock_timeout(15_000);
 
     for index in 0..8 {
-        repo.add(&format!("Task {index}"), &["-p", "1"]);
+        repo.add(&format!("Task {index}"), &["-p", "high"]);
     }
 
     let mut children = Vec::new();

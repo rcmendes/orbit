@@ -64,6 +64,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Attach a tool's own data to a Task | `orbit property set/remove` |
 | Apply many changes at once, all or none | `orbit batch` |
 | Read the board | `orbit list`, `orbit show`, `orbit tree`, `orbit prime` |
+| Inspect the command surface | `orbit schema` |
 | Collect or archive the board | `orbit export` |
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
 | Recover or maintain the board | `orbit doctor`, `orbit sync` |
@@ -1479,6 +1480,85 @@ orbit sync              # commit anything left uncommitted
 | `STORAGE_MISMATCH` | `config.toml` still records `board.storage` but the Board folder's Git shape disagrees. `orbit migrate` removes the retired key and normalizes the layout. |
 | `ABSOLUTE_BOARD_PATH` | A managed agent config still records a Board path. Re-run `orbit setup` to rewrite it path-free. |
 | `LOCKED` | Retryable: another writer holds the lock. Retry after a short backoff. |
+
+## Command reference
+
+<!-- BEGIN GENERATED COMMANDS (orbit schema --docs; edit src/registry.rs) -->
+
+| Command | MCP tool | Access |
+| --- | --- | --- |
+| `orbit init` | — | — (creates Boards and agent harnesses; not a Board operation) |
+| `orbit repo add` | `repo_add` | write |
+| `orbit repo remove` | `repo_remove` | write |
+| `orbit repo list` | `repo_list` | read-only, idempotent |
+| `orbit repo refresh` | `repo_refresh` | write, idempotent |
+| `orbit slug show` | `slug_show` | read-only, idempotent |
+| `orbit slug migrate` | `slug_migrate` | write, destructive |
+| `orbit migrate` | `migrate` | write, destructive |
+| `orbit migrate model` | `migrate_model` | write, destructive |
+| `orbit add` | `create` | write |
+| `orbit list` | `list` | read-only, idempotent |
+| `orbit ready` | `ready` | write |
+| `orbit show` | `get` | read-only, idempotent |
+| `orbit tree` | `tree` | read-only, idempotent |
+| `orbit claim` | `claim` | write |
+| `orbit assign` | `assign` | write, idempotent |
+| `orbit release` | `release` | write |
+| `orbit heartbeat` | `heartbeat` | write |
+| `orbit checkpoint` | `checkpoint` | write, idempotent |
+| `orbit done` | `finish` | write |
+| `orbit cancel` | `finish` | write |
+| `orbit reopen` | `reopen` | write |
+| `orbit transition` | `transition` | write |
+| `orbit update` | `update` | write, idempotent |
+| `orbit label add` | `label` | write |
+| `orbit label remove` | `label` | write |
+| `orbit label list` | `label` | write |
+| `orbit batch` | `batch` | write |
+| `orbit property set` | `property` | write, idempotent |
+| `orbit property remove` | `property` | write, idempotent |
+| `orbit comment add` | `comment` | write |
+| `orbit comment list` | `comment` | write |
+| `orbit depend` | `link` | write |
+| `orbit undepend` | `link` | write |
+| `orbit link add` | `link` | write |
+| `orbit link remove` | `link` | write |
+| `orbit link list` | `link` | write |
+| `orbit delete` | `delete` | write, destructive |
+| `orbit prime` | `prime` | read-only, idempotent |
+| `orbit export` | `export` | read-only, idempotent |
+| `orbit setup` | — | — (writes agent harness configuration; not a Board operation) |
+| `orbit mcp` | — | — (is the MCP server itself) |
+| `orbit doctor` | `doctor` | write, idempotent |
+| `orbit sync` | `sync` | write, idempotent |
+| `orbit schema` | — | — (publishes this registry; not a Board operation) |
+| `orbit board host` | `board_host` | write |
+| `orbit board sync` | `board_sync` | write |
+| `orbit board move` | `board_move` | write, destructive |
+| `orbit remote status` | `remote_status` | read-only, idempotent |
+| `orbit remote connect` | `remote_connect` | write |
+| `orbit remote disconnect` | `remote_disconnect` | write, destructive |
+| `orbit remote list` | `remote_list` | read-only, idempotent |
+| `orbit remote issues` | `remote_issues` | read-only, idempotent |
+| `orbit remote issues refresh` | `remote_issues_refresh` | write, idempotent |
+| `orbit remote issues list` | `remote_issues` | read-only, idempotent |
+| `orbit remote issues show` | `remote_issues_show` | read-only, idempotent |
+| `orbit remote import` | `remote_import` | write |
+| `orbit remote link` | `remote_link` | write |
+| `orbit remote create` | `remote_create` | write |
+| `orbit remote detach` | `remote_detach` | write |
+| `orbit remote reattach` | `remote_reattach` | write |
+| `orbit remote sync` | `remote_sync` | write |
+| `orbit remote auto-push` | `remote_auto_push` | write, idempotent |
+| `orbit triage context` | `triage_context` | read-only, idempotent |
+| `orbit triage review` | `triage_review` | read-only, idempotent |
+| `orbit triage apply` | `triage_apply` | write |
+
+<!-- END GENERATED COMMANDS -->
+`orbit schema [COMMAND]` prints the same information as JSON;
+`orbit schema --docs` regenerates this section. Meta commands (`init`,
+`setup`, `mcp`, `schema`) are exempt from MCP exposure because they configure
+the environment rather than operate on a Board.
 
 ## See also
 

@@ -183,6 +183,15 @@ pub enum Command {
     #[command(long_about = help::SYNC_LONG, after_long_help = help::SYNC_EXAMPLES)]
     Sync,
 
+    /// Print the JSON Schema of the command registry.
+    ///
+    /// Describes every public command once — CLI path, summary, MCP tool,
+    /// argument schema, and safety annotations — as published by the command
+    /// registry in `src/registry.rs`. With COMMAND, prints just that command's
+    /// or tool's entry; --docs prints the generated docs/commands.md section.
+    #[command(long_about = help::SCHEMA_LONG, after_long_help = help::SCHEMA_EXAMPLES)]
+    Schema(SchemaArgs),
+
     /// Configure and synchronize the Board's host repository.
     #[command(long_about = help::BOARD_LONG, after_long_help = help::BOARD_EXAMPLES)]
     Board(BoardArgs),
@@ -1445,6 +1454,17 @@ pub enum AutoPushState {
     On,
     #[value(alias = "disable", alias = "false")]
     Off,
+}
+
+#[derive(Debug, Args)]
+pub struct SchemaArgs {
+    /// Command path or MCP tool name to describe instead of the whole registry.
+    #[arg(value_name = "COMMAND")]
+    pub command: Option<String>,
+
+    /// Print the generated docs/commands.md reference section instead of JSON.
+    #[arg(long)]
+    pub docs: bool,
 }
 
 #[derive(Debug, Args)]

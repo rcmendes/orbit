@@ -1451,3 +1451,22 @@ Examples:
   orbit board sync
   orbit board sync --resolve orb-a1b2c3.title=local --resolve config=host
   orbit board sync --json";
+
+pub const SCHEMA_LONG: &str = "\
+Print the JSON Schema of the command registry: every public command with its
+CLI path, summary, MCP tool mapping, argument schema, and safety annotations
+(readOnly, destructive, idempotent). The registry in src/registry.rs is the
+single description behind the MCP tools, this output, and the generated
+section of docs/commands.md.
+
+With COMMAND — a command path like `remote issues refresh` or a bare name like
+`ready`, or an MCP tool name like `create` — prints just that entry. `--docs`
+prints the generated docs/commands.md reference section instead of JSON.";
+
+pub const SCHEMA_EXAMPLES: &str = "\
+Examples:
+  orbit schema
+  orbit schema ready --json
+  orbit schema remote issues refresh
+  orbit schema create
+  orbit schema --docs";

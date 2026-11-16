@@ -133,257 +133,7 @@ fn initialize_result(params: &Value) -> Value {
 }
 
 fn tool_definitions() -> Vec<Value> {
-    vec![
-        tool(
-            "ready",
-            "List ready tasks. With claim=true, atomically claim the highest-priority one.",
-            json!({
-                "claim": { "type": "boolean", "description": "Claim the first ready task." },
-                "by": { "type": "string", "description": "Agent identity for the claim." },
-                "limit": { "type": "integer", "minimum": 1, "description": "Maximum tasks to list." },
-                "parent": { "type": "string", "description": "Only Ready SubTasks of this Parent Task." },
-                "repository": { "type": "string", "description": "Only tasks with this member Repository; matches the `repository` field." },
-                "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
-                "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
-                "types": { "type": "array", "items": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"] }, "description": "Only tasks with any of these Issue types." },
-                "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"] }, "description": "Exclude tasks with any of these Issue types." },
-                "components": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these Component slugs; restricted to the Board's configured components when set." },
-                "exclude_components": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these Component slugs." },
-                "all": { "type": "boolean", "description": "Include Ready tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." }
-            }),
-            &[],
-        ),
-        tool(
-            "list",
-            "List tasks with filters. Terminal tasks are hidden unless include_closed=true; all=true widens Repository scope.",
-            json!({
-                "status": { "type": "string", "description": "Workflow status name; `orbit show` lists each task's status and allowed transitions." },
-                "priority": { "type": "string", "description": "Priority name from the Board's configured list (default: highest, high, medium, low)." },
-                "assignee": { "type": "string", "description": "Only tasks assigned to this name." },
-                "claimed_by": { "type": "string", "description": "Deprecated alias for `assignee`." },
-                "waiting": { "type": "boolean", "description": "Only tasks with an external blocker." },
-                "label": { "type": "string", "description": "Filter by label." },
-                "unlabeled": { "type": "boolean", "description": "Only tasks with no labels." },
-                "parent": { "type": "string", "description": "Only SubTasks of this Parent Task." },
-                "repository": { "type": "string", "description": "Only tasks with this member Repository; matches the `repository` field." },
-                "labels": { "type": "array", "items": { "type": "string" }, "description": "Only tasks carrying every label." },
-                "exclude_labels": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks carrying any of these labels." },
-                "types": { "type": "array", "items": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"] }, "description": "Only tasks with any of these Issue types." },
-                "exclude_types": { "type": "array", "items": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"] }, "description": "Exclude tasks with any of these Issue types." },
-                "components": { "type": "array", "items": { "type": "string" }, "description": "Only tasks with any of these Component slugs; restricted to the Board's configured components when set." },
-                "exclude_components": { "type": "array", "items": { "type": "string" }, "description": "Exclude tasks with any of these Component slugs." },
-                "all": { "type": "boolean", "description": "Include tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks." },
-                "include_closed": { "type": "boolean", "description": "Include done and cancelled tasks." },
-                "linked": { "type": "boolean", "description": "Only Tasks with an active Remote Issue link." },
-                "local": { "type": "boolean", "description": "Only Tasks without an active Remote Issue link; includes detached provenance." }
-            }),
-            &[],
-        ),
-        tool(
-            "get",
-            "Read one task, including its Markdown body and dependents.",
-            json!({ "id": { "type": "string", "description": "Task ID or project key, for example orb-a7b2c9 or ORB-12." } }),
-            &["id"],
-        ),
-        tool(
-            "create",
-            "Create a task. Returns the new task id.",
-            json!({
-                "title": { "type": "string" },
-                "type": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"], "description": "Issue type; defaults to the Board default type." },
-                "priority": { "type": "string", "description": "Priority name from the Board's configured list (default: highest, high, medium, low)." },
-                "labels": { "type": "array", "items": { "type": "string" } },
-                "depends_on": { "type": "array", "items": { "type": "string" } },
-                "parent": { "type": "string", "description": "Create a SubTask under this Parent Task." },
-                "waiting_on": { "type": "string", "description": "External blocker." },
-                "component": { "type": "string", "description": "Optional Component slug; restricted to the Board's configured components when set." },
-                "external_id": { "type": "string", "description": "The task's identity in an external system; unique per Board." },
-                "verification": { "type": "string", "description": "Concise checks or commands for agents." },
-                "reporter": { "type": "string", "description": "Reporter recorded at creation; defaults to the caller identity." },
-                "body": { "type": "string", "description": "Markdown body and acceptance criteria." }
-            }),
-            &["title"],
-        ),
-        tool(
-            "update",
-            "Change a task's title, body, priority, component, repository, external id, verification, or external wait. Does not change status.",
-            json!({
-                "id": { "type": "string" },
-                "title": { "type": "string" },
-                "body": { "type": "string" },
-                "type": { "type": "string", "enum": ["epic", "story", "task", "bug", "sub-task"], "description": "New Issue type." },
-                "priority": { "type": "string", "description": "Priority name from the Board's configured list (default: highest, high, medium, low)." },
-                "waiting_on": { "type": "string" },
-                "clear_waiting": { "type": "boolean" },
-                "component": { "type": "string", "description": "New Component slug; restricted to the Board's configured components when set." },
-                "clear_component": { "type": "boolean" },
-                "repository": { "type": "string", "description": "New member Repository name; absent means Board-wide." },
-                "clear_repository": { "type": "boolean" },
-                "external_id": { "type": "string", "description": "New External ID; unique per Board." },
-                "clear_external_id": { "type": "boolean" },
-                "verification": { "type": "string" },
-                "clear_verification": { "type": "boolean" }
-            }),
-            &["id"],
-        ),
-        tool(
-            "claim",
-            "Claim a specific task: set the assignee and start a lease.",
-            json!({
-                "id": { "type": "string" },
-                "by": { "type": "string", "description": "Agent identity." },
-                "kind": { "type": "string", "enum": ["agent", "human"], "description": "The assignee's kind; defaults to agent." },
-                "steal": { "type": "boolean", "description": "Take over a live or stale claim." }
-            }),
-            &["id"],
-        ),
-        tool(
-            "assign",
-            "Assign a task to a person or agent without a lease.",
-            json!({
-                "id": { "type": "string" },
-                "to": { "type": "string", "description": "The assignee's name." },
-                "kind": { "type": "string", "enum": ["agent", "human"], "description": "The assignee's kind; defaults to human." },
-                "force": { "type": "boolean", "description": "Replace a different assignee." }
-            }),
-            &["id", "to"],
-        ),
-        tool(
-            "release",
-            "Release a claim and return the task to todo.",
-            json!({
-                "id": { "type": "string" },
-                "by": { "type": "string" },
-                "force": { "type": "boolean", "description": "Release another agent's claim." }
-            }),
-            &["id"],
-        ),
-        tool(
-            "heartbeat",
-            "Extend a claim's lease while working.",
-            json!({
-                "id": { "type": "string" },
-                "by": { "type": "string" }
-            }),
-            &["id"],
-        ),
-        tool(
-            "checkpoint",
-            "Record or update the active work checkpoint on a claimed task.",
-            json!({
-                "id": { "type": "string" },
-                "progress": { "type": "string", "description": "Current progress. Required for the first checkpoint." },
-                "next": { "type": "string", "description": "Next useful action for the next claimant." },
-                "clear_next": { "type": "boolean", "description": "Remove the next action." },
-                "blocker": { "type": "string", "description": "A blocker the next claimant must know about." },
-                "clear_blocker": { "type": "boolean", "description": "Remove the blocker." },
-                "by": { "type": "string", "description": "Agent identity; must match the claim holder." }
-            }),
-            &["id"],
-        ),
-        tool(
-            "finish",
-            "Complete or cancel a task. Done still requires finished dependencies.",
-            json!({
-                "id": { "type": "string" },
-                "status": { "type": "string", "enum": ["done", "cancelled"] },
-                "by": { "type": "string" },
-                "force": { "type": "boolean", "description": "Override a competing live claim; never bypasses dependencies." },
-                "comment": { "type": "string", "description": "Completion note recorded atomically with the status change." }
-            }),
-            &["id", "status"],
-        ),
-        tool(
-            "transition",
-            "Run a named workflow transition on a task; `get` reports each task's allowed_transitions.",
-            json!({
-                "id": { "type": "string" },
-                "name": { "type": "string", "description": "Workflow transition name, for example promote, block, or defer." },
-                "by": { "type": "string", "description": "Caller identity for Claim-holder checks." },
-                "force": { "type": "boolean", "description": "Run even when another holder's live Claim blocks the transition." }
-            }),
-            &["id", "name"],
-        ),
-        tool(
-            "link",
-            "Add, remove, or list typed links. Without `type`/`external`, add/remove manage the blocking `blocks` link between two tasks (depend/undepend).",
-            json!({
-                "id": { "type": "string" },
-                "dep_id": { "type": "string", "description": "Orbit Task ID or project key target; omit when `external` is given or action is `list`." },
-                "external": { "type": "string", "description": "External reference target as SYSTEM:ID, for example jira:PROJ-123." },
-                "action": { "type": "string", "enum": ["add", "remove", "list"] },
-                "type": { "type": "string", "description": "Link type: blocks, relates-to, duplicates, discovered-from, or a custom slug. Defaults to blocks for task targets." },
-                "url": { "type": "string", "description": "Canonical URL for an external target." },
-                "blocking": { "type": "boolean", "description": "Override the link type's default blocking behavior." },
-                "attributes": { "type": "object", "description": "Arbitrary key/value attributes stored on the link." }
-            }),
-            &["id", "action"],
-        ),
-        tool(
-            "delete",
-            "Delete a task. With force=true, clean up dependent tasks first.",
-            json!({
-                "id": { "type": "string" },
-                "by": { "type": "string" },
-                "force": { "type": "boolean" }
-            }),
-            &["id"],
-        ),
-        tool(
-            "label",
-            "Add, remove, or list task labels.",
-            json!({
-                "action": { "type": "string", "enum": ["add", "remove", "list"] },
-                "id": { "type": "string" },
-                "labels": { "type": "array", "items": { "type": "string" } }
-            }),
-            &["action"],
-        ),
-        tool(
-            "batch",
-            "Apply many task operations in one commit, all or none. Same operations as `orbit batch`.",
-            json!({
-                "operations": { "type": "array", "items": { "type": "object" } },
-                "dry_run": { "type": "boolean" },
-                "by": { "type": "string" }
-            }),
-            &["operations"],
-        ),
-        tool(
-            "property",
-            "Set a tool's Property (a JSON object, namespaced by owner) on a task, or remove it with value null.",
-            json!({
-                "id": { "type": "string" },
-                "owner": { "type": "string" },
-                "value": { "type": ["object", "null"] }
-            }),
-            &["id", "owner"],
-        ),
-        tool(
-            "comment",
-            "Add or list task comments.",
-            json!({
-                "action": { "type": "string", "enum": ["add", "list"] },
-                "id": { "type": "string" },
-                "body": { "type": "string" },
-                "by": { "type": "string" }
-            }),
-            &["action"],
-        ),
-    ]
-}
-
-fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
-    json!({
-        "name": name,
-        "description": description,
-        "inputSchema": {
-            "type": "object",
-            "properties": properties,
-            "required": required,
-            "additionalProperties": false
-        }
-    })
+    crate::registry::tool_definitions()
 }
 
 fn resource_template() -> Value {
@@ -413,7 +163,8 @@ fn tool_call(
     let text = serde_json::to_string(&tool.envelope)
         .map_err(|error| (-32603, format!("serialize tool result: {error}")))?;
     let mut result = json!({
-        "content": [{ "type": "text", "text": text }]
+        "content": [{ "type": "text", "text": text }],
+        "structuredContent": tool.envelope
     });
     if tool.is_error {
         result["isError"] = json!(true);
@@ -1198,7 +949,10 @@ fn dispatch_tool(
                 _ => return tool_invalid("`action` must be `add` or `list`"),
             }
         }
-        other => return tool_invalid(format!("unknown tool `{other}`")),
+        other => match crate::registry::tool_argv(other, arguments) {
+            Ok(argv) => args = argv,
+            Err(message) => return tool_invalid(message),
+        },
     }
 
     let outcome = run_orbit(executable, dir, &args, true);
@@ -1350,6 +1104,33 @@ fn bool_arg(arguments: &Value, key: &str) -> bool {
     arguments.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// MCP tools whose arguments are translated to argv by hand in
+/// [`dispatch_tool`]. Registry-driven tools are not listed here; the
+/// registry parity tests keep both sets in sync with `registry::TOOLS`.
+#[cfg(test)]
+pub(crate) fn custom_tool_names() -> &'static [&'static str] {
+    &[
+        "ready",
+        "list",
+        "get",
+        "create",
+        "update",
+        "claim",
+        "assign",
+        "release",
+        "heartbeat",
+        "checkpoint",
+        "finish",
+        "transition",
+        "link",
+        "delete",
+        "label",
+        "batch",
+        "property",
+        "comment",
+    ]
+}
+
 fn tool_invalid(message: impl Into<String>) -> ToolResponse {
     tool_error("INVALID_ARGUMENT", message)
 }
@@ -1386,7 +1167,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), 52);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -1410,9 +1191,42 @@ mod tests {
             "comment",
             "property",
             "batch",
+            "tree",
+            "reopen",
+            "prime",
+            "export",
+            "doctor",
+            "sync",
+            "repo_add",
+            "slug_migrate",
+            "migrate_model",
+            "board_sync",
+            "remote_status",
+            "remote_issues",
+            "remote_auto_push",
+            "triage_context",
+            "triage_apply",
         ] {
             assert!(names.contains(&expected), "{expected}");
         }
+        // Every tool carries MCP safety annotations and a structured output
+        // schema, generated from the command registry.
+        for tool in &tools {
+            let annotations = tool["annotations"].as_object().expect("annotations");
+            for hint in [
+                "readOnlyHint",
+                "destructiveHint",
+                "idempotentHint",
+                "openWorldHint",
+            ] {
+                assert!(annotations.contains_key(hint), "{}: {hint}", tool["name"]);
+            }
+            assert!(tool["outputSchema"].is_object());
+        }
+        let get = tools.iter().find(|tool| tool["name"] == "get").unwrap();
+        assert_eq!(get["annotations"]["readOnlyHint"], true);
+        let delete = tools.iter().find(|tool| tool["name"] == "delete").unwrap();
+        assert_eq!(delete["annotations"]["destructiveHint"], true);
     }
 
     #[test]

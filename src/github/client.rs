@@ -13,7 +13,7 @@ use crate::github::relationships::{RelationshipChange, SupportedRelationship};
 const AREA_FIELD_OPTIONS: [&str; 6] = ["board", "cli", "mcp", "setup", "docs", "release"];
 
 /// The option list for a newly created Area Issue Field: the Board's
-/// configured `board.areas`, or the canonical six when the Board defines no
+/// configured `board.components`, or the canonical six when the Board defines no
 /// Areas. GitHub single-select fields need a fixed option list, so an
 /// unrestricted Board still gets the canonical defaults.
 pub(crate) fn area_field_options(board_areas: &[String]) -> Vec<String> {

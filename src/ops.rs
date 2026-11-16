@@ -6,7 +6,9 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 
 use crate::board::Board;
-use crate::commands::{normalize_labels, normalize_waiting, parse_area_option, validate_priority};
+use crate::commands::{
+    normalize_labels, normalize_waiting, parse_component_option, validate_priority,
+};
 use crate::error::{OrbitError, Result, code};
 use crate::graph::Graph;
 use crate::mutation::TerminalKind;
@@ -22,12 +24,13 @@ pub struct NewTask {
     pub depends_on: Vec<String>,
     pub parent: Option<String>,
     pub waiting_on: Option<String>,
-    pub area: Option<String>,
+    pub component: Option<String>,
     pub verification: Option<String>,
-    pub repo: Option<String>,
+    pub repository: Option<String>,
+    pub external_id: Option<String>,
     pub body: String,
     pub source_key: Option<String>,
-    pub annotations: BTreeMap<String, serde_json::Value>,
+    pub properties: BTreeMap<String, serde_json::Value>,
 }
 
 pub struct AddOutcome {
@@ -128,17 +131,29 @@ pub fn add(
         ));
     }
 
-    if let Some(repo) = &new.repo
-        && !task::is_valid_repo(repo)
+    if let Some(repository) = &new.repository
+        && !task::is_valid_repository(repository)
     {
         return Err(OrbitError::invalid_argument(format!(
-            "repo `{repo}` is not a valid Repository name"
+            "repository `{repository}` is not a valid Repository name"
         )));
     }
-    let area = parse_area_option(board, new.area)?;
+    if let Some(external_id) = &new.external_id {
+        task::validate_external_id(external_id)?;
+        if let Some(existing) = graph.find_by_external_id(external_id)? {
+            return Err(OrbitError::new(
+                code::DUPLICATE_EXTERNAL_ID,
+                format!(
+                    "external id {external_id} is already on task {}",
+                    existing.id
+                ),
+            ));
+        }
+    }
+    let component = parse_component_option(board, new.component)?;
     let verification = task::normalize_verification(new.verification)?;
-    for (owner, value) in &new.annotations {
-        task::validate_annotation(owner, value)?;
+    for (owner, value) in &new.properties {
+        task::validate_property(owner, value)?;
     }
     let id = generate_unique_id(graph, board, parent.as_deref())?;
 
@@ -153,17 +168,18 @@ pub fn add(
             links,
             parent,
             checkpoint: None,
-            area,
+            component,
             verification,
             github: None,
             remote: None,
-            repo: new.repo,
+            repository: new.repository,
+            external_id: new.external_id,
             claim: None,
             stray_claim_times: None,
             created_at: now,
             updated_at: now,
             source_key: new.source_key,
-            annotations: new.annotations,
+            properties: new.properties,
             extra: Default::default(),
         },
         body: new.body,
@@ -195,8 +211,8 @@ fn generate_unique_id(graph: &Graph, board: &Board, parent: Option<&str>) -> Res
     ))
 }
 
-/// Sets (`Some`) or removes (`None`) one owner's Annotation on a Task.
-pub fn annotate(
+/// Sets (`Some`) or removes (`None`) one owner's Property on a Task.
+pub fn property(
     graph: &mut Graph,
     id: &str,
     owner: &str,
@@ -204,17 +220,17 @@ pub fn annotate(
     now: DateTime<Utc>,
 ) -> Result<bool> {
     if let Some(value) = &value {
-        crate::task::validate_annotation(owner, value)?;
+        crate::task::validate_property(owner, value)?;
     }
     let task = graph.get_mut(id)?;
     let changed = match value {
         Some(value) => {
-            task.front.annotations.get(owner) != Some(&value) && {
-                task.front.annotations.insert(owner.to_string(), value);
+            task.front.properties.get(owner) != Some(&value) && {
+                task.front.properties.insert(owner.to_string(), value);
                 true
             }
         }
-        None => task.front.annotations.remove(owner).is_some(),
+        None => task.front.properties.remove(owner).is_some(),
     };
     if changed {
         task.touch(now);
@@ -230,8 +246,10 @@ pub struct TaskUpdate {
     pub priority: Option<String>,
     pub task_type: Option<TaskType>,
     pub waiting_on: FieldUpdate<String>,
-    pub area: FieldUpdate<String>,
+    pub component: FieldUpdate<String>,
     pub verification: FieldUpdate<String>,
+    pub repository: FieldUpdate<String>,
+    pub external_id: FieldUpdate<String>,
 }
 
 /// Applies field changes to a Task. Returns whether any value differs.
@@ -274,13 +292,31 @@ pub fn update(
         },
         other => other,
     };
-    let area = match change.area {
-        FieldUpdate::Set(value) => match parse_area_option(board, Some(value))? {
+    let component = match change.component {
+        FieldUpdate::Set(value) => match parse_component_option(board, Some(value))? {
             Some(value) => FieldUpdate::Set(value),
             None => FieldUpdate::Keep,
         },
         other => other,
     };
+    if let FieldUpdate::Set(value) = &change.repository
+        && !task::is_valid_repository(value)
+    {
+        return Err(OrbitError::invalid_argument(format!(
+            "repository `{value}` is not a valid Repository name"
+        )));
+    }
+    if let FieldUpdate::Set(value) = &change.external_id {
+        task::validate_external_id(value)?;
+        if let Some(existing) = graph.find_by_external_id(value)?
+            && existing.id != id
+        {
+            return Err(OrbitError::new(
+                code::DUPLICATE_EXTERNAL_ID,
+                format!("external id {value} is already on task {}", existing.id),
+            ));
+        }
+    }
     let verification = match change.verification {
         FieldUpdate::Set(value) => match task::normalize_verification(Some(value))? {
             Some(value) => FieldUpdate::Set(value),
@@ -304,8 +340,10 @@ pub fn update(
         task.front.task_type = task_type;
     }
     apply_waiting_links(&mut task.front.links, waiting_change);
-    apply_field(&mut task.front.area, area);
+    apply_field(&mut task.front.component, component);
     apply_field(&mut task.front.verification, verification);
+    apply_field(&mut task.front.repository, change.repository);
+    apply_field(&mut task.front.external_id, change.external_id);
     let changed = front_differs(&before.0, &task.front) || before.1 != task.body;
     task.touch(now);
     Ok(changed)
@@ -341,8 +379,10 @@ fn front_differs(before: &TaskFrontmatter, after: &TaskFrontmatter) -> bool {
         || before.priority != after.priority
         || before.task_type != after.task_type
         || before.links != after.links
-        || before.area != after.area
+        || before.component != after.component
         || before.verification != after.verification
+        || before.repository != after.repository
+        || before.external_id != after.external_id
 }
 
 /// Adds and removes Labels. Returns whether the Task's Labels changed.

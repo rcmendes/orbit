@@ -61,7 +61,7 @@ pub fn plan_sync(
     let orbit_title = view.task.front.title.clone();
     let orbit_body = view.task.body.clone();
     let orbit_labels = view.task.front.labels.clone();
-    let orbit_area = view.task.front.area.clone();
+    let orbit_area = view.task.front.component.clone();
     let orbit_verification = view.task.front.verification.clone();
     let orbit_status = view.task.front.status;
 
@@ -137,7 +137,7 @@ pub fn baseline_from(task: &Task, issue: &RemoteIssue) -> SyncBaseline {
         title: issue.title.clone(),
         body: issue.body.clone(),
         labels: issue.labels.clone(),
-        area: task.front.area.clone(),
+        area: task.front.component.clone(),
         verification: task.front.verification.clone(),
         status: Some(task.front.status),
         remote_status: Some(issue.status),
@@ -302,7 +302,7 @@ pub fn reject_unmapped_metadata(
 ) -> Result<()> {
     let mapped = adapter.mapped_fields(project);
     let present: Vec<&str> = [
-        ("area", task.front.area.is_some()),
+        ("area", task.front.component.is_some()),
         ("verification", task.front.verification.is_some()),
     ]
     .into_iter()
@@ -401,7 +401,7 @@ mod tests {
                 stray_claim_times: None,
                 created_at: now,
                 updated_at: now,
-                area: Some("cli".into()),
+                component: Some("cli".into()),
                 verification: Some("cargo test".into()),
                 github: None,
                 remote: Some(crate::task::RemoteLink {
@@ -412,9 +412,10 @@ mod tests {
                     active: true,
                     baseline: None,
                 }),
-                repo: None,
+                repository: None,
+                external_id: None,
                 source_key: None,
-                annotations: BTreeMap::new(),
+                properties: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: body.into(),

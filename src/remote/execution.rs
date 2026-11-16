@@ -520,7 +520,7 @@ fn resolve_sync_conflicts(
                 plan.apply_labels = Some(issue.labels.clone())
             }
             ("area", SyncResolution::PreferOrbit) => {
-                plan.push_area = Some(task.front.area.clone());
+                plan.push_area = Some(task.front.component.clone());
             }
             ("area", SyncResolution::PreferRemote) => plan.apply_area = Some(issue.area.clone()),
             ("verification", SyncResolution::PreferOrbit) => {
@@ -578,13 +578,13 @@ pub(crate) fn apply_plan(
     }
     if let Some(area) = &plan.apply_area {
         if let Some(value) = area
-            && !crate::task::is_valid_area(value)
+            && !crate::task::is_valid_component(value)
         {
             return Err(OrbitError::invalid_argument(format!(
                 "the remote tracker returned an invalid area `{value}`"
             )));
         }
-        task.front.area = area.clone();
+        task.front.component = area.clone();
     }
     if let Some(verification) = &plan.apply_verification {
         task.front.verification = verification.clone();
@@ -748,7 +748,7 @@ pub fn create_and_link<R: RemoteResolver + ?Sized>(
             body: task.body.clone(),
             labels: task.front.labels.clone(),
             status: task.front.status,
-            area: task.front.area.clone(),
+            area: task.front.component.clone(),
             verification: task.front.verification.clone(),
         },
     )?;

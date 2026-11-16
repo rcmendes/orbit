@@ -372,8 +372,8 @@ pub(super) fn format_detail(
             lines.push(line);
         }
     }
-    for (owner, value) in &task.front.annotations {
-        lines.push(format!("annotation {owner}: {value}"));
+    for (owner, value) in &task.front.properties {
+        lines.push(format!("property {owner}: {value}"));
     }
     if let Some(checkpoint) = &task.front.checkpoint {
         let label = if task.front.status.is_terminal() {

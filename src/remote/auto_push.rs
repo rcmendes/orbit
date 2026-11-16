@@ -148,7 +148,7 @@ fn auto_create<R: RemoteResolver + ?Sized>(
     // A Repository may designate the Remote Project for its new Tasks.
     if let Some(project) = task
         .front
-        .repo
+        .repository
         .as_deref()
         .and_then(|repo| crate::repository::remote_project_for(board, repo))
     {

@@ -3,24 +3,25 @@
 Shared, durable conventions for work on this repository. These apply to every
 agent session unless a Task explicitly narrows or extends them.
 
-## Work areas (`area`)
+## Components (`component`)
 
-Each Task may carry one optional `area` value: a short lowercase slug
-(letters, digits, `-`) classifying where the change primarily lands. Areas are
-per-Board vocabulary, configured in `config.toml`:
+Each Task may carry one optional `component` value: a short lowercase slug
+(letters, digits, `-`) classifying which part of the product the change
+primarily lands in. Components are per-Board vocabulary, configured in
+`config.toml`:
 
 ```toml
 [board]
-areas = ["board", "cli", "mcp", "setup", "docs", "release"]
+components = ["board", "cli", "mcp", "setup", "docs", "release"]
 ```
 
-When `board.areas` is empty the Board defines no Areas and any lowercase slug
-is accepted. Do not store personal preferences or session-local state in
-`area`.
+When `board.components` is empty the Board defines no Components and any
+lowercase slug is accepted. Do not store personal preferences or session-local
+state in `component`.
 
 For this repository the suggested values are:
 
-| Area | Typical scope |
+| Component | Typical scope |
 | --- | --- |
 | `board` | Board resolution, task storage, graph, locks, git adapter |
 | `cli` | JSON CLI, command handlers, help text |
@@ -29,10 +30,10 @@ For this repository the suggested values are:
 | `docs` | User-facing documentation under `docs/` and root guides |
 | `release` | Versioning, packaging, CI release automation |
 
-Filter with `orbit list --area cli` or `orbit ready --exclude-area docs`. The
-same values appear in JSON (`area`) and in MCP `create`, `update`, `list`, and
-`ready`. `orbit triage context` reports the Board's configured `allowed_areas`
-(`null` when unrestricted).
+Filter with `orbit list --component cli` or `orbit ready --exclude-component docs`.
+The same values appear in JSON (`component`) and in MCP `create`, `update`,
+`list`, and `ready`. `orbit triage context` reports the Board's configured
+`allowed_components` (`null` when unrestricted).
 
 ## Verification guidance
 
@@ -56,5 +57,5 @@ steps. A Task may override a default only by stating so explicitly in its
 ## What not to store here
 
 Do not put transient execution state, personal tool choices, or session-local
-notes in `area` or `verification`. Claims, checkpoints, comments, and labels
+notes in `component` or `verification`. Claims, checkpoints, comments, and labels
 remain the right place for workflow state and triage.

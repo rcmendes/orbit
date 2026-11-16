@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{OrbitError, Result, code};
-use crate::task::{Task, normalize_area, normalize_label, normalize_verification};
+use crate::task::{Task, normalize_component, normalize_label, normalize_verification};
 use crate::triage::labels::{validate_category_roles, validate_label_list, validate_state_roles};
 
 const FORBIDDEN_FIELDS: &[&str] = &["title", "body", "status", "state"];
@@ -15,9 +15,9 @@ pub struct TriageProposal {
     #[serde(default)]
     pub uncertainty: Option<String>,
     #[serde(default)]
-    pub area: Option<String>,
+    pub component: Option<String>,
     #[serde(default)]
-    pub clear_area: bool,
+    pub clear_component: bool,
     #[serde(default)]
     pub verification: Option<String>,
     #[serde(default)]
@@ -45,11 +45,11 @@ impl TriageProposal {
         })
     }
 
-    pub fn normalize(&mut self, allowed_areas: &[String]) -> Result<()> {
-        if self.clear_area && self.area.is_some() {
+    pub fn normalize(&mut self, allowed_components: &[String]) -> Result<()> {
+        if self.clear_component && self.component.is_some() {
             return Err(OrbitError::new(
                 code::TRIAGE_INVALID_PROPOSAL,
-                "proposal cannot set both area and clear_area",
+                "proposal cannot set both component and clear_component",
             ));
         }
         if self.clear_verification && self.verification.is_some() {
@@ -76,8 +76,8 @@ impl TriageProposal {
         self.labels_add = add;
         self.labels_remove = remove;
 
-        if let Some(area) = self.area.take() {
-            self.area = Some(normalize_area(&area, allowed_areas)?);
+        if let Some(component) = self.component.take() {
+            self.component = Some(normalize_component(&component, allowed_components)?);
         }
 
         if let Some(verification) = self.verification.take() {
@@ -88,8 +88,8 @@ impl TriageProposal {
     }
 
     pub fn has_metadata_changes(&self) -> bool {
-        self.area.is_some()
-            || self.clear_area
+        self.component.is_some()
+            || self.clear_component
             || self.verification.is_some()
             || self.clear_verification
             || !self.labels_add.is_empty()
@@ -109,20 +109,23 @@ impl TriageProposal {
 
         let mut changes = serde_json::Map::new();
 
-        if self.clear_area {
-            if task.front.area.is_some() {
+        if self.clear_component {
+            if task.front.component.is_some() {
                 changes.insert(
-                    "area".into(),
+                    "component".into(),
                     json!({
-                        "from": task.front.area.as_deref(),
+                        "from": task.front.component.as_deref(),
                         "to": null
                     }),
                 );
             }
-        } else if let Some(area) = &self.area {
-            let current = task.front.area.as_deref();
-            if current != Some(area.as_str()) {
-                changes.insert("area".into(), json!({ "from": current, "to": area }));
+        } else if let Some(component) = &self.component {
+            let current = task.front.component.as_deref();
+            if current != Some(component.as_str()) {
+                changes.insert(
+                    "component".into(),
+                    json!({ "from": current, "to": component }),
+                );
             }
         }
 
@@ -180,10 +183,10 @@ impl TriageProposal {
             return Ok(false);
         }
 
-        if self.clear_area {
-            task.front.area = None;
-        } else if let Some(area) = &self.area {
-            task.front.area = Some(area.clone());
+        if self.clear_component {
+            task.front.component = None;
+        } else if let Some(component) = &self.component {
+            task.front.component = Some(component.clone());
         }
 
         if self.clear_verification {
@@ -223,7 +226,7 @@ fn reject_forbidden_fields(value: &Value) -> Result<()> {
             return Err(OrbitError::new(
                 code::TRIAGE_INVALID_PROPOSAL,
                 format!(
-                    "proposal must not include non-Triage Task field `{field}`; triage only updates area, verification, and canonical labels on Orbit"
+                    "proposal must not include non-Triage Task field `{field}`; triage only updates component, verification, and canonical labels on Orbit"
                 ),
             ));
         }

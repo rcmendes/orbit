@@ -204,10 +204,10 @@ impl Config {
                 )));
             }
         }
-        for area in &self.board.areas {
-            if !crate::task::is_valid_area(area) {
+        for component in &self.board.components {
+            if !crate::task::is_valid_component(component) {
                 return Err(OrbitError::config(format!(
-                    "board.areas contains invalid area `{area}`"
+                    "board.components contains invalid component `{component}`"
                 )));
             }
         }
@@ -292,10 +292,10 @@ pub struct BoardConfig {
     /// Still parsed so `orbit migrate` can read pre-migration Boards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<StorageMode>,
-    /// Optional per-Board Area vocabulary. When empty, any short lowercase
-    /// Area name is accepted.
+    /// Optional per-Board Component vocabulary. When empty, any short
+    /// lowercase Component name is accepted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub areas: Vec<String>,
+    pub components: Vec<String>,
     #[serde(default = "default_lease")]
     pub lease_minutes: i64,
     #[serde(default = "task::default_priority")]
@@ -358,7 +358,7 @@ impl Default for BoardConfig {
         Self {
             branch: default_branch(),
             storage: None,
-            areas: Vec::new(),
+            components: Vec::new(),
             lease_minutes: default_lease(),
             default_priority: task::default_priority(),
             priorities: task::default_priorities(),

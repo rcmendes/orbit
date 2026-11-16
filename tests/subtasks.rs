@@ -1217,7 +1217,7 @@ fn a_board_written_by_the_previous_release_loads_everywhere() {
     assert!(!ids.contains(&parent.as_str()), "{ids:?}");
 
     let export = repo.ok_json(&["export", "--json"]);
-    assert_eq!(export["data"]["schema_version"], 3, "{export}");
+    assert_eq!(export["data"]["schema_version"], 4, "{export}");
     let exported = export["data"]["tasks"]
         .as_array()
         .unwrap()

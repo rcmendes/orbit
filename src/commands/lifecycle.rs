@@ -95,7 +95,7 @@ struct WorktreePlan {
 fn plan_worktree(board: &Board, id: &str) -> Result<WorktreePlan> {
     let (graph, _) = crate::graph::Graph::load(board, crate::graph::LoadMode::Strict)?;
     let task = graph.get(id)?;
-    let member = match task.front.repo.as_deref() {
+    let member = match task.front.repository.as_deref() {
         Some(name) => crate::repository::members(board)?
             .into_iter()
             .find(|member| member.name == name)

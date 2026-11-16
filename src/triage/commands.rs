@@ -49,12 +49,12 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
         .as_ref()
         .map(|path| path.display().to_string());
 
-    // An empty `board.areas` means the Board defines no Areas, so any
+    // An empty `board.components` means the Board defines no Areas, so any
     // lowercase slug is allowed; `null` tells the agent there is no list.
-    let allowed_areas = if board.config.board.areas.is_empty() {
+    let allowed_components = if board.config.board.components.is_empty() {
         serde_json::Value::Null
     } else {
-        json!(board.config.board.areas)
+        json!(board.config.board.components)
     };
     // For a Linked Task only the Remote Project's Mapped fields can be
     // published, so they are the only fields Triage may change; a Local
@@ -62,12 +62,12 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
     // field stays available.
     let capabilities = match &publish {
         Publishability::Remote { mapped, .. } => json!({
-            "area": mapped.area,
+            "component": mapped.area,
             "verification": mapped.verification,
             "labels": mapped.labels,
         }),
         _ => json!({
-            "area": true,
+            "component": true,
             "verification": true,
             "labels": true,
         }),
@@ -77,13 +77,13 @@ fn cmd_context(board: &Board, id: &str) -> Result<crate::output::CommandOutput> 
         "github": github_compat_json(task),
         "remote": link_json(task),
         "current": {
-            "area": task.front.area.as_deref(),
+            "component": task.front.component.as_deref(),
             "verification": task.front.verification,
             "labels": task.front.labels,
         },
         "project_guidance": guidance,
         "project_guidance_path": guidance_path_json,
-        "allowed_areas": allowed_areas,
+        "allowed_components": allowed_components,
         "canonical_labels": CANONICAL_TRIAGE_LABELS,
         "metadata_capabilities": capabilities,
     });
@@ -263,11 +263,11 @@ fn render_preview(id: &str, proposal: &TriageProposal, changes: &serde_json::Val
     }
 
     let change_map = changes.as_object();
-    if let Some(area) = change_map.and_then(|changes| changes.get("area")) {
+    if let Some(component) = change_map.and_then(|changes| changes.get("component")) {
         lines.push(format!(
-            "Area: {} -> {}",
-            display_diff_value(&area["from"]),
-            display_diff_value(&area["to"])
+            "Component: {} -> {}",
+            display_diff_value(&component["from"]),
+            display_diff_value(&component["to"])
         ));
     }
     if let Some(verification) = change_map.and_then(|changes| changes.get("verification")) {
@@ -397,7 +397,7 @@ fn unavailable_tracker_note(task: &str, tracker: &str) -> String {
 /// For a Linked Task, reject proposal changes the Remote Project cannot
 /// publish: the adapter's Mapped fields are the only fields sync carries,
 /// so proposing an unmappable field would promise a publish that can
-/// never happen (and, for `area`/`verification`, would break the next
+/// never happen (and, for `component`/`verification`, would break the next
 /// push). Local Tasks and unresolvable trackers have no publish step, so
 /// nothing is rejected.
 fn reject_unmapped_changes(
@@ -409,7 +409,7 @@ fn reject_unmapped_changes(
         return Ok(());
     };
     let unmapped: Vec<&str> = [
-        ("area", mapped.area),
+        ("component", mapped.area),
         ("verification", mapped.verification),
         ("labels", mapped.labels),
     ]
@@ -442,7 +442,7 @@ fn load_proposal(board: &Board, path: &Path) -> Result<TriageProposal> {
         })?
     };
     let mut proposal = TriageProposal::parse_json(&raw)?;
-    proposal.normalize(&board.config.board.areas)?;
+    proposal.normalize(&board.config.board.components)?;
     Ok(proposal)
 }
 
@@ -518,7 +518,7 @@ mod tests {
                 .contains("No metadata changes proposed; leaving the Task unchanged.")
         );
 
-        let mut satisfied = TriageProposal::parse_json(r#"{"area":"cli"}"#).unwrap();
+        let mut satisfied = TriageProposal::parse_json(r#"{"component":"cli"}"#).unwrap();
         satisfied.normalize(&[]).unwrap();
         let noop_preview = render_preview("orb-123", &satisfied, &serde_json::json!({}));
         assert!(noop_preview.contains("No metadata changes: the proposal is already satisfied."));

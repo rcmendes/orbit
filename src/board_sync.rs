@@ -707,11 +707,11 @@ fn merge_task(
         &key("checkpoint"),
         outcome,
     );
-    let area = pick(
-        base_front.map(|f| f.area.clone()),
-        local.front.area.clone(),
-        remote.front.area.clone(),
-        &key("area"),
+    let component = pick(
+        base_front.map(|f| f.component.clone()),
+        local.front.component.clone(),
+        remote.front.component.clone(),
+        &key("component"),
         outcome,
     );
     let verification = pick(
@@ -735,11 +735,18 @@ fn merge_task(
         &key("remote"),
         outcome,
     );
-    let repo = pick(
-        base_front.map(|f| f.repo.clone()),
-        local.front.repo.clone(),
-        remote.front.repo.clone(),
-        &key("repo"),
+    let repository = pick(
+        base_front.map(|f| f.repository.clone()),
+        local.front.repository.clone(),
+        remote.front.repository.clone(),
+        &key("repository"),
+        outcome,
+    );
+    let external_id = pick(
+        base_front.map(|f| f.external_id.clone()),
+        local.front.external_id.clone(),
+        remote.front.external_id.clone(),
+        &key("external_id"),
         outcome,
     );
     let created_at = pick(
@@ -803,31 +810,31 @@ fn merge_task(
         &key("source_key"),
         outcome,
     );
-    // Annotations merge per owner, like unknown keys.
+    // Properties merge per owner, like unknown keys.
     let mut owners: BTreeSet<String> = BTreeSet::new();
     for source in [
-        base_front.map(|f| f.annotations.keys()),
-        Some(local.front.annotations.keys()),
-        Some(remote.front.annotations.keys()),
+        base_front.map(|f| f.properties.keys()),
+        Some(local.front.properties.keys()),
+        Some(remote.front.properties.keys()),
     ]
     .into_iter()
     .flatten()
     {
         owners.extend(source.cloned());
     }
-    let mut annotations = BTreeMap::new();
+    let mut properties = BTreeMap::new();
     for owner in owners {
-        let base_value = base_front.map(|f| f.annotations.get(&owner).cloned());
-        let local_value = local.front.annotations.get(&owner).cloned();
-        let remote_value = remote.front.annotations.get(&owner).cloned();
+        let base_value = base_front.map(|f| f.properties.get(&owner).cloned());
+        let local_value = local.front.properties.get(&owner).cloned();
+        let remote_value = remote.front.properties.get(&owner).cloned();
         if let Some(value) = pick(
             base_value,
             local_value,
             remote_value,
-            &key(&format!("annotations.{owner}")),
+            &key(&format!("properties.{owner}")),
             outcome,
         ) {
-            annotations.insert(owner, value);
+            properties.insert(owner, value);
         }
     }
 
@@ -842,15 +849,16 @@ fn merge_task(
             links,
             parent,
             checkpoint,
-            area,
+            component,
             verification,
             github,
             remote: remote_link,
-            repo,
+            repository,
+            external_id,
             claim: claim.claim,
             stray_claim_times: claim.stray,
             source_key,
-            annotations,
+            properties,
             created_at,
             updated_at,
             extra,
@@ -1129,9 +1137,9 @@ mod tests {
         }
     }
 
-    fn task_with(annotations: &str) -> Task {
+    fn task_with(properties: &str) -> Task {
         let content = format!(
-            "---\ntitle: T\nstatus: todo\n{annotations}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\nbody\n"
+            "---\ntitle: T\nstatus: todo\n{properties}created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\nbody\n"
         );
         task::parse_task("orb-aaaaaa".to_string(), &content).unwrap()
     }
@@ -1269,15 +1277,15 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_annotations_from_both_sides() {
+    fn merge_keeps_properties_from_both_sides() {
         let base = task_with("");
-        let local = task_with("annotations:\n  ci:\n    passed: true\n");
-        let remote = task_with("annotations:\n  planner:\n    order: 1\n");
+        let local = task_with("properties:\n  ci:\n    passed: true\n");
+        let remote = task_with("properties:\n  planner:\n    order: 1\n");
         let mut outcome = outcome();
         let merged = merge_task("orb-aaaaaa", Some(base), local, remote, &mut outcome).unwrap();
         let parsed = task::parse_task("orb-aaaaaa".to_string(), &merged).unwrap();
         assert_eq!(
-            serde_json::to_value(&parsed.front.annotations).unwrap(),
+            serde_json::to_value(&parsed.front.properties).unwrap(),
             serde_json::json!({"ci": {"passed": true}, "planner": {"order": 1}})
         );
         assert!(outcome.conflicts.is_empty());

@@ -327,6 +327,29 @@ impl Graph {
             ));
         }
 
+        // An External ID names one Task in an external system; two carriers
+        // make the identity ambiguous, so every duplicate is an issue.
+        let mut external_ids: std::collections::BTreeMap<&str, Vec<&str>> =
+            std::collections::BTreeMap::new();
+        for task in self.tasks.values() {
+            if let Some(external_id) = task.front.external_id.as_deref() {
+                external_ids
+                    .entry(external_id)
+                    .or_default()
+                    .push(task.id.as_str());
+            }
+        }
+        for (external_id, ids) in external_ids.into_iter().filter(|(_, ids)| ids.len() > 1) {
+            issues.push(Issue::new(
+                code::DUPLICATE_EXTERNAL_ID,
+                ids.first().copied(),
+                format!(
+                    "external id {external_id} is on more than one task: {}",
+                    ids.join(", ")
+                ),
+            ));
+        }
+
         issues
     }
 
@@ -343,6 +366,27 @@ impl Graph {
                 code::DUPLICATE_SOURCE_KEY,
                 format!(
                     "source key {key} is on more than one task: {}, {}",
+                    first.map(|task| task.id.as_str()).unwrap_or_default(),
+                    second.id
+                ),
+            ));
+        }
+        Ok(first)
+    }
+
+    /// The Task carrying `id` as its External ID. Two carriers are an error,
+    /// because the external identity would be ambiguous.
+    pub fn find_by_external_id(&self, id: &str) -> Result<Option<&Task>> {
+        let mut found = self
+            .tasks
+            .values()
+            .filter(|task| task.front.external_id.as_deref() == Some(id));
+        let first = found.next();
+        if let Some(second) = found.next() {
+            return Err(OrbitError::new(
+                code::DUPLICATE_EXTERNAL_ID,
+                format!(
+                    "external id {id} is on more than one task: {}, {}",
                     first.map(|task| task.id.as_str()).unwrap_or_default(),
                     second.id
                 ),
@@ -811,10 +855,12 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
             .checkpoint
             .as_ref()
             .map(|_| task.front.status.is_terminal()),
-        "area": task.front.area.as_deref(),
+        "component": task.front.component.as_deref(),
+        "repository": task.front.repository.as_deref(),
+        "external_id": task.front.external_id.as_deref(),
         "verification": task.front.verification,
         "source_key": task.front.source_key,
-        "annotations": task.front.annotations,
+        "properties": task.front.properties,
         "github": crate::remote::link::github_compat_json(task),
         "remote": crate::remote::link::link_json(task),
         "claimed_by": task.holder(),
@@ -874,17 +920,18 @@ mod tests {
                     .collect(),
                 parent: None,
                 checkpoint: None,
-                area: None,
+                component: None,
                 verification: None,
                 github: None,
                 remote: None,
-                repo: None,
+                repository: None,
+                external_id: None,
                 claim: None,
                 stray_claim_times: None,
                 created_at: now,
                 updated_at: now,
                 source_key: None,
-                annotations: BTreeMap::new(),
+                properties: BTreeMap::new(),
                 extra: BTreeMap::new(),
             },
             body: String::new(),

@@ -703,14 +703,14 @@ flowchart TD
     K --> V
     C --> V
     V -->|failure| X["stop; old layout still readable"]
-    V -->|success| R["one commit: layout + content conversion<br/>github: to remote:, repo:* to repo,<br/>[github] to remote projects, board.areas"]
+    V -->|success| R["one commit: layout + content conversion<br/>github: to remote:, repo:* to repository,<br/>[github] to remote projects, board.components"]
     X --> A["doctor reports AMBIGUOUS_BOARD or LEGACY_LAYOUT<br/>rerun orbit migrate"]
 ```
 
 The conversion also rewrites task frontmatter `github:` links to `remote:`,
-moves `repo:*` labels into the `repo` field, converts `[github]` configuration
-into remote project entries, drops `board.storage`, and seeds `board.areas`
-from the Area values Tasks already use — all in the same commit. Re-running
+moves `repo:*` labels into the `repository` field, converts `[github]` configuration
+into remote project entries, drops `board.storage`, and seeds `board.components`
+from the Component values Tasks already use — all in the same commit. Re-running
 after `--apply` is a no-op.
 
 A forced `git clean -xdff` that removes `DIR` leaves the `orbit` branch and a stale worktree record. `doctor` reports `ORPHAN_WORKTREE`; `doctor --fix` or `init` prunes the record and re-attaches `DIR` without task loss.

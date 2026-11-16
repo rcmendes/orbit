@@ -46,7 +46,7 @@ Change a Board's Task-ID prefix:
   orbit slug show
   orbit slug migrate atlas --dry-run";
 
-pub const BOARD_MIGRATE_LONG: &str = "Convert a pre-ADR-0019 Board into a standalone Board folder. Previews by default; --apply converts legacy layouts and worktree-mode Boards, rewrites github: links to remote:, [github] to remote project entries, repo:* labels to the repo field, and seeds board.areas, in one commit.";
+pub const BOARD_MIGRATE_LONG: &str = "Convert a pre-ADR-0019 Board into a standalone Board folder. Previews by default; --apply converts legacy layouts and worktree-mode Boards, rewrites github: links to remote:, [github] to remote project entries, repo:* labels to the repository field, and seeds board.components, in one commit.";
 
 pub const BOARD_MIGRATE_EXAMPLES: &str = "\
 Examples:
@@ -151,7 +151,7 @@ pub const REPO_LONG: &str = "\
 Manage the Board's member Repositories. A Board has zero or more member \
 Repositories: Git repositories discovered under the folder that anchors the \
 Board, plus Repositories added explicitly. Tasks record their Repository in \
-the optional `repo` frontmatter field; `orbit add` fills it from the current \
+the optional `repository` frontmatter field; `orbit add` fills it from the current \
 Repository automatically.";
 
 pub const REPO_EXAMPLES: &str = "\
@@ -281,7 +281,7 @@ Examples:
   orbit add \"Spec: SSO login\" --type epic --body-file spec.md
 
   # Break a feature into a SubTask
-  orbit add \"API: add the endpoint\" --parent orb-a7b2c9 --label repo:api
+  orbit add \"API: add the endpoint\" --parent orb-a7b2c9
 
   # Publish a ticket under a spec or epic parent
   orbit add \"web: login redirect\" --parent orb-a7b2c9 --label ready-for-agent";
@@ -297,7 +297,7 @@ status with --status. Filters combine, so --status in_progress --claimed-by
 claude shows everything one agent is holding.
 
 Inside a member Repository or one of its worktrees the list is scoped to that
-Repository's Tasks plus Board-wide Tasks (tasks with no repo); --all widens it
+Repository's Tasks plus Board-wide Tasks (tasks with no repository); --all widens it
 to the whole Board. At the Board's root there is no scoping.
 
 Human output is an aligned table with ID, STATUS, P, TYPE,";
@@ -333,8 +333,9 @@ const LIST_LONG_FILTERS: &str =
     "--parent lists only the SubTasks of one Parent Task. --type is repeatable and
 matches any listed work shape; --exclude-type hides any listed shape. --label
 is repeatable and every label must match; --exclude-label is repeatable and
-hides a task carrying any of the named labels. --repo NAME is shorthand for
---label repo:NAME. For work an agent can start, use `orbit ready` instead of
+hides a task carrying any of the named labels. --repository NAME filters on
+the `repository` field; --component and --exclude-component filter on the
+`component` field. For work an agent can start, use `orbit ready` instead of
 filtering this list.";
 
 const LIST_EXAMPLES_HEAD: &str = "Examples:
@@ -357,8 +358,8 @@ const LIST_EXAMPLES_HEAD: &str = "Examples:
   orbit list --group
 
   # Everything for one repository, optionally with another label
-  orbit list --repo api
-  orbit list --repo api --label ready-for-agent
+  orbit list --repository api
+  orbit list --repository api --label ready-for-agent
 
 ";
 
@@ -416,11 +417,12 @@ moves to in_progress with a lease; --by names the agent and requires --claim.
 When nothing is ready the command still succeeds, with data null and
 meta.reason NO_READY_TASKS, so a polling loop can wait and retry.
 
-With --parent, only that Parent Task's Ready SubTasks are considered. --repo NAME
+With --parent, only that Parent Task's Ready SubTasks are considered. --repository NAME
 and repeatable --label scope the queue to a repository or a set of labels;
 repeatable --type keeps only listed work shapes, and --exclude-type hides them,
 which is how an agent skips epics, specs, or other containers. --exclude-label
-remains for legacy label-only boards. Filters combine with --parent using AND.
+remains for legacy label-only boards. --component and --exclude-component filter
+on the `component` field. Filters combine with --parent using AND.
 Use them to scope an agent to one feature or one repository instead of the whole
 Board.
 
@@ -443,7 +445,7 @@ Examples:
   orbit ready --parent orb-a7b2c9 --claim --by claude
 
   # Claim the next task for one repository
-  orbit ready --repo api --claim --by claude
+  orbit ready --repository api --claim --by claude
 
   # Skip epics and specs while claiming normal work
   orbit ready --exclude-type epic --claim --by claude";
@@ -645,9 +647,10 @@ Examples:
 
 pub const UPDATE_LONG: &str = "\
 Edits a task without changing its lifecycle. Use --title, --body/--body-file,
---priority, --type, or --waiting-on/--clear-waiting. Status, claims, labels,
-comments, and dependencies have their own commands. --type epic is refused on a
-SubTask.";
+--priority, --type, --component/--clear-component, --repository/--clear-repository,
+--external-id/--clear-external-id, --verification/--clear-verification, or
+--waiting-on/--clear-waiting. Status, claims, labels, comments, and dependencies
+have their own commands. --type epic is refused on a SubTask.";
 
 pub const UPDATE_EXAMPLES: &str = "\
 Examples:
@@ -670,7 +673,7 @@ against an in-memory snapshot, and nothing is written until all succeed. A
 failure names the operation's index and op in error.details.
 
 Operations: add, update, label, depend, undepend, claim, heartbeat, release,
-done, cancel, reopen, comment, annotate. Each takes the fields and follows the
+done, cancel, reopen, comment, property. Each takes the fields and follows the
 rules of its command. A reference (id, on, parent, depends_on) is a Task ID or
 `key:` followed by a Source Key added earlier in the Batch or already on the
 Board. An add whose Source Key exists matches that Task instead of creating
@@ -704,36 +707,37 @@ Examples:
   echo '{\"operations\": [{\"op\": \"label\", \"id\": \"orb-a7b2c9\", \"remove\": [\"needs-triage\"]},
         {\"op\": \"claim\", \"id\": \"orb-a7b2c9\", \"by\": \"planner-7\"}]}' | orbit batch --file -";
 
-pub const ANNOTATION_LONG: &str = "\
-An Annotation is structured data that one tool attaches to a Task under the
-tool's name, its owner. Orbit stores, returns, and shows it but never
-interprets it: Annotations never affect readiness, claims, or status, and they
-are never synchronized with a Remote Tracker.
+pub const PROPERTY_LONG: &str = "\
+A Property is structured data that one tool attaches to a Task under the
+tool's name, its owner — the owner is the property's namespace. Orbit stores,
+returns, and shows it but never interprets it: Properties never affect
+readiness, claims, or status, and they are never synchronized with a Remote
+Tracker.
 
-`set` replaces the owner's whole Annotation with a JSON object of at most 8192
-bytes; `remove` deletes it. Other owners' Annotations are untouched. An owner
+`set` replaces the owner's whole Property with a JSON object of at most 8192
+bytes; `remove` deletes it. Other owners' Properties are untouched. An owner
 is a lowercase slug of at most 40 characters.";
 
-pub const ANNOTATION_EXAMPLES: &str = "\
+pub const PROPERTY_EXAMPLES: &str = "\
 Examples:
   # Record a CI result on a task
-  orbit annotation set orb-a7b2c9 ci --value '{\"passed\":true,\"run\":412}'
+  orbit property set orb-a7b2c9 ci --value '{\"passed\":true,\"run\":412}'
 
   # Read it back
-  orbit show orb-a7b2c9 --json | jq '.data.annotations.ci'
+  orbit show orb-a7b2c9 --json | jq '.data.properties.ci'
 
   # Remove it
-  orbit annotation remove orb-a7b2c9 ci";
+  orbit property remove orb-a7b2c9 ci";
 
-pub const ANNOTATION_SET_EXAMPLES: &str = "\
+pub const PROPERTY_SET_EXAMPLES: &str = "\
 Examples:
-  # Replace the ci Annotation on a task
-  orbit annotation set orb-a7b2c9 ci --value '{\"passed\":true}'";
+  # Replace the ci Property on a task
+  orbit property set orb-a7b2c9 ci --value '{\"passed\":true}'";
 
-pub const ANNOTATION_REMOVE_EXAMPLES: &str = "\
+pub const PROPERTY_REMOVE_EXAMPLES: &str = "\
 Examples:
-  # Remove the ci Annotation from a task
-  orbit annotation remove orb-a7b2c9 ci";
+  # Remove the ci Property from a task
+  orbit property remove orb-a7b2c9 ci";
 
 pub const LABEL_LONG: &str = "\
 Labels are free-form lowercase slugs stored on the task. They are the triage state
@@ -940,7 +944,7 @@ Parent Tasks ready to close, and stale claims. This is the context an agent
 session starts with; the Claude and Devin SessionStart hooks call
 `orbit prime --hook-json` automatically.
 
---repo NAME and repeatable --label scope the counts, ready tasks, close
+--repository NAME and repeatable --label scope the counts, ready tasks, close
 candidates, and stale claims to a repository or label set. --hook-json prints
 the SessionStart hook envelope instead of the normal output and cannot be combined
 with --json.";
@@ -954,12 +958,12 @@ Examples:
   orbit prime --json
 
   # Scope the session context to one repository
-  orbit prime --by claude --repo api";
+  orbit prime --by claude --repository api";
 
 pub const EXPORT_LONG: &str = "\
 Emits a deterministic JSON snapshot of the whole Board: every Task and SubTask,
 including terminal work, with type, labels, dependency and parent edges, derived
-readiness, Annotations, and comments. The snapshot is ordered by task ID and contains no
+readiness, Properties, and comments. The snapshot is ordered by task ID and contains no
 timestamps or machine-local paths, so the same board state always produces the
 same data.
 
@@ -1022,14 +1026,15 @@ Examples:
 
 pub const MCP_LONG: &str = "\
 Runs the Model Context Protocol server over stdio. Editors start this process from
-their MCP configuration, so it is rarely run by hand. It exposes 14 tools (ready,
+their MCP configuration, so it is rarely run by hand. It exposes 15 tools (ready,
 list, get, create, update, claim, release, heartbeat, checkpoint, finish, link,
-delete, label, comment) and the orbit://tasks/{id} Markdown resource, reusing the
-CLI's lock, atomic writes, and auto-commit. `create` accepts `parent` to make a
-SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint`
-records the claim holder's handoff. `list` and `ready` accept `parent`, `repo`,
-`labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature,
-repository, or work shape.
+delete, label, comment, property) and the orbit://tasks/{id} Markdown resource,
+reusing the CLI's lock, atomic writes, and auto-commit. `create` accepts `parent`
+to make a SubTask and `type`, `component`, and `external_id` to set fields;
+`update` accepts `type`, `component`, `repository`, and `external_id`; `checkpoint`
+records the claim holder's handoff. `list` and `ready` accept `parent`, `repository`,
+`components`, `exclude_components`, `labels`, `exclude_labels`, `types`, and
+`exclude_types` to scope a feature, repository, or work shape.
 
 Use `orbit mcp` as the command in a client configuration. Pass --dir globally to
 serve a specific Board.";
@@ -1276,7 +1281,7 @@ Examples:
 pub const TRIAGE_LONG: &str = "\
 Review Tasks and apply approved metadata changes on the Orbit Board first.
 
-Triage only touches Orbit-owned `area`, task-level `verification`, and canonical triage/category
+Triage only touches Orbit-owned `component`, task-level `verification`, and canonical triage/category
 labels. It works on Local Tasks and Linked Tasks alike; for a Linked Task, only the Remote
 Project's Mapped fields can be proposed, since those are the only fields a later sync publishes.
 It does not change Task title, body, status, or open/closed state, and it does not run

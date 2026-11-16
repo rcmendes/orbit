@@ -111,6 +111,11 @@ pub struct Profile {
     /// custom `[workflow]` definition, same shape as `config.toml`.
     #[serde(default)]
     pub workflow: Option<WorkflowConfig>,
+    /// `[policy]` rules the profile contributes: merged into the Board's
+    /// `config.policy.rules` by name on `orbit setup`. Rules may scope
+    /// themselves to this profile through `profiles = ["<name>"]`.
+    #[serde(default)]
+    pub policy: crate::policy::PolicyConfig,
     /// Optional `board.*` overrides applied with the profile.
     #[serde(default)]
     pub board: ProfileBoard,
@@ -227,6 +232,19 @@ impl Profile {
             };
             Workflow::from_config(&config)?;
         }
+        // Policy rules get their shape checks here; references to
+        // transitions, statuses, and profiles are validated when the merged
+        // config is saved (`Config::validate`).
+        let mut rule_names = std::collections::BTreeSet::new();
+        for rule in &self.policy.rules {
+            rule.validate_shape()?;
+            if !rule_names.insert(rule.name.as_str()) {
+                return Err(OrbitError::config(format!(
+                    "profile `{name}` defines policy rule `{}` more than once",
+                    rule.name
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -259,6 +277,20 @@ impl Profile {
     pub fn apply(&self, config: &mut Config, source: Option<&str>) -> Result<()> {
         if let Some(workflow) = &self.workflow {
             config.workflow = workflow.clone();
+        }
+        // Profile policy rules merge by name: re-applying replaces the
+        // profile's own rules and leaves hand-written rules alone.
+        for rule in &self.policy.rules {
+            if let Some(existing) = config
+                .policy
+                .rules
+                .iter_mut()
+                .find(|existing| existing.name == rule.name)
+            {
+                *existing = rule.clone();
+            } else {
+                config.policy.rules.push(rule.clone());
+            }
         }
         let board = &self.board;
         if let Some(priorities) = &board.priorities {

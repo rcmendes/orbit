@@ -271,8 +271,9 @@ impl Hierarchy {
 
 /// Whether one required field is present on a Task. Known names map onto the
 /// typed frontmatter fields; any other name is looked up in the frontmatter's
-/// `extra` map so Boards can require their own custom fields.
-fn required_field_present(task: &Task, field: &str) -> bool {
+/// `extra` map so Boards can require their own custom fields. Shared with the
+/// `[policy]` rule validators (`require_fields`).
+pub(crate) fn required_field_present(task: &Task, field: &str) -> bool {
     let front = &task.front;
     match field {
         "title" => !front.title.trim().is_empty(),

@@ -314,11 +314,21 @@ running binary and reports `PROFILE_UNMET` when they are not met;
 `orbit capabilities` lists applied profile names.
 _Avoid_: Installed plugin, profile state
 
+**Policy rule**:
+A `[[policy.rules]]` entry in `config.toml` (or contributed by an applied
+Profile) that guards Workflow transitions: required fields, required evidence
+Properties, a WIP limit, a max-attempts cap, reviewer/assignee distinctness, a
+readiness lint that also gates `ready` and `claim`, and post-functions that add
+labels or Properties after a governed transition. Rules scope by transition,
+target Status, Issue type, labels, and applied profiles; a violation fails the
+operation with `POLICY_VIOLATION`.
+_Avoid_: Guard clause, hook, validator function
+
 **Capability**:
 A named feature an Orbit binary provides — `workflow`, `issue-types`,
 `hierarchy`, `priorities`, `links`, `components`, `properties`, `external-id`,
-`assignee`, `reporter`, `lease`, `keys`, `idempotency`, `batch`, `remote`,
-`workspace`, `mcp`, `setup`, `profiles`, `doctor` — reported by
+`assignee`, `reporter`, `lease`, `keys`, `idempotency`, `batch`, `policy`,
+`remote`, `workspace`, `mcp`, `setup`, `profiles`, `doctor` — reported by
 `orbit capabilities` and negotiated by Profiles through `requires`/`optional`.
 _Avoid_: Feature flag, module (modules are Board-enabled subsystems)
 

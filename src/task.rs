@@ -236,6 +236,218 @@ pub fn validate_annotation(owner: &str, value: &serde_json::Value) -> Result<()>
 /// Longest Source Key, in characters.
 pub const SOURCE_KEY_MAX: usize = 200;
 
+/// Canonical link type: the owner Task is blocked by the link's target.
+/// `blocks` links block readiness and take part in cycle checks unless
+/// `blocking: false` overrides the default.
+pub const LINK_TYPE_BLOCKS: &str = "blocks";
+/// Symmetric association between two Tasks or a Task and an external reference.
+pub const LINK_TYPE_RELATES_TO: &str = "relates-to";
+/// The target duplicates the owner Task.
+pub const LINK_TYPE_DUPLICATES: &str = "duplicates";
+/// The target was discovered from the owner Task.
+pub const LINK_TYPE_DISCOVERED_FROM: &str = "discovered-from";
+/// Orbit's name for the `waiting_on` convenience: an external blocker recorded
+/// through `add --waiting-on` / `update --waiting-on`.
+pub const LINK_TYPE_WAITING_ON: &str = "waiting-on";
+
+/// Longest link type name, in characters.
+pub const LINK_TYPE_MAX: usize = 64;
+
+/// The other end of a [`Link`]: an Orbit Task ID or an external reference.
+/// Serializes untagged: a bare string is a Task ID, a map is external.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LinkTarget {
+    /// An Orbit Task ID.
+    Task(String),
+    /// A reference outside this Board (another tracker, a URL-backed issue, ...).
+    External(ExternalRef),
+}
+
+/// An issue living outside the Board. `system` names the tracker or service
+/// (`jira`, `github`, ...), `id` its identity there, `url` an optional
+/// canonical link.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExternalRef {
+    pub system: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+impl ExternalRef {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        for (name, value) in [("system", self.system.as_str()), ("id", self.id.as_str())] {
+            if value.trim().is_empty() {
+                return Err(format!("link target external.{name} must not be empty"));
+            }
+        }
+        if self.url.as_ref().is_some_and(|url| url.trim().is_empty()) {
+            return Err("link target external.url must not be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl LinkTarget {
+    /// The Orbit Task ID when the target is internal.
+    pub fn task_id(&self) -> Option<&str> {
+        match self {
+            Self::Task(id) => Some(id),
+            Self::External(_) => None,
+        }
+    }
+
+    /// Target equality for link operations: external references match on
+    /// `system` + `id`, ignoring `url` (a URL is metadata, not identity).
+    pub fn same_reference(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Task(a), Self::Task(b)) => a == b,
+            (Self::External(a), Self::External(b)) => a.system == b.system && a.id == b.id,
+            _ => false,
+        }
+    }
+
+    /// Display label: the Task ID, or `system:id` for an external reference.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Task(id) => id.clone(),
+            Self::External(reference) => format!("{}:{}", reference.system, reference.id),
+        }
+    }
+}
+
+/// A typed relation between this Task and another Task or an external
+/// reference. The link is stored on the inward end: `type` names the
+/// relation the *target* has toward the owner, so `blocks` on Task T
+/// targeting D reads "D blocks T" — the same edge `depends_on` used to hold.
+///
+/// `blocking` overrides the type's default: `blocks` defaults to blocking,
+/// every other type to non-blocking. Blocking links drive readiness and
+/// cycle checks; non-blocking links never do. `attributes` carries arbitrary
+/// Board- or tool-owned data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Link {
+    /// Link type: `blocks`, `relates-to`, `duplicates`, `discovered-from`,
+    /// `waiting-on`, or a Board-defined custom slug. Serialized as `type`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub target: LinkTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<bool>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attributes: BTreeMap<String, serde_yaml_ng::Value>,
+}
+
+impl Link {
+    /// A blocking `blocks` link to an Orbit Task — what `depends_on` stored.
+    pub fn dependency(target: &str) -> Self {
+        Self {
+            kind: LINK_TYPE_BLOCKS.to_string(),
+            target: LinkTarget::Task(target.to_string()),
+            blocking: None,
+            attributes: BTreeMap::new(),
+        }
+    }
+
+    /// A blocking link to an external reference — what `waiting_on` stored.
+    /// `text` is the free-form blocker description.
+    pub fn waiting_on(text: &str) -> Self {
+        Self {
+            kind: LINK_TYPE_WAITING_ON.to_string(),
+            target: LinkTarget::External(ExternalRef {
+                system: "external".to_string(),
+                id: text.to_string(),
+                url: None,
+            }),
+            blocking: Some(true),
+            attributes: BTreeMap::new(),
+        }
+    }
+
+    /// Whether the link participates in readiness and cycle checks.
+    pub fn is_blocking(&self) -> bool {
+        self.blocking
+            .unwrap_or_else(|| self.kind == LINK_TYPE_BLOCKS)
+    }
+
+    /// The internal Task ID this link points at, when it has one.
+    pub fn target_task(&self) -> Option<&str> {
+        self.target.task_id()
+    }
+
+    /// Whether the target is an external reference.
+    pub fn is_external(&self) -> bool {
+        matches!(self.target, LinkTarget::External(_))
+    }
+
+    /// How the owner Task sees the link (the inward name of the type).
+    pub fn inward_name(&self) -> String {
+        match self.kind.as_str() {
+            LINK_TYPE_BLOCKS => "is blocked by".to_string(),
+            LINK_TYPE_RELATES_TO => "relates to".to_string(),
+            LINK_TYPE_DUPLICATES => "is duplicated by".to_string(),
+            LINK_TYPE_DISCOVERED_FROM => "is the origin of".to_string(),
+            _ => self.kind.clone(),
+        }
+    }
+
+    /// How the target sees the link (the outward name of the type).
+    pub fn outward_name(&self) -> String {
+        match self.kind.as_str() {
+            LINK_TYPE_BLOCKS => "blocks".to_string(),
+            LINK_TYPE_RELATES_TO => "relates to".to_string(),
+            LINK_TYPE_DUPLICATES => "duplicates".to_string(),
+            LINK_TYPE_DISCOVERED_FROM => "discovered from".to_string(),
+            _ => self.kind.clone(),
+        }
+    }
+
+    /// JSON shape returned by `show`/`list`: the stored fields plus the
+    /// resolved blocking flag and both directional names.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": self.kind,
+            "target": self.target,
+            "blocking": self.is_blocking(),
+            "inward": self.inward_name(),
+            "outward": self.outward_name(),
+            "attributes": self.attributes,
+        })
+    }
+}
+
+/// Normalizes a link type to its canonical lowercase kebab slug and checks
+/// it is a valid type name. Accepts the spaced display forms ("relates to",
+/// "discovered from") and maps them onto the canonical slugs.
+pub fn normalize_link_kind(input: &str) -> Result<String> {
+    let kind = input
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+        .replace('_', "-");
+    let valid = !kind.is_empty()
+        && kind.len() <= LINK_TYPE_MAX
+        && kind
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && kind
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    if !valid {
+        return Err(OrbitError::new(
+            crate::error::code::INVALID_ARGUMENT,
+            format!(
+                "invalid link type `{input}`; use a short lowercase slug such as `blocks` or `relates-to`"
+            ),
+        ));
+    }
+    Ok(kind)
+}
+
 /// Checks a Source Key: 1 to 200 printable, non-whitespace ASCII characters.
 pub fn validate_source_key(key: &str) -> Result<()> {
     if key.is_empty() || key.len() > SOURCE_KEY_MAX || !key.bytes().all(|b| b.is_ascii_graphic()) {
@@ -260,12 +472,17 @@ struct RawFrontmatter {
     priority: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     labels: Vec<String>,
+    /// Legacy dependency list, read once into `links` and never written back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     depends_on: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    parent: Option<String>,
+    /// Legacy free-text external blocker, read once into `links`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     waiting_on: Option<String>,
+    /// Typed links replacing `depends_on`/`waiting_on` (ADR 0022).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    links: Vec<Link>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     checkpoint: Option<Checkpoint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -308,15 +525,31 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             claimed_at,
             lease_until,
         });
+        // Legacy `depends_on`/`waiting_on` keys upgrade into `links` on read;
+        // `links` itself is written back, the legacy keys never are.
+        let mut links = raw.links;
+        for dep in raw.depends_on {
+            let link = Link::dependency(&dep);
+            if !links.contains(&link) {
+                links.push(link);
+            }
+        }
+        if let Some(waiting) = raw.waiting_on
+            && !waiting.trim().is_empty()
+        {
+            let link = Link::waiting_on(waiting.trim());
+            if !links.contains(&link) {
+                links.push(link);
+            }
+        }
         Self {
             title: raw.title,
             status: raw.status,
             task_type: raw.task_type,
             priority: raw.priority,
             labels: raw.labels,
-            depends_on: raw.depends_on,
+            links,
             parent: raw.parent,
-            waiting_on: raw.waiting_on,
             checkpoint: raw.checkpoint,
             area: raw.area,
             verification: raw.verification,
@@ -347,9 +580,10 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             task_type: front.task_type,
             priority: front.priority,
             labels: front.labels,
-            depends_on: front.depends_on,
+            depends_on: Vec::new(),
+            waiting_on: None,
+            links: front.links,
             parent: front.parent,
-            waiting_on: front.waiting_on,
             checkpoint: front.checkpoint,
             area: front.area,
             verification: front.verification.clone(),
@@ -378,9 +612,9 @@ pub struct TaskFrontmatter {
     /// by the name's ordinal in that list, not by the name itself.
     pub priority: String,
     pub labels: Vec<String>,
-    pub depends_on: Vec<String>,
+    /// Typed links to other Tasks or external references (ADR 0022).
+    pub links: Vec<Link>,
     pub parent: Option<String>,
-    pub waiting_on: Option<String>,
     pub checkpoint: Option<Checkpoint>,
     /// Optional work-area slug; each Board restricts it through `board.areas`.
     pub area: Option<String>,
@@ -481,26 +715,73 @@ impl Task {
         changed
     }
 
-    /// Adds a dependency edge. Returns true when the edge is new; an existing
-    /// edge leaves the Task untouched.
-    pub fn add_dependency(&mut self, dep: &str, now: DateTime<Utc>) -> bool {
-        if self.front.depends_on.iter().any(|existing| existing == dep) {
+    /// Adds a typed link. Returns true when the link is new; an identical
+    /// link (same type and target) leaves the Task untouched.
+    pub fn add_link(&mut self, link: Link, now: DateTime<Utc>) -> bool {
+        if self.front.links.iter().any(|existing| {
+            existing.kind == link.kind && existing.target.same_reference(&link.target)
+        }) {
             return false;
         }
-        self.front.depends_on.push(dep.to_string());
+        self.front.links.push(link);
         self.touch(now);
         true
     }
 
-    /// Removes a dependency edge. Returns true when an edge was removed.
-    pub fn remove_dependency(&mut self, dep: &str, now: DateTime<Utc>) -> bool {
-        let before = self.front.depends_on.len();
-        self.front.depends_on.retain(|existing| existing != dep);
-        let changed = self.front.depends_on.len() != before;
+    /// Removes links matching `kind` (when given) and `target`. Returns true
+    /// when at least one link was removed.
+    pub fn remove_links(
+        &mut self,
+        kind: Option<&str>,
+        target: &LinkTarget,
+        now: DateTime<Utc>,
+    ) -> bool {
+        let before = self.front.links.len();
+        self.front.links.retain(|link| {
+            !link.target.same_reference(target)
+                || (kind.is_some() && Some(link.kind.as_str()) != kind)
+        });
+        let changed = self.front.links.len() != before;
         if changed {
             self.touch(now);
         }
         changed
+    }
+
+    /// Removes every link pointing at `id`, whatever its type.
+    pub fn remove_links_to(&mut self, id: &str, now: DateTime<Utc>) -> bool {
+        let before = self.front.links.len();
+        self.front
+            .links
+            .retain(|link| link.target_task() != Some(id));
+        let changed = self.front.links.len() != before;
+        if changed {
+            self.touch(now);
+        }
+        changed
+    }
+
+    /// Links that take part in readiness and cycle checks.
+    pub fn blocking_links(&self) -> impl Iterator<Item = &Link> {
+        self.front.links.iter().filter(|link| link.is_blocking())
+    }
+
+    /// Blocking links whose target lives outside the Board.
+    pub fn external_blockers(&self) -> impl Iterator<Item = &Link> {
+        self.blocking_links().filter(|link| link.is_external())
+    }
+
+    /// Display labels for external blockers: the bare id for the `external`
+    /// system `--waiting-on` writes, `system:id` for named systems.
+    pub fn waiting_labels(&self) -> Vec<String> {
+        self.external_blockers()
+            .map(|link| match &link.target {
+                LinkTarget::External(reference) if reference.system == "external" => {
+                    reference.id.clone()
+                }
+                _ => link.target.label(),
+            })
+            .collect()
     }
 }
 
@@ -545,10 +826,13 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
             front.priority
         )));
     }
-    if front.depends_on.iter().any(|dep| dep.trim().is_empty()) {
-        return Err(OrbitError::corrupt_task(format!(
-            "task {id} has an empty dependency id"
-        )));
+    for link in &mut front.links {
+        link.kind = normalize_link_kind(&link.kind).map_err(|error| {
+            OrbitError::corrupt_task(format!("task {id} has an invalid link: {}", error.message))
+        })?;
+        if let Err(reason) = validate_link(link) {
+            return Err(OrbitError::corrupt_task(format!("task {id}: {reason}")));
+        }
     }
     if front
         .parent
@@ -620,6 +904,28 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
         front,
         body: body.to_string(),
     })
+}
+
+/// Checks one stored link: a usable type name, a non-empty target, and a
+/// bounded attributes map.
+fn validate_link(link: &Link) -> std::result::Result<(), String> {
+    match &link.target {
+        LinkTarget::Task(id) => {
+            if id.trim().is_empty() {
+                return Err("link target task id must not be empty".to_string());
+            }
+        }
+        LinkTarget::External(reference) => reference.validate()?,
+    }
+    let attributes_size = serde_yaml_ng::to_string(&link.attributes)
+        .map(|text| text.len())
+        .unwrap_or(usize::MAX);
+    if attributes_size > ANNOTATION_MAX_BYTES {
+        return Err(format!(
+            "link attributes are {attributes_size} bytes; the limit is {ANNOTATION_MAX_BYTES}"
+        ));
+    }
+    Ok(())
 }
 
 pub fn render_task(task: &Task) -> Result<String> {
@@ -819,9 +1125,8 @@ mod tests {
                 task_type: TaskType::Task,
                 priority: "high".to_string(),
                 labels: Vec::new(),
-                depends_on: vec!["orb-f14c02".to_string()],
+                links: vec![Link::dependency("orb-f14c02")],
                 parent: None,
-                waiting_on: None,
                 checkpoint: None,
                 area: None,
                 verification: None,
@@ -850,7 +1155,7 @@ mod tests {
         assert_eq!(parsed.front.title, task.front.title);
         assert_eq!(parsed.front.status, task.front.status);
         assert_eq!(parsed.front.priority, task.front.priority);
-        assert_eq!(parsed.front.depends_on, task.front.depends_on);
+        assert_eq!(parsed.front.links, task.front.links);
         assert_eq!(parsed.body, task.body);
     }
 

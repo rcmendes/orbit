@@ -105,7 +105,14 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
         graph
             .tasks
             .values()
-            .map(|task| task.front.depends_on.len() + usize::from(task.front.parent.is_some()))
+            .map(|task| {
+                task.front
+                    .links
+                    .iter()
+                    .filter(|link| link.target_task().is_some())
+                    .count()
+                    + usize::from(task.front.parent.is_some())
+            })
             .sum()
     } else {
         0
@@ -353,11 +360,17 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
             Some(parent) => Some(mapped(&old_to_new, parent)?.to_string()),
             None => None,
         };
-        migrated.front.depends_on = original
+        migrated.front.links = original
             .front
-            .depends_on
+            .links
             .iter()
-            .map(|dependency| mapped(&old_to_new, dependency).map(str::to_string))
+            .map(|link| {
+                let mut link = link.clone();
+                if let Some(target) = link.target_task() {
+                    link.target = task::LinkTarget::Task(mapped(&old_to_new, target)?.to_string());
+                }
+                Ok(link)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let rendered = task::render_task(&migrated)?;

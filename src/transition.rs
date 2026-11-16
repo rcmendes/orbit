@@ -226,13 +226,13 @@ impl Task {
         Outcome::Changed
     }
 
-    /// Terminal transitions and reopen also clear `waiting_on`.
+    /// Terminal transitions and reopen keep links; only the Claim settles.
     fn finish(&mut self, status: Status, now: DateTime<Utc>) -> Outcome {
-        self.front.waiting_on = None;
         self.settle(status, now)
     }
 
-    /// Release keeps `waiting_on`; only terminal transitions clear it.
+    /// Links and external blockers survive every transition; only explicit
+    /// link commands change them.
     pub fn release(
         &mut self,
         caller: Option<&str>,
@@ -354,10 +354,11 @@ impl Task {
         if self.front.status.is_terminal() {
             return Err(self.invalid(InvalidReason::ClaimTerminal(self.front.status)));
         }
-        if self.front.waiting_on.is_some() {
+        let waiting_labels = self.waiting_labels();
+        if !waiting_labels.is_empty() {
             return Err(TransitionError::WaitingExternal {
                 id,
-                waiting_on: self.front.waiting_on.clone(),
+                waiting_on: Some(waiting_labels.join(", ")),
             });
         }
         if !gate.hold_labels.is_empty() {
@@ -571,9 +572,8 @@ mod tests {
                 task_type: TaskType::Task,
                 priority: "medium".to_string(),
                 labels: Vec::new(),
-                depends_on: Vec::new(),
+                links: vec![crate::task::Link::waiting_on("vendor")],
                 parent: None,
-                waiting_on: Some("vendor".to_string()),
                 checkpoint: None,
                 area: None,
                 verification: None,
@@ -670,9 +670,9 @@ mod tests {
                     assert!(t.front.claim.is_none());
                     assert_eq!(t.front.updated_at, now());
                     assert_eq!(
-                        t.front.waiting_on.as_deref(),
-                        Some("vendor"),
-                        "release keeps waiting_on"
+                        t.waiting_labels(),
+                        vec!["vendor".to_string()],
+                        "release keeps the external blocker link"
                     );
                 }
                 _ => assert_eq!(t.front.updated_at, before, "untouched on no-op or error"),
@@ -851,7 +851,7 @@ mod tests {
         let holder = || "alice".to_string();
 
         let mut t = task(Todo, No);
-        t.front.waiting_on = None;
+        t.front.links.clear();
         assert_eq!(t.claim("bob", false, lease, &open, now()), Ok(()));
         let claim = t.front.claim.clone().unwrap();
         assert_eq!((t.front.status, claim.holder.as_str()), (InProgress, "bob"));
@@ -891,7 +891,7 @@ mod tests {
             ),
         ] {
             let mut t = task(InProgress, Stale);
-            t.front.waiting_on = None;
+            t.front.links.clear();
             // steal must not bypass the readiness gate
             assert_eq!(t.claim("bob", true, lease, gate, now()), Err(expected));
             assert_eq!(t.holder(), Some("alice"));
@@ -904,7 +904,7 @@ mod tests {
         );
 
         let mut t = task(InProgress, Live);
-        t.front.waiting_on = None;
+        t.front.links.clear();
         assert_eq!(
             t.claim("bob", false, lease, &open, now()),
             Err(TransitionError::AlreadyClaimed {
@@ -915,7 +915,7 @@ mod tests {
         );
 
         let mut t = task(InProgress, Stale);
-        t.front.waiting_on = None;
+        t.front.links.clear();
         assert_eq!(
             t.claim("bob", false, lease, &open, now()),
             Err(TransitionError::ClaimStale {
@@ -953,7 +953,11 @@ mod tests {
             if expected == Ok(Outcome::Changed) {
                 assert_eq!(t.front.status, Done);
                 assert!(t.front.claim.is_none());
-                assert!(t.front.waiting_on.is_none(), "done clears waiting_on");
+                assert_eq!(
+                    t.waiting_labels(),
+                    vec!["vendor".to_string()],
+                    "done keeps the external blocker link"
+                );
                 assert_eq!(t.front.updated_at, now());
             }
 
@@ -966,7 +970,11 @@ mod tests {
             if expected == Ok(Outcome::Changed) {
                 assert_eq!(t.front.status, Cancelled);
                 assert!(t.front.claim.is_none());
-                assert!(t.front.waiting_on.is_none(), "cancel clears waiting_on");
+                assert_eq!(
+                    t.waiting_labels(),
+                    vec!["vendor".to_string()],
+                    "cancel keeps the external blocker link"
+                );
             }
         }
 
@@ -1018,7 +1026,11 @@ mod tests {
             assert_eq!(t.reopen(false, &[], now()), Ok(()));
             assert_eq!(t.front.status, Todo);
             assert!(t.front.claim.is_none());
-            assert!(t.front.waiting_on.is_none(), "reopen clears waiting_on");
+            assert_eq!(
+                t.waiting_labels(),
+                vec!["vendor".to_string()],
+                "reopen keeps the external blocker link"
+            );
             assert_eq!(t.front.updated_at, now());
 
             let mut t = task(status, No);

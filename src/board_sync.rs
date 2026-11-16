@@ -427,27 +427,45 @@ where
     }
 }
 
-/// Set-aware variant of `pick` for `depends_on`: order and duplicates do not
-/// make two equal dependency lists conflict.
-fn pick_depends_on(
-    base: Option<Vec<String>>,
-    local: Vec<String>,
-    remote: Vec<String>,
+/// Identity of a link for merging: type plus target. Attributes and the
+/// blocking override are the link's value, so editing them merges as a
+/// three-way field change while two sides adding different links union.
+fn link_key(link: &crate::task::Link) -> String {
+    let target = serde_json::to_string(&link.target).unwrap_or_default();
+    format!("{}|{target}", link.kind)
+}
+
+fn find_link(links: &[crate::task::Link], key: &str) -> Option<crate::task::Link> {
+    links.iter().find(|link| link_key(link) == key).cloned()
+}
+
+/// Links merge per (type, target): each side's set of link identities is
+/// three-way merged, so concurrent additions union and concurrent edits to
+/// the same link conflict like any other field.
+fn merge_links(
+    base: Option<&[crate::task::Link]>,
+    local: &[crate::task::Link],
+    remote: &[crate::task::Link],
     field: &str,
     outcome: &mut MergeOutcome,
-) -> Vec<String> {
-    let canonical = |mut list: Vec<String>| {
-        list.sort();
-        list.dedup();
-        list
-    };
-    pick(
-        base.map(canonical),
-        canonical(local),
-        canonical(remote),
-        field,
-        outcome,
-    )
+) -> Vec<crate::task::Link> {
+    let mut keys: BTreeSet<String> = BTreeSet::new();
+    for links in [base, Some(local), Some(remote)].into_iter().flatten() {
+        keys.extend(links.iter().map(link_key));
+    }
+    let mut merged = Vec::new();
+    for key in keys {
+        if let Some(link) = pick(
+            base.map(|links| find_link(links, &key)),
+            find_link(local, &key),
+            find_link(remote, &key),
+            field,
+            outcome,
+        ) {
+            merged.push(link);
+        }
+    }
+    merged
 }
 
 #[derive(Clone)]
@@ -668,11 +686,11 @@ fn merge_task(
         &key("labels"),
         outcome,
     );
-    let depends_on = pick_depends_on(
-        base_front.map(|f| f.depends_on.clone()),
-        local.front.depends_on.clone(),
-        remote.front.depends_on.clone(),
-        &key("depends_on"),
+    let links = merge_links(
+        base_front.map(|f| f.links.as_slice()),
+        &local.front.links,
+        &remote.front.links,
+        &key("links"),
         outcome,
     );
     let parent = pick(
@@ -680,13 +698,6 @@ fn merge_task(
         local.front.parent.clone(),
         remote.front.parent.clone(),
         &key("parent"),
-        outcome,
-    );
-    let waiting_on = pick(
-        base_front.map(|f| f.waiting_on.clone()),
-        local.front.waiting_on.clone(),
-        remote.front.waiting_on.clone(),
-        &key("waiting_on"),
         outcome,
     );
     let checkpoint = pick(
@@ -828,9 +839,8 @@ fn merge_task(
             task_type,
             priority,
             labels,
-            depends_on,
+            links,
             parent,
-            waiting_on,
             checkpoint,
             area,
             verification,

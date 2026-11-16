@@ -818,10 +818,12 @@ Examples:
   orbit comment list orb-a7b2c9 --json";
 
 pub const DEPEND_LONG: &str = "\
-Creates a blocking edge: the first task will not be ready until the second one is
-done or cancelled. The command rejects self-dependencies, missing tasks, cycles,
-adding a dependency to a terminal task, and parent/child edges. Parentage is
-created with `orbit add --parent`, not with depend.
+Creates a blocking `blocks` link: the first task will not be ready until the
+second one is done or cancelled. This is shorthand for
+`orbit link add <id> --type blocks --to <dep-id>`; use `orbit link` for other
+types, external targets, or link attributes. The command rejects self-links,
+missing tasks, cycles, linking a terminal task, and parent/child edges.
+Parentage is created with `orbit add --parent`, not with depend.
 
 Prefer `orbit add --depends-on` when the edge is known at creation time. Use
 depend later, when a blocker is discovered after both tasks exist.";
@@ -838,14 +840,79 @@ Examples:
   orbit add \"API: add the endpoint\" --parent orb-a7b2c9";
 
 pub const UNDEPEND_LONG: &str = "\
-Removes a blocking edge between two tasks. Idempotent: removing an edge that is
-not there succeeds. The dependent task may become ready immediately, unless other
-dependencies, an external blocker, or a hold label still block it.";
+Removes the blocking `blocks` link between two tasks. Idempotent: removing a
+link that is not there succeeds. Non-blocking links of other types are not
+affected; use `orbit link remove` for those. The dependent task may become
+ready immediately, unless other blocking links, an external blocker, or a hold
+label still block it.";
 
 pub const UNDEPEND_EXAMPLES: &str = "\
 Examples:
   orbit undepend orb-a7b2c9 orb-f14c02
   orbit ready --json";
+
+pub const LINK_LONG: &str = "\
+Manage typed links between tasks and external references. A link carries a
+type (blocks, relates-to, duplicates, discovered-from, or a custom slug), a
+target, a blocking flag, and arbitrary attributes.
+
+Blocking links drive readiness: the task is not ready while a blocking link
+points at an open task or an external reference. Only blocking links are
+checked for cycles; relates-to and other non-blocking links can form cycles
+freely. `orbit depend`/`undepend` are shorthand for adding/removing a blocking
+`blocks` link between two tasks.
+
+The target is either an Orbit Task ID (`--to`) or an external reference
+(`--external SYSTEM:ID`, for example jira:PROJ-123).";
+
+pub const LINK_EXAMPLES: &str = "\
+Examples:
+  # Design the schema relates to Write the spec (non-blocking)
+  orbit link add orb-a7b2c9 --type relates-to --to orb-f14c02
+
+  # Ship the API is blocked by an external Jira ticket
+  orbit link add orb-a7b2c9 --type blocks --external jira:PROJ-123 --url https://jira.example.com/browse/PROJ-123
+
+  # Track a duplicate with attributes
+  orbit link add orb-a7b2c9 --type duplicates --to orb-f14c02 --attribute reason=\"same root cause\"
+
+  # List every link on a task, or remove one
+  orbit link list orb-a7b2c9
+  orbit link remove orb-a7b2c9 --type relates-to --to orb-f14c02";
+
+pub const LINK_ADD_LONG: &str = "\
+Adds a typed link from the task to another Orbit Task (`--to`) or an external
+reference (`--external SYSTEM:ID`). The link type defaults to relates-to;
+built-in types are blocks, relates-to, duplicates, and discovered-from, and
+any other slug is a custom type. `--blocking`/`--no-blocking` override the
+type's default blocking behavior. `--attribute KEY=VALUE` stores arbitrary
+attributes on the link (repeatable; VALUE is parsed as YAML).";
+
+pub const LINK_ADD_EXAMPLES: &str = "\
+Examples:
+  orbit link add orb-a7b2c9 --type relates-to --to orb-f14c02
+  orbit link add orb-a7b2c9 --type blocks --external jira:PROJ-123 --url https://jira.example.com/browse/PROJ-123
+  orbit link add orb-a7b2c9 --type duplicates --to orb-f14c02 --attribute reason=\"same root cause\"";
+
+pub const LINK_REMOVE_LONG: &str = "\
+Removes links on the task matching the given target and, optionally, link
+type. Idempotent: removing a link that is not there succeeds.";
+
+pub const LINK_REMOVE_EXAMPLES: &str = "\
+Examples:
+  orbit link remove orb-a7b2c9 --to orb-f14c02
+  orbit link remove orb-a7b2c9 --type relates-to --to orb-f14c02
+  orbit link remove orb-a7b2c9 --external jira:PROJ-123";
+
+pub const LINK_LIST_LONG: &str = "\
+Lists a task's links with their type, target, blocking flag, and attributes.
+Each link is shown from the task's point of view: the stored inward name and
+the outward name on the target's side.";
+
+pub const LINK_LIST_EXAMPLES: &str = "\
+Examples:
+  orbit link list orb-a7b2c9
+  orbit link list orb-a7b2c9 --json";
 
 pub const DELETE_LONG: &str = "\
 Permanently removes a task and its comment thread from the Board. By default it

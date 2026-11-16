@@ -276,13 +276,18 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "link",
-            "Add or remove a dependency.",
+            "Add, remove, or list typed links. Without `type`/`external`, add/remove manage the blocking `blocks` link between two tasks (depend/undepend).",
             json!({
                 "id": { "type": "string" },
-                "dep_id": { "type": "string" },
-                "action": { "type": "string", "enum": ["add", "remove"] }
+                "dep_id": { "type": "string", "description": "Orbit Task ID target; omit when `external` is given or action is `list`." },
+                "external": { "type": "string", "description": "External reference target as SYSTEM:ID, for example jira:PROJ-123." },
+                "action": { "type": "string", "enum": ["add", "remove", "list"] },
+                "type": { "type": "string", "description": "Link type: blocks, relates-to, duplicates, discovered-from, or a custom slug. Defaults to blocks for task targets." },
+                "url": { "type": "string", "description": "Canonical URL for an external target." },
+                "blocking": { "type": "boolean", "description": "Override the link type's default blocking behavior." },
+                "attributes": { "type": "object", "description": "Arbitrary key/value attributes stored on the link." }
             }),
-            &["id", "dep_id", "action"],
+            &["id", "action"],
         ),
         tool(
             "delete",
@@ -875,20 +880,89 @@ fn dispatch_tool(
             let Some(id) = required_str(arguments, "id") else {
                 return tool_invalid("missing or invalid `id`");
             };
-            let Some(dep_id) = required_str(arguments, "dep_id") else {
-                return tool_invalid("missing or invalid `dep_id`");
-            };
             let Some(action) = required_str(arguments, "action") else {
                 return tool_invalid("missing or invalid `action`");
             };
-            let command = match action.as_str() {
-                "add" => "depend",
-                "remove" => "undepend",
-                _ => return tool_invalid("`action` must be `add` or `remove`"),
-            };
-            args.push(command.to_string());
-            args.push(id);
-            args.push(dep_id);
+            if action == "list" {
+                args.push("link".to_string());
+                args.push("list".to_string());
+                args.push(id);
+            } else {
+                let dep_id = optional_str(arguments, "dep_id");
+                let external = optional_str(arguments, "external");
+                if dep_id.is_none() && external.is_none() {
+                    return tool_invalid("`link` needs `dep_id` or `external`");
+                }
+                if dep_id.is_some() && external.is_some() {
+                    return tool_invalid("`link` takes `dep_id` or `external`, not both");
+                }
+                let kind = optional_str(arguments, "type");
+                let attributes = arguments.get("attributes").and_then(Value::as_object);
+                let url = optional_str(arguments, "url");
+                let blocking = arguments.get("blocking").and_then(Value::as_bool);
+                // Plain depend/undepend shorthand when no typed-link options
+                // are given and the target is a task.
+                let shorthand = dep_id.is_some()
+                    && kind.is_none()
+                    && external.is_none()
+                    && attributes.is_none()
+                    && url.is_none()
+                    && blocking.is_none();
+                if shorthand {
+                    let command = match action.as_str() {
+                        "add" => "depend",
+                        "remove" => "undepend",
+                        _ => return tool_invalid("`action` must be `add`, `remove`, or `list`"),
+                    };
+                    args.push(command.to_string());
+                    args.push(id);
+                    args.push(dep_id.unwrap());
+                } else {
+                    let subcommand = match action.as_str() {
+                        "add" => "add",
+                        "remove" => "remove",
+                        _ => return tool_invalid("`action` must be `add`, `remove`, or `list`"),
+                    };
+                    args.push("link".to_string());
+                    args.push(subcommand.to_string());
+                    args.push(id);
+                    args.push("--type".to_string());
+                    args.push(kind.unwrap_or_else(|| {
+                        if dep_id.is_some() {
+                            "blocks".to_string()
+                        } else {
+                            "relates-to".to_string()
+                        }
+                    }));
+                    if let Some(dep_id) = dep_id {
+                        args.push("--to".to_string());
+                        args.push(dep_id);
+                    }
+                    if let Some(external) = external {
+                        args.push("--external".to_string());
+                        args.push(external);
+                    }
+                    if let Some(url) = url {
+                        args.push("--url".to_string());
+                        args.push(url);
+                    }
+                    match blocking {
+                        Some(true) => args.push("--blocking".to_string()),
+                        Some(false) => args.push("--no-blocking".to_string()),
+                        None => {}
+                    }
+                    if let Some(attributes) = attributes {
+                        for (key, value) in attributes {
+                            let rendered = match value {
+                                Value::String(text) => text.clone(),
+                                other => serde_json::to_string(other).unwrap_or_default(),
+                            };
+                            args.push("--attribute".to_string());
+                            args.push(format!("{key}={rendered}"));
+                        }
+                    }
+                }
+            }
         }
         "delete" => {
             let Some(id) = required_str(arguments, "id") else {

@@ -125,7 +125,7 @@ The canonical vocabulary lives in `docs/GLOSSARY.md`. In short:
 - **Type** is the stored work shape: `task` (default), `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness. An **Epic** or **spec** is a top-level Task with `type: epic`; `epic` is refused on a SubTask. External trackers call the unit an Issue and a child a Sub-issue; see [`docs/GLOSSARY.md`](./GLOSSARY.md), [ADR 0009](./adr/0009-keep-task-vocabulary.md), and [ADR 0010](./adr/0010-structural-type-field.md).
 - **Ready** is derived: `todo`, no Claim (including no Stale Claim), not Waiting, no Hold Label, every Dependency is `done` or `cancelled`, and every SubTask is `done` or `cancelled`.
 - **Blocked** is derived: at least one Dependency is not `done` or `cancelled`, or a Parent Task has at least one open SubTask.
-- **Waiting** is an external blocker recorded by `waiting_on`; it is not a Status.
+- **Waiting** is an external blocker recorded as a blocking Link to an external reference; it is not a Status.
 - A **Claim** is exclusive, time-bounded responsibility for a Task. The time window is a **Lease**. An expired, unreleased Claim is **Stale**: the Task is not Ready, but it can be released or stolen.
 - A **Checkpoint** is the claim holder's latest handoff note: progress, the next useful action, and any blocker. It is stored on the Task, survives release and takeover, and never affects readiness or claim eligibility.
 - **Done** and **Cancelled** both resolve dependents. Cancelled exists so abandoned work does not have to lie with `done` or destroy history with `delete`.
@@ -167,9 +167,9 @@ stateDiagram-v2
 
     note left of todo
         Ready is derived:
-        todo, no claim, no waiting_on,
-        no hold label, every dependency
-        done or cancelled, and every
+        todo, no claim, no blocking link,
+        no hold label, every blocking
+        dependency done or cancelled, and every
         SubTask done or cancelled.
     end note
 ```
@@ -226,10 +226,14 @@ priority: medium
 labels:
 - ready-for-agent
 - bug
-depends_on:
-- orb-a7b2c9
+links:
+- type: blocks
+  target: orb-a7b2c9
+- type: discovered-from
+  target: jira:PROJ-123
+  attributes:
+    found-by: alice
 parent: orb-f14c02
-waiting_on: Waiting for API credentials
 checkpoint:
   by: claude-1
   at: 2026-10-23T12:10:00Z
@@ -249,9 +253,11 @@ updated_at: 2026-10-23T12:00:00Z
 Body text, acceptance criteria, notes.
 ```
 
-Required: `title`, `status`, `created_at`, `updated_at`. Optional: `type` (default `task`; one of `task`, `epic`, `spike`, `chore`, `decision`; always written on save), `priority` (a name from `board.priorities`; defaults to `board.default_priority`, `medium` unless the Board changes it), `labels` (default empty, normalized, sorted, deduplicated), `depends_on` (default empty), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `waiting_on`, `checkpoint`, `area` (optional; a short lowercase slug, restricted to `board.areas` when the Board configures them), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `repo` (optional; the member Repository that owns the Task, filled from the current Repository by `orbit add`), `remote` (optional provider-neutral link — `tracker`, `project`, `id`, optional `url`, `active`, and an opaque `baseline` — or inactive provenance when a Remote Tracker provider is enabled), `github` (optional legacy GitHub link kept for backward compatibility; new writes use `remote`), `source_key` (optional; a caller-chosen Source Key of 1 to 200 printable ASCII characters without spaces, unique per Board; `add --source-key` returns the existing Task instead of creating a duplicate, and `doctor` reports a key on two Tasks as `DUPLICATE_SOURCE_KEY`), `annotations` (optional; a map from owner to a JSON object, see Annotations below). A link with no `active` field is active; detach writes `active: false` while retaining the stable identity and sync baseline. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task whose own depth stays below `board.max_subtask_depth` (1–4, default 1); a SubTask cannot have `type: epic`, and the SubTask ID must encode the same parent. `doctor` reports a mismatch as `PARENT_MISMATCH` or an invalid epic as `INVALID_TYPE`.
+Required: `title`, `status`, `created_at`, `updated_at`. Optional: `type` (default `task`; one of `task`, `epic`, `spike`, `chore`, `decision`; always written on save), `priority` (a name from `board.priorities`; defaults to `board.default_priority`, `medium` unless the Board changes it), `labels` (default empty, normalized, sorted, deduplicated), `links` (default empty; typed relations to other Tasks or external references — see Links below), `parent` (absent for a Task; when present the Task is a SubTask and the value names its Parent Task), `checkpoint`, `area` (optional; a short lowercase slug, restricted to `board.areas` when the Board configures them), `verification` (optional; trimmed text up to 2000 characters; concise agent checks or commands), `repo` (optional; the member Repository that owns the Task, filled from the current Repository by `orbit add`), `remote` (optional provider-neutral link — `tracker`, `project`, `id`, optional `url`, `active`, and an opaque `baseline` — or inactive provenance when a Remote Tracker provider is enabled), `github` (optional legacy GitHub link kept for backward compatibility; new writes use `remote`), `source_key` (optional; a caller-chosen Source Key of 1 to 200 printable ASCII characters without spaces, unique per Board; `add --source-key` returns the existing Task instead of creating a duplicate, and `doctor` reports a key on two Tasks as `DUPLICATE_SOURCE_KEY`), `annotations` (optional; a map from owner to a JSON object, see Annotations below). A link with no `active` field is active; detach writes `active: false` while retaining the stable identity and sync baseline. Unknown fields are preserved on rewrite. Timestamps are RFC 3339 UTC. A `parent` must name an existing, non-terminal Task whose own depth stays below `board.max_subtask_depth` (1–4, default 1); a SubTask cannot have `type: epic`, and the SubTask ID must encode the same parent. `doctor` reports a mismatch as `PARENT_MISMATCH` or an invalid epic as `INVALID_TYPE`.
 
 **Annotations.** An Annotation is structured data that one tool attaches to a Task under the tool's name, its owner. An owner is a lowercase slug (`[a-z0-9][a-z0-9-]*`, at most 40 characters); a value is a JSON object of at most 8192 bytes serialized compactly. Orbit stores, returns, and shows Annotations but never interprets them: they never affect Ready, Blocked, Claim eligibility, or Status, and they are never pushed to or pulled from a Remote Tracker. Board host sync merges them per owner. `show`, `list`, and `export` return `annotations` (an empty object when none); human `show` prints one `annotation <owner>: <json>` line per owner. `doctor` reports a malformed Annotation as `INVALID_ANNOTATION`.
+
+**Links.** A Link is a typed relation stored on the Task: `type` names the relation the *target* has toward the owner (`blocks` on Task T targeting D reads "D blocks T"), `target` is either an Orbit Task ID (a bare string) or an external reference (`{system, id, url?}`, for example `jira:PROJ-123`), `blocking` optionally overrides the type's default, and `attributes` is an optional map of arbitrary key/value data. Built-in types are `blocks`, `relates-to`, `duplicates`, and `discovered-from`; `blocks` defaults to blocking and every other type to non-blocking, and any other lowercase slug is a custom type. Blocking links drive readiness — the Task is not Ready while a blocking link names an open Task or an external reference — and only blocking links take part in cycle checks; non-blocking links may form cycles freely. `orbit link add|remove|list` manages links; `orbit depend`/`undepend` and `add --depends-on` are shorthand for a blocking `blocks` link between two Tasks, and `add --waiting-on` records a blocking `waiting-on` link to an external reference. `show`/`list`/`export` return `links` (each entry carries `type`, `target`, the resolved `blocking` flag, `inward`/`outward` names, and `attributes`) plus the derived `depends_on` (open blocking Task targets) and `waiting_on` (external blocking targets) views. Legacy `depends_on`/`waiting_on` frontmatter keys are read once into `links` on load and never written back.
 
 The body is free-form Markdown. Orbit does not duplicate the title as an H1. Frontmatter is parsed as the first `---` block, not by splitting the whole file on `---`.
 
@@ -273,7 +279,7 @@ Comments are append-only; there is no edit or delete command. A correction is a 
 
 A Task stores at most one **Checkpoint** in its frontmatter: the claim holder's latest handoff note. `by` and `at` identify the last writer and the time of that write; `progress` is required; `next` and `blocker` are optional. `orbit checkpoint` replaces the record. The first write requires `progress`; later writes may update one field and keep the rest, and `--clear-next` or `--clear-blocker` removes an optional field. A partial update rewrites `by` and `at` even when it keeps the previous `progress` text, so the record always names the claimant who last accepted responsibility for it.
 
-The caller must hold the Claim; a Stale Claim still counts until another agent steals it. The command refuses a task with no Claim and a terminal task with `INVALID_TRANSITION`. A Checkpoint does not change Status, readiness, Claim eligibility, dependencies, or `waiting_on`.
+The caller must hold the Claim; a Stale Claim still counts until another agent steals it. The command refuses a task with no Claim and a terminal task with `INVALID_TRANSITION`. A Checkpoint does not change Status, readiness, Claim eligibility, links, or blockers.
 
 `orbit show`, every task-detail projection, `list`, `ready`, `prime`, MCP `get`, and `export` expose the record as `checkpoint`. When the Task is terminal, the latest Checkpoint stays in the task file as archived history and the detail projection adds `checkpoint_archived: true`; active queue surfaces never list terminal Tasks. A Checkpoint is Orbit-owned execution state stored on the Board and is not synchronized to GitHub Issues or any other external tracker.
 
@@ -436,7 +442,7 @@ The migration is deterministic:
 
 - A top-level ID keeps its random suffix: `orb-a7b2c9` becomes `atlas-a7b2c9`.
 - A SubTask keeps the parent suffix and its child suffix: `orb-a7b2c9.d4b3df` becomes `atlas-a7b2c9.d4b3df`.
-- `parent` and every `depends_on` entry are rewritten structurally from the mapping, never by text search.
+- `parent` and every internal `links` target are rewritten structurally from the mapping, never by text search.
 - Every comment file is renamed and its Orbit-generated `# Comments: <old-id>` header is updated. Comment bodies are copied verbatim.
 - `id.prefix` is updated to `<slug>-`.
 - Task bodies, checkpoint text, unknown frontmatter fields, comment text, Git history, external links, and old task IDs quoted in prose are not rewritten. YAML serialization may normalize formatting when a task is saved.
@@ -472,7 +478,7 @@ The plan shape is:
 }
 ```
 
-`references` counts the structured `parent` and `depends_on` entries rewritten. Mappings are sorted by old ID; claims are sorted by old ID. `comment_files` counts comment files, not comment blocks. A successful apply sets `applied: true` and the full commit hash; a no-op or dry run sets `commit: null`.
+`references` counts the structured `parent` and internal `links` targets rewritten. Mappings are sorted by old ID; claims are sorted by old ID. `comment_files` counts comment files, not comment blocks. A successful apply sets `applied: true` and the full commit hash; a no-op or dry run sets `commit: null`.
 
 The migration is not reversible for external references. `git revert` restores the files, but old IDs in pull requests, chat, docs, agent memory, and shell history remain stale. Run `--dry-run` first, pick the final slug deliberately, and treat the prefix as immutable again afterwards.
 
@@ -548,6 +554,9 @@ orbit comment list <id>
 orbit annotation set <id> <owner> --value JSON
 orbit annotation remove <id> <owner>
 orbit batch --file PATH|- [--dry-run] [--by NAME]
+orbit link add <id> [--type TYPE] (--to ID|--external SYSTEM:ID) [--url URL] [--blocking|--no-blocking] [--attribute KEY=VALUE]...
+orbit link remove <id> [--type TYPE] (--to ID|--external SYSTEM:ID)
+orbit link list <id>
 orbit depend <id> <dep-id>
 orbit undepend <id> <dep-id>
 orbit delete <id> [--by NAME] [--force]
@@ -604,8 +613,8 @@ held for the complete push. `--no-sync` and `ORBIT_NO_AUTO_SYNC=1` suppress it;
 explicit `orbit remote sync` is never suppressed.
 
 The trigger is a change to title, body, labels, status, `area`, or
-`verification`. Priority, type, `waiting_on`, claims, checkpoints, comments, and
-dependency relationships do not trigger a remote write. The command wrapper
+`verification`. Priority, type, links, claims, checkpoints, comments, and
+Remote Issue relationships do not trigger a remote write. The command wrapper
 snapshots `tasks/*.md` before and after a task write command and pushes every
 changed Task whose mapped delta is non-empty. Deleted Tasks leave their Issues
 untouched and warn when linked. `orbit remote *`, `orbit board *`, `orbit sync`,
@@ -697,7 +706,8 @@ Entries record what each release delivered. Some name commands that were later r
 - A forced `reopen` can leave an already-done dependent with an unfinished dependency. That is a historical fact, not corruption: `doctor` reports it as a warning, and the next `done` of that dependent still enforces its dependencies.
 - `reopen` refuses when a done dependent exists unless `--force`. Reopening a SubTask of a done parent reopens the parent too.
 - `delete` refuses when dependents exist unless `--force`; `--force` removes the ID from each dependent first. A Parent Task with SubTasks is refused unless `--force`, which deletes the whole subtree.
-- `depend` refuses self-dependencies, missing tasks, cycles, adding a dependency to a terminal task, and parent/child edges in either direction. Parentage is not a Dependency; use `add --parent`.
+- `depend` refuses self-links, missing tasks, cycles through blocking links, linking a terminal task, and parent/child edges in either direction. It is shorthand for `link add --type blocks --to`; parentage is not a Link — use `add --parent`.
+- `link add` rejects a blocking link that would close a cycle; non-blocking types never create cycles. `link remove` is idempotent and matches on type (when given) and target; external targets match on `system`+`id` regardless of `url`.
 - `add --parent <id>` creates a SubTask and stores `parent`. The parent must exist, be non-terminal, and leave the SubTask's depth within `board.max_subtask_depth` (1–4, default 1).
 - A Parent Task is Ready only when every SubTask is `done` or `cancelled`. `claim`, `done`, and `cancel` refuse with `SUBTASKS_OPEN` while open SubTasks remain. `done --force` and `cancel --force` cancel the open SubTasks first; `delete` refuses a Parent Task with SubTasks unless `--force`, which deletes the whole subtree.
 - `reopen` of a SubTask under a done Parent Task reopens the parent too. A SubTask under a cancelled parent is refused until the parent is reopened.
@@ -751,7 +761,7 @@ Error:
 
 ### Batch
 
-`orbit batch --file PATH|-` reads `{"operations": [...]}`. Each operation has an `op` (`add`, `update`, `label`, `depend`, `undepend`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`, `comment`, `annotate`) and the fields of its command: `add` takes `key` (Source Key), `title`, `type`, `parent`, `labels`, `depends_on`, `body`, `priority`, `repo`, `waiting_on`, `area`, `verification`, `annotations`; `update` takes `id` plus `title`, `body`, `priority`, `type`, `waiting_on`/`clear_waiting`, `area`/`clear_area`, `verification`/`clear_verification`; `label` takes `id`, `add`, `remove`; `depend`/`undepend` take `id`, `on`; `claim` takes `id`, `by`, `steal`; `heartbeat` takes `id`, `by`; `release`, `done`, and `cancel` take `id`, `by`, `force` (and `comment` for `done`/`cancel`); `reopen` takes `id`, `force`; `comment` takes `id`, `by`, `body`; `annotate` takes `id`, `owner`, `value` (an object, or null to remove). Unknown fields fail with `INVALID_BATCH`.
+`orbit batch --file PATH|-` reads `{"operations": [...]}`. Each operation has an `op` (`add`, `update`, `label`, `depend`, `undepend`, `link`, `unlink`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`, `comment`, `annotate`) and the fields of its command: `add` takes `key` (Source Key), `title`, `type`, `parent`, `labels`, `depends_on`, `body`, `priority`, `repo`, `waiting_on`, `area`, `verification`, `annotations`; `update` takes `id` plus `title`, `body`, `priority`, `type`, `waiting_on`/`clear_waiting`, `area`/`clear_area`, `verification`/`clear_verification`; `label` takes `id`, `add`, `remove`; `depend`/`undepend` take `id`, `on`; `link` takes `id`, `type` (optional, default `relates-to`), `to` or `external` (exactly one), optional `url`, `blocking`, and `attributes` (an object); `unlink` takes `id`, optional `type`, and `to` or `external`; `claim` takes `id`, `by`, `steal`; `heartbeat` takes `id`, `by`; `release`, `done`, and `cancel` take `id`, `by`, `force` (and `comment` for `done`/`cancel`); `reopen` takes `id`, `force`; `comment` takes `id`, `by`, `body`; `annotate` takes `id`, `owner`, `value` (an object, or null to remove). Unknown fields fail with `INVALID_BATCH`.
 
 A reference (`id`, `on`, `parent`, `depends_on` entries) is a Task ID or `key:` plus a Source Key added earlier in the Batch or already on the Board. `by` defaults to `--by`, then `ORBIT_AGENT`, then `USER`.
 
@@ -781,6 +791,7 @@ Operations run in order on one in-memory snapshot under the exclusive lock. On t
       "resolved_subtask_count": 0,
       "open_subtask_count": 0,
       "eligible_for_close": false,
+      "links": [],
       "depends_on": [],
       "waiting_on": null,
       "checkpoint": null,
@@ -802,7 +813,7 @@ Operations run in order on one in-memory snapshot under the exclusive lock. On t
 ```
 
 - `tasks` contains every Task and SubTask, including `done` and `cancelled`, sorted by ID.
-- Each entry is the `show --json` detail shape: `kind`, `type`, `parent`, `subtasks`, `open_subtasks`, `subtask_count`, `resolved_subtask_count`, `open_subtask_count`, `eligible_for_close`, `labels`, `depends_on`, `dependents`, `waiting_on`, `checkpoint`, derived `ready` and `blocking`, the body, and the full comments. `eligible_for_close` is true only for a non-terminal Parent Task with at least one SubTask and no open SubTasks. `checkpoint_archived` is true when a recorded checkpoint belongs to a terminal Task.
+- Each entry is the `show --json` detail shape: `kind`, `type`, `parent`, `subtasks`, `open_subtasks`, `subtask_count`, `resolved_subtask_count`, `open_subtask_count`, `eligible_for_close`, `labels`, `links`, `depends_on`, `dependents`, `waiting_on`, `checkpoint`, derived `ready` and `blocking`, the body, and the full comments. `eligible_for_close` is true only for a non-terminal Parent Task with at least one SubTask and no open SubTasks. `checkpoint_archived` is true when a recorded checkpoint belongs to a terminal Task.
 - The snapshot is a pure function of board state: no export timestamp and no machine-local paths. Comments keep their file order.
 - Consumers should pin `schema_version` and ignore unknown fields.
 

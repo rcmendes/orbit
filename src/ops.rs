@@ -637,8 +637,30 @@ fn lease(board: &Board) -> chrono::Duration {
     chrono::Duration::minutes(board.config.board.lease_minutes)
 }
 
+/// Snapshots the named Tasks so a policy violation can roll the in-memory
+/// mutation back before the error reaches the caller.
+fn snapshot_tasks(graph: &Graph, ids: &[String]) -> Vec<(String, Task)> {
+    ids.iter()
+        .filter_map(|id| graph.tasks.get(id).map(|task| (id.clone(), task.clone())))
+        .collect()
+}
+
+fn restore_tasks(graph: &mut Graph, snapshots: Vec<(String, Task)>) {
+    for (id, task) in snapshots {
+        graph.tasks.insert(id, task);
+    }
+}
+
+/// The Task's status after `f` ran, when it differs from `before` — the
+/// signal that a governed transition actually happened (lease renewals and
+/// same-state no-ops skip policy).
+fn transitioned(before: &Task, after: &Task) -> bool {
+    before.front.status != after.front.status || before.front.assignee != after.front.assignee
+}
+
 /// Claims a Task for `by`, setting the assignee and a fresh lease. The
-/// current assignee renews its own claim.
+/// current assignee renews its own claim. The readiness lint gates the
+/// claim, and `[policy]` rules on the `claim` transition enforce after it.
 pub fn claim(
     graph: &mut Graph,
     board: &Board,
@@ -648,21 +670,44 @@ pub fn claim(
     steal: bool,
     now: DateTime<Utc>,
 ) -> Result<bool> {
-    let task = graph.get(id)?;
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
+    // The readiness lint keeps vague Tasks out of agent hands even when
+    // they sit in the Ready status.
+    crate::policy::lint_error(graph, &resolved)?;
+    let task = graph.get(&resolved)?;
     let workflow = graph.workflow.clone();
     let gate = ClaimGate {
         hold_labels: graph.hold_labels(task),
         blocking: graph.blocking_ids(task),
-        open_subtasks: graph.open_descendants(id),
+        open_subtasks: graph.open_descendants(&resolved),
     };
     graph
-        .get_mut(id)?
+        .get_mut(&resolved)?
         .claim(by, kind, steal, lease(board), &gate, now, &workflow)?;
+    let after = graph.get(&resolved)?;
+    if transitioned(&before, after) {
+        let status = after.front.status.clone();
+        crate::policy::enforce(
+            graph,
+            &resolved,
+            crate::workflow::TRANSITION_CLAIM,
+            Some(status.as_str()),
+            &before,
+            now,
+        )?;
+    }
     Ok(true)
 }
 
 /// Assigns a Task to `name` without a lease — how humans take work. The
 /// readiness gates do not apply; `force` overrides a different assignee.
+/// `[policy]` rules on the `claim` transition still enforce: assignment is
+/// a deliberate act, but it performs the same transition.
 pub fn assign(
     graph: &mut Graph,
     id: &str,
@@ -675,11 +720,29 @@ pub fn assign(
     if name.is_empty() {
         return Err(OrbitError::invalid_argument("assignee must not be empty"));
     }
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
     let workflow = graph.workflow.clone();
-    Ok(graph
-        .get_mut(id)?
+    let changed = graph
+        .get_mut(&resolved)?
         .assign(name, kind, force, now, &workflow)?
-        == Outcome::Changed)
+        == Outcome::Changed;
+    if changed {
+        let status = graph.get(&resolved)?.front.status.clone();
+        crate::policy::enforce(
+            graph,
+            &resolved,
+            crate::workflow::TRANSITION_CLAIM,
+            Some(status.as_str()),
+            &before,
+            now,
+        )?;
+    }
+    Ok(changed)
 }
 
 /// Extends the holder's Lease. Changes only Lease fields.
@@ -698,6 +761,7 @@ pub fn heartbeat(
 }
 
 /// Releases a Claim. An unclaimed Task is unchanged (`Ok(false)`).
+/// `[policy]` rules on the `release` transition enforce.
 pub fn release(
     graph: &mut Graph,
     id: &str,
@@ -705,8 +769,29 @@ pub fn release(
     force: bool,
     now: DateTime<Utc>,
 ) -> Result<bool> {
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
     let workflow = graph.workflow.clone();
-    Ok(graph.get_mut(id)?.release(by, force, now, &workflow)? == Outcome::Changed)
+    let changed = graph
+        .get_mut(&resolved)?
+        .release(by, force, now, &workflow)?
+        == Outcome::Changed;
+    if changed {
+        let status = graph.get(&resolved)?.front.status.clone();
+        crate::policy::enforce(
+            graph,
+            &resolved,
+            crate::workflow::TRANSITION_RELEASE,
+            Some(status.as_str()),
+            &before,
+            now,
+        )?;
+    }
+    Ok(changed)
 }
 
 pub struct FinishOutcome {
@@ -726,6 +811,9 @@ pub fn finish(
     kind: TerminalKind,
     now: DateTime<Utc>,
 ) -> Result<FinishOutcome> {
+    // Policy snapshots and rollbacks key off the immutable internal ID.
+    let resolved = graph.resolve(id)?;
+    let id = resolved.as_str();
     let open_descendants = graph.open_descendants(id);
     if !open_descendants.is_empty() && !force {
         return Err(OrbitError::new(
@@ -752,6 +840,10 @@ pub fn finish(
                 .is_ok_and(|task| !workflow.is_terminal(&task.front.status))
         })
         .collect();
+    // Snapshot every Task this finish can touch so a `[policy]` violation
+    // rolls the whole in-memory change back.
+    let snapshots = snapshot_tasks(graph, &open);
+    let main_before = graph.tasks.get(id).cloned();
     for child in &open {
         graph.get_mut(child)?.cancel(by, true, now, &workflow)?;
     }
@@ -760,6 +852,46 @@ pub fn finish(
         TerminalKind::Done => task.complete(by, force, &blocking, &[], now, &workflow)?,
         TerminalKind::Cancelled => task.cancel(by, force, now, &workflow)?,
     };
+    // Enforce `[policy]` on the closing transition of the target Task and
+    // on each descendant's `cancel`; a violation restores every snapshot.
+    let transition_name = match kind {
+        TerminalKind::Done => crate::workflow::TRANSITION_DONE,
+        TerminalKind::Cancelled => crate::workflow::TRANSITION_CANCEL,
+    };
+    let mut governed = vec![(id.to_string(), transition_name)];
+    for child in &open {
+        governed.push((child.clone(), crate::workflow::TRANSITION_CANCEL));
+    }
+    for (task_id, name) in governed {
+        let before = if task_id == id {
+            main_before.clone()
+        } else {
+            snapshots
+                .iter()
+                .find(|(snapshot_id, _)| snapshot_id == &task_id)
+                .map(|(_, task)| task.clone())
+        };
+        let Some(before) = before else { continue };
+        let after = match graph.tasks.get(&task_id) {
+            Some(after) => after.clone(),
+            None => continue,
+        };
+        if !transitioned(&before, &after) {
+            continue;
+        }
+        let status = after.front.status.clone();
+        if let Err(error) =
+            crate::policy::enforce(graph, &task_id, name, Some(status.as_str()), &before, now)
+        {
+            // Roll back every Task this finish touched, not just the one
+            // whose rule failed.
+            if let Some(before) = &main_before {
+                graph.tasks.insert(id.to_string(), before.clone());
+            }
+            restore_tasks(graph, snapshots.clone());
+            return Err(error);
+        }
+    }
     Ok(FinishOutcome {
         changed: outcome == Outcome::Changed,
         cancelled_subtasks: open,
@@ -788,6 +920,8 @@ pub fn cancel(
 
 /// Runs one named workflow transition on a Task, e.g. `orbit transition
 /// orb-… promote`. Closing transitions record the transition's resolution.
+/// `[policy]` rules scoped to the transition name enforce here, so the CLI,
+/// `orbit batch`, and MCP share them.
 pub fn transition(
     graph: &mut Graph,
     id: &str,
@@ -796,25 +930,44 @@ pub fn transition(
     force: bool,
     now: DateTime<Utc>,
 ) -> Result<Outcome> {
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
     let workflow = graph.workflow.clone();
-    Ok(graph
-        .get_mut(id)?
-        .transition_to(name, caller, force, now, &workflow)?)
+    let outcome = graph
+        .get_mut(&resolved)?
+        .transition_to(name, caller, force, now, &workflow)?;
+    if outcome == Outcome::Changed {
+        let after = graph.get(&resolved)?;
+        let status = after.front.status.clone();
+        crate::policy::enforce(graph, &resolved, name, Some(status.as_str()), &before, now)?;
+    }
+    Ok(outcome)
 }
 
 /// Reopens a Task and, when needed, its completed ancestor Tasks. Returns the
-/// reopened ancestors' IDs, nearest first.
+/// reopened ancestors' IDs, nearest first. `[policy]` rules on the `reopen`
+/// transition enforce for the Task and each ancestor it reopens.
 pub fn reopen(graph: &mut Graph, id: &str, force: bool, now: DateTime<Utc>) -> Result<Vec<String>> {
-    let task = graph.get(id)?.clone();
+    let resolved = graph.resolve(id)?;
+    let mut snapshots: Vec<(String, Task)> = Vec::new();
+    let task = graph.get(&resolved)?.clone();
     let workflow = graph.workflow.clone();
-    let child_dependents = done_dependents(graph, id);
+    let child_dependents = done_dependents(graph, &resolved);
     let mut probe = task.clone();
     probe.reopen(force, &child_dependents, now, &workflow)?;
+    snapshots.push((resolved.clone(), task.clone()));
 
     let mut reopened = Vec::new();
-    for ancestor_id in graph.ancestors(id) {
+    for ancestor_id in graph.ancestors(&resolved) {
         match workflow.category_of(&graph.get(&ancestor_id)?.front.status) {
             Some(StatusCategory::Done) => {
+                if let Some(before) = graph.tasks.get(&ancestor_id).cloned() {
+                    snapshots.push((ancestor_id.clone(), before));
+                }
                 let ancestor_dependents = done_dependents(graph, &ancestor_id);
                 graph
                     .get_mut(&ancestor_id)?
@@ -833,8 +986,32 @@ pub fn reopen(graph: &mut Graph, id: &str, force: bool, now: DateTime<Utc>) -> R
         }
     }
     graph
-        .get_mut(id)?
+        .get_mut(&resolved)?
         .reopen(force, &child_dependents, now, &workflow)?;
+
+    // Enforce `[policy]` on every Task the reopen touched; a violation
+    // restores them all.
+    for (task_id, before) in &snapshots {
+        let after = match graph.tasks.get(task_id) {
+            Some(after) => after.clone(),
+            None => continue,
+        };
+        if !transitioned(before, &after) {
+            continue;
+        }
+        let status = after.front.status.clone();
+        if let Err(error) = crate::policy::enforce(
+            graph,
+            task_id,
+            crate::workflow::TRANSITION_REOPEN,
+            Some(status.as_str()),
+            before,
+            now,
+        ) {
+            restore_tasks(graph, snapshots.clone());
+            return Err(error);
+        }
+    }
     Ok(reopened)
 }
 

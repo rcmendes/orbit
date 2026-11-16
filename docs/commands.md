@@ -1518,6 +1518,7 @@ orbit sync              # commit anything left uncommitted
 | `DANGLING_PARENT` | Run `doctor`; the parent ID is missing. Recreate the parent or fix the SubTask's frontmatter. |
 | `INVALID_TYPE` | The Issue type is not in `board.types`, or the `parent` edge violates `board.hierarchy` (the child's type must sit strictly below the parent's). |
 | `MISSING_REQUIRED_FIELD` | The Issue type's `required` list in `board.types` names fields the Task lacks. |
+| `POLICY_VIOLATION` | A `[[policy.rules]]` rule in `config.toml` (or contributed by an applied profile) failed. `error.details.violations` lists each failed check; fix the fields/properties it names or adjust the rule. |
 | `ALREADY_INITIALIZED` | A Board already resolves for this working tree. Use it, run `orbit repo remove` to drop an explicit membership, move or migrate an ancestor/main/legacy Board, or pass a `DIR` outside every working tree. |
 | `BOARD_NOT_FOUND` | Run `orbit init`, pass `--dir`/`ORBIT_DIR`, or `orbit repo add` an existing Board. |
 | `CONFIG_ERROR` | The target `DIR` is not empty (apart from `.git`), or a configuration value is invalid. Use a fresh directory for a new standalone Board. |

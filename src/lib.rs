@@ -26,6 +26,7 @@ pub mod model_migrate;
 pub mod mutation;
 pub mod ops;
 pub mod output;
+pub mod policy;
 pub mod profile;
 pub mod registry;
 pub mod remote;

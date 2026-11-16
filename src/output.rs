@@ -153,6 +153,9 @@ pub(crate) fn default_hint(error_code: &str) -> String {
         code::INVALID_TRANSITION => {
             "Run `orbit show <id>` for the Issue's allowed_transitions.".to_string()
         }
+        code::POLICY_VIOLATION => {
+            "Fix the fields, properties, or labels listed in details.violations, or adjust the `[policy]` rule in config.toml.".to_string()
+        }
         code::CONFIG_ERROR | code::BOARD_CORRUPT | code::CORRUPT_TASK => {
             "Fix the Board files or config.toml; `orbit doctor` reports problems.".to_string()
         }

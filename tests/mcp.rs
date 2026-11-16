@@ -122,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 18);
+    assert_eq!(names.len(), 52);
     for expected in [
         "ready",
         "list",
@@ -140,9 +140,60 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "delete",
         "label",
         "comment",
+        "property",
+        "batch",
+        "tree",
+        "reopen",
+        "prime",
+        "export",
+        "doctor",
+        "sync",
+        "repo_add",
+        "repo_remove",
+        "repo_list",
+        "repo_refresh",
+        "slug_show",
+        "slug_migrate",
+        "migrate",
+        "migrate_model",
+        "board_host",
+        "board_sync",
+        "board_move",
+        "remote_status",
+        "remote_connect",
+        "remote_disconnect",
+        "remote_list",
+        "remote_issues",
+        "remote_issues_refresh",
+        "remote_issues_show",
+        "remote_import",
+        "remote_link",
+        "remote_create",
+        "remote_detach",
+        "remote_reattach",
+        "remote_sync",
+        "remote_auto_push",
+        "triage_context",
+        "triage_review",
+        "triage_apply",
     ] {
         assert!(names.contains(&expected), "{expected}");
     }
+
+    // Registry-generated tools carry MCP safety annotations.
+    let tool_list = tools["result"]["tools"].as_array().unwrap();
+    let get_tool = tool_list.iter().find(|tool| tool["name"] == "get").unwrap();
+    assert_eq!(get_tool["annotations"]["readOnlyHint"], true);
+    let delete_tool = tool_list
+        .iter()
+        .find(|tool| tool["name"] == "delete")
+        .unwrap();
+    assert_eq!(delete_tool["annotations"]["destructiveHint"], true);
+    let remote_tool = tool_list
+        .iter()
+        .find(|tool| tool["name"] == "remote_status")
+        .unwrap();
+    assert_eq!(remote_tool["annotations"]["openWorldHint"], true);
 
     let list_tool = tools["result"]["tools"]
         .as_array()

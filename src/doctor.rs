@@ -168,6 +168,7 @@ fn diagnose(
     };
     if let Some(board) = &board {
         issues.extend(crate::remote::commands::doctor_issues(board));
+        issues.extend(profile_issues(board));
     }
 
     let healthy = issues.is_empty();
@@ -360,6 +361,39 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
             }
         }
     }
+}
+
+/// Reports every applied `[[profiles]]` record whose requirements this
+/// binary does not meet — the same negotiation `orbit setup <plugin>`
+/// performs, re-checked so a binary downgrade or a hand-edited record
+/// surfaces here.
+fn profile_issues(board: &Board) -> Vec<Issue> {
+    board
+        .config
+        .profiles
+        .iter()
+        .filter_map(|profile| {
+            let unmet = crate::profile::unmet_applied(profile);
+            if unmet.is_empty() {
+                return None;
+            }
+            Some(
+                Issue::new(
+                    code::PROFILE_UNMET,
+                    None,
+                    format!(
+                        "profile `{}` requires {}",
+                        profile.name,
+                        unmet.describe().join(" and ")
+                    ),
+                )
+                .with_issue(&profile.name)
+                .with_next_action(
+                    "upgrade Orbit, or apply a profile whose requirements this binary meets",
+                ),
+            )
+        })
+        .collect()
 }
 
 fn orbit_on_path() -> bool {

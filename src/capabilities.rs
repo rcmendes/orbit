@@ -17,6 +17,50 @@ use crate::error::{OrbitError, Result};
 use crate::output::CommandOutput;
 use crate::workflow::Workflow;
 
+/// The named capabilities this binary provides (ADR 0022). Profiles
+/// declare `requires`/`optional` against this vocabulary; `orbit setup`
+/// refuses a profile whose `requires` are not all listed here, and
+/// `orbit doctor` reports an applied profile whose requirements are unmet.
+/// Kernel features are always present; opt-in modules (`remote`,
+/// `workspace`) are capabilities the binary supports but a Board enables
+/// through its own configuration.
+pub const SUPPORTED: &[&str] = &[
+    "workflow",
+    "issue-types",
+    "hierarchy",
+    "priorities",
+    "links",
+    "components",
+    "properties",
+    "external-id",
+    "assignee",
+    "reporter",
+    "lease",
+    "keys",
+    "idempotency",
+    "batch",
+    "remote",
+    "workspace",
+    "mcp",
+    "setup",
+    "profiles",
+    "doctor",
+];
+
+/// Whether this binary provides the named capability.
+pub fn is_supported(capability: &str) -> bool {
+    SUPPORTED.contains(&capability)
+}
+
+/// `requires` entries this binary does not provide, in order.
+pub fn missing(requires: &[String]) -> Vec<String> {
+    requires
+        .iter()
+        .filter(|capability| !is_supported(capability))
+        .cloned()
+        .collect()
+}
+
 /// `orbit capabilities [--json]`.
 pub fn run(dir: Option<&Path>) -> Result<CommandOutput> {
     let mut discovery = Board::discovery(dir);
@@ -32,10 +76,16 @@ pub fn run(dir: Option<&Path>) -> Result<CommandOutput> {
     let compatible = contract::is_compatible(&board_contract);
     let workflow = workflow_summary(&config);
     let modules = modules(&config);
+    let profiles: Vec<&str> = config
+        .profiles
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .collect();
 
     let data = json!({
         "orbit_version": env!("CARGO_PKG_VERSION"),
         "contract": contract::VERSION,
+        "capabilities": SUPPORTED,
         "board": {
             "contract": board_contract,
             "compatible": compatible,
@@ -43,6 +93,7 @@ pub fn run(dir: Option<&Path>) -> Result<CommandOutput> {
         },
         "modules": modules,
         "workflow": workflow,
+        "profiles": profiles,
     });
 
     let human = human_summary(&data);
@@ -148,6 +199,16 @@ fn human_summary(data: &Value) -> String {
                 .filter_map(|module| module["name"].as_str())
                 .collect();
             out.push_str(&format!("modules: {}\n", names.join(", ")));
+        }
+        _ => {}
+    }
+    if let Some(count) = data["capabilities"].as_array().map(Vec::len) {
+        out.push_str(&format!("capabilities: {count} supported\n"));
+    }
+    match &data["profiles"] {
+        Value::Array(profiles) if !profiles.is_empty() => {
+            let names: Vec<&str> = profiles.iter().filter_map(Value::as_str).collect();
+            out.push_str(&format!("profiles: {}\n", names.join(", ")));
         }
         _ => {}
     }

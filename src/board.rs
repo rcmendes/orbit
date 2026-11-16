@@ -152,6 +152,11 @@ pub struct Config {
         skip_serializing_if = "crate::workflow::WorkflowConfig::is_default"
     )]
     pub workflow: crate::workflow::WorkflowConfig,
+    /// Profiles applied to this Board (`orbit setup <plugin>`), recorded so
+    /// `orbit doctor` and `orbit capabilities` can re-negotiate their
+    /// requirements without re-reading the profile files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<crate::profile::AppliedProfile>,
     /// The contract version the Board was written for (ADR 0022). A binary
     /// refuses a Board whose contract is newer than its own; see
     /// [`crate::contract`]. Boards predating the field read as the current
@@ -170,6 +175,7 @@ impl Default for Config {
             repositories: Vec::new(),
             workspace: crate::workspace::WorkspaceConfig::default(),
             workflow: crate::workflow::WorkflowConfig::default(),
+            profiles: Vec::new(),
             contract: crate::contract::default_version(),
         }
     }
@@ -275,6 +281,21 @@ impl Config {
         self.workspace.validate()?;
         self.workflow.validate()?;
         crate::workflow::Workflow::from_config(self)?;
+        let mut profile_names = std::collections::BTreeSet::new();
+        for profile in &self.profiles {
+            if !task::is_valid_label(&profile.name) {
+                return Err(OrbitError::config(format!(
+                    "profiles contains invalid profile name `{}`",
+                    profile.name
+                )));
+            }
+            if !profile_names.insert(profile.name.as_str()) {
+                return Err(OrbitError::config(format!(
+                    "profiles contains duplicate profile `{}`",
+                    profile.name
+                )));
+            }
+        }
         let mut names = std::collections::BTreeSet::new();
         let mut paths = std::collections::BTreeSet::new();
         for repository in &self.repositories {

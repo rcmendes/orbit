@@ -295,6 +295,33 @@ warning; Board commands then refuse with `BOARD_NOT_MIGRATED` until a one-time
 `orbit migrate` converts it to the current layout.
 _Avoid_: Old mode, compatibility board
 
+**Profile**:
+A declarative TOML document that translates a plugin's vocabulary onto a Board:
+its `requires`/`optional` Capabilities, a minimum contract version, a Workflow
+template or custom `[workflow]`, hold and role names, vocabulary mappings, and
+optional `board.*` overrides. `orbit setup <plugin>` resolves a Profile from the
+shipped built-ins, `profiles/<name>.toml` in the Board, the Orbit folder, the
+repository, `~/.config/orbit/profiles/`, or an explicit path, negotiates its
+requirements, and applies it to `config.toml` idempotently. A Profile never adds
+code.
+_Avoid_: Preset, theme, plugin binary
+
+**Applied Profile**:
+The `[[profiles]]` record a Profile leaves in `config.toml`: its name, source,
+minimum contract, required and optional capabilities, holds, roles, and
+vocabulary. `orbit doctor` re-checks the record's requirements against the
+running binary and reports `PROFILE_UNMET` when they are not met;
+`orbit capabilities` lists applied profile names.
+_Avoid_: Installed plugin, profile state
+
+**Capability**:
+A named feature an Orbit binary provides — `workflow`, `issue-types`,
+`hierarchy`, `priorities`, `links`, `components`, `properties`, `external-id`,
+`assignee`, `reporter`, `lease`, `keys`, `idempotency`, `batch`, `remote`,
+`workspace`, `mcp`, `setup`, `profiles`, `doctor` — reported by
+`orbit capabilities` and negotiated by Profiles through `requires`/`optional`.
+_Avoid_: Feature flag, module (modules are Board-enabled subsystems)
+
 ## Compatibility vocabulary
 
 Beads, Linear, and Matt Pocock's skills call the unit an **Issue**, a child a

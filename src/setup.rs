@@ -279,27 +279,61 @@ pub struct InstallOptions {
 }
 
 pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOutput> {
+    let target = args.client.trim();
+    let client = SetupClient::from_name(&target.to_ascii_lowercase());
+    // `all` installs every harness; it is not a profile name.
+    let profile = if client == Some(SetupClient::All) {
+        None
+    } else {
+        crate::profile::find(target, dir)?
+    };
+
+    match (client, profile) {
+        (None, None) => Err(unknown_setup_target(target)),
+        (None, Some(resolved)) => run_profile(&args, dir, &resolved),
+        (Some(client), resolved) => {
+            let mut output = run_harness(&args, dir, client)?;
+            if let Some(resolved) = resolved {
+                merge_profile(&args, dir, &resolved, &mut output)?;
+            }
+            Ok(output)
+        }
+    }
+}
+
+fn unknown_setup_target(target: &str) -> OrbitError {
+    OrbitError::invalid_argument(format!(
+        "`{target}` is neither an agent integration nor a profile; integrations are claude, cursor, codex, opencode, devin, mattpocock, all — profiles resolve from `profiles/<name>.toml` in the Board, the repository, or `~/.config/orbit/profiles/`"
+    ))
+}
+
+/// The harness half of `orbit setup`: instruction files, skills, MCP
+/// entries, and hooks for one `SetupClient`.
+fn run_harness(
+    args: &crate::cli::SetupArgs,
+    dir: Option<&Path>,
+    client: SetupClient,
+) -> Result<CommandOutput> {
     let project = project_root()?;
     let remote_details = crate::remote::details_visible_for(dir);
     let root = scope_root(args.scope, &project)?;
     let mut warnings = Vec::new();
 
-    if matches!(args.client, SetupClient::Mattpocock)
+    if matches!(client, SetupClient::Mattpocock)
         && (args.mcp || args.mcp_bin.is_some() || args.portable_mcp)
     {
         warnings.push("mattpocock is not an MCP client; ignoring MCP options".to_string());
     }
 
-    let hooks = args.hooks
-        && !args.remove
-        && (args.client == SetupClient::All || args.client.supports_hooks());
+    let hooks =
+        args.hooks && !args.remove && (client == SetupClient::All || client.supports_hooks());
     if args.hooks && !args.remove && !hooks {
         warnings
             .push("hooks are only supported for Claude and Devin; ignoring --hooks".to_string());
     }
 
     let mcp = !args.no_mcp;
-    let clients = expand(args.client);
+    let clients = expand(client);
     let mcp_bin = if mcp && !args.remove {
         Some(configured_mcp_bin(
             args.portable_mcp,
@@ -348,6 +382,208 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
     )?;
     outcome.output.warnings.extend(warnings);
     Ok(outcome.output)
+}
+
+/// The result of previewing, checking, or applying one profile.
+struct ProfileOutcome {
+    /// Merged into `data["profile"]` (and `data["files"]` for previews).
+    data: Value,
+    files: Vec<FileOutcome>,
+    human_extra: String,
+    warnings: Vec<String>,
+    exit_code: i32,
+}
+
+/// `orbit setup <plugin>` where `<plugin>` is not an agent integration:
+/// the profile is the whole target.
+fn run_profile(
+    args: &crate::cli::SetupArgs,
+    dir: Option<&Path>,
+    resolved: &crate::profile::ResolvedProfile,
+) -> Result<CommandOutput> {
+    if args.remove {
+        return Err(OrbitError::invalid_argument(format!(
+            "`{}` is a profile; profiles are declarative — remove its `[[profiles]]` record and applied settings from the Board's config.toml, or apply a different profile",
+            resolved.profile.name()
+        )));
+    }
+    let outcome = profile_outcome(args, dir, resolved)?;
+    let mut data = outcome.data;
+    if let Some(object) = data.as_object_mut() {
+        object.insert(
+            "files".to_string(),
+            json!(
+                outcome
+                    .files
+                    .iter()
+                    .map(|f| f.to_json(args.print))
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
+    let mut output = CommandOutput::new(data, outcome.human_extra);
+    output.warnings = outcome.warnings;
+    output.exit_code = outcome.exit_code;
+    Ok(output)
+}
+
+/// Applies (or previews/checks) a profile found for a known agent
+/// integration, merging the result into the harness output.
+fn merge_profile(
+    args: &crate::cli::SetupArgs,
+    dir: Option<&Path>,
+    resolved: &crate::profile::ResolvedProfile,
+    output: &mut CommandOutput,
+) -> Result<()> {
+    if args.remove {
+        output.warnings.push(format!(
+            "profile `{}` stays applied; profiles are declarative — edit the Board's config.toml to change it",
+            resolved.profile.name()
+        ));
+        return Ok(());
+    }
+    let outcome = profile_outcome(args, dir, resolved)?;
+    if let (Some(target), Value::Object(extra)) = (output.data.as_object_mut(), &outcome.data) {
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
+        }
+        if let Some(files) = target.get_mut("files").and_then(Value::as_array_mut) {
+            files.extend(outcome.files.iter().map(|file| file.to_json(args.print)));
+        }
+    }
+    output.human.push_str(&outcome.human_extra);
+    output.warnings.extend(outcome.warnings);
+    output.exit_code = output.exit_code.max(outcome.exit_code);
+    Ok(())
+}
+
+/// Shared profile handling for `--check`, `--print`, and a normal apply.
+/// Requirements are negotiated first: an unmet profile fails (or reports
+/// `unmet` under `--check`) before the Board is touched.
+fn profile_outcome(
+    args: &crate::cli::SetupArgs,
+    dir: Option<&Path>,
+    resolved: &crate::profile::ResolvedProfile,
+) -> Result<ProfileOutcome> {
+    let profile = &resolved.profile;
+    let unmet = profile.unmet();
+    if !unmet.is_empty() && !args.check {
+        return Err(OrbitError::new(
+            code::PROFILE_UNMET,
+            format!(
+                "profile `{}` cannot be applied: this orbit does not provide {}",
+                profile.name(),
+                unmet.describe().join(", ")
+            ),
+        )
+        .with_details(json!({
+            "profile": profile.name(),
+            "missing_capabilities": unmet.capabilities,
+            "required_contract": unmet.contract,
+            "binary_contract": crate::contract::VERSION,
+        })));
+    }
+
+    let write = !args.check && !args.print;
+    let access = crate::board::BoardAccess::open(
+        dir,
+        if write {
+            crate::board::AccessMode::Write
+        } else {
+            crate::board::AccessMode::Read
+        },
+    )?;
+    let board = access.board();
+
+    // Simulate the apply to learn whether the Board would change.
+    let mut simulated = board.config.clone();
+    profile.apply(&mut simulated, Some(&resolved.source))?;
+    let before = board.config.to_toml()?;
+    let after = simulated.to_toml()?;
+    let changed = before != after;
+
+    let config_action = if changed {
+        Action::Updated
+    } else {
+        Action::Unchanged
+    };
+    let config_file = FileOutcome {
+        relative: PathBuf::from("config.toml"),
+        action: config_action,
+        content: args.print.then(|| after.clone()),
+        warning: None,
+    };
+
+    let mut data = json!({
+        "profile": {
+            "name": profile.name(),
+            "source": resolved.source,
+            "path": resolved.path,
+            "board": board.root,
+        },
+    });
+    let mut human = String::new();
+    let mut warnings = Vec::new();
+    let mut exit_code = 0;
+
+    if args.check {
+        let status = if !unmet.is_empty() {
+            "unmet"
+        } else if changed {
+            "stale"
+        } else {
+            "installed"
+        };
+        data["status"] = json!(status);
+        data["changed"] = json!(changed);
+        human.push_str(&format!(
+            "orbit setup check: profile `{}` is {status}\n",
+            profile.name()
+        ));
+        human.push_str(&format!("{} {}\n", config_action.as_str(), "config.toml"));
+        exit_code = if status == "installed" { 0 } else { 1 };
+        if !unmet.is_empty() {
+            warnings.push(format!(
+                "profile `{}` is missing: {}",
+                profile.name(),
+                unmet.describe().join(", ")
+            ));
+        }
+    } else if args.print {
+        data["preview"] = json!(true);
+        data["changed"] = json!(changed);
+        human.push_str(&format!(
+            "profile `{}` would {} the Board's config.toml\n",
+            profile.name(),
+            if changed { "update" } else { "leave unchanged" }
+        ));
+    } else {
+        let outcome = board.save_config(
+            &format!("orbit: apply profile {}", profile.name()),
+            |config| profile.apply(config, Some(&resolved.source)),
+        )?;
+        let committed = matches!(outcome, crate::git::CommitOutcome::Committed);
+        data["changed"] = json!(changed);
+        data["committed"] = json!(committed);
+        human.push_str(&format!(
+            "profile `{}` {} on {}\n",
+            profile.name(),
+            if changed {
+                "applied"
+            } else {
+                "already applied"
+            },
+            board.root.display()
+        ));
+    }
+
+    Ok(ProfileOutcome {
+        data,
+        files: vec![config_file],
+        human_extra: human,
+        warnings,
+        exit_code,
+    })
 }
 
 pub fn install(root: &Path, options: InstallOptions) -> Result<InstallOutcome> {

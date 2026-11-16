@@ -83,6 +83,7 @@ pub mod code {
     pub const BOARD_HOST_CONFLICT: &str = "BOARD_HOST_CONFLICT";
     pub const BOARD_SYNC_CONFLICT: &str = "BOARD_SYNC_CONFLICT";
     pub const CONTRACT_VERSION_UNSUPPORTED: &str = "CONTRACT_VERSION_UNSUPPORTED";
+    pub const PROFILE_UNMET: &str = "PROFILE_UNMET";
 }
 
 #[derive(Debug, Clone)]

@@ -152,6 +152,11 @@ pub struct Config {
         skip_serializing_if = "crate::workflow::WorkflowConfig::is_default"
     )]
     pub workflow: crate::workflow::WorkflowConfig,
+    /// Declarative transition policy (`[policy]`): rules scoped by
+    /// transition, type, label, or profile that guard workflow transitions
+    /// and carry post-functions. Enforced in `ops` for every surface.
+    #[serde(default, skip_serializing_if = "crate::policy::PolicyConfig::is_empty")]
+    pub policy: crate::policy::PolicyConfig,
     /// Profiles applied to this Board (`orbit setup <plugin>`), recorded so
     /// `orbit doctor` and `orbit capabilities` can re-negotiate their
     /// requirements without re-reading the profile files.
@@ -175,6 +180,7 @@ impl Default for Config {
             repositories: Vec::new(),
             workspace: crate::workspace::WorkspaceConfig::default(),
             workflow: crate::workflow::WorkflowConfig::default(),
+            policy: crate::policy::PolicyConfig::default(),
             profiles: Vec::new(),
             contract: crate::contract::default_version(),
         }
@@ -281,6 +287,7 @@ impl Config {
         self.workspace.validate()?;
         self.workflow.validate()?;
         crate::workflow::Workflow::from_config(self)?;
+        crate::policy::Policy::from_config(self)?;
         let mut profile_names = std::collections::BTreeSet::new();
         for profile in &self.profiles {
             if !task::is_valid_label(&profile.name) {

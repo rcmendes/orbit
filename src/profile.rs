@@ -26,7 +26,124 @@ use crate::workflow::{Workflow, WorkflowConfig};
 /// Profiles shipped inside the Orbit binary, as `(name, TOML)` pairs.
 /// Plugin profiles that belong to Orbit itself register here; Boards and
 /// users supply their own through the profile search path instead.
-const BUILTIN_PROFILES: &[(&str, &str)] = &[];
+const BUILTIN_PROFILES: &[(&str, &str)] = &[("mattpocock", MATPOCOCK_PROFILE)];
+
+/// The `mattpocock` profile: Matt Pocock's engineering skills speak five
+/// triage roles (`needs-triage`, `needs-info`, `ready-for-agent`,
+/// `ready-for-human`, `wontfix`) plus the `bug`/`enhancement` categories.
+/// The profile maps them onto the Issue model — statuses and transitions
+/// for the state roles, a human assignee kind for `ready-for-human`, a
+/// `Won't Do` resolution for `wontfix`, and the `bug`/`story` Issue types
+/// for the categories — and `orbit setup mattpocock` regenerates the
+/// `docs/agents/` guides from this vocabulary.
+const MATPOCOCK_PROFILE: &str = r#"
+name = "mattpocock"
+description = "Matt Pocock engineering skills: five triage roles on the Issue workflow"
+contract = "1.0.0"
+requires = ["workflow", "issue-types", "assignee"]
+optional = ["policy"]
+
+[roles]
+# `ready-for-human` is ready work for a person: transition to Ready, then
+# `orbit assign <id> --to <name>` (assignee kind `human` is the default).
+ready-for-human = "human"
+
+[vocabulary.status]
+needs-triage = "Triage"
+needs-info = "Needs Info"
+ready-for-agent = "Ready"
+ready-for-human = "Ready"
+
+[vocabulary.resolution]
+wontfix = "Won't Do"
+
+[vocabulary.type]
+bug = "bug"
+enhancement = "story"
+
+[workflow]
+initial = "Triage"
+
+[[workflow.statuses]]
+name = "Triage"
+category = "todo"
+
+[[workflow.statuses]]
+name = "Needs Info"
+category = "todo"
+
+[[workflow.statuses]]
+name = "Ready"
+category = "todo"
+ready = true
+
+[[workflow.statuses]]
+name = "In Progress"
+category = "active"
+
+[[workflow.statuses]]
+name = "Done"
+category = "done"
+
+[[workflow.statuses]]
+name = "Cancelled"
+category = "canceled"
+
+# The five triage roles are transitions named after the skill's label
+# vocabulary, so `orbit transition <id> <role>` round-trips each one.
+[[workflow.transitions]]
+name = "needs-triage"
+from = ["Triage", "Needs Info", "Ready", "In Progress"]
+to = "Triage"
+
+[[workflow.transitions]]
+name = "needs-info"
+from = ["Triage", "Needs Info", "Ready", "In Progress"]
+to = "Needs Info"
+
+[[workflow.transitions]]
+name = "ready-for-agent"
+from = ["Triage", "Needs Info", "Ready", "In Progress"]
+to = "Ready"
+
+[[workflow.transitions]]
+name = "ready-for-human"
+from = ["Triage", "Needs Info", "Ready", "In Progress"]
+to = "Ready"
+
+[[workflow.transitions]]
+name = "wontfix"
+from = ["Triage", "Needs Info", "Ready", "In Progress"]
+to = "Cancelled"
+resolution = "Won't Do"
+
+[[workflow.transitions]]
+name = "claim"
+from = ["Ready", "In Progress"]
+to = "In Progress"
+
+[[workflow.transitions]]
+name = "release"
+from = ["In Progress"]
+to = "Ready"
+
+[[workflow.transitions]]
+name = "done"
+from = ["Triage", "Needs Info", "Ready", "In Progress"]
+to = "Done"
+resolution = "completed"
+
+[[workflow.transitions]]
+name = "cancel"
+from = ["Triage", "Needs Info", "Ready", "In Progress"]
+to = "Cancelled"
+resolution = "cancelled"
+
+[[workflow.transitions]]
+name = "reopen"
+from = ["Done", "Cancelled"]
+to = "Triage"
+"#;
 
 /// The `[[profiles]]` record `orbit setup <plugin>` writes into
 /// `config.toml`. It captures everything doctor and capabilities need to
@@ -111,6 +228,11 @@ pub struct Profile {
     /// custom `[workflow]` definition, same shape as `config.toml`.
     #[serde(default)]
     pub workflow: Option<WorkflowConfig>,
+    /// `[policy]` rules the profile contributes: merged into the Board's
+    /// `config.policy.rules` by name on `orbit setup`. Rules may scope
+    /// themselves to this profile through `profiles = ["<name>"]`.
+    #[serde(default)]
+    pub policy: crate::policy::PolicyConfig,
     /// Optional `board.*` overrides applied with the profile.
     #[serde(default)]
     pub board: ProfileBoard,
@@ -227,6 +349,19 @@ impl Profile {
             };
             Workflow::from_config(&config)?;
         }
+        // Policy rules get their shape checks here; references to
+        // transitions, statuses, and profiles are validated when the merged
+        // config is saved (`Config::validate`).
+        let mut rule_names = std::collections::BTreeSet::new();
+        for rule in &self.policy.rules {
+            rule.validate_shape()?;
+            if !rule_names.insert(rule.name.as_str()) {
+                return Err(OrbitError::config(format!(
+                    "profile `{name}` defines policy rule `{}` more than once",
+                    rule.name
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -259,6 +394,20 @@ impl Profile {
     pub fn apply(&self, config: &mut Config, source: Option<&str>) -> Result<()> {
         if let Some(workflow) = &self.workflow {
             config.workflow = workflow.clone();
+        }
+        // Profile policy rules merge by name: re-applying replaces the
+        // profile's own rules and leaves hand-written rules alone.
+        for rule in &self.policy.rules {
+            if let Some(existing) = config
+                .policy
+                .rules
+                .iter_mut()
+                .find(|existing| existing.name == rule.name)
+            {
+                *existing = rule.clone();
+            } else {
+                config.policy.rules.push(rule.clone());
+            }
         }
         let board = &self.board;
         if let Some(priorities) = &board.priorities {
@@ -371,6 +520,18 @@ pub fn find(name: &str, dir: Option<&Path>) -> Result<Option<ResolvedProfile>> {
         }
     }
     Ok(None)
+}
+
+/// A profile shipped inside the binary, parsed on demand. Returns `None`
+/// for names that are not built in. Built-in TOML is a compile-time
+/// constant, so a parse failure is a build bug and panics.
+pub fn builtin(name: &str) -> Option<Profile> {
+    BUILTIN_PROFILES
+        .iter()
+        .find(|(builtin, _)| *builtin == name)
+        .map(|(_, text)| {
+            Profile::parse(text, name).expect("built-in profile must parse and validate")
+        })
 }
 
 fn resolve_path_arg(name: &str) -> Result<Option<PathBuf>> {

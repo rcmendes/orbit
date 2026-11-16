@@ -147,7 +147,7 @@ flowchart LR
 | --- | --- | --- |
 | Interface | `src/cli.rs`, `src/output.rs`, `src/mcp.rs`, `src/registry.rs` | Parse commands, render terminal output or exactly one JSON object on stdout in `--json`, expose the same operations over MCP, and describe every public command once in the registry that generates the MCP tools, `orbit schema`, and the `docs/commands.md` reference. |
 | Application | `src/commands/`, `src/migrate.rs`, `src/board_migrate.rs`, `src/repository.rs`, `src/board_host.rs`, `src/board_sync.rs`, `src/health.rs`, `src/github/`, `src/remote/`, `src/workspace.rs` | Dispatch, acquire the right lock mode, hydrate the graph, call one Task transition, call the writer, and shape the result. `src/remote/` owns the provider-neutral Remote Tracker port — sync engine, baselines, auto-push, relationships, link persistence, and the Remote Issue catalog seam — while `src/github/` is the built-in GitHub adapter. `src/repository.rs` owns Board membership (discovered child Repositories plus explicit `[repositories]` entries) and the rebuildable inventory cache; `src/board_host.rs`/`src/board_sync.rs` own host configuration and the Orbit-aware merge used by `orbit board sync`. `src/workspace.rs` is a compatibility shim that still stores the `[workspace]` config block and the Board-anchor lookup. `doctor` adds read-only repository/cache, migration, link, and managed-agent diagnostics. Prefix migration rewrites one Board's IDs; `orbit migrate` converts a legacy layout and `init` merges child Boards on an anchor. |
-| Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/workflow.rs`, `src/comment.rs`, `src/feed.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, the Board-defined Workflow (statuses, categories, transitions, templates), lifecycle transition rules, dependency validation, readiness, counts, comments, and the Change feed — named events `orbit changes`/`orbit history` derive by replaying Board Git history with a monotonic commit cursor. |
+| Domain | `src/board.rs`, `src/slug.rs`, `src/graph.rs`, `src/task.rs`, `src/transition.rs`, `src/workflow.rs`, `src/policy.rs`, `src/review.rs`, `src/comment.rs`, `src/feed.rs` | Board discovery and config, slug normalization and validation, task parsing and rendering, the Board-defined Workflow (statuses, categories, transitions, templates), lifecycle transition rules, dependency validation, the declarative transition policy (`[policy]` rules, readiness lint, post-functions), review/evidence/Ask state on the `evidence`/`orbit` Properties, the Change feed — named events `orbit changes`/`orbit history` derive by replaying Board Git history with a monotonic commit cursor — readiness, counts, and comments. |
 | Durability | `src/lock.rs`, `src/atomic.rs`, `src/git.rs` | One Board-wide advisory lock at `<DIR>/.lock`, temp-file + fsync + rename publication, and auto-commit to the board branch. |
 | Execution | `src/mutation.rs`, `src/remote/execution.rs` | Board mutation execution (lifecycle, terminal, reopen, shared Task persistence and commit warnings) and provider-neutral Remote Tracker execution (`synchronize`, `create_and_link`, `apply_plan`) behind a resolved `RemoteAdapter`; both run inside the caller's Board access scope. |
 | Contract | `src/error.rs`, `src/contract.rs`, `src/output.rs`, `src/capabilities.rs`, `src/concurrency.rs` | Stable error codes rendered as RFC 9457-style problem fields (`type`, `title`, `detail`, `retryable`, `hint`), the Board contract semver and its compatibility gate, the `orbit capabilities` handshake that reports contract version, modules, and workflow — including on Boards the gate refuses — and the shared optimistic-concurrency (`--if-version` against `updated_at`) and write-idempotency (`--idempotency-key` records under the Board cache) checks every mutation runs inside the exclusive lock. |
@@ -347,8 +347,20 @@ stateDiagram-v2
     in_progress --> in_progress: heartbeat
     in_progress --> in_progress: checkpoint
     in_progress --> in_progress: claim --steal
+    in_progress --> in_review: submit
+    in_progress --> needs_human: ask or escalate
     in_progress --> done: done
     in_progress --> cancelled: cancel
+
+    in_review --> done: approve
+    in_review --> in_progress: request_changes
+    in_review --> needs_human: ask or escalate
+    in_review --> done: done
+    in_review --> cancelled: cancel
+
+    needs_human --> ready: answer
+    needs_human --> done: done
+    needs_human --> cancelled: cancel
 
     done --> ready: reopen
     cancelled --> ready: reopen
@@ -375,7 +387,7 @@ stateDiagram-v2
     end note
 ```
 
-`minimal` drops the `todo` backlog status and the `promote`/`defer` edges; `agentic` adds `blocked` and review statuses. A custom `[workflow]` may add statuses such as `In Review` and transitions such as `submit`; `Workflow::from_config` validates unique names, valid categories, exactly one ready Status, an existing initial Status, transitions that reference defined statuses, and resolution placement (resolutions only on transitions into closed categories).
+`minimal` drops the `todo` backlog, `needs_human`, `in_review`, and their edges; `agentic` adds `blocked` and `needs_decision` holds on top of the same review loop (`escalate` lands on `needs_decision`; `ask` and attempt-limit escalations land on `needs_human`). The review bookkeeping lives in `src/review.rs`: submit evidence under the `evidence` Property, the latest submit/verdict under `orbit.review`, the open question under `orbit.ask`, and attempt-limit reroutes under `orbit.escalation`. An open Ask is a derived block like a hold label — `is_ready` reports false and `claim`, `done`, and transitions refuse with `ASK_OPEN` until `answer` records the reply. A custom `[workflow]` may still define its own review and escalation statuses and edges; `Workflow::from_config` validates unique names, valid categories, exactly one ready Status, an existing initial Status, transitions that reference defined statuses, and resolution placement (resolutions only on transitions into closed categories).
 
 ### Transition rules
 
@@ -393,6 +405,11 @@ These rules live in `src/transition.rs`, which stays pure: every method takes th
 | `active` | `cancel` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields; links are untouched. Records the transition's resolution. Resolves dependents. |
 | closed | `reopen` | `reopen` | Ready Status | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively claimed ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears claim fields; links are untouched; clears the resolution. |
 | any | `transition <name>` | named edge | edge target | Runs one Workflow transition directly, honoring the claim-holder check where the edge requires it. |
+| `active` | `submit` | `submit` | `in_review` | Records evidence on the `evidence` Property and the submitter on `orbit.review`; needs at least one evidence flag. |
+| `in_review` | `review --verdict approve` | `approve` | `done` | Records the verdict; the reviewer is checked against `distinct_from` policy as the transient assignee. |
+| `in_review` | `review --verdict request-changes --reason` | `request_changes` | `in_progress` | Records the verdict and reason, reassigns to the recorded submitter; `max_attempts`-only violations reroute through `escalate` instead of failing. |
+| open | `ask QUESTION` | `ask` | `needs_human` when allowed | Records `orbit.ask` with `return_to`; the open Ask blocks readiness, `claim`, `done`, and transitions (`ASK_OPEN`). |
+| open | `answer ANSWER` | `answer` (fallback) | `return_to` or `answer` target | Records the reply on `orbit.ask` and restores the recorded status when still open. |
 | closed | `done --comment` / `cancel --comment` | — | unchanged | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
 | closed | opposite terminal command | — | rejected | `INVALID_TRANSITION`; reopen first. |
 | any | `update`, `label`, `comment`, `depend`, `undepend` | — | unchanged | Metadata only. `update`, `label`, and `comment` also work on terminal tasks. `depend` refuses terminal tasks, cycles, and parent/child edges; `undepend` is idempotent. |
@@ -418,7 +435,9 @@ flowchart TD
     SUBTASKS -->|yes| READY["ready<br/>eligible for ready and claim"]
 ```
 
-The failure codes follow the gate: `WAITING_EXTERNAL` for an external blocking link, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open SubTasks, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate. `graph::is_ready`, `ready_tasks`, `counts`, `prime`, and the MCP `ready` tool all share this one definition.
+The failure codes follow the gate: `WAITING_EXTERNAL` for an external blocking link, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open SubTasks, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. An open Ask (`orbit.ask` without `answered_at`) is another derived block: `is_ready` reports false and `claim`, `done`, and transitions refuse with `ASK_OPEN` until `orbit answer` records the reply. `--steal` bypasses only the claim checks, never the gate. `graph::is_ready`, `ready_tasks`, `counts`, `prime`, and the MCP `ready` tool all share this one definition.
+
+On top of the structural gate, `[policy]` rules with `lint = true` (`src/policy.rs`) add declarative field/property requirements to `is_ready` itself: a Task that fails the Board's readiness lint leaves the `ready` queue, and `claim` reports `POLICY_VIOLATION` instead of claiming it. Transition guards beyond the lint — required fields, evidence properties, WIP limits, attempt limits, reviewer/assignee distinctness, and post-functions — are enforced in `src/ops.rs`, the shared operation layer every surface (CLI, `orbit batch`, MCP) funnels through, so a violating transition fails atomically with `POLICY_VIOLATION` and `details.violations` naming each failed check.
 
 ### Stored versus derived
 
@@ -532,7 +551,7 @@ This map shows forward flow; solid arrows are the primary path, while dotted arr
 | Bootstrap | `init`, `migrate`, `setup`, `repo add`/`remove` | Create or convert the Board; optionally wire harness files and MCP entries, or register a member Repository on a multi-Repository Board. |
 | Authoring | `add`, `update`, `label`, `comment`, `depend`, `undepend`, `delete` | Create tasks and change metadata. No command here changes Status except `delete`, which removes the task. |
 | Inspection | `list`, `show`, `tree`, `ready`, `prime`, `export`, `changes`, `history`, `remote status`, `remote create`/`sync` preview, `repo list` | Read-only by default. `tree` is the scoped family view; `ready` is the derived queue; `prime` is the compact agent context; `export` is the deterministic full snapshot; `changes` pages the Change feed with a commit cursor and `history` replays one Issue's timeline from Git history. Sync and create previews do not write; only `--apply` changes Board state or GitHub. |
-| Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen`, `transition` | Change Status, the claim, or the claim holder's handoff record. Writes take the exclusive lock. |
+| Execution | `claim`, `ready --claim`, `heartbeat`, `checkpoint`, `release`, `done`, `cancel`, `reopen`, `transition`, `submit`, `review`, `ask`, `answer` | Change Status, the claim, review/evidence bookkeeping, or the claim holder's handoff record. Writes take the exclusive lock. |
 | Maintenance | `doctor`, `sync`, `remote`, `repo`, `board`, `slug`, `mcp` | Check Board and configured Remote Tracker health, commit heartbeat-only changes, explicitly create or synchronize Remote Issues or push mapped changes when auto-push is enabled, manage member Repositories and the rebuildable repository catalog, configure and synchronize the Board host, inspect or rewrite the Task-ID prefix, and serve MCP over stdio. |
 
 ## 4. Board layouts and initialization

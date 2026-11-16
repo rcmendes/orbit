@@ -140,14 +140,19 @@ The canonical vocabulary lives in `docs/GLOSSARY.md`. In short:
 The lifecycle is a **Workflow** defined by the Board, not a fixed enum. `config.toml` selects a shipped template — `minimal`, `standard` (the default), or `agentic` — or defines `[workflow]` `statuses`, `transitions`, and `initial` directly. Every Status has a name and a category (`todo`, `active`, `done`, `canceled`); exactly one Status is flagged `ready`. The standard template:
 
 ```text
-statuses:    ready (todo, ready) · todo (todo) · in_progress (active)
+statuses:    ready (todo, ready) · todo (todo) · needs_human (todo)
+             · in_progress (active) · in_review (active)
              · done (done) · cancelled (canceled)
 initial:     ready
-transitions: claim · release · promote · defer · done · cancel · reopen
+transitions: claim · release · promote · defer · submit · approve
+             · request_changes · ask · escalate · answer
+             · done · cancel · reopen
 ```
 ```
 
-`minimal` drops the `todo` backlog and its `promote`/`defer` edges; `agentic` adds `blocked` and review-oriented statuses. Custom workflows may add statuses such as `In Review` and transitions such as `submit`; validation requires unique status and transition names, valid categories, exactly one ready Status, an initial Status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and no resolutions on transitions into open statuses.
+`minimal` drops the `todo` backlog, `needs_human`, `in_review`, and their edges. `agentic` adds `blocked` and `needs_decision` hold statuses on top of the review loop: `escalate` lands on `needs_decision`, while `ask` and attempt-limit escalations land on `needs_human`. Custom workflows may define their own review and escalation statuses and edges; validation requires unique status and transition names, valid categories, exactly one ready Status, an initial Status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and no resolutions on transitions into open statuses.
+
+The review loop is declarative: `submit` moves `in_progress` work into `in_review` and records structured evidence (commands with exit codes, the verified commit, touched files, and a note) plus the submitter on the `evidence`/`orbit` Properties; `approve` closes the Issue with the `completed` resolution; `request_changes` sends it back to `in_progress` and reassigns it to the recorded submitter. `ask` records an open question on `orbit.ask` — which blocks readiness, `claim`, `done`, and every transition except `answer` — and moves the Issue to `needs_human` when the edge allows; `orbit answer` records the reply and restores the status captured at ask time. When a `request_changes` verdict hits only `max_attempts` policy violations and the workflow's `escalate` edge is allowed, the Issue reroutes through `escalate` to the hold status instead of failing, recording `orbit.escalation`. All of it runs in `src/ops.rs`, so CLI, `orbit batch`, and MCP enforce identically.
 
 The built-in commands drive named Workflow edges:
 
@@ -164,6 +169,11 @@ The built-in commands drive named Workflow edges:
 | open | `cancel` | `cancel` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live lease requires the assignee unless `--force`. Clears assignee and lease and `waiting_on`; records the transition's resolution. Resolves dependents. |
 | closed | `reopen` | `reopen` | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively leased ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears assignee and lease, `waiting_on`, and the resolution. |
 | any | `transition <name>` | any defined edge | Runs one named Workflow transition directly, honoring the assignee check where the edge requires it. An unknown name or an edge that does not start from the current Status fails with `INVALID_TRANSITION` naming the valid transitions. |
+| `active` | `submit` | `submit` | Moves the Task into the In Review status and records structured evidence — at least one of `--command` (repeatable), `--exit-code`, `--commit`, `--file` (repeatable), or `--note` — on the `evidence` Property, plus the submitter and round count on `orbit.review`. |
+| `in_review` | `review --verdict approve` | `approve` | Records the verdict on `orbit.review` and closes the Task with the transition's resolution. |
+| `in_review` | `review --verdict request-changes --reason TEXT` | `request_changes` | Records the verdict and reason, returns the Task to `in_progress`, and reassigns it to the recorded submitter (unassigned when the work never went through `submit`). `--reason` is required. |
+| open | `ask QUESTION` | `ask` | Records an open Ask on `orbit.ask` with the current status as `return_to`, and moves to `needs_human` when the `ask` edge allows. An open Ask blocks readiness, `claim`, `done`, and every transition except `answer` (`ASK_OPEN`). A second open Ask is refused. |
+| open | `answer ANSWER` | `answer` (fallback) | Records the reply on `orbit.ask`, lifting the block, and restores `return_to` when it is still an open status; otherwise the `answer` edge runs, or the Ready status as last resort. Answering a Task with no open Ask is an error. |
 | any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live lease requires the assignee unless `--force`. With dependents or SubTasks, requires `--force`, which first removes edges from dependents and deletes the whole SubTask subtree. |
 
 Closed categories (`done`, `canceled`) resolve dependents; `reopen`-style transitions return a Task to an open Status; `cancel` is not `delete`. `orbit show` reports `status_category`, `resolution`, and `allowed_transitions` — the Workflow edges valid from the current Status. Waiting, hold labels, and dependency edges are gates on readiness and claims, not Statuses. The full transition table and readiness gate are in [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md).
@@ -317,11 +327,39 @@ prefix = "orb-"
 # name = "acme"
 # source = "user"
 # requires = ["workflow"]
+
+# Optional: declarative transition policy — see §3.2.
+# [policy]
+# [[policy.rules]]
+# name = "ready-evidence"
+# transition = "*"
+# to = "ready"
+# require_properties = ["evidence"]
+# lint = true
 ```
 
 `[workflow]` selects the Board's lifecycle. `template` names a shipped workflow — `minimal`, `standard` (the default), or `agentic`. Setting `statuses`, `transitions`, or `initial` instead defines a custom workflow; validation requires unique status and transition names, valid categories (`todo`, `active`, `done`, `canceled`), exactly one status flagged `ready`, an `initial` status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and none on transitions into open statuses. See §3.1 for the shipped templates. The three templates ship inside Orbit; a Profile's `[workflow]` section selects one of them or defines a custom workflow the same way.
 
 `board.storage` is retired (ADR 0019): every Board is a standalone repository, so the key is neither written nor honored; a config that still carries it marks a legacy Board for `orbit migrate`. `board.priorities` is the ordered Priority vocabulary, most important first; each entry is a lowercase name and `board.default_priority` must name one of them. Tasks store a Priority name and sort by its position in the list, so renaming or reordering the list reorders every Task without rewriting files. `board.types` declares the Issue type vocabulary (`[[board.types]]` entries with `name` and optional `required` frontmatter fields), `board.hierarchy` orders the types into levels (`[[board.hierarchy]]` entries with a `types` list, top level first; a child must sit strictly deeper than its parent), and `board.default_type` names the type `orbit add` uses when neither `--type` nor `--parent` applies. All three are omitted from `config.toml` while they match the defaults (`epic`, `story`, `task`, `bug`, `sub-task`; `epic` > `story`/`task`/`bug` > `sub-task`; `task`); a legacy `board.max_subtask_depth` key is ignored. `id.prefix` must contain only lowercase letters, digits, and dashes; a dot remains valid in legacy IDs but new IDs never contain one. A prefix ending in `-` is a new-style `<slug>-`: the slug part is 1–20 characters, starts and ends alphanumeric, and contains no `--`, so the full prefix is at most 21 characters. A legacy prefix without a trailing dash stays valid under the same alphabet rules with a 20-character cap. The default is `orb-`. Optional `id.accepted_prefixes` lists additional valid Task-ID prefixes retained when Boards with different slugs are consolidated; new Task IDs still use `id.prefix`.
+
+### 3.2 Policy
+
+`[policy]` declares transition rules the Board enforces inside the shared operation layer (`orbit add`-adjacent mutations aside, every command that moves a Task through the Workflow — CLI, `orbit batch`, and MCP alike — hits the same checks). A `[[policy.rules]]` entry names a rule `name` and the workflow `transition` it guards (`"*"` for every transition; lifecycle commands map to their Workflow edges — `claim`, `release`, `done`, `cancel`, `reopen`). Every set scope condition must match for the rule to apply: `to` (the transition's target Status), `types` (Issue types), `labels` (the Task must carry all of them), and `profiles` (the Board's applied `[[profiles]]` names). An empty scope matches everything.
+
+Validators run against the Task as it will be stored after the transition lands; a failing check aborts the whole operation — in `orbit batch` that means no operation in the file is applied — with `POLICY_VIOLATION`. `error.details.violations` lists each failed check with the rule name, the check kind, the Task ID, and the Transition; the error `hint` names the offending fields and points at the `[policy]` rule.
+
+| Key | Effect |
+| --- | --- |
+| `require_fields` | Frontmatter fields the Task must have once the transition lands — the same vocabulary `[[board.types]].required` uses (`title`, `body`, `verification`, `properties`, `checkpoint`, `parent`, `component`, `repository`, `links`, ...). |
+| `require_properties` | Property owners (`orbit property set <id> <owner> '<json>'`) that must be present — the evidence hook (`evidence`, `proof`, ...). |
+| `wip_limit` | `{ status = "..." }` or `{ category = "..." }` plus `max`: refuse the transition when the target already holds `max` other Tasks. |
+| `max_attempts` | Refuse once the rule has governed `max` successful transitions of this Task; attempts are counted per rule in the reserved `orbit` property's `attempts` map. On `request_changes`, a violation made only of `max_attempts` checks escalates the Task through the workflow's `escalate` edge to the hold status instead of failing. |
+| `distinct_from` | The post-transition assignee must not equal any listed name; `reporter` resolves to the Task's reporter, `author` to the last `orbit submit`ter (the reporter when never submitted), and any other entry is a literal — the reviewer-not-author rule for `orbit review`. |
+| `lint = true` | The rule's field and property checks also gate `Graph::is_ready` (the `orbit ready` queue) and `orbit claim`, on top of guarding the transition into its `to` status, which must name the workflow's Ready status. This replaces the old hard-coded ready-brief check: readiness requirements are declarative per Board. |
+| `add_labels`, `set_properties` | Post-functions run after a governed transition succeeds: labels are added and Properties (each value a JSON object) are set on the stored Task. |
+
+Rules also validate at Board load: an unknown transition name, a `to`, `wip_limit.status`, or lint `to` that names no Status (or, for `lint`, a `to` that is not the Ready status), an unknown Issue type in `types`, a `profiles` entry naming a profile the Board has not applied, a malformed WIP limit, and a duplicate rule name all fail with `CONFIG_ERROR`.
+
 ## 5. Board lifecycle
 
 A Board lives in a Board folder, `DIR`, which is always a standalone Git repository on branch `orbit`. In a Git working tree, the default is `./.orbit/board` — the hidden Board inside the repository's Orbit folder, with `cache/` beside it (or the main checkout's from a linked worktree). A `DIR` that is itself a Git working-tree root, including `.`, means "initialize that checkout" and resolves to its `./.orbit/board` (the main checkout's from a linked worktree); the repository root's own `.orbit` anchors it. Any other `DIR` inside a repository is a visible Board folder anchored by the repository's `.orbit/board` pointer file and hidden through `.git/info/exclude`. Outside Git, `orbit init` at an anchor folder creates `<anchor>/.orbit/board`; any other directory becomes a visible Board folder anchored by a sibling `.orbit`. `--dir` and `ORBIT_DIR` accept an anchor or a Board directory.
@@ -536,7 +574,7 @@ Before ADR 0019, a local Board lived at `<git-common-dir>/orbit/board` with its 
 
 ### Profiles
 
-A **Profile** is a declarative TOML document that translates a plugin's vocabulary onto a Board (ADR 0022): it never adds code, it only selects configuration the kernel already understands. `orbit setup <plugin>` resolves the target in this order — an explicit path (`./acme.toml` or any name containing `/` or ending `.toml`), profiles shipped inside the binary, `<board>/profiles/<name>.toml`, `<orbit>/profiles/<name>.toml`, `<repo>/profiles/<name>.toml`, `~/.config/orbit/profiles/<name>.toml`, then `./profiles/<name>.toml` — and, when the name is also an agent integration (`claude`, `cursor`, `codex`, `opencode`, `devin`, `mattpocock`), applies the profile alongside the harness files. A target that is neither an integration nor a resolvable profile fails with `INVALID_ARGUMENT`.
+A **Profile** is a declarative TOML document that translates a plugin's vocabulary onto a Board (ADR 0022): it never adds code, it only selects configuration the kernel already understands. Orbit ships one built-in profile, `mattpocock`, which maps the Matt Pocock skills' five triage roles onto the Issue model — `needs-triage`/`needs-info`/`ready-for-agent`/`ready-for-human` to the `Triage`/`Needs Info`/`Ready` statuses (with a `human` assignee kind for `ready-for-human`), `wontfix` to a `Cancelled` transition recording resolution `Won't Do`, and `bug`/`enhancement` to the `bug`/`story` Issue types — and whose `docs/agents/` guides `orbit setup mattpocock` regenerates from the profile's vocabulary. `orbit setup <plugin>` resolves the target in this order — an explicit path (`./acme.toml` or any name containing `/` or ending `.toml`), profiles shipped inside the binary, `<board>/profiles/<name>.toml`, `<orbit>/profiles/<name>.toml`, `<repo>/profiles/<name>.toml`, `~/.config/orbit/profiles/<name>.toml`, then `./profiles/<name>.toml` — and, when the name is also an agent integration (`claude`, `cursor`, `codex`, `opencode`, `devin`, `mattpocock`), applies the profile alongside the harness files. A target that is neither an integration nor a resolvable profile fails with `INVALID_ARGUMENT`.
 
 The profile format:
 
@@ -567,9 +605,17 @@ components = ["api"]
 default_type = "task"
 # types = [{ name = "bug", required = ["steps"] }]
 # hierarchy = [{ types = ["epic"] }, { types = ["story", "task", "bug"] }]
+
+[policy]                       # optional; same shape as config.toml [policy]
+# [[policy.rules]]
+# name = "ready-evidence"
+# transition = "*"
+# to = "ready"
+# require_properties = ["evidence"]
+# lint = true
 ```
 
-Before touching the Board, `orbit setup` negotiates the profile's requirements: every `requires` entry must be a Capability this binary provides (the same list `orbit capabilities` reports), and `contract` must not be newer than the binary's contract. An unmet profile fails with `PROFILE_UNMET`, whose `details` name the missing capabilities and required contract — `optional` entries never block. Applying writes the profile's `[workflow]` and `[board]` overrides, merges `holds` into `non_ready_labels`, and upserts a `[[profiles]]` record (name, source, contract, requires/optional, holds, roles, vocabulary) into `config.toml` under the Board lock, committing `orbit: apply profile <name>`. Re-applying the same profile is a no-op — `data.changed` is `false` and nothing commits — and re-applying with a different source or content replaces the record in place. `--check` reports `installed`/`stale`/`unmet` without writing; `--print` previews the resulting `config.toml`; `--remove` refuses a profile-only target because profiles are declarative (remove the `[[profiles]]` record and its settings by hand or apply a different profile), and only warns when a profile rides along with a harness removal.
+Before touching the Board, `orbit setup` negotiates the profile's requirements: every `requires` entry must be a Capability this binary provides (the same list `orbit capabilities` reports), and `contract` must not be newer than the binary's contract. An unmet profile fails with `PROFILE_UNMET`, whose `details` name the missing capabilities and required contract — `optional` entries never block. Applying writes the profile's `[workflow]` and `[board]` overrides, merges `holds` into `non_ready_labels`, merges the profile's `[policy]` rules into `config.policy.rules` by name (re-applying replaces a same-named rule), and upserts a `[[profiles]]` record (name, source, contract, requires/optional, holds, roles, vocabulary) into `config.toml` under the Board lock, committing `orbit: apply profile <name>`. Re-applying the same profile is a no-op — `data.changed` is `false` and nothing commits — and re-applying with a different source or content replaces the record in place. `--check` reports `installed`/`stale`/`unmet` without writing; `--print` previews the resulting `config.toml`; `--remove` refuses a profile-only target because profiles are declarative (remove the `[[profiles]]` record and its settings by hand or apply a different profile), and only warns when a profile rides along with a harness removal.
 
 `orbit doctor` re-checks every `[[profiles]]` record against the running binary and reports `PROFILE_UNMET` for a profile whose requirements are no longer met — for example after a downgrade or a hand-edited record. `orbit capabilities` lists the binary's supported `capabilities` and the Board's applied `profiles` so consumers can negotiate before choosing commands.
 
@@ -829,6 +875,7 @@ Entries record what each release delivered. Some name commands that were later r
 - `label add` and `label remove` are idempotent. Labels are lowercase slugs; invalid labels are rejected with `INVALID_LABEL`.
 - `claim` by the current assignee renews that assignee's lease, live or stale, and succeeds; any other identity still gets `ALREADY_CLAIMED` or `CLAIM_STALE` without `--steal`.
 - A Task carrying a configured hold label is not Ready; `claim` returns `LABEL_BLOCKED`. `--steal` does not bypass hold labels; remove the label first.
+- A `[policy]` rule with `lint = true` (§3.2) adds its field and property checks to the readiness gate: a Task that fails the lint leaves the `ready` queue and `claim` refuses it with `POLICY_VIOLATION` even before the transition guard runs.
 - `done` and `cancel` accept `--comment TEXT` or `--comment-file PATH`; the note is appended in the same locked operation as the terminal status change, so an agent cannot record a completion note before the task is closed.
 - `comment add` is append-only and immutable. A comment has an author and RFC 3339 timestamp; corrections are new comments. `delete` removes the task's comment file.
 - `checkpoint` replaces the latest handoff record. The first write requires `--progress`; later writes may update only the fields passed. The caller must hold the claim (a stale lease counts), and a terminal task or unclaimed task returns `INVALID_TRANSITION`. The record never changes readiness, claim eligibility, or dependencies. `release`, `claim --steal`, and `reopen` preserve it; terminal tasks keep it as archived history and the detail projection reports `checkpoint_archived: true`.
@@ -938,7 +985,7 @@ Operations run in order on one in-memory snapshot under the exclusive lock. On t
 - The snapshot is a pure function of board state: no export timestamp and no machine-local paths. Comments keep their file order.
 - Consumers should pin `schema_version` and ignore unknown fields.
 
-Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `DANGLING_PARENT`, `PARENT_CYCLE`, `MISSING_REQUIRED_FIELD`, `PREFIX_MISMATCH`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `SUBTASKS_OPEN`, `SUBTASKS_EXIST`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_SLUG`, `SLUG_LOCKED`, `MIGRATION_BLOCKED`, `BOARD_NOT_MIGRATED`, `PREFIX_COLLISION`, `INVALID_TYPE`, `INVALID_AREA`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `CLAIM_WORKTREE_FAILED`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`, `NOT_A_REPOSITORY`, `LINK_NOT_FOUND`, `EPHEMERAL_BIN`, `GITHUB_NOT_CONFIGURED`, `GITHUB_REPO_NOT_LINKED`, `GITHUB_SETUP_INCOMPLETE`, `REMOTE_TRACKER_UNKNOWN`, `REMOTE_PROJECT_NOT_LINKED`, `REMOTE_ISSUE_CONFLICT`, `BOARD_HOST_NOT_CONFIGURED`, `BOARD_HOST_CONFLICT`, `BOARD_SYNC_CONFLICT`, `TRIAGE_APPROVAL_REQUIRED`, `TRIAGE_INVALID_PROPOSAL`, `CONTRACT_VERSION_UNSUPPORTED`, `VERSION_CONFLICT`, `INVALID_IDEMPOTENCY_KEY`.
+Error codes: `NOT_FOUND`, `CORRUPT_TASK`, `DANGLING_DEP`, `DANGLING_PARENT`, `PARENT_CYCLE`, `MISSING_REQUIRED_FIELD`, `PREFIX_MISMATCH`, `CYCLE_DETECTED`, `DEPENDENCY_BLOCKED`, `SUBTASKS_OPEN`, `SUBTASKS_EXIST`, `ALREADY_CLAIMED`, `CLAIM_STALE`, `NOT_CLAIM_HOLDER`, `WAITING_EXTERNAL`, `INVALID_TRANSITION`, `INVALID_ARGUMENT`, `INVALID_SLUG`, `SLUG_LOCKED`, `MIGRATION_BLOCKED`, `BOARD_NOT_MIGRATED`, `PREFIX_COLLISION`, `INVALID_TYPE`, `INVALID_AREA`, `INVALID_LABEL`, `LABEL_BLOCKED`, `CORRUPT_COMMENT`, `ORPHAN_COMMENT`, `LOCKED`, `ALREADY_INITIALIZED`, `BOARD_NOT_FOUND`, `BOARD_CORRUPT`, `GIT_ERROR`, `CLAIM_WORKTREE_FAILED`, `IO_ERROR`, `CONFIG_ERROR`, `ID_COLLISION`, `NOT_A_REPOSITORY`, `LINK_NOT_FOUND`, `EPHEMERAL_BIN`, `GITHUB_NOT_CONFIGURED`, `GITHUB_REPO_NOT_LINKED`, `GITHUB_SETUP_INCOMPLETE`, `REMOTE_TRACKER_UNKNOWN`, `REMOTE_PROJECT_NOT_LINKED`, `REMOTE_ISSUE_CONFLICT`, `BOARD_HOST_NOT_CONFIGURED`, `BOARD_HOST_CONFLICT`, `BOARD_SYNC_CONFLICT`, `TRIAGE_APPROVAL_REQUIRED`, `TRIAGE_INVALID_PROPOSAL`, `CONTRACT_VERSION_UNSUPPORTED`, `VERSION_CONFLICT`, `INVALID_IDEMPOTENCY_KEY`, `POLICY_VIOLATION`.
 
 Warnings and `doctor` findings use a separate namespace. The base findings are `LEGACY_LAYOUT`, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and `ABSOLUTE_BOARD_PATH`; Remote Tracker findings report configuration, link, and sync problems. They appear in `meta.warnings` or in the `doctor` issue list; they are not command failures. Findings include `severity` (`error` or `warning`), the affected repository/Task/Issue when applicable, `cause`, and a safe `next_action`. Retired `WORKSPACE_*`, `MATTPOCOCK_*`, and `GITHUB_*` finding codes remain defined for compatibility.
 

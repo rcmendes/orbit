@@ -108,6 +108,9 @@ pub struct Graph {
     /// The Board's declarative workflow: status categories, the Ready status,
     /// and the named transitions `allowed_transitions` reports.
     pub workflow: Workflow,
+    /// The Board's `[policy]` rules: transition guards, post-functions, and
+    /// the readiness lint `is_ready` consults (ADR 0022).
+    pub policy: crate::policy::Policy,
     /// Ordered Priority names from `board.priorities`, most important first.
     /// Tasks sort by the name's ordinal; a name outside the list sorts last.
     pub priorities: Vec<String>,
@@ -145,6 +148,7 @@ impl Graph {
             non_ready_labels,
             hierarchy: Hierarchy::default(),
             workflow,
+            policy: crate::policy::Policy::default(),
             priorities: task::default_priorities(),
         }
     }
@@ -258,6 +262,7 @@ impl Graph {
             non_ready_labels: board.config.board.non_ready_labels.clone(),
             hierarchy: Hierarchy::from_config(&board.config.board)?,
             workflow,
+            policy: crate::policy::Policy::from_config(&board.config)?,
             priorities: board.config.board.priorities.clone(),
         };
         let validation = graph.validate();
@@ -536,15 +541,19 @@ impl Graph {
         Ok(first)
     }
 
-    /// Ready means the Task sits in the workflow's Ready status and the
-    /// derived conditions hold: unassigned, not waiting, no hold labels, no
-    /// open blocking dependencies, and no open SubTasks.
+    /// Ready means the Task sits in the workflow's Ready status, the
+    /// derived conditions hold — unassigned, not waiting, no hold labels,
+    /// no open blocking dependencies, no open SubTasks, and no unanswered
+    /// Ask — and the Board's readiness lint (`[policy]` rules with
+    /// `lint = true`) passes.
     pub fn is_ready(&self, task: &Task) -> bool {
         self.workflow.is_ready_status(&task.front.status)
             && task.front.assignee.is_none()
             && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
             && self.open_descendants(&task.id).is_empty()
+            && !crate::review::has_open_ask(task)
+            && self.policy.passes_lint(task)
     }
 
     pub fn hold_labels(&self, task: &Task) -> Vec<String> {

@@ -136,6 +136,22 @@ pub enum Command {
     #[command(long_about = help::TRANSITION_LONG, after_long_help = help::TRANSITION_EXAMPLES)]
     Transition(TransitionArgs),
 
+    /// Submit work for review with structured evidence.
+    #[command(long_about = help::SUBMIT_LONG, after_long_help = help::SUBMIT_EXAMPLES)]
+    Submit(SubmitArgs),
+
+    /// Record a review verdict — approve or request-changes — with an optional reason.
+    #[command(long_about = help::REVIEW_LONG, after_long_help = help::REVIEW_EXAMPLES)]
+    Review(ReviewArgs),
+
+    /// Ask a question that blocks the task until it is answered.
+    #[command(long_about = help::ASK_LONG, after_long_help = help::ASK_EXAMPLES)]
+    Ask(AskArgs),
+
+    /// Answer an open ask and unblock the task.
+    #[command(long_about = help::ANSWER_LONG, after_long_help = help::ANSWER_EXAMPLES)]
+    Answer(AnswerArgs),
+
     /// Edit a task's title, body, priority, or external blocker.
     #[command(long_about = help::UPDATE_LONG, after_long_help = help::UPDATE_EXAMPLES)]
     Update(UpdateArgs),
@@ -786,6 +802,106 @@ pub struct TransitionArgs {
     /// Run even when another holder's live Claim blocks the transition.
     #[arg(long)]
     pub force: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ReviewVerdictArg {
+    /// Accept the submitted work.
+    Approve,
+    /// Send the work back to the author with a reason.
+    RequestChanges,
+}
+
+#[derive(Debug, Args)]
+pub struct SubmitArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// Submitter identity. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+
+    /// The submitter's kind.
+    #[arg(long, value_enum, default_value_t = IdentityKind::Agent)]
+    pub kind: IdentityKind,
+
+    /// A verification command that proves the work (repeatable).
+    #[arg(long, value_name = "CMD")]
+    pub command: Vec<String>,
+
+    /// Exit code the verification command returned.
+    #[arg(long)]
+    pub exit_code: Option<i64>,
+
+    /// Commit the work was verified against.
+    #[arg(long)]
+    pub commit: Option<String>,
+
+    /// A file the work touched (repeatable).
+    #[arg(long, value_name = "PATH")]
+    pub file: Vec<String>,
+
+    /// Free-form evidence note.
+    #[arg(long)]
+    pub note: Option<String>,
+
+    /// Run even when another holder's live claim blocks the transition.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ReviewArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// The verdict to record.
+    #[arg(long, value_enum)]
+    pub verdict: ReviewVerdictArg,
+
+    /// Why changes are requested; required for `request-changes`.
+    #[arg(long, value_name = "TEXT")]
+    pub reason: Option<String>,
+
+    /// Reviewer identity. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+
+    /// The reviewer's kind.
+    #[arg(long, value_enum, default_value_t = IdentityKind::Agent)]
+    pub kind: IdentityKind,
+
+    /// Run even when another holder's live claim blocks the transition.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AskArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// The question that blocks the task until answered.
+    #[arg(value_name = "QUESTION")]
+    pub question: String,
+
+    /// Asker identity. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AnswerArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// The answer that unblocks the task.
+    #[arg(value_name = "ANSWER")]
+    pub answer: String,
+
+    /// Answerer identity. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
 }
 
 #[derive(Debug, Args)]

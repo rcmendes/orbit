@@ -9,6 +9,7 @@ mod query;
 mod relations;
 mod render;
 mod repo;
+mod review;
 mod slug;
 
 use serde_json::Value;
@@ -35,6 +36,7 @@ use property::cmd_property;
 use query::{cmd_export, cmd_list, cmd_prime, cmd_ready, cmd_show, cmd_sync, cmd_tree};
 use relations::{cmd_comment, cmd_depend, cmd_label, cmd_link, cmd_undepend};
 use repo::run as cmd_repo;
+use review::{cmd_answer, cmd_ask, cmd_review, cmd_submit};
 use slug::cmd_slug;
 
 /// The Task an `--if-version` guards.
@@ -118,6 +120,10 @@ fn version_target(command: &Command) -> Result<VersionTarget> {
             | Command::Cancel(_)
             | Command::Reopen(_)
             | Command::Transition(_)
+            | Command::Submit(_)
+            | Command::Review(_)
+            | Command::Ask(_)
+            | Command::Answer(_)
             | Command::Update(_)
             | Command::Delete(_)
             | Command::Depend(_)
@@ -139,6 +145,10 @@ fn version_target(command: &Command) -> Result<VersionTarget> {
         Command::Cancel(args) => task(&args.id),
         Command::Reopen(args) => task(&args.id),
         Command::Transition(args) => task(&args.id),
+        Command::Submit(args) => task(&args.id),
+        Command::Review(args) => task(&args.id),
+        Command::Ask(args) => task(&args.id),
+        Command::Answer(args) => task(&args.id),
         Command::Update(args) => task(&args.id),
         Command::Delete(args) => task(&args.id),
         Command::Depend(args) => task(&args.id),
@@ -284,6 +294,18 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         }),
         Command::Transition(args) => with_task_board(dir.as_deref(), true, &concurrency, |board| {
             cmd_transition(board, args)
+        }),
+        Command::Submit(args) => with_task_board(dir.as_deref(), true, &concurrency, |board| {
+            cmd_submit(board, args)
+        }),
+        Command::Review(args) => with_task_board(dir.as_deref(), true, &concurrency, |board| {
+            cmd_review(board, args)
+        }),
+        Command::Ask(args) => with_task_board(dir.as_deref(), true, &concurrency, |board| {
+            cmd_ask(board, args)
+        }),
+        Command::Answer(args) => with_task_board(dir.as_deref(), true, &concurrency, |board| {
+            cmd_answer(board, args)
         }),
         Command::Update(args) => with_task_board(dir.as_deref(), true, &concurrency, |board| {
             cmd_update(board, args)

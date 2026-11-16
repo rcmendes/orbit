@@ -314,11 +314,37 @@ running binary and reports `PROFILE_UNMET` when they are not met;
 `orbit capabilities` lists applied profile names.
 _Avoid_: Installed plugin, profile state
 
+**Policy rule**:
+A `[[policy.rules]]` entry in `config.toml` (or contributed by an applied
+Profile) that guards Workflow transitions: required fields, required evidence
+Properties, a WIP limit, a max-attempts cap, reviewer/assignee distinctness, a
+readiness lint that also gates `ready` and `claim`, and post-functions that add
+labels or Properties after a governed transition. Rules scope by transition,
+target Status, Issue type, labels, and applied profiles; a violation fails the
+operation with `POLICY_VIOLATION`.
+_Avoid_: Guard clause, hook, validator function
+
+**In Review**:
+The `active`-category Status the `submit` transition lands on in the shipped `standard` and `agentic` Workflows. Work sits there until `orbit review` records an `approve` (closing the Task) or `request-changes` (returning it to the author) verdict.
+_Avoid_: Pending review, QA
+
+**Review evidence**:
+The structured proof `orbit submit` records on the `evidence` Property: commands with their exit code, the verified commit, touched files, and an optional note, each stamped with the submitter. `[policy]` `require_properties` rules can demand it before work enters review.
+_Avoid_: Test output dump, logs
+
+**Ask**:
+An open question recorded on the `orbit` Property's `ask` entry by `orbit ask`, carrying the question, asker, and the Status to return to. An unanswered Ask blocks readiness, `claim`, `done`, and every transition except `answer` (`ASK_OPEN`) until `orbit answer` records the reply; when the Workflow's `ask` edge allows, the Task also moves to the `needs_human` hold.
+_Avoid_: Comment, blocker
+
+**Escalation**:
+Routing a Task to a hold Status for human attention: `orbit ask` moves it to `needs_human` (or the Workflow's `ask` target), an agent's `escalate` transition lands on `needs_decision` in the `agentic` template, and a `request_changes` verdict whose only `[policy]` violations are `max_attempts` reroutes through `escalate` and records `orbit.escalation`.
+_Avoid_: Blocked (a derived waiting condition), priority change
+
 **Capability**:
 A named feature an Orbit binary provides — `workflow`, `issue-types`,
 `hierarchy`, `priorities`, `links`, `components`, `properties`, `external-id`,
-`assignee`, `reporter`, `lease`, `keys`, `idempotency`, `batch`, `remote`,
-`workspace`, `mcp`, `setup`, `profiles`, `doctor` — reported by
+`assignee`, `reporter`, `lease`, `keys`, `idempotency`, `batch`, `policy`,
+`remote`, `workspace`, `mcp`, `setup`, `profiles`, `doctor` — reported by
 `orbit capabilities` and negotiated by Profiles through `requires`/`optional`.
 _Avoid_: Feature flag, module (modules are Board-enabled subsystems)
 

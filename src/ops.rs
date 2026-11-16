@@ -12,7 +12,7 @@ use crate::commands::{
 use crate::error::{OrbitError, Result, code};
 use crate::graph::Graph;
 use crate::mutation::TerminalKind;
-use crate::task::{self, IdentityKind, Task, TaskFrontmatter};
+use crate::task::{self, Identity, IdentityKind, Task, TaskFrontmatter};
 use crate::transition::{ClaimGate, FieldUpdate, Outcome, TransitionError};
 use crate::workflow::StatusCategory;
 
@@ -637,8 +637,53 @@ fn lease(board: &Board) -> chrono::Duration {
     chrono::Duration::minutes(board.config.board.lease_minutes)
 }
 
+/// Snapshots the named Tasks so a policy violation can roll the in-memory
+/// mutation back before the error reaches the caller.
+fn snapshot_tasks(graph: &Graph, ids: &[String]) -> Vec<(String, Task)> {
+    ids.iter()
+        .filter_map(|id| graph.tasks.get(id).map(|task| (id.clone(), task.clone())))
+        .collect()
+}
+
+fn restore_tasks(graph: &mut Graph, snapshots: Vec<(String, Task)>) {
+    for (id, task) in snapshots {
+        graph.tasks.insert(id, task);
+    }
+}
+
+/// The Task's status after `f` ran, when it differs from `before` — the
+/// signal that a governed transition actually happened (lease renewals and
+/// same-state no-ops skip policy).
+fn transitioned(before: &Task, after: &Task) -> bool {
+    before.front.status != after.front.status || before.front.assignee != after.front.assignee
+}
+
+/// The `ASK_OPEN` error for a Task with an unanswered Ask.
+fn ask_open_error(task: &Task) -> OrbitError {
+    OrbitError::new(
+        code::ASK_OPEN,
+        format!(
+            "{} has an open ask; answer it with `orbit answer {} \"<answer>\"` before continuing",
+            task.id, task.id
+        ),
+    )
+    .with_details(serde_json::json!({
+        "task": task.id,
+        "ask": crate::review::open_ask(task),
+    }))
+}
+
+/// Refuses the operation while the Task carries an unanswered Ask.
+fn require_no_open_ask(task: &Task) -> Result<()> {
+    if crate::review::has_open_ask(task) {
+        return Err(ask_open_error(task));
+    }
+    Ok(())
+}
+
 /// Claims a Task for `by`, setting the assignee and a fresh lease. The
-/// current assignee renews its own claim.
+/// current assignee renews its own claim. The readiness lint gates the
+/// claim, and `[policy]` rules on the `claim` transition enforce after it.
 pub fn claim(
     graph: &mut Graph,
     board: &Board,
@@ -648,21 +693,45 @@ pub fn claim(
     steal: bool,
     now: DateTime<Utc>,
 ) -> Result<bool> {
-    let task = graph.get(id)?;
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
+    // The readiness lint keeps vague Tasks out of agent hands even when
+    // they sit in the Ready status.
+    crate::policy::lint_error(graph, &resolved)?;
+    require_no_open_ask(graph.get(&resolved)?)?;
+    let task = graph.get(&resolved)?;
     let workflow = graph.workflow.clone();
     let gate = ClaimGate {
         hold_labels: graph.hold_labels(task),
         blocking: graph.blocking_ids(task),
-        open_subtasks: graph.open_descendants(id),
+        open_subtasks: graph.open_descendants(&resolved),
     };
     graph
-        .get_mut(id)?
+        .get_mut(&resolved)?
         .claim(by, kind, steal, lease(board), &gate, now, &workflow)?;
+    let after = graph.get(&resolved)?;
+    if transitioned(&before, after) {
+        let status = after.front.status.clone();
+        crate::policy::enforce(
+            graph,
+            &resolved,
+            crate::workflow::TRANSITION_CLAIM,
+            Some(status.as_str()),
+            &before,
+            now,
+        )?;
+    }
     Ok(true)
 }
 
 /// Assigns a Task to `name` without a lease — how humans take work. The
 /// readiness gates do not apply; `force` overrides a different assignee.
+/// `[policy]` rules on the `claim` transition still enforce: assignment is
+/// a deliberate act, but it performs the same transition.
 pub fn assign(
     graph: &mut Graph,
     id: &str,
@@ -675,11 +744,29 @@ pub fn assign(
     if name.is_empty() {
         return Err(OrbitError::invalid_argument("assignee must not be empty"));
     }
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
     let workflow = graph.workflow.clone();
-    Ok(graph
-        .get_mut(id)?
+    let changed = graph
+        .get_mut(&resolved)?
         .assign(name, kind, force, now, &workflow)?
-        == Outcome::Changed)
+        == Outcome::Changed;
+    if changed {
+        let status = graph.get(&resolved)?.front.status.clone();
+        crate::policy::enforce(
+            graph,
+            &resolved,
+            crate::workflow::TRANSITION_CLAIM,
+            Some(status.as_str()),
+            &before,
+            now,
+        )?;
+    }
+    Ok(changed)
 }
 
 /// Extends the holder's Lease. Changes only Lease fields.
@@ -698,6 +785,7 @@ pub fn heartbeat(
 }
 
 /// Releases a Claim. An unclaimed Task is unchanged (`Ok(false)`).
+/// `[policy]` rules on the `release` transition enforce.
 pub fn release(
     graph: &mut Graph,
     id: &str,
@@ -705,8 +793,29 @@ pub fn release(
     force: bool,
     now: DateTime<Utc>,
 ) -> Result<bool> {
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
     let workflow = graph.workflow.clone();
-    Ok(graph.get_mut(id)?.release(by, force, now, &workflow)? == Outcome::Changed)
+    let changed = graph
+        .get_mut(&resolved)?
+        .release(by, force, now, &workflow)?
+        == Outcome::Changed;
+    if changed {
+        let status = graph.get(&resolved)?.front.status.clone();
+        crate::policy::enforce(
+            graph,
+            &resolved,
+            crate::workflow::TRANSITION_RELEASE,
+            Some(status.as_str()),
+            &before,
+            now,
+        )?;
+    }
+    Ok(changed)
 }
 
 pub struct FinishOutcome {
@@ -726,6 +835,9 @@ pub fn finish(
     kind: TerminalKind,
     now: DateTime<Utc>,
 ) -> Result<FinishOutcome> {
+    // Policy snapshots and rollbacks key off the immutable internal ID.
+    let resolved = graph.resolve(id)?;
+    let id = resolved.as_str();
     let open_descendants = graph.open_descendants(id);
     if !open_descendants.is_empty() && !force {
         return Err(OrbitError::new(
@@ -733,6 +845,11 @@ pub fn finish(
             format!("{id} has open SubTasks: {}", open_descendants.join(", ")),
         )
         .with_details(serde_json::json!({"task": id, "subtasks": open_descendants})));
+    }
+    // An unanswered Ask blocks completion; cancelling stays allowed so
+    // blocked work can still be abandoned.
+    if matches!(kind, TerminalKind::Done) {
+        require_no_open_ask(graph.get(id)?)?;
     }
     let blocking = graph.blocking_ids(graph.get(id)?);
     if matches!(kind, TerminalKind::Done) && !blocking.is_empty() {
@@ -752,6 +869,10 @@ pub fn finish(
                 .is_ok_and(|task| !workflow.is_terminal(&task.front.status))
         })
         .collect();
+    // Snapshot every Task this finish can touch so a `[policy]` violation
+    // rolls the whole in-memory change back.
+    let snapshots = snapshot_tasks(graph, &open);
+    let main_before = graph.tasks.get(id).cloned();
     for child in &open {
         graph.get_mut(child)?.cancel(by, true, now, &workflow)?;
     }
@@ -760,6 +881,46 @@ pub fn finish(
         TerminalKind::Done => task.complete(by, force, &blocking, &[], now, &workflow)?,
         TerminalKind::Cancelled => task.cancel(by, force, now, &workflow)?,
     };
+    // Enforce `[policy]` on the closing transition of the target Task and
+    // on each descendant's `cancel`; a violation restores every snapshot.
+    let transition_name = match kind {
+        TerminalKind::Done => crate::workflow::TRANSITION_DONE,
+        TerminalKind::Cancelled => crate::workflow::TRANSITION_CANCEL,
+    };
+    let mut governed = vec![(id.to_string(), transition_name)];
+    for child in &open {
+        governed.push((child.clone(), crate::workflow::TRANSITION_CANCEL));
+    }
+    for (task_id, name) in governed {
+        let before = if task_id == id {
+            main_before.clone()
+        } else {
+            snapshots
+                .iter()
+                .find(|(snapshot_id, _)| snapshot_id == &task_id)
+                .map(|(_, task)| task.clone())
+        };
+        let Some(before) = before else { continue };
+        let after = match graph.tasks.get(&task_id) {
+            Some(after) => after.clone(),
+            None => continue,
+        };
+        if !transitioned(&before, &after) {
+            continue;
+        }
+        let status = after.front.status.clone();
+        if let Err(error) =
+            crate::policy::enforce(graph, &task_id, name, Some(status.as_str()), &before, now)
+        {
+            // Roll back every Task this finish touched, not just the one
+            // whose rule failed.
+            if let Some(before) = &main_before {
+                graph.tasks.insert(id.to_string(), before.clone());
+            }
+            restore_tasks(graph, snapshots.clone());
+            return Err(error);
+        }
+    }
     Ok(FinishOutcome {
         changed: outcome == Outcome::Changed,
         cancelled_subtasks: open,
@@ -788,6 +949,8 @@ pub fn cancel(
 
 /// Runs one named workflow transition on a Task, e.g. `orbit transition
 /// orb-… promote`. Closing transitions record the transition's resolution.
+/// `[policy]` rules scoped to the transition name enforce here, so the CLI,
+/// `orbit batch`, and MCP share them.
 pub fn transition(
     graph: &mut Graph,
     id: &str,
@@ -796,25 +959,49 @@ pub fn transition(
     force: bool,
     now: DateTime<Utc>,
 ) -> Result<Outcome> {
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
+    // An unanswered Ask blocks workflow moves; the `answer` transition
+    // itself stays reachable as the manual fallback.
+    if name != crate::workflow::TRANSITION_ANSWER {
+        require_no_open_ask(&before)?;
+    }
     let workflow = graph.workflow.clone();
-    Ok(graph
-        .get_mut(id)?
-        .transition_to(name, caller, force, now, &workflow)?)
+    let outcome = graph
+        .get_mut(&resolved)?
+        .transition_to(name, caller, force, now, &workflow)?;
+    if outcome == Outcome::Changed {
+        let after = graph.get(&resolved)?;
+        let status = after.front.status.clone();
+        crate::policy::enforce(graph, &resolved, name, Some(status.as_str()), &before, now)?;
+    }
+    Ok(outcome)
 }
 
 /// Reopens a Task and, when needed, its completed ancestor Tasks. Returns the
-/// reopened ancestors' IDs, nearest first.
+/// reopened ancestors' IDs, nearest first. `[policy]` rules on the `reopen`
+/// transition enforce for the Task and each ancestor it reopens.
 pub fn reopen(graph: &mut Graph, id: &str, force: bool, now: DateTime<Utc>) -> Result<Vec<String>> {
-    let task = graph.get(id)?.clone();
+    let resolved = graph.resolve(id)?;
+    let mut snapshots: Vec<(String, Task)> = Vec::new();
+    let task = graph.get(&resolved)?.clone();
     let workflow = graph.workflow.clone();
-    let child_dependents = done_dependents(graph, id);
+    let child_dependents = done_dependents(graph, &resolved);
     let mut probe = task.clone();
     probe.reopen(force, &child_dependents, now, &workflow)?;
+    snapshots.push((resolved.clone(), task.clone()));
 
     let mut reopened = Vec::new();
-    for ancestor_id in graph.ancestors(id) {
+    for ancestor_id in graph.ancestors(&resolved) {
         match workflow.category_of(&graph.get(&ancestor_id)?.front.status) {
             Some(StatusCategory::Done) => {
+                if let Some(before) = graph.tasks.get(&ancestor_id).cloned() {
+                    snapshots.push((ancestor_id.clone(), before));
+                }
                 let ancestor_dependents = done_dependents(graph, &ancestor_id);
                 graph
                     .get_mut(&ancestor_id)?
@@ -833,8 +1020,32 @@ pub fn reopen(graph: &mut Graph, id: &str, force: bool, now: DateTime<Utc>) -> R
         }
     }
     graph
-        .get_mut(id)?
+        .get_mut(&resolved)?
         .reopen(force, &child_dependents, now, &workflow)?;
+
+    // Enforce `[policy]` on every Task the reopen touched; a violation
+    // restores them all.
+    for (task_id, before) in &snapshots {
+        let after = match graph.tasks.get(task_id) {
+            Some(after) => after.clone(),
+            None => continue,
+        };
+        if !transitioned(before, &after) {
+            continue;
+        }
+        let status = after.front.status.clone();
+        if let Err(error) = crate::policy::enforce(
+            graph,
+            task_id,
+            crate::workflow::TRANSITION_REOPEN,
+            Some(status.as_str()),
+            before,
+            now,
+        ) {
+            restore_tasks(graph, snapshots.clone());
+            return Err(error);
+        }
+    }
     Ok(reopened)
 }
 
@@ -847,4 +1058,447 @@ fn done_dependents(graph: &Graph, id: &str) -> Vec<String> {
         })
         .map(|dependent| dependent.id.clone())
         .collect()
+}
+
+// --- Review, evidence, and escalation (ADR 0022) -----------------------------
+
+/// `orbit submit`: runs the workflow's `submit` transition into the In
+/// Review status and records the structured evidence plus the submitter on
+/// the `evidence`/`orbit` Properties. `[policy]` rules on `submit` enforce
+/// after the evidence lands, so `require_properties = ["evidence"]`-style
+/// guards see the proof this command exists to record.
+pub fn submit(
+    graph: &mut Graph,
+    id: &str,
+    by: &str,
+    kind: IdentityKind,
+    evidence: &crate::review::Evidence,
+    force: bool,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    if evidence.is_empty() {
+        return Err(OrbitError::invalid_argument(
+            "submit needs evidence: pass at least one of --command, --exit-code, --commit, --file, or --note",
+        ));
+    }
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
+    require_no_open_ask(&before)?;
+    let workflow = graph.workflow.clone();
+    let outcome = graph.get_mut(&resolved)?.transition_to(
+        crate::workflow::TRANSITION_SUBMIT,
+        Some(by),
+        force,
+        now,
+        &workflow,
+    )?;
+    if outcome == Outcome::Unchanged {
+        return Ok(false);
+    }
+    {
+        let task = graph.get_mut(&resolved)?;
+        crate::review::append_evidence(task, by, kind, evidence, now)?;
+        crate::review::record_submit(task, by, kind, now);
+    }
+    let status = graph.get(&resolved)?.front.status.clone();
+    crate::policy::enforce(
+        graph,
+        &resolved,
+        crate::workflow::TRANSITION_SUBMIT,
+        Some(status.as_str()),
+        &before,
+        now,
+    )?;
+    Ok(true)
+}
+
+/// What `orbit review` did, for command output.
+pub struct ReviewOutcome {
+    pub changed: bool,
+    pub verdict: crate::review::Verdict,
+    /// `request-changes` hit a policy attempt limit and the Issue was
+    /// rerouted through the workflow's `escalate` edge instead of failing.
+    pub escalated: bool,
+    pub status: String,
+}
+
+/// `orbit review`: runs the verdict's workflow transition (`approve` closes
+/// the Issue, `request_changes` sends it back to the author). The reviewer
+/// is recorded as the transient assignee while `[policy]` validates, so
+/// `distinct_from` rules compare the reviewer against the author; on
+/// `request-changes` the assignee is then restored to the recorded submitter.
+/// When every violation is a `max_attempts` failure and the workflow's
+/// `escalate` edge is allowed from the post-transition status, the Issue
+/// escalates (for example to `needs_human`) instead of erroring.
+#[allow(clippy::too_many_arguments)]
+pub fn review(
+    graph: &mut Graph,
+    id: &str,
+    verdict: crate::review::Verdict,
+    reason: Option<&str>,
+    by: &str,
+    kind: IdentityKind,
+    force: bool,
+    now: DateTime<Utc>,
+) -> Result<ReviewOutcome> {
+    if verdict == crate::review::Verdict::RequestChanges
+        && reason.is_none_or(|reason| reason.trim().is_empty())
+    {
+        return Err(OrbitError::invalid_argument(
+            "request-changes needs --reason describing what must change",
+        ));
+    }
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
+    require_no_open_ask(&before)?;
+    let transition_name = verdict.transition();
+    let workflow = graph.workflow.clone();
+    let outcome = graph.get_mut(&resolved)?.transition_to(
+        transition_name,
+        Some(by),
+        force,
+        now,
+        &workflow,
+    )?;
+    if outcome == Outcome::Unchanged {
+        return Ok(ReviewOutcome {
+            changed: false,
+            verdict,
+            escalated: false,
+            status: graph.get(&resolved)?.front.status.clone(),
+        });
+    }
+    {
+        let task = graph.get_mut(&resolved)?;
+        // The reviewer stands in as assignee for the policy check; the
+        // verdict itself is recorded on `orbit.review`.
+        task.front.assignee = Some(Identity {
+            name: by.to_string(),
+            kind,
+        });
+        task.front.lease = None;
+        task.front.stray_lease_times = None;
+        crate::review::record_verdict(task, verdict, reason, by, kind, now);
+    }
+    let status = graph.get(&resolved)?.front.status.clone();
+    if verdict == crate::review::Verdict::RequestChanges {
+        let task = graph.get(&resolved)?;
+        let violations = graph
+            .policy
+            .check(graph, task, transition_name, Some(status.as_str()));
+        if !violations.is_empty() {
+            let only_attempts = violations.iter().all(|v| v.check == "max_attempts");
+            let can_escalate = only_attempts
+                && workflow
+                    .transition_named(crate::workflow::TRANSITION_ESCALATE)
+                    .is_some_and(|edge| edge.allows_from(&status));
+            if can_escalate {
+                return escalate_review(graph, &resolved, &violations, by, now);
+            }
+            graph.tasks.insert(resolved.clone(), before.clone());
+            return Err(crate::policy::violation_error(
+                &resolved,
+                transition_name,
+                violations,
+            ));
+        }
+    }
+    crate::policy::enforce(
+        graph,
+        &resolved,
+        transition_name,
+        Some(status.as_str()),
+        &before,
+        now,
+    )?;
+    {
+        let task = graph.get_mut(&resolved)?;
+        restore_review_assignee(task, verdict);
+    }
+    Ok(ReviewOutcome {
+        changed: true,
+        verdict,
+        escalated: false,
+        status: graph.get(&resolved)?.front.status.clone(),
+    })
+}
+
+/// Settles the assignee after a review verdict: `approve` leaves the
+/// closed Issue unassigned (the reviewer lives on `orbit.review`);
+/// `request-changes` hands the Issue back to the recorded submitter —
+/// unassigned when the work never went through `orbit submit`.
+fn restore_review_assignee(task: &mut Task, verdict: crate::review::Verdict) {
+    use crate::review::Verdict;
+    match verdict {
+        Verdict::Approve => {
+            task.front.assignee = None;
+        }
+        Verdict::RequestChanges => {
+            task.front.assignee = crate::review::submitted_by(task).map(|author| Identity {
+                name: author,
+                kind: crate::review::submitted_kind(task),
+            });
+        }
+    }
+    task.front.lease = None;
+    task.front.stray_lease_times = None;
+}
+
+/// Reroutes a `request-changes` verdict whose only violations are
+/// `max_attempts` through the workflow's `escalate` edge, recording the
+/// escalation on `orbit.escalation`. The reviewer verdict stays recorded —
+/// the review happened; the attempt budget is what ran out.
+fn escalate_review(
+    graph: &mut Graph,
+    resolved: &str,
+    violations: &[crate::policy::Violation],
+    by: &str,
+    now: DateTime<Utc>,
+) -> Result<ReviewOutcome> {
+    let esc_before = graph.get(resolved)?.clone();
+    let workflow = graph.workflow.clone();
+    graph.get_mut(resolved)?.transition_to(
+        crate::workflow::TRANSITION_ESCALATE,
+        Some(by),
+        true,
+        now,
+        &workflow,
+    )?;
+    let rules: Vec<String> = violations.iter().map(|v| v.rule.clone()).collect();
+    let status = {
+        let task = graph.get_mut(resolved)?;
+        crate::review::record_escalation(
+            task,
+            "attempt-limit",
+            crate::review::Verdict::RequestChanges.transition(),
+            &rules,
+            by,
+            now,
+        );
+        // The hold belongs to the author, not the reviewer whose verdict
+        // triggered the escalation.
+        restore_review_assignee(task, crate::review::Verdict::RequestChanges);
+        task.front.status.clone()
+    };
+    crate::policy::enforce(
+        graph,
+        resolved,
+        crate::workflow::TRANSITION_ESCALATE,
+        Some(status.as_str()),
+        &esc_before,
+        now,
+    )?;
+    Ok(ReviewOutcome {
+        changed: true,
+        verdict: crate::review::Verdict::RequestChanges,
+        escalated: true,
+        status,
+    })
+}
+
+/// What `orbit ask` did.
+pub struct AskOutcome {
+    /// The Task file changed (the Ask record is always written).
+    pub changed: bool,
+    /// The workflow's `ask` edge also moved the Issue (to `needs_human`).
+    pub status_changed: bool,
+    pub status: String,
+}
+
+/// `orbit ask`: records an open Ask on `orbit.ask` — blocking readiness,
+/// claim, `done`, and the review transitions — and runs the workflow's
+/// `ask` edge when it is allowed from the current status, landing the
+/// Issue on its escalation hold (`needs_human` in the shipped templates).
+/// The pre-ask status is kept as `return_to` for `orbit answer`.
+pub fn ask(
+    graph: &mut Graph,
+    id: &str,
+    question: &str,
+    by: &str,
+    now: DateTime<Utc>,
+) -> Result<AskOutcome> {
+    let question = question.trim();
+    if question.is_empty() {
+        return Err(OrbitError::invalid_argument(
+            "ask question must not be empty",
+        ));
+    }
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
+    let workflow = graph.workflow.clone();
+    let current = before.front.status.clone();
+    if workflow.is_terminal(&current) {
+        return Err(OrbitError::new(
+            code::INVALID_TRANSITION,
+            format!("{resolved} is `{current}`; closed Issues cannot ask"),
+        ));
+    }
+    {
+        let task = graph.get_mut(&resolved)?;
+        crate::review::record_ask(task, question, by, &current, now)?;
+    }
+    let ask_allowed = workflow
+        .transition_named(crate::workflow::TRANSITION_ASK)
+        .is_some_and(|edge| edge.allows_from(&current));
+    let mut status_changed = false;
+    if ask_allowed {
+        // Asking is an escalation any actor may raise; the live-claim
+        // holder check does not apply.
+        let outcome = graph.get_mut(&resolved)?.transition_to(
+            crate::workflow::TRANSITION_ASK,
+            Some(by),
+            true,
+            now,
+            &workflow,
+        )?;
+        status_changed = outcome == Outcome::Changed;
+    }
+    let status = graph.get(&resolved)?.front.status.clone();
+    if status_changed {
+        crate::policy::enforce(
+            graph,
+            &resolved,
+            crate::workflow::TRANSITION_ASK,
+            Some(status.as_str()),
+            &before,
+            now,
+        )?;
+    }
+    Ok(AskOutcome {
+        changed: true,
+        status_changed,
+        status,
+    })
+}
+
+/// What `orbit answer` did.
+pub struct AnswerOutcome {
+    pub changed: bool,
+    /// The status the Issue returned to, when it moved.
+    pub status: String,
+    /// The Ask's recorded `return_to` status that was restored, if any.
+    pub returned_to: Option<String>,
+}
+
+/// `orbit answer`: records the reply on the open Ask — unblocking the
+/// Issue — and restores the status recorded at ask time when it is still a
+/// usable open status. Otherwise the workflow's `answer` edge runs (the
+/// shipped templates send `needs_human` back to the Ready status).
+pub fn answer(
+    graph: &mut Graph,
+    id: &str,
+    answer: &str,
+    by: &str,
+    now: DateTime<Utc>,
+) -> Result<AnswerOutcome> {
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Err(OrbitError::invalid_argument("answer must not be empty"));
+    }
+    let resolved = graph.resolve(id)?;
+    let before = graph
+        .tasks
+        .get(&resolved)
+        .cloned()
+        .ok_or_else(|| OrbitError::not_found(id))?;
+    let workflow = graph.workflow.clone();
+    let current = before.front.status.clone();
+    let terminal = workflow.is_terminal(&current);
+    let return_to = crate::review::ask_return_to(&before);
+
+    // Where the Issue lands: the recorded return status when it is still
+    // open and different, the `answer` transition when defined, else the
+    // workflow's open/Ready status. Terminal Issues only get the record.
+    enum Move {
+        Stay,
+        Restore(String),
+        Transition,
+    }
+    let restore_target = |candidate: &str| {
+        (candidate != current
+            && workflow.status(candidate).is_some()
+            && !workflow.is_terminal(candidate))
+        .then(|| candidate.to_string())
+    };
+    let move_kind = if terminal {
+        Move::Stay
+    } else if let Some(target) = return_to.as_deref().and_then(restore_target) {
+        Move::Restore(target)
+    } else if let Some(target) = return_to.as_deref() {
+        // The recorded status is gone or closed: prefer the `answer`
+        // transition, then the Ready/open status as last resort.
+        let _ = target;
+        if workflow
+            .transition_named(crate::workflow::TRANSITION_ANSWER)
+            .is_some_and(|edge| edge.allows_from(&current))
+        {
+            Move::Transition
+        } else {
+            restore_target(workflow.ready_status().unwrap_or(workflow.open_status()))
+                .map_or(Move::Stay, Move::Restore)
+        }
+    } else if workflow
+        .transition_named(crate::workflow::TRANSITION_ANSWER)
+        .is_some_and(|edge| edge.allows_from(&current))
+    {
+        Move::Transition
+    } else {
+        restore_target(workflow.ready_status().unwrap_or(workflow.open_status()))
+            .map_or(Move::Stay, Move::Restore)
+    };
+
+    let mut transitioned = false;
+    let mut returned_to = None;
+    {
+        let task = graph.get_mut(&resolved)?;
+        crate::review::answer_ask(task, answer, by, now)?;
+        match move_kind {
+            Move::Stay => {}
+            Move::Restore(target) => {
+                task.front.status = target.clone();
+                task.front.resolution = None;
+                returned_to = Some(target);
+                transitioned = true;
+            }
+            Move::Transition => {
+                task.transition_to(
+                    crate::workflow::TRANSITION_ANSWER,
+                    Some(by),
+                    true,
+                    now,
+                    &workflow,
+                )?;
+                transitioned = true;
+            }
+        }
+        task.touch(now);
+    }
+    let status = graph.get(&resolved)?.front.status.clone();
+    if transitioned {
+        crate::policy::enforce(
+            graph,
+            &resolved,
+            crate::workflow::TRANSITION_ANSWER,
+            Some(status.as_str()),
+            &before,
+            now,
+        )?;
+    }
+    Ok(AnswerOutcome {
+        changed: true,
+        status,
+        returned_to,
+    })
 }

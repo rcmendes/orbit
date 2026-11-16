@@ -324,8 +324,9 @@ maps, and optional `[board]` overrides. `orbit setup <plugin>` negotiates the
 requirements first — an unmet profile fails with `PROFILE_UNMET` naming the
 missing capabilities — then applies the profile to `config.toml` idempotently
 and records it under `[[profiles]]` for `doctor` and `capabilities`. A profile
-sharing an integration's name (for example `mattpocock`) applies alongside the
-harness files. `--check` reports `installed`/`stale`/`unmet`; `--print` previews
+sharing an integration's name (for example `mattpocock`, which ships as a
+built-in profile mapping the five triage roles onto the Issue workflow)
+applies alongside the harness files. `--check` reports `installed`/`stale`/`unmet`; `--print` previews
 the resulting `config.toml`; `--remove` refuses a profile-only target — profiles
 are declarative, so remove the `[[profiles]]` record and its settings by hand
 or apply a different profile.
@@ -1549,6 +1550,7 @@ orbit sync              # commit anything left uncommitted
 | `DANGLING_PARENT` | Run `doctor`; the parent ID is missing. Recreate the parent or fix the SubTask's frontmatter. |
 | `INVALID_TYPE` | The Issue type is not in `board.types`, or the `parent` edge violates `board.hierarchy` (the child's type must sit strictly below the parent's). |
 | `MISSING_REQUIRED_FIELD` | The Issue type's `required` list in `board.types` names fields the Task lacks. |
+| `POLICY_VIOLATION` | A `[[policy.rules]]` rule in `config.toml` (or contributed by an applied profile) failed. `error.details.violations` lists each failed check; fix the fields/properties it names or adjust the rule. |
 | `ALREADY_INITIALIZED` | A Board already resolves for this working tree. Use it, run `orbit repo remove` to drop an explicit membership, move or migrate an ancestor/main/legacy Board, or pass a `DIR` outside every working tree. |
 | `BOARD_NOT_FOUND` | Run `orbit init`, pass `--dir`/`ORBIT_DIR`, or `orbit repo add` an existing Board. |
 | `CONFIG_ERROR` | The target `DIR` is not empty (apart from `.git`), or a configuration value is invalid. Use a fresh directory for a new standalone Board. |
@@ -1592,6 +1594,10 @@ orbit sync              # commit anything left uncommitted
 | `orbit cancel` | `finish` | write |
 | `orbit reopen` | `reopen` | write |
 | `orbit transition` | `transition` | write |
+| `orbit submit` | `submit` | write |
+| `orbit review` | `review` | write |
+| `orbit ask` | `ask` | write |
+| `orbit answer` | `answer` | write |
 | `orbit update` | `update` | write, idempotent |
 | `orbit label add` | `label` | write |
 | `orbit label remove` | `label` | write |

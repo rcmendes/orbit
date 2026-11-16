@@ -26,6 +26,7 @@ use crate::workflow::Workflow;
 /// through its own configuration.
 pub const SUPPORTED: &[&str] = &[
     "workflow",
+    "policy",
     "issue-types",
     "hierarchy",
     "priorities",

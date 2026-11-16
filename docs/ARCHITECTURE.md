@@ -277,9 +277,8 @@ classDiagram
         +Status status
         +String priority
         +Vec labels
-        +Vec depends_on
+        +Vec links
         +String parent
-        +String waiting_on
         +DateTime created_at
         +DateTime updated_at
         +String body
@@ -317,7 +316,7 @@ classDiagram
     Graph "1" o-- "0..*" Task : indexes
     Task "1" *-- "0..1" Claim : stored as flat claimed_by, claimed_at, lease_until keys
     Task "1" o-- "0..*" Comment : sidecar
-    Task "0..*" --> "0..*" Task : depends_on
+    Task "0..*" --> "0..*" Task : links (blocking)
     Task "0..*" --> "0..1" Task : parent
 ```
 
@@ -357,9 +356,10 @@ stateDiagram-v2
 
     note left of todo
         Ready is derived, not a Status:
-        todo, no claim, no waiting_on,
-        no hold label, and every dependency
-        done or cancelled.
+        todo, no claim, no blocking link
+        to an open Task or external reference,
+        no hold label, and every blocking
+        dependency done or cancelled.
     end note
 
     note right of done
@@ -381,9 +381,9 @@ These rules live in `src/transition.rs`: a Task owns its transitions and returns
 | `in_progress` | `checkpoint` | `in_progress` | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a terminal task or a task with no claim. |
 | `in_progress` | `claim --steal` | `in_progress` | Replaces the holder and resets `claimed_at` and `lease_until`, preserving the latest checkpoint. `--steal` does not bypass hold labels or dependencies. |
 | `in_progress` | `release` | `todo` | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. |
-| `todo` or `in_progress` | `done` | `done` | Every dependency must be `done` or `cancelled`, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields and `waiting_on`. |
-| `todo` or `in_progress` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields and `waiting_on`. Resolves dependents. |
-| `done` or `cancelled` | `reopen` | `todo` | Reopening a SubTask reopens every done ancestor too, nearest first; a cancelled ancestor must be reopened first and an active ancestor ends the walk. Refuses when a dependent is already `done` unless `--force`. Clears claim fields and `waiting_on`. |
+| `todo` or `in_progress` | `done` | `done` | Every dependency must be `done` or `cancelled`, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields; links are untouched. |
+| `todo` or `in_progress` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields; links are untouched. Resolves dependents. |
+| `done` or `cancelled` | `reopen` | `todo` | Reopening a SubTask reopens every done ancestor too, nearest first; a cancelled ancestor must be reopened first and an active ancestor ends the walk. Refuses when a dependent is already `done` unless `--force`. Clears claim fields; links are untouched. |
 | `done` | `done --comment` | `done` | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
 | `cancelled` | `cancel --comment` | `cancelled` | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
 | `done` | `cancel` | rejected | `INVALID_TRANSITION`; reopen first. |
@@ -401,7 +401,7 @@ flowchart TD
     STATUS -->|no| NOTREADY["not ready"]
     STATUS -->|yes| CLAIMED{"claimed_by is null?"}
     CLAIMED -->|no| NOTREADY
-    CLAIMED -->|yes| WAITING{"waiting_on is null?"}
+    CLAIMED -->|yes| WAITING{"no blocking link?"}
     WAITING -->|no| NOTREADY
     WAITING -->|yes| HELD{"any hold label?"}
     HELD -->|yes| NOTREADY
@@ -412,7 +412,7 @@ flowchart TD
     SUBTASKS -->|yes| READY["ready<br/>eligible for ready and claim"]
 ```
 
-The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open SubTasks, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate.
+The failure codes follow the gate: `WAITING_EXTERNAL` for an external blocking link, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open SubTasks, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate.
 
 ### Stored versus derived
 
@@ -421,10 +421,9 @@ The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_B
 | Status | yes | `status` in frontmatter |
 | Priority | yes | `priority`, a name from `board.priorities` |
 | Labels | yes | `labels`, normalized, sorted, deduplicated |
-| Dependencies | yes | `depends_on` IDs |
+| Links | yes | `links`: type, target (Task ID or external ref), blocking, attributes |
 | Parent | yes | `parent` ID on a SubTask |
 | SubTasks | yes, on the child | `parent` points at the Parent Task |
-| External wait | yes | `waiting_on` text |
 | Claim and lease | yes | `claimed_by`, `claimed_at`, `lease_until` |
 | Checkpoint | yes | `checkpoint` with `by`, `at`, `progress`, `next`, `blocker` |
 | Comments | yes, separately | `comments/ID.md` |
@@ -592,7 +591,7 @@ flowchart LR
 
 `orbit init` resolves the literal `id.prefix` from the repository or Board anchor name before creating a Board. A Board anchored at `~/.orbit` uses `orb` with a warning; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the anchor rule.
 
-`orbit slug show` reads the stored prefix, task/SubTask counts, and comment-file count without loading the graph. `orbit slug migrate <slug>` is the explicit rewrite path for a populated Board. It keeps each random suffix, rewrites `parent`, `depends_on`, comment filenames and Orbit headers, updates `id.prefix`, and records one commit. It refuses an unhealthy Board, a target collision, and live claims unless `--force`; a dry run reports the plan and claims without writing.
+`orbit slug show` reads the stored prefix, task/SubTask counts, and comment-file count without loading the graph. `orbit slug migrate <slug>` is the explicit rewrite path for a populated Board. It keeps each random suffix, rewrites `parent`, internal `links` targets, comment filenames and Orbit headers, updates `id.prefix`, and records one commit. It refuses an unhealthy Board, a target collision, and live claims unless `--force`; a dry run reports the plan and claims without writing.
 
 ```mermaid
 flowchart TD

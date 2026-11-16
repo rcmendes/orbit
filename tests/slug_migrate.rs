@@ -186,7 +186,14 @@ fn migrate_rewrites_ids_references_comments_and_commits_once() {
     let child_body = normalize_newlines(repo.read_task(&new_child));
     assert!(child_body.contains(&format!("parent: {new_parent}")));
     let dependent_body = normalize_newlines(repo.read_task(&new_dependent));
-    assert!(dependent_body.contains(&format!("depends_on:\n- {new_parent}")));
+    assert!(
+        dependent_body.contains("- type: blocks"),
+        "{dependent_body}"
+    );
+    assert!(
+        dependent_body.contains(&format!("target: {new_parent}")),
+        "{dependent_body}"
+    );
 
     assert!(!board.join(format!("comments/{parent}.md")).exists());
     let comments_path = board.join(format!("comments/{new_parent}.md"));

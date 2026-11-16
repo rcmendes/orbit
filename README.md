@@ -278,7 +278,7 @@ Orbit keeps the vocabulary small on purpose. Everything else is derived.
 | **Lease** | The time window during which a Claim is valid. Default: 30 minutes. |
 | **Checkpoint** | The claim holder's latest handoff note: current progress, the next useful action, and any blocker. It survives release and takeover but never affects readiness. |
 | **Ready** | Derived: `todo`, unclaimed, not Waiting, no Hold Label, every Dependency resolved, and every SubTask resolved. Never stored. |
-| **Waiting** | An external blocker recorded in `waiting_on`. Not a Status. |
+| **Waiting** | An external blocker recorded as a blocking Link to an external reference. Not a Status. |
 | **Comment** | An append-only, authored, timestamped note attached to a Task. |
 
 The full definitions, including the words Orbit avoids, are in [GLOSSARY.md](./docs/GLOSSARY.md).
@@ -385,8 +385,9 @@ type: task
 priority: 2
 labels:
 - ready-for-agent
-depends_on:
-- orb-f14c02
+links:
+- type: blocks
+  target: orb-f14c02
 created_at: 2026-10-23T11:00:00Z
 updated_at: 2026-10-23T12:00:00Z
 ---
@@ -469,7 +470,7 @@ flowchart TD
     STATUS -->|no| NOTREADY["not ready"]
     STATUS -->|yes| CLAIMED{"claimed_by is null?"}
     CLAIMED -->|no| NOTREADY
-    CLAIMED -->|yes| WAITING{"waiting_on is null?"}
+    CLAIMED -->|yes| WAITING{"no blocking link to an open Task or external reference?"}
     WAITING -->|no| NOTREADY
     WAITING -->|yes| HELD{"any hold label?"}
     HELD -->|yes| NOTREADY
@@ -487,7 +488,7 @@ flowchart TD
     class STATUS,CLAIMED,WAITING,HELD,DEPS,SUBTASKS gate
 ```
 
-The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open children, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate.
+The failure codes follow the gate: `WAITING_EXTERNAL` for an external blocking link, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished blocking dependencies, `SUBTASKS_OPEN` for open children, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate.
 
 ### Status vs. derived state
 
@@ -517,7 +518,7 @@ stateDiagram-v2
     cancelled --> cancelled: cancel --comment
 ```
 
-Ready, blocked, waiting, stale, and held are derived from claims, dependencies, labels, and `waiting_on`. They cannot be written as a Status. `done` and `cancelled` both resolve dependents; `delete` is not a transition, it removes the task file.
+Ready, blocked, waiting, stale, and held are derived from claims, blocking links, labels, and SubTasks. They cannot be written as a Status. `done` and `cancelled` both resolve dependents; `delete` is not a transition, it removes the task file.
 
 ## Features and SubTasks
 
@@ -594,7 +595,7 @@ orbit slug migrate atlas --dry-run    # counts, references, and affected claims
 orbit slug migrate atlas              # rewrite, validate, and commit once
 ```
 
-Migration keeps each random suffix (`orb-32fdfd` → `atlas-32fdfd`, `orb-32fdfd.7fk2m9` → `atlas-32fdfd.7fk2m9`), rewrites `parent` and `depends_on`, renames comment files and their Orbit header, and updates `id.prefix`. It refuses an unhealthy Board or a prefix collision, and live claims require `--force` so the affected agents know to re-read. Task bodies, checkpoint text, comment text, Git history, and external links are not rewritten.
+Migration keeps each random suffix (`orb-32fdfd` → `atlas-32fdfd`, `orb-32fdfd.7fk2m9` → `atlas-32fdfd.7fk2m9`), rewrites `parent` and internal `links` targets, renames comment files and their Orbit header, and updates `id.prefix`. It refuses an unhealthy Board or a prefix collision, and live claims require `--force` so the affected agents know to re-read. Task bodies, checkpoint text, comment text, Git history, and external links are not rewritten.
 
 ## Multi-repository Boards
 
@@ -776,8 +777,8 @@ cargo test 2>&1 | orbit comment add orb-a7b2c9 --by claude --body-file -
 - **Hold labels:** `needs-triage`, `needs-info`, `ready-for-human` (configurable in `config.toml`).
 - **Neutral labels:** `ready-for-agent`, `bug`, `enhancement`.
 - **Comments** are append-only and immutable. A correction is a new comment; the thread is merged into `show`.
-- **Waiting** is an external blocker: `orbit add "..." --waiting-on "upstream 2.4"`, cleared later with `orbit update <id> --clear-waiting`.
-- **Dependencies** are real blockers: `--depends-on` at creation or `orbit depend <id> <dep-id>` later.
+- **Waiting** is an external blocker: `orbit add "..." --waiting-on "upstream 2.4"` or `orbit link add <id> --type blocks --external jira:PROJ-123`, cleared later with `orbit update <id> --clear-waiting` or `orbit link remove`.
+- **Dependencies** are real blockers: `--depends-on` at creation, `orbit depend <id> <dep-id>` later, or `orbit link add <id> --type blocks --to <dep-id>`. Non-blocking links (`relates-to`, `duplicates`, `discovered-from`, custom types) relate work without blocking it.
 - **`wontfix`** is a label plus a terminal status: add the label and `orbit cancel <id> --by <agent>`.
 
 Triage is what keeps the agent queue clean without hiding unfinished work from humans. `orbit list --label needs-triage` is the inbox; `orbit ready` is the frontier.
@@ -915,7 +916,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | Stage | Commands |
 | --- | --- |
 | **Set up** | `init` · `repo` · `setup` |
-| **Author** | `add` · `update` · `depend` · `undepend` · `label` · `comment` · `delete` |
+| **Author** | `add` · `update` · `depend` · `undepend` · `link` · `label` · `comment` · `delete` |
 | **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `remote status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
 | **Maintain** | `doctor` · `sync` · `board` · `migrate` · `remote` · `slug` · `mcp` |

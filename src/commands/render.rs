@@ -355,13 +355,22 @@ pub(super) fn format_detail(
     if let Some(parent) = &task.front.parent {
         lines.push(format!("parent: {parent}"));
     }
-    if task.front.depends_on.is_empty() {
-        lines.push("depends_on: -".to_string());
+    if task.front.links.is_empty() {
+        lines.push("links: -".to_string());
     } else {
-        lines.push(format!("depends_on: {}", task.front.depends_on.join(", ")));
-    }
-    if let Some(waiting) = &task.front.waiting_on {
-        lines.push(format!("waiting_on: {waiting}"));
+        for link in &task.front.links {
+            let mut line = format!("link {} {}", link.kind, link.target.label());
+            if link.is_blocking() {
+                line.push_str(" (blocking)");
+            }
+            for (key, value) in &link.attributes {
+                let rendered = serde_yaml_ng::to_string(value)
+                    .map(|text| text.trim().to_string())
+                    .unwrap_or_else(|_| "?".to_string());
+                line.push_str(&format!(" {key}={rendered}"));
+            }
+            lines.push(line);
+        }
     }
     for (owner, value) in &task.front.annotations {
         lines.push(format!("annotation {owner}: {value}"));

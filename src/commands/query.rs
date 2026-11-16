@@ -106,7 +106,7 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             {
                 return false;
             }
-            !args.waiting || task.front.waiting_on.is_some()
+            !args.waiting || task.external_blockers().next().is_some()
         })
         .collect();
 

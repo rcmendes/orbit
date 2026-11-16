@@ -79,6 +79,25 @@ enum Operation {
         id: String,
         on: String,
     },
+    Link {
+        id: String,
+        #[serde(rename = "type")]
+        kind: Option<String>,
+        to: Option<String>,
+        external: Option<String>,
+        url: Option<String>,
+        #[serde(default)]
+        blocking: Option<bool>,
+        #[serde(default)]
+        attributes: BTreeMap<String, serde_yaml_ng::Value>,
+    },
+    Unlink {
+        id: String,
+        #[serde(rename = "type")]
+        kind: Option<String>,
+        to: Option<String>,
+        external: Option<String>,
+    },
     Claim {
         id: String,
         by: Option<String>,
@@ -134,6 +153,8 @@ impl Operation {
             Operation::Label { .. } => "label",
             Operation::Depend { .. } => "depend",
             Operation::Undepend { .. } => "undepend",
+            Operation::Link { .. } => "link",
+            Operation::Unlink { .. } => "unlink",
             Operation::Claim { .. } => "claim",
             Operation::Heartbeat { .. } => "heartbeat",
             Operation::Release { .. } => "release",
@@ -283,6 +304,52 @@ impl Applier<'_> {
             Operation::Undepend { id, on } => {
                 let (id, on) = (self.resolve(&id)?, self.resolve(&on)?);
                 let changed = crate::ops::undepend(&mut self.graph, &id, &on, now)?;
+                Ok((id, changed, false))
+            }
+            Operation::Link {
+                id,
+                kind,
+                to,
+                external,
+                url,
+                blocking,
+                attributes,
+            } => {
+                let id = self.resolve(&id)?;
+                let to = to.map(|target| self.resolve(&target)).transpose()?;
+                let kind = crate::task::normalize_link_kind(
+                    kind.as_deref().unwrap_or(crate::task::LINK_TYPE_RELATES_TO),
+                )?;
+                let mut target = crate::ops::link_target(to.as_deref(), external.as_deref())?;
+                if let (crate::task::LinkTarget::External(reference), Some(url)) =
+                    (&mut target, url)
+                {
+                    reference.url = Some(url);
+                }
+                let link = crate::task::Link {
+                    kind,
+                    target,
+                    blocking,
+                    attributes,
+                };
+                let changed = crate::ops::link(&mut self.graph, &id, link, now)?;
+                Ok((id, changed, false))
+            }
+            Operation::Unlink {
+                id,
+                kind,
+                to,
+                external,
+            } => {
+                let id = self.resolve(&id)?;
+                let to = to.map(|target| self.resolve(&target)).transpose()?;
+                let kind = kind
+                    .as_deref()
+                    .map(crate::task::normalize_link_kind)
+                    .transpose()?;
+                let target = crate::ops::link_target(to.as_deref(), external.as_deref())?;
+                let changed =
+                    crate::ops::unlink(&mut self.graph, &id, kind.as_deref(), &target, now)?;
                 Ok((id, changed, false))
             }
             Operation::Claim { id, by, steal } => {
@@ -517,9 +584,8 @@ mod tests {
                 task_type: TaskType::Task,
                 priority: "medium".to_string(),
                 labels: Vec::new(),
-                depends_on: Vec::new(),
+                links: Vec::new(),
                 parent: None,
-                waiting_on: None,
                 checkpoint: None,
                 area: None,
                 verification: None,

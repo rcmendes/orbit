@@ -1,6 +1,6 @@
 use chrono::{TimeZone, Utc};
 use orbit_tracker::graph::Graph;
-use orbit_tracker::task::{Status, Task, TaskFrontmatter, TaskType};
+use orbit_tracker::task::{Link, Status, Task, TaskFrontmatter, TaskType};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, HashSet};
 
@@ -14,9 +14,11 @@ fn task(id: String, status: Status, dependencies: Vec<String>) -> Task {
             task_type: TaskType::Task,
             priority: "medium".to_string(),
             labels: Vec::new(),
-            depends_on: dependencies,
+            links: dependencies
+                .into_iter()
+                .map(|dependency| Link::dependency(&dependency))
+                .collect(),
             parent: None,
-            waiting_on: None,
             checkpoint: None,
             area: None,
             verification: None,
@@ -59,8 +61,7 @@ fn build_dag(edges: &[(usize, usize)], statuses: &[Status]) -> (Graph, Vec<Strin
         if !seen.insert((from, to)) {
             continue;
         }
-        let dependency = ids[to].clone();
-        tasks[from].front.depends_on.push(dependency);
+        tasks[from].front.links.push(Link::dependency(&ids[to]));
     }
 
     (Graph::from_tasks(tasks), ids)
@@ -85,9 +86,8 @@ proptest! {
 
         for task in graph.tasks.values() {
             let expected: Vec<String> = task
-                .front
-                .depends_on
-                .iter()
+                .blocking_links()
+                .filter_map(|link| link.target_task())
                 .filter(|dependency| {
                     graph
                         .tasks
@@ -95,7 +95,7 @@ proptest! {
                         .map(|dependency| !dependency.front.status.is_terminal())
                         .unwrap_or(true)
                 })
-                .cloned()
+                .map(str::to_string)
                 .collect();
 
             prop_assert_eq!(graph.blocking_ids(task), expected);
@@ -103,7 +103,6 @@ proptest! {
                 graph.is_ready(task),
                 task.front.status == Status::Todo
                     && task.front.claim.is_none()
-                    && task.front.waiting_on.is_none()
                     && graph.blocking_ids(task).is_empty()
             );
         }
@@ -111,12 +110,15 @@ proptest! {
         for task in graph.ready_tasks() {
             prop_assert_eq!(task.front.status, Status::Todo);
             prop_assert!(task.front.claim.is_none());
-            let all_dependencies_terminal = task.front.depends_on.iter().all(|dependency| {
-                graph
-                    .tasks
-                    .get(dependency)
-                    .is_some_and(|dependency| dependency.front.status.is_terminal())
-            });
+            let all_dependencies_terminal = task
+                .blocking_links()
+                .filter_map(|link| link.target_task())
+                .all(|dependency| {
+                    graph
+                        .tasks
+                        .get(dependency)
+                        .is_some_and(|dependency| dependency.front.status.is_terminal())
+                });
             prop_assert!(all_dependencies_terminal);
         }
     }

@@ -112,7 +112,7 @@ Another Task in a closed Status Category (`done` or `canceled`) is required befo
 _Avoid_: Blocker, prerequisite, parent
 
 **Ready**:
-A condition of a Task sitting in the Workflow's Ready Status — the one Status marked `ready` — with no Claim (including no Stale Claim), not Waiting, no Hold Label, no open Dependency, and no open SubTask. Ready is derived, never stored.
+A condition of a Task sitting in the Workflow's Ready Status — the one Status marked `ready` — with no Assignee, not Waiting, no Hold Label, no open Dependency, and no open SubTask. Ready is derived, never stored.
 _Avoid_: Unblocked, available, actionable
 
 **Blocked**:
@@ -131,20 +131,32 @@ _Avoid_: Closed, complete
 A Status in the `canceled` Status Category for a Task that was abandoned without completing its work. Counts as resolved for dependent Tasks. The shipped templates name it `cancelled`; custom Workflows may use any name in the `canceled` category.
 _Avoid_: Deleted, closed, wontfix
 
+**Assignee**:
+The human or agent identity responsible for a Task. An assignee may hold a Lease or none — `orbit assign` sets one without a lease, which is how humans take work.
+_Avoid_: Claimant, owner, holder
+
+**Identity Kind**:
+Whether an assignee is a `human` or an `agent`. Informational only; the lease, not the kind, decides claim semantics.
+_Avoid_: Role, type
+
+**Reporter**:
+The identity that created a Task, recorded at creation and never changed.
+_Avoid_: Author, creator, submitter
+
 **Claim**:
-Exclusive, time-bounded responsibility for a Task, held by one Agent.
+Taking responsibility for a Task as its assignee together with a fresh Lease. Repeating a claim by the current assignee renews the lease; `--steal` takes over another assignee's lease.
 _Avoid_: Assignment, lock, reservation
 
 **Lease**:
-The time window during which a Claim is valid.
+The time window during which a claim's lease is valid; extended by heartbeat. An assignee without a lease cannot heartbeat.
 _Avoid_: Timeout, TTL
 
 **Checkpoint**:
-The claim holder's latest handoff note on a Task: current progress, the next useful action, and any blocker. A Checkpoint survives release, takeover, and reopen, never affects readiness or Claim eligibility, and stays as archived history after the Task is done or cancelled.
+The assignee's latest handoff note on a Task: current progress, the next useful action, and any blocker. A Checkpoint survives release, takeover, and reopen, never affects readiness or Claim eligibility, and stays as archived history after the Task is done or cancelled.
 _Avoid_: Status update, progress log, assignment note
 
 **Stale**:
-A condition of a Task whose Claim's Lease has expired but the Claim has not been released. A Stale Task is not Ready; it can be released or stolen.
+A condition of a Task whose assignee's Lease has expired but the assignment has not been released. A Stale Task is not Ready; it can be released or stolen, and the previous assignee can still record a Checkpoint until takeover.
 _Avoid_: Expired claim, abandoned
 
 **Agent**:

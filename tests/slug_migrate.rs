@@ -277,7 +277,7 @@ fn live_claims_require_force_and_force_lists_the_holders() {
         .iter()
         .find(|task| task["id"] == new_id)
         .unwrap();
-    assert_eq!(task["claimed_by"], "alice");
+    assert_eq!(task["assignee"], "alice");
     assert_eq!(task["status"], "in_progress");
     assert_eq!(commit_count(&repo, &board), claimed + 1);
 }
@@ -511,5 +511,5 @@ fn migrate_flushes_pending_heartbeat_writes_before_the_single_commit() {
         .iter()
         .find(|task| task["id"] == new_id)
         .unwrap();
-    assert_eq!(task["claimed_by"], "alice");
+    assert_eq!(task["assignee"], "alice");
 }

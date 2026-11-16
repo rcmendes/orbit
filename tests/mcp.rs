@@ -122,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 17);
+    assert_eq!(names.len(), 18);
     for expected in [
         "ready",
         "list",
@@ -130,6 +130,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "create",
         "update",
         "claim",
+        "assign",
         "release",
         "heartbeat",
         "checkpoint",
@@ -187,7 +188,7 @@ fn create_claim_heartbeat_and_finish_round_trip() {
     let claimed = client.call(12, "ready", json!({ "claim": true, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
     assert_eq!(claimed["data"]["status"], "in_progress");
-    assert_eq!(claimed["data"]["claimed_by"], "claude");
+    assert_eq!(claimed["data"]["assignee"], "claude");
 
     let heartbeat = client.call(13, "heartbeat", json!({ "id": id, "by": "claude" }));
     let heartbeat = tool_envelope(&heartbeat);
@@ -229,7 +230,7 @@ fn checkpoint_round_trips_over_mcp() {
 
     let claimed = client.call(21, "claim", json!({ "id": id, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
-    assert_eq!(claimed["data"]["claimed_by"], "claude");
+    assert_eq!(claimed["data"]["assignee"], "claude");
 
     let recorded = client.call(
         22,
@@ -433,12 +434,12 @@ fn update_claim_and_release_are_available() {
     let claimed = client.call(51, "claim", json!({ "id": id, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
     assert_eq!(claimed["data"]["status"], "in_progress");
-    assert_eq!(claimed["data"]["claimed_by"], "claude");
+    assert_eq!(claimed["data"]["assignee"], "claude");
 
     let released = client.call(52, "release", json!({ "id": id, "by": "claude" }));
     let released = tool_envelope(&released);
     assert_eq!(released["data"]["status"], "ready");
-    assert!(released["data"]["claimed_by"].is_null());
+    assert!(released["data"]["assignee"].is_null());
 }
 
 #[test]

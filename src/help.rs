@@ -40,7 +40,7 @@ Typical agent loop:
 Inspect work without changing it:
   orbit ready --limit 5
   orbit show orb-a7b2c9 --json
-  orbit list --status in_progress --claimed-by claude
+  orbit list --status in_progress --assignee claude
 
 Change a Board's Task-ID prefix:
   orbit slug show
@@ -293,7 +293,7 @@ Examples:
 const LIST_LONG_HEAD: &str = "\
 Lists tasks from a consistent snapshot of the Board. Done and cancelled tasks are
 hidden by default; pass --include-closed to include them, or name a terminal
-status with --status. Filters combine, so --status in_progress --claimed-by
+status with --status. Filters combine, so --status in_progress --assignee
 claude shows everything one agent is holding.
 
 Inside a member Repository or one of its worktrees the list is scoped to that
@@ -346,7 +346,7 @@ const LIST_EXAMPLES_HEAD: &str = "Examples:
   orbit list --label needs-triage
 
   # What is claude working on?
-  orbit list --status in_progress --claimed-by claude
+  orbit list --status in_progress --assignee claude
 
   # Full history, including closed work
   orbit list --include-closed --json
@@ -408,7 +408,7 @@ pub fn list_examples(remote: bool) -> String {
 }
 
 pub const READY_LONG: &str = "\
-Shows tasks that can start now: todo, unclaimed, not waiting on an external
+Shows tasks that can start now: todo, unassigned, not waiting on an external
 blocker, no hold label, and every dependency already done or cancelled. Results
 are ordered by priority, then creation time.
 
@@ -488,15 +488,16 @@ Examples:
 
 pub const CLAIM_LONG: &str = "\
 Claims one specific task instead of taking the top of the ready queue. The task
-must be active and unclaimed (a stale claim needs --steal), must not wait on an
+must be active and unassigned (a stale lease needs --steal), must not wait on an
 external blocker or an unfinished dependency, and must carry no hold label such
 as needs-triage or ready-for-human.
 
-A claim sets status in_progress, records the agent, and starts a lease (30 minutes
+A claim sets the assignee and status in_progress, and starts a lease (30 minutes
 by default, configurable in config.toml). Extend it with `orbit heartbeat`.
---steal takes over another agent's claim even while its lease is live; hold
-labels still block. A claim by the current holder renews its own lease, live or
-stale. The agent defaults to ORBIT_AGENT, then USER.
+--steal takes over another assignee's claim even while its lease is live; hold
+labels still block. A claim by the current assignee renews its own lease, live
+or stale. The agent defaults to ORBIT_AGENT, then USER; --kind records whether
+the assignee is an agent or a human.
 
 --worktree also creates the Task's worktree: .worktrees/<id> on branch
 ticket/<id> in the Task's Repository, falling back to the member Repository
@@ -522,6 +523,30 @@ Examples:
 
   # Inspect the claim and its lease
   orbit show orb-a7b2c9 --json";
+
+pub const ASSIGN_LONG: &str = "\
+Assigns a task to a person or an agent without starting a lease — how humans
+take work. The task moves to the claim transition's target status, but the
+readiness gates (external blockers, unfinished dependencies, hold labels, open
+SubTasks) do not apply: assignment is a deliberate act.
+
+An assignee without a lease cannot heartbeat; the lease is what `orbit claim`
+adds. Re-assigning the current assignee only updates the kind and keeps any
+lease; assigning someone else requires --force and drops the old lease. The
+kind defaults to human; pass --kind agent for agent identities.
+
+To hand the task back, use `orbit release` (the assignee or --force).";
+
+pub const ASSIGN_EXAMPLES: &str = "\
+Examples:
+  # Hand a task to a person
+  orbit assign orb-a7b2c9 --to rodrigo
+
+  # Assign to an agent without a lease
+  orbit assign orb-a7b2c9 --to devin --kind agent
+
+  # Take over from the current assignee
+  orbit assign orb-a7b2c9 --to rodrigo --force";
 
 pub const RELEASE_LONG: &str = "\
 Clears the claim and returns the task to the workflow's release target (the
@@ -552,14 +577,14 @@ Examples:
   orbit heartbeat orb-a7b2c9 --by claude
 
   # List the tasks you currently hold
-  orbit list --status in_progress --claimed-by claude";
+  orbit list --status in_progress --assignee claude";
 
 pub const CHECKPOINT_LONG: &str = "\
-Records or replaces the latest handoff checkpoint on a claimed task: the current
-progress, the next useful action, and any blocker. The claim holder owns the
-checkpoint; a stale lease still counts until another agent takes the claim with
+Records or replaces the latest handoff checkpoint on an assigned task: the current
+progress, the next useful action, and any blocker. The assignee owns the
+checkpoint; a stale lease still counts until another agent takes over with
 `orbit claim --steal`. The checkpoint survives release, takeover, and reopen, so
-the next claimant can read it from `orbit show`, `orbit ready`, or a claim result.
+the next assignee can read it from `orbit show`, `orbit ready`, or a claim result.
 
 The first checkpoint requires --progress. Later updates may pass only the fields
 that changed; omitted fields keep their previous value, and --clear-next or
@@ -694,9 +719,10 @@ commit. Either every operation applies or none does: operations run in order
 against an in-memory snapshot, and nothing is written until all succeed. A
 failure names the operation's index and op in error.details.
 
-Operations: add, update, label, depend, undepend, claim, heartbeat, release,
-done, cancel, reopen, comment, property. Each takes the fields and follows the
-rules of its command. A reference (id, on, parent, depends_on) is a Task ID or
+Operations: add, update, label, depend, undepend, link, unlink, claim, assign,
+heartbeat, release, done, cancel, reopen, transition, comment, property. Each
+takes the fields and follows the rules of its command. A reference (id, on,
+parent, depends_on) is a Task ID or
 `key:` followed by a Source Key added earlier in the Batch or already on the
 Board. An add whose Source Key exists matches that Task instead of creating
 another, a claim by the current holder renews it, and reopen of an open Task
@@ -1399,8 +1425,8 @@ pub const BOARD_SYNC_LONG: &str = "\
 Synchronize the Board with its host: commit pending changes, fetch the host's
 `orbit` branch, merge, and push — never rebase, never force-push. Different
 Tasks merge, different fields of the same Task merge, and Comments union.
-Claims resolve by the earlier `claimed_at`; the loser gets a comment telling
-them their claim lost. A same-field conflict stops the sync with
+Assignments resolve by the earlier lease start; the loser gets a comment telling
+them their assignment lost. A same-field conflict stops the sync with
 BOARD_SYNC_CONFLICT; rerun with `--resolve FIELD=local|host` (repeatable) to
 pick a side per field. `config` resolves config.toml and `<task-id>` resolves a
 whole Task file.";

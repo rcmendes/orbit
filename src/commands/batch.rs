@@ -45,6 +45,7 @@ enum Operation {
         component: Option<String>,
         verification: Option<String>,
         external_id: Option<String>,
+        reporter: Option<String>,
         #[serde(default)]
         properties: BTreeMap<String, Value>,
     },
@@ -108,8 +109,16 @@ enum Operation {
     Claim {
         id: String,
         by: Option<String>,
+        kind: Option<crate::task::IdentityKind>,
         #[serde(default)]
         steal: bool,
+    },
+    Assign {
+        id: String,
+        to: String,
+        kind: Option<crate::task::IdentityKind>,
+        #[serde(default)]
+        force: bool,
     },
     Heartbeat {
         id: String,
@@ -170,6 +179,7 @@ impl Operation {
             Operation::Link { .. } => "link",
             Operation::Unlink { .. } => "unlink",
             Operation::Claim { .. } => "claim",
+            Operation::Assign { .. } => "assign",
             Operation::Heartbeat { .. } => "heartbeat",
             Operation::Release { .. } => "release",
             Operation::Done { .. } => "done",
@@ -239,6 +249,7 @@ impl Applier<'_> {
                 component,
                 verification,
                 external_id,
+                reporter,
                 properties,
             } => {
                 let parent = parent.map(|p| self.resolve(&p)).transpose()?;
@@ -262,6 +273,7 @@ impl Applier<'_> {
                     verification,
                     repository,
                     external_id,
+                    reporter: reporter.or_else(|| self.optional(None)),
                     body: body.unwrap_or_default(),
                     source_key: key.clone(),
                     properties,
@@ -375,10 +387,40 @@ impl Applier<'_> {
                     crate::ops::unlink(&mut self.graph, &id, kind.as_deref(), &target, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Claim { id, by, steal } => {
+            Operation::Claim {
+                id,
+                by,
+                kind,
+                steal,
+            } => {
                 let id = self.resolve(&id)?;
                 let by = self.agent(by)?;
-                let changed = crate::ops::claim(&mut self.graph, self.board, &id, &by, steal, now)?;
+                let changed = crate::ops::claim(
+                    &mut self.graph,
+                    self.board,
+                    &id,
+                    &by,
+                    kind.unwrap_or(crate::task::IdentityKind::Agent),
+                    steal,
+                    now,
+                )?;
+                Ok((id, changed, false))
+            }
+            Operation::Assign {
+                id,
+                to,
+                kind,
+                force,
+            } => {
+                let id = self.resolve(&id)?;
+                let changed = crate::ops::assign(
+                    &mut self.graph,
+                    &id,
+                    &to,
+                    kind.unwrap_or(crate::task::IdentityKind::Human),
+                    force,
+                    now,
+                )?;
                 Ok((id, changed, false))
             }
             Operation::Heartbeat { id, by } => {
@@ -639,8 +681,10 @@ mod tests {
                 remote: None,
                 repository: None,
                 external_id: None,
-                claim: None,
-                stray_claim_times: None,
+                assignee: None,
+                lease: None,
+                reporter: None,
+                stray_lease_times: None,
                 source_key: None,
                 properties: BTreeMap::new(),
                 created_at: now,

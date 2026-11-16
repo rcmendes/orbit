@@ -2409,6 +2409,7 @@ From any member Repository, these commands resolve the shared Board across the G
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
 - `orbit claim <id> --by <agent> --worktree` claims one task and creates `.worktrees/<id>` on `ticket/<id>` in the Task's Repository.
+- `orbit assign <id> --to <name>` assigns a task to a person or agent without a lease.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 - `orbit checkpoint <id> --by <agent> --progress \"...\" [--next \"...\"] [--blocker \"...\"]` records a handoff that survives release and takeover.
 {COMPLETION_LINE}

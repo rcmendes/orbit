@@ -141,7 +141,7 @@ fn batch_remove_hold_label_and_claim_together() {
         ]}),
     );
     let show = repo.ok_json(&["show", &held, "--json"]);
-    assert_eq!(show["data"]["claimed_by"], "planner-7");
+    assert_eq!(show["data"]["assignee"], "planner-7");
     assert_eq!(show["data"]["status"], "in_progress");
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 0);
@@ -177,7 +177,7 @@ fn batch_rerun_after_partial_apply_converges() {
         .as_str()
         .unwrap();
     let show = repo.ok_json(&["show", step, "--json"]);
-    assert_eq!(show["data"]["claimed_by"], "planner-7");
+    assert_eq!(show["data"]["assignee"], "planner-7");
     assert_eq!(show["data"]["labels"], json!([]));
     assert_eq!(show["data"]["properties"], json!({"planner": {"order": 1}}));
     assert_eq!(task_files(&repo).len(), after_first.len());

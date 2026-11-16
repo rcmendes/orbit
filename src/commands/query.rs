@@ -5,7 +5,7 @@ use crate::cli::{ListArgs, PrimeArgs, ReadyArgs, ShowArgs, TreeArgs};
 use crate::git::CommitOutcome;
 use crate::graph::LoadMode;
 use crate::setup::COMPLETION_LINE;
-use crate::task::TaskType;
+use crate::task::{IdentityKind, TaskType};
 
 use super::render::*;
 use super::*;
@@ -74,8 +74,8 @@ pub(super) fn cmd_list(board: &Board, args: ListArgs) -> Result<crate::output::C
             {
                 return false;
             }
-            if let Some(claimed_by) = &args.claimed_by
-                && task.holder() != Some(claimed_by.as_str())
+            if let Some(assignee) = &args.assignee
+                && task.assignee_name() != Some(assignee.as_str())
             {
                 return false;
             }
@@ -186,6 +186,7 @@ pub(super) fn cmd_ready(board: &Board, args: ReadyArgs) -> Result<crate::output:
             &id,
             crate::mutation::Lifecycle::Claim {
                 agent: &agent,
+                kind: IdentityKind::Agent,
                 steal: false,
             },
             Utc::now(),

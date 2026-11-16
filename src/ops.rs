@@ -12,7 +12,7 @@ use crate::commands::{
 use crate::error::{OrbitError, Result, code};
 use crate::graph::Graph;
 use crate::mutation::TerminalKind;
-use crate::task::{self, Task, TaskFrontmatter, TaskType};
+use crate::task::{self, IdentityKind, Task, TaskFrontmatter, TaskType};
 use crate::transition::{ClaimGate, FieldUpdate, Outcome, TransitionError};
 use crate::workflow::StatusCategory;
 
@@ -29,6 +29,8 @@ pub struct NewTask {
     pub verification: Option<String>,
     pub repository: Option<String>,
     pub external_id: Option<String>,
+    /// Who created the Task; recorded once at creation.
+    pub reporter: Option<String>,
     pub body: String,
     pub source_key: Option<String>,
     pub properties: BTreeMap<String, serde_json::Value>,
@@ -151,6 +153,10 @@ pub fn add(
             ));
         }
     }
+    let reporter = new
+        .reporter
+        .map(|reporter| reporter.trim().to_string())
+        .filter(|reporter| !reporter.is_empty());
     let component = parse_component_option(board, new.component)?;
     let verification = task::normalize_verification(new.verification)?;
     for (owner, value) in &new.properties {
@@ -176,8 +182,10 @@ pub fn add(
             remote: None,
             repository: new.repository,
             external_id: new.external_id,
-            claim: None,
-            stray_claim_times: None,
+            assignee: None,
+            lease: None,
+            reporter,
+            stray_lease_times: None,
             created_at: now,
             updated_at: now,
             source_key: new.source_key,
@@ -549,12 +557,14 @@ fn lease(board: &Board) -> chrono::Duration {
     chrono::Duration::minutes(board.config.board.lease_minutes)
 }
 
-/// Claims a Task for `by`. The current holder renews its own Claim.
+/// Claims a Task for `by`, setting the assignee and a fresh lease. The
+/// current assignee renews its own claim.
 pub fn claim(
     graph: &mut Graph,
     board: &Board,
     id: &str,
     by: &str,
+    kind: IdentityKind,
     steal: bool,
     now: DateTime<Utc>,
 ) -> Result<bool> {
@@ -567,8 +577,29 @@ pub fn claim(
     };
     graph
         .get_mut(id)?
-        .claim(by, steal, lease(board), &gate, now, &workflow)?;
+        .claim(by, kind, steal, lease(board), &gate, now, &workflow)?;
     Ok(true)
+}
+
+/// Assigns a Task to `name` without a lease — how humans take work. The
+/// readiness gates do not apply; `force` overrides a different assignee.
+pub fn assign(
+    graph: &mut Graph,
+    id: &str,
+    name: &str,
+    kind: IdentityKind,
+    force: bool,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(OrbitError::invalid_argument("assignee must not be empty"));
+    }
+    let workflow = graph.workflow.clone();
+    Ok(graph
+        .get_mut(id)?
+        .assign(name, kind, force, now, &workflow)?
+        == Outcome::Changed)
 }
 
 /// Extends the holder's Lease. Changes only Lease fields.

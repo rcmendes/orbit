@@ -13,7 +13,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 
 use crate::error::{OrbitError, code};
-use crate::task::{Checkpoint, Claim, Task};
+use crate::task::{Checkpoint, Identity, IdentityKind, Lease, Task};
 use crate::workflow::{
     StatusCategory, TRANSITION_CANCEL, TRANSITION_CLAIM, TRANSITION_DONE, TRANSITION_RELEASE,
     TRANSITION_REOPEN, TransitionDef, Workflow,
@@ -237,49 +237,59 @@ fn require_transition<'w>(
 }
 
 impl Task {
-    pub fn holder(&self) -> Option<&str> {
-        self.front.claim.as_ref().map(|claim| claim.holder.as_str())
+    /// The assignee's name, when the Task has one.
+    pub fn assignee_name(&self) -> Option<&str> {
+        self.front
+            .assignee
+            .as_ref()
+            .map(|assignee| assignee.name.as_str())
     }
 
     pub fn claimed_at(&self) -> Option<DateTime<Utc>> {
-        self.front.claim.as_ref().and_then(|claim| claim.claimed_at)
+        self.front.lease.as_ref().and_then(|lease| lease.claimed_at)
     }
 
     pub fn lease_until(&self) -> Option<DateTime<Utc>> {
         self.front
-            .claim
+            .lease
             .as_ref()
-            .and_then(|claim| claim.lease_until)
+            .and_then(|lease| lease.lease_until)
     }
 
     pub fn is_stale(&self, now: DateTime<Utc>) -> bool {
         self.front
-            .claim
+            .lease
             .as_ref()
-            .is_some_and(|claim| claim.is_stale(now))
+            .is_some_and(|lease| lease.is_stale(now))
     }
 
-    /// A live Claim held by someone else blocks the caller unless forced; a
-    /// Stale one does not.
+    /// A live lease held by someone else blocks the caller unless forced; a
+    /// stale or absent lease does not.
     pub fn authorize_live(
         &self,
         caller: Option<&str>,
         force: bool,
         now: DateTime<Utc>,
     ) -> Result<(), TransitionError> {
-        match &self.front.claim {
-            Some(claim) if claim.is_live(now) && !force => self.require_holder(claim, caller),
+        match (&self.front.assignee, &self.front.lease) {
+            (Some(assignee), Some(lease)) if lease.is_live(now) && !force => {
+                self.require_holder(assignee, caller)
+            }
             _ => Ok(()),
         }
     }
 
-    fn require_holder(&self, claim: &Claim, caller: Option<&str>) -> Result<(), TransitionError> {
-        if caller == Some(claim.holder.as_str()) {
+    fn require_holder(
+        &self,
+        assignee: &Identity,
+        caller: Option<&str>,
+    ) -> Result<(), TransitionError> {
+        if caller == Some(assignee.name.as_str()) {
             return Ok(());
         }
         Err(TransitionError::NotClaimHolder {
             id: self.id.clone(),
-            holder: claim.holder.clone(),
+            holder: assignee.name.clone(),
         })
     }
 
@@ -290,9 +300,12 @@ impl Task {
         }
     }
 
-    fn clear_claim(&mut self) {
-        self.front.claim = None;
-        self.front.stray_claim_times = None;
+    /// Drops the assignee, lease, and any stray lease times — responsibility
+    /// and its time window are handed back together.
+    fn clear_assignment(&mut self) {
+        self.front.assignee = None;
+        self.front.lease = None;
+        self.front.stray_lease_times = None;
     }
 
     /// Applies a workflow transition: sets the target status, records the
@@ -322,11 +335,11 @@ impl Task {
                     .clone()
                     .unwrap_or_else(|| transition.name.clone()),
             );
-            self.clear_claim();
+            self.clear_assignment();
         } else {
             self.front.resolution = None;
             if was_active {
-                self.clear_claim();
+                self.clear_assignment();
             }
         }
         self.front.status = transition.to.clone();
@@ -359,7 +372,7 @@ impl Task {
             }));
         };
         if !transition.allows_from(&status) {
-            if self.front.claim.is_none() && !workflow.is_terminal(&status) {
+            if self.front.assignee.is_none() && !workflow.is_terminal(&status) {
                 return Ok(Outcome::Unchanged);
             }
             return Err(self.invalid(InvalidReason::NotAllowed {
@@ -372,12 +385,12 @@ impl Task {
                     .collect(),
             }));
         }
-        if let Some(claim) = &self.front.claim
+        if let Some(assignee) = &self.front.assignee
             && !force
         {
-            self.require_holder(claim, caller)?;
+            self.require_holder(assignee, caller)?;
         }
-        if self.front.claim.is_none() && self.front.status == transition.to {
+        if self.front.assignee.is_none() && self.front.status == transition.to {
             return Ok(Outcome::Unchanged);
         }
         Ok(self.apply_transition(transition, workflow, now))
@@ -388,23 +401,22 @@ impl Task {
     pub fn heartbeat(
         &mut self,
         agent: &str,
-        lease: Duration,
+        lease_duration: Duration,
         now: DateTime<Utc>,
         workflow: &Workflow,
     ) -> Result<DateTime<Utc>, TransitionError> {
         if workflow.category_of(&self.front.status) != Some(StatusCategory::Active) {
             return Err(self.invalid(InvalidReason::HeartbeatNotActive(self.front.status.clone())));
         }
-        let Some(claim) = &self.front.claim else {
+        let Some(assignee) = &self.front.assignee else {
             return Err(self.invalid(InvalidReason::HeartbeatNoClaim));
         };
-        self.require_holder(claim, Some(agent))?;
-        let lease_until = now + lease;
-        self.front
-            .claim
-            .as_mut()
-            .expect("checked above")
-            .lease_until = Some(lease_until);
+        self.require_holder(assignee, Some(agent))?;
+        let Some(lease) = &mut self.front.lease else {
+            return Err(self.invalid(InvalidReason::HeartbeatNoClaim));
+        };
+        let lease_until = now + lease_duration;
+        lease.lease_until = Some(lease_until);
         self.touch(now);
         Ok(lease_until)
     }
@@ -421,10 +433,10 @@ impl Task {
         if workflow.is_terminal(&self.front.status) {
             return Err(self.invalid(InvalidReason::CheckpointClosed(self.front.status.clone())));
         }
-        let Some(claim) = &self.front.claim else {
+        let Some(assignee) = &self.front.assignee else {
             return Err(self.invalid(InvalidReason::CheckpointNoClaim));
         };
-        self.require_holder(claim, Some(agent))?;
+        self.require_holder(assignee, Some(agent))?;
         if update.is_empty() {
             return Err(TransitionError::InvalidCheckpoint(
                 "nothing to record in the checkpoint".to_string(),
@@ -475,10 +487,13 @@ impl Task {
     }
 
     /// Readiness gate first (so `steal` never bypasses it), then the existing
-    /// Claim. The `claim` transition decides the target status.
+    /// assignee. The `claim` transition decides the target status. A claim
+    /// sets both the assignee and a fresh lease.
+    #[allow(clippy::too_many_arguments)]
     pub fn claim(
         &mut self,
         agent: &str,
+        kind: IdentityKind,
         steal: bool,
         lease: Duration,
         gate: &ClaimGate,
@@ -516,23 +531,43 @@ impl Task {
                 subtasks: gate.open_subtasks.clone(),
             });
         }
-        // The current holder renews its own Claim, live or Stale; this makes a
-        // repeated claim (for example a retried Batch) a safe no-op.
-        if let Some(claim) = &mut self.front.claim
-            && claim.holder == agent
+        // The current assignee renews its own claim, live or stale; this
+        // makes a repeated claim (for example a retried Batch) a safe no-op.
+        if let Some(assignee) = &mut self.front.assignee
+            && assignee.name == agent
         {
-            claim.lease_until = Some(now + lease);
+            assignee.kind = kind;
+            self.front.lease = Some(Lease {
+                claimed_at: self
+                    .front
+                    .lease
+                    .as_ref()
+                    .and_then(|l| l.claimed_at)
+                    .or(Some(now)),
+                lease_until: Some(now + lease),
+            });
             if self.front.status != target {
                 self.front.status = target;
             }
             self.touch(now);
             return Ok(());
         }
-        if let Some(claim) = &self.front.claim
+        if let Some(assignee) = &self.front.assignee
             && !steal
         {
-            let (holder, lease_until) = (claim.holder.clone(), claim.lease_until);
-            return Err(if claim.is_live(now) {
+            let (holder, lease_until) = (
+                assignee.name.clone(),
+                self.front
+                    .lease
+                    .as_ref()
+                    .and_then(|lease| lease.lease_until),
+            );
+            let live = self
+                .front
+                .lease
+                .as_ref()
+                .is_some_and(|lease| lease.is_live(now));
+            return Err(if live {
                 TransitionError::AlreadyClaimed {
                     id,
                     holder,
@@ -547,14 +582,75 @@ impl Task {
             });
         }
         self.front.status = target;
-        self.front.stray_claim_times = None;
-        self.front.claim = Some(Claim {
-            holder: agent.to_string(),
+        self.front.stray_lease_times = None;
+        self.front.assignee = Some(Identity {
+            name: agent.to_string(),
+            kind,
+        });
+        self.front.lease = Some(Lease {
             claimed_at: Some(now),
             lease_until: Some(now + lease),
         });
         self.touch(now);
         Ok(())
+    }
+
+    /// Assigns the Task to `name` without a lease — how humans take work
+    /// (ADR 0022). The `claim` transition decides the target status, but the
+    /// readiness gates do not apply: assignment is a deliberate act, not a
+    /// claim. Re-assigning the current assignee only updates the kind and
+    /// keeps any lease; assigning someone else drops the old lease.
+    pub fn assign(
+        &mut self,
+        name: &str,
+        kind: IdentityKind,
+        force: bool,
+        now: DateTime<Utc>,
+        workflow: &Workflow,
+    ) -> Result<Outcome, TransitionError> {
+        let id = self.id.clone();
+        if workflow.is_terminal(&self.front.status) {
+            return Err(self.invalid(InvalidReason::ClaimClosed(self.front.status.clone())));
+        }
+        let transition = require_transition(workflow, TRANSITION_CLAIM, &self.front.status, &id)?;
+        let target = transition.to.clone();
+        if let Some(assignee) = &self.front.assignee {
+            if assignee.name == name {
+                let mut changed = assignee.kind != kind;
+                if let Some(assignee) = &mut self.front.assignee {
+                    assignee.kind = kind;
+                }
+                if self.front.status != target {
+                    self.front.status = target;
+                    changed = true;
+                }
+                if changed {
+                    self.touch(now);
+                    return Ok(Outcome::Changed);
+                }
+                return Ok(Outcome::Unchanged);
+            }
+            if !force {
+                return Err(TransitionError::AlreadyClaimed {
+                    id,
+                    holder: assignee.name.clone(),
+                    lease_until: self
+                        .front
+                        .lease
+                        .as_ref()
+                        .and_then(|lease| lease.lease_until),
+                });
+            }
+        }
+        self.front.status = target;
+        self.front.stray_lease_times = None;
+        self.front.assignee = Some(Identity {
+            name: name.to_string(),
+            kind,
+        });
+        self.front.lease = None;
+        self.touch(now);
+        Ok(Outcome::Changed)
     }
 
     /// `Unchanged` means already done: the handler may still record a comment
@@ -736,14 +832,33 @@ mod tests {
     #[derive(Clone, Copy, Debug)]
     enum Held {
         No,
+        /// Assignee `alice` with a live lease.
         Live,
+        /// Assignee `alice` without a lease (a human assignment).
+        Assigned,
     }
 
-    /// A task whose Claim (if any) is held by `alice`.
+    /// A task whose assignee (if any) is `alice`.
     fn task(status: &str, held: Held) -> Task {
-        let lease_until = match held {
-            Held::No => None,
-            Held::Live => Some(now() + Duration::minutes(10)),
+        let (assignee, lease) = match held {
+            Held::No => (None, None),
+            Held::Live => (
+                Some(Identity {
+                    name: "alice".to_string(),
+                    kind: IdentityKind::Agent,
+                }),
+                Some(Lease {
+                    claimed_at: Some(now() - Duration::minutes(20)),
+                    lease_until: Some(now() + Duration::minutes(10)),
+                }),
+            ),
+            Held::Assigned => (
+                Some(Identity {
+                    name: "alice".to_string(),
+                    kind: IdentityKind::Human,
+                }),
+                None,
+            ),
         };
         Task {
             id: ID.to_string(),
@@ -763,12 +878,10 @@ mod tests {
                 remote: None,
                 repository: None,
                 external_id: None,
-                stray_claim_times: None,
-                claim: lease_until.map(|lease_until| Claim {
-                    holder: "alice".to_string(),
-                    claimed_at: Some(now() - Duration::minutes(20)),
-                    lease_until: Some(lease_until),
-                }),
+                assignee,
+                lease,
+                reporter: None,
+                stray_lease_times: None,
                 created_at: now(),
                 updated_at: now() - Duration::hours(1),
                 source_key: None,
@@ -793,6 +906,7 @@ mod tests {
         t.front.links.clear();
         t.claim(
             "bob",
+            IdentityKind::Agent,
             false,
             Duration::minutes(30),
             &gate(),
@@ -801,7 +915,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t.front.status, "in_progress");
-        assert_eq!(t.holder(), Some("bob"));
+        assert_eq!(t.assignee_name(), Some("bob"));
         assert_eq!(t.lease_until(), Some(now() + Duration::minutes(30)));
     }
 
@@ -811,6 +925,7 @@ mod tests {
         let error = closed
             .claim(
                 "bob",
+                IdentityKind::Agent,
                 false,
                 Duration::minutes(30),
                 &gate(),
@@ -833,6 +948,7 @@ mod tests {
         let error = backlog
             .claim(
                 "bob",
+                IdentityKind::Agent,
                 false,
                 Duration::minutes(30),
                 &gate(),
@@ -863,6 +979,7 @@ mod tests {
         let error = waiting
             .claim(
                 "bob",
+                IdentityKind::Agent,
                 false,
                 Duration::minutes(30),
                 &gate(),
@@ -877,6 +994,7 @@ mod tests {
         let error = held
             .claim(
                 "bob",
+                IdentityKind::Agent,
                 false,
                 Duration::minutes(30),
                 &gate(),
@@ -895,6 +1013,7 @@ mod tests {
         let error = blocked
             .claim(
                 "bob",
+                IdentityKind::Agent,
                 false,
                 Duration::minutes(30),
                 &gate,
@@ -906,11 +1025,122 @@ mod tests {
     }
 
     #[test]
+    fn claim_sets_assignee_and_lease() {
+        let mut t = task("ready", Held::No);
+        t.front.links.clear();
+        t.claim(
+            "devin",
+            IdentityKind::Agent,
+            false,
+            Duration::minutes(30),
+            &gate(),
+            now(),
+            &workflow(),
+        )
+        .unwrap();
+        let assignee = t.front.assignee.as_ref().unwrap();
+        assert_eq!(assignee.name, "devin");
+        assert_eq!(assignee.kind, IdentityKind::Agent);
+        assert!(t.front.lease.as_ref().unwrap().is_live(now()));
+    }
+
+    #[test]
+    fn assign_sets_a_human_assignee_without_a_lease() {
+        let mut t = task("ready", Held::No);
+        t.front.links.clear();
+        // `waiting_on` link and hold gates do not block a deliberate assign.
+        let outcome = t
+            .assign("rodrigo", IdentityKind::Human, false, now(), &workflow())
+            .unwrap();
+        assert_eq!(outcome, Outcome::Changed);
+        assert_eq!(t.front.status, "in_progress");
+        let assignee = t.front.assignee.as_ref().unwrap();
+        assert_eq!(assignee.name, "rodrigo");
+        assert_eq!(assignee.kind, IdentityKind::Human);
+        assert!(t.front.lease.is_none());
+        // A lease-less assignee still counts for checkpoint and release.
+        let update = CheckpointUpdate {
+            progress: Some("looking".to_string()),
+            ..CheckpointUpdate::default()
+        };
+        t.record_checkpoint("rodrigo", update, now(), &workflow())
+            .unwrap();
+    }
+
+    #[test]
+    fn assign_to_someone_else_needs_force_and_drops_the_lease() {
+        let mut t = task("in_progress", Held::Live);
+        t.front.links.clear();
+        let error = t
+            .assign("rodrigo", IdentityKind::Human, false, now(), &workflow())
+            .unwrap_err();
+        assert!(matches!(error, TransitionError::AlreadyClaimed { .. }));
+
+        t.assign("rodrigo", IdentityKind::Human, true, now(), &workflow())
+            .unwrap();
+        assert_eq!(t.assignee_name(), Some("rodrigo"));
+        assert!(t.front.lease.is_none());
+    }
+
+    #[test]
+    fn claim_against_a_lease_less_assignee_is_stale() {
+        let mut t = task("in_progress", Held::Assigned);
+        t.front.links.clear();
+        let error = t
+            .claim(
+                "devin",
+                IdentityKind::Agent,
+                false,
+                Duration::minutes(30),
+                &gate(),
+                now(),
+                &workflow(),
+            )
+            .unwrap_err();
+        assert!(matches!(error, TransitionError::ClaimStale { .. }));
+        // --steal takes over and keeps the checkpoint handoff.
+        t.front.checkpoint = Some(Checkpoint {
+            by: "alice".to_string(),
+            at: now() - Duration::minutes(5),
+            progress: "half done".to_string(),
+            next: None,
+            blocker: None,
+        });
+        t.claim(
+            "devin",
+            IdentityKind::Agent,
+            true,
+            Duration::minutes(30),
+            &gate(),
+            now(),
+            &workflow(),
+        )
+        .unwrap();
+        assert_eq!(t.assignee_name(), Some("devin"));
+        assert_eq!(t.front.checkpoint.as_ref().unwrap().progress, "half done");
+    }
+
+    #[test]
+    fn heartbeat_requires_a_lease() {
+        let mut t = task("in_progress", Held::Assigned);
+        let error = t
+            .heartbeat("alice", Duration::minutes(30), now(), &workflow())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            TransitionError::InvalidTransition {
+                reason: InvalidReason::HeartbeatNoClaim,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn release_returns_to_the_transition_target() {
         let mut t = task("in_progress", Held::Live);
         t.release(Some("alice"), false, now(), &workflow()).unwrap();
         assert_eq!(t.front.status, "ready");
-        assert!(t.front.claim.is_none());
+        assert!(t.front.assignee.is_none());
         // release keeps waiting_on on open-to-open edges
         assert_eq!(t.waiting_labels(), vec!["vendor".to_string()]);
     }
@@ -1005,7 +1235,7 @@ mod tests {
         assert_eq!(outcome, Outcome::Changed);
         assert_eq!(t.front.status, "done");
         assert_eq!(t.front.resolution.as_deref(), Some("completed"));
-        assert!(t.front.claim.is_none());
+        assert!(t.front.assignee.is_none());
         // Links and external blockers survive transitions.
         assert_eq!(t.waiting_labels(), vec!["vendor".to_string()]);
     }
@@ -1160,7 +1390,7 @@ mod tests {
             .unwrap();
         assert_eq!(t.front.status, "cancelled");
         assert_eq!(t.front.resolution.as_deref(), Some("cancelled"));
-        assert!(t.front.claim.is_none());
+        assert!(t.front.assignee.is_none());
     }
 
     #[test]

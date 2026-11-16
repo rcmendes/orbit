@@ -196,7 +196,7 @@ fn worktree_runtime_failure_reports_and_preserves_successful_claim() {
             "{value}"
         );
         assert_eq!(
-            value["error"]["details"]["claim"]["claimed_by"], "devin",
+            value["error"]["details"]["claim"]["assignee"], "devin",
             "{value}"
         );
         assert_eq!(
@@ -205,7 +205,7 @@ fn worktree_runtime_failure_reports_and_preserves_successful_claim() {
         );
         let shown = repo.ok_json(&["show", id, "--json"]);
         assert_eq!(shown["data"]["status"], "in_progress", "{shown}");
-        assert_eq!(shown["data"]["claimed_by"], "devin", "{shown}");
+        assert_eq!(shown["data"]["assignee"], "devin", "{shown}");
     }
 }
 

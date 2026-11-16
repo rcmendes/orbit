@@ -24,8 +24,8 @@ use batch::cmd_batch;
 use crud::{cmd_add, cmd_delete, cmd_update};
 use init::cmd_init;
 use lifecycle::{
-    cmd_cancel, cmd_checkpoint, cmd_claim, cmd_done, cmd_heartbeat, cmd_release, cmd_reopen,
-    cmd_transition,
+    cmd_assign, cmd_cancel, cmd_checkpoint, cmd_claim, cmd_done, cmd_heartbeat, cmd_release,
+    cmd_reopen, cmd_transition,
 };
 use property::cmd_property;
 use query::{cmd_export, cmd_list, cmd_prime, cmd_ready, cmd_show, cmd_sync, cmd_tree};
@@ -69,6 +69,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Tree(args) => with_board(dir.as_deref(), false, |board| cmd_tree(board, args)),
         Command::Claim(args) => {
             with_task_board(dir.as_deref(), true, |board| cmd_claim(board, args))
+        }
+        Command::Assign(args) => {
+            with_task_board(dir.as_deref(), true, |board| cmd_assign(board, args))
         }
         Command::Release(args) => {
             with_task_board(dir.as_deref(), true, |board| cmd_release(board, args))

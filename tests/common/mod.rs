@@ -388,8 +388,9 @@ impl TestRepo {
         let updated = content
             .lines()
             .map(|line| {
-                if line.starts_with("lease_until:") {
-                    "lease_until: 2020-01-01T00:00:00Z".to_string()
+                let indent = &line[..line.len() - line.trim_start().len()];
+                if line.trim_start().starts_with("lease_until:") {
+                    format!("{indent}lease_until: 2020-01-01T00:00:00Z")
                 } else {
                     line.to_string()
                 }

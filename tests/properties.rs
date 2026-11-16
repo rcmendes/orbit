@@ -28,8 +28,10 @@ fn task(id: String, status: &str, dependencies: Vec<String>) -> Task {
             remote: None,
             repository: None,
             external_id: None,
-            claim: None,
-            stray_claim_times: None,
+            assignee: None,
+            lease: None,
+            reporter: None,
+            stray_lease_times: None,
             created_at: now,
             updated_at: now,
             source_key: None,
@@ -110,14 +112,14 @@ proptest! {
             prop_assert_eq!(
                 graph.is_ready(task),
                 workflow.is_ready_status(&task.front.status)
-                    && task.front.claim.is_none()
+                    && task.front.assignee.is_none()
                     && graph.blocking_ids(task).is_empty()
             );
         }
 
         for task in graph.ready_tasks() {
             prop_assert!(graph.workflow.is_ready_status(&task.front.status));
-            prop_assert!(task.front.claim.is_none());
+            prop_assert!(task.front.assignee.is_none());
             let all_dependencies_terminal = task
                 .blocking_links()
                 .filter_map(|link| link.target_task())

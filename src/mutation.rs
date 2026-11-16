@@ -174,7 +174,14 @@ pub fn finish(
 pub enum Lifecycle<'a> {
     Claim {
         agent: &'a str,
+        kind: crate::task::IdentityKind,
         steal: bool,
+    },
+    /// Assigns the Task without a lease (`orbit assign`).
+    Assign {
+        name: &'a str,
+        kind: crate::task::IdentityKind,
+        force: bool,
     },
     Release {
         caller: Option<&'a str>,
@@ -216,9 +223,14 @@ pub fn execute_in(
     now: DateTime<Utc>,
 ) -> Result<MutationResult> {
     let (verb, changed, heartbeat) = match operation {
-        Lifecycle::Claim { agent, steal } => (
+        Lifecycle::Claim { agent, kind, steal } => (
             "claim",
-            crate::ops::claim(&mut graph, board, id, agent, steal, now)?,
+            crate::ops::claim(&mut graph, board, id, agent, kind, steal, now)?,
+            false,
+        ),
+        Lifecycle::Assign { name, kind, force } => (
+            "assign",
+            crate::ops::assign(&mut graph, id, name, kind, force, now)?,
             false,
         ),
         Lifecycle::Release { caller, force } => (

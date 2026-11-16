@@ -2,8 +2,8 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::cli::{
-    CancelArgs, CheckpointArgs, ClaimArgs, DoneArgs, HeartbeatArgs, ReleaseArgs, ReopenArgs,
-    TransitionArgs,
+    AssignArgs, CancelArgs, CheckpointArgs, ClaimArgs, DoneArgs, HeartbeatArgs, ReleaseArgs,
+    ReopenArgs, TransitionArgs,
 };
 use crate::comment;
 use crate::transition::{CheckpointUpdate, FieldUpdate};
@@ -22,6 +22,7 @@ pub(super) fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output:
         &args.id,
         crate::mutation::Lifecycle::Claim {
             agent: &agent,
+            kind: args.kind,
             steal: args.steal,
         },
         Utc::now(),
@@ -168,6 +169,30 @@ impl WorktreePlan {
         }
         Ok(true)
     }
+}
+
+/// `orbit assign`: set the assignee without a lease — how humans take work.
+pub(super) fn cmd_assign(board: &Board, args: AssignArgs) -> Result<crate::output::CommandOutput> {
+    let result = crate::mutation::execute(
+        board,
+        &args.id,
+        crate::mutation::Lifecycle::Assign {
+            name: &args.to,
+            kind: args.kind,
+            force: args.force,
+        },
+        Utc::now(),
+    )?;
+    if !result.changed {
+        return Ok(crate::output::CommandOutput::new(
+            json!({"id": args.id, "assignee": args.to, "changed": false}),
+            format!("{} was already assigned to {}", args.id, args.to),
+        ));
+    }
+    Ok(mutation_output(
+        result,
+        format!("assigned {} to {}", args.id, args.to),
+    ))
 }
 
 pub(super) fn cmd_release(

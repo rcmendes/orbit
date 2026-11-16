@@ -16,7 +16,7 @@ use crate::board_host;
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
-use crate::task::{self, Claim, StrayClaimTimes, Task, TaskFrontmatter};
+use crate::task::{self, Identity, Lease, StrayLeaseTimes, Task, TaskFrontmatter};
 use crate::workflow::Workflow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -471,26 +471,24 @@ fn merge_links(
 }
 
 #[derive(Clone)]
-struct ClaimSide {
-    claim: Option<Claim>,
-    stray: Option<StrayClaimTimes>,
+struct AssignmentSide {
+    assignee: Option<Identity>,
+    lease: Option<Lease>,
+    stray: Option<StrayLeaseTimes>,
 }
 
-impl ClaimSide {
+impl AssignmentSide {
     fn of(front: Option<&TaskFrontmatter>) -> Self {
         Self {
-            claim: front.and_then(|front| front.claim.clone()),
-            stray: front.and_then(|front| front.stray_claim_times.clone()),
+            assignee: front.and_then(|front| front.assignee.clone()),
+            lease: front.and_then(|front| front.lease.clone()),
+            stray: front.and_then(|front| front.stray_lease_times.clone()),
         }
     }
 
     fn eq(&self, other: &Self) -> bool {
-        self.claim == other.claim && self.stray == other.stray
+        self.assignee == other.assignee && self.lease == other.lease && self.stray == other.stray
     }
-}
-
-fn claim_identity(claim: &Claim) -> (Option<DateTime<Utc>>, &str) {
-    (claim.claimed_at, claim.holder.as_str())
 }
 
 fn later_time(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
@@ -503,12 +501,12 @@ fn later_time(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<Date
 }
 
 fn later_stray(
-    a: &Option<StrayClaimTimes>,
-    b: &Option<StrayClaimTimes>,
-) -> Option<StrayClaimTimes> {
+    a: &Option<StrayLeaseTimes>,
+    b: &Option<StrayLeaseTimes>,
+) -> Option<StrayLeaseTimes> {
     match (a, b) {
         (Some(a), Some(b)) => {
-            let key = |s: &StrayClaimTimes| (s.claimed_at, s.lease_until);
+            let key = |s: &StrayLeaseTimes| (s.claimed_at, s.lease_until);
             Some(if key(a) >= key(b) {
                 a.clone()
             } else {
@@ -521,16 +519,35 @@ fn later_stray(
     }
 }
 
-/// The earlier of two Claims wins; a missing timestamp sorts last and the
-/// holder name breaks exact ties deterministically.
-fn earlier_claim<'a>(local: &'a Claim, remote: &'a Claim) -> (&'a Claim, &'a Claim) {
+/// The earlier of two assignments wins; a missing lease start sorts last
+/// and the assignee name breaks exact ties deterministically.
+fn earlier_assignment<'a>(
+    local: &'a AssignmentSide,
+    remote: &'a AssignmentSide,
+) -> (&'a AssignmentSide, &'a AssignmentSide) {
     let local_key = (
-        local.claimed_at.unwrap_or(DateTime::<Utc>::MAX_UTC),
-        local.holder.as_str(),
+        local
+            .lease
+            .as_ref()
+            .and_then(|lease| lease.claimed_at)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC),
+        local
+            .assignee
+            .as_ref()
+            .map(|assignee| assignee.name.as_str())
+            .unwrap_or(""),
     );
     let remote_key = (
-        remote.claimed_at.unwrap_or(DateTime::<Utc>::MAX_UTC),
-        remote.holder.as_str(),
+        remote
+            .lease
+            .as_ref()
+            .and_then(|lease| lease.claimed_at)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC),
+        remote
+            .assignee
+            .as_ref()
+            .map(|assignee| assignee.name.as_str())
+            .unwrap_or(""),
     );
     if local_key <= remote_key {
         (local, remote)
@@ -539,28 +556,41 @@ fn earlier_claim<'a>(local: &'a Claim, remote: &'a Claim) -> (&'a Claim, &'a Cla
     }
 }
 
-fn claim_notice(task: &str, winner: &Claim, loser: Option<&Claim>) -> ClaimNotice {
+fn assignment_notice(
+    task: &str,
+    winner: &AssignmentSide,
+    loser: Option<&AssignmentSide>,
+) -> ClaimNotice {
+    let name = winner
+        .assignee
+        .as_ref()
+        .map(|assignee| assignee.name.as_str())
+        .unwrap_or("unknown");
+    let claimed = winner
+        .lease
+        .as_ref()
+        .and_then(|lease| lease.claimed_at)
+        .map(|at| at.to_rfc3339())
+        .unwrap_or_else(|| "unknown".into());
     let body = match loser {
-        Some(loser) => format!(
-            "claim conflict on {task}: the earlier claim by {} (claimed {}) won over {} (claimed {})",
-            winner.holder,
-            winner
-                .claimed_at
+        Some(loser) => {
+            let loser_name = loser
+                .assignee
+                .as_ref()
+                .map(|assignee| assignee.name.as_str())
+                .unwrap_or("unknown");
+            let loser_claimed = loser
+                .lease
+                .as_ref()
+                .and_then(|lease| lease.claimed_at)
                 .map(|at| at.to_rfc3339())
-                .unwrap_or_else(|| "unknown".into()),
-            loser.holder,
-            loser
-                .claimed_at
-                .map(|at| at.to_rfc3339())
-                .unwrap_or_else(|| "unknown".into()),
-        ),
+                .unwrap_or_else(|| "unknown".into());
+            format!(
+                "claim conflict on {task}: the earlier assignment to {name} (claimed {claimed}) won over {loser_name} (claimed {loser_claimed})"
+            )
+        }
         None => format!(
-            "claim conflict on {task}: kept the claim by {} (claimed {}); the other side had released it",
-            winner.holder,
-            winner
-                .claimed_at
-                .map(|at| at.to_rfc3339())
-                .unwrap_or_else(|| "unknown".into()),
+            "claim conflict on {task}: kept the assignment to {name} (claimed {claimed}); the other side had released it"
         ),
     };
     ClaimNotice {
@@ -569,74 +599,82 @@ fn claim_notice(task: &str, winner: &Claim, loser: Option<&Claim>) -> ClaimNotic
     }
 }
 
-/// Claim merge: the earlier Claim wins and the loser is told; a Claim always
-/// beats a release when both sides changed it differently. A Task whose
-/// merged status is terminal keeps no Claim.
-fn merge_claim(
+/// Assignment merge: the earlier assignment wins and the loser is told; an
+/// assignment always beats a release when both sides changed it differently.
+/// A Task whose merged status is terminal keeps no assignee or lease.
+fn merge_assignment(
     id: &str,
     status: &str,
     workflow: &Workflow,
-    base: &ClaimSide,
-    local: &ClaimSide,
-    remote: &ClaimSide,
+    base: &AssignmentSide,
+    local: &AssignmentSide,
+    remote: &AssignmentSide,
     outcome: &mut MergeOutcome,
-) -> ClaimSide {
+) -> AssignmentSide {
     if workflow.is_terminal(status) {
-        return ClaimSide {
-            claim: None,
+        return AssignmentSide {
+            assignee: None,
+            lease: None,
             stray: later_stray(&local.stray, &remote.stray),
         };
     }
-    // The same claim on both sides keeps the freshest lease.
-    if let (Some(local_claim), Some(remote_claim)) = (&local.claim, &remote.claim)
-        && claim_identity(local_claim) == claim_identity(remote_claim)
+    // The same assignee on both sides keeps the freshest lease.
+    if let (Some(local_assignee), Some(remote_assignee)) = (&local.assignee, &remote.assignee)
+        && local_assignee == remote_assignee
     {
-        let mut claim = local_claim.clone();
-        claim.lease_until = later_time(local_claim.lease_until, remote_claim.lease_until);
-        return ClaimSide {
-            claim: Some(claim),
+        let lease = match (&local.lease, &remote.lease) {
+            (Some(local_lease), Some(remote_lease)) => Some(Lease {
+                claimed_at: local_lease.claimed_at.or(remote_lease.claimed_at),
+                lease_until: later_time(local_lease.lease_until, remote_lease.lease_until),
+            }),
+            (Some(local_lease), None) => Some(local_lease.clone()),
+            (None, Some(remote_lease)) => Some(remote_lease.clone()),
+            (None, None) => None,
+        };
+        return AssignmentSide {
+            assignee: local.assignee.clone(),
+            lease,
             stray: None,
         };
     }
-    if local.claim.is_none() && remote.claim.is_none() {
-        return ClaimSide {
-            claim: None,
+    if local.assignee.is_none() && remote.assignee.is_none() {
+        return AssignmentSide {
+            assignee: None,
+            lease: None,
             stray: later_stray(&local.stray, &remote.stray),
         };
     }
-    // Ordinary three-way: only one side touched the claim.
+    // Ordinary three-way: only one side touched the assignment.
     if local.eq(base) {
         return remote.clone();
     }
     if remote.eq(base) {
         return local.clone();
     }
-    // Both sides changed the claim differently.
-    match (&local.claim, &remote.claim) {
-        (Some(local_claim), Some(remote_claim)) => {
-            let (winner, loser) = earlier_claim(local_claim, remote_claim);
-            outcome.notices.push(claim_notice(id, winner, Some(loser)));
-            ClaimSide {
-                claim: Some(winner.clone()),
+    // Both sides changed the assignment differently.
+    match (&local.assignee, &remote.assignee) {
+        (Some(_), Some(_)) => {
+            let (winner, loser) = earlier_assignment(local, remote);
+            outcome
+                .notices
+                .push(assignment_notice(id, winner, Some(loser)));
+            AssignmentSide {
+                assignee: winner.assignee.clone(),
+                lease: winner.lease.clone(),
                 stray: None,
             }
         }
-        (Some(local_claim), None) => {
-            outcome.notices.push(claim_notice(id, local_claim, None));
-            ClaimSide {
-                claim: Some(local_claim.clone()),
-                stray: None,
-            }
+        (Some(_), None) => {
+            outcome.notices.push(assignment_notice(id, local, None));
+            local.clone()
         }
-        (None, Some(remote_claim)) => {
-            outcome.notices.push(claim_notice(id, remote_claim, None));
-            ClaimSide {
-                claim: Some(remote_claim.clone()),
-                stray: None,
-            }
+        (None, Some(_)) => {
+            outcome.notices.push(assignment_notice(id, remote, None));
+            remote.clone()
         }
-        (None, None) => ClaimSide {
-            claim: None,
+        (None, None) => AssignmentSide {
+            assignee: None,
+            lease: None,
             stray: later_stray(&local.stray, &remote.stray),
         },
     }
@@ -776,13 +814,20 @@ fn merge_task(
         &key("resolution"),
         outcome,
     );
-    let claim = merge_claim(
+    let assignment = merge_assignment(
         id,
         &status,
         workflow,
-        &ClaimSide::of(base_front),
-        &ClaimSide::of(Some(&local.front)),
-        &ClaimSide::of(Some(&remote.front)),
+        &AssignmentSide::of(base_front),
+        &AssignmentSide::of(Some(&local.front)),
+        &AssignmentSide::of(Some(&remote.front)),
+        outcome,
+    );
+    let reporter = pick(
+        base_front.map(|f| f.reporter.clone()),
+        local.front.reporter.clone(),
+        remote.front.reporter.clone(),
+        &key("reporter"),
         outcome,
     );
 
@@ -868,8 +913,10 @@ fn merge_task(
             remote: remote_link,
             repository,
             external_id,
-            claim: claim.claim,
-            stray_claim_times: claim.stray,
+            assignee: assignment.assignee,
+            lease: assignment.lease,
+            reporter,
+            stray_lease_times: assignment.stray,
             source_key,
             properties,
             created_at,
@@ -1220,7 +1267,7 @@ mod tests {
         for (local, host) in [(&local, &host), (&host, &local)] {
             let merged = merge_tasks(&base, local, host, &[]);
             assert!(merged.conflicts.is_empty());
-            assert_eq!(merged_task(&merged).front.claim.unwrap().holder, "host");
+            assert_eq!(merged_task(&merged).front.assignee.unwrap().name, "host");
             assert_eq!(merged.notices.len(), 1);
             let comments =
                 comment::parse_comments(merged.files["comments/orbit-test.md"].as_deref().unwrap())
@@ -1246,7 +1293,7 @@ mod tests {
         assert!(merged.conflicts.is_empty());
         let task = merged_task(&merged);
         assert_eq!(task.front.status, "done");
-        assert!(task.front.claim.is_none());
+        assert!(task.front.assignee.is_none());
     }
 
     #[test]

@@ -278,9 +278,8 @@ classDiagram
         +Option resolution
         +String priority
         +Vec labels
-        +Vec depends_on
+        +Vec links
         +String parent
-        +String waiting_on
         +DateTime created_at
         +DateTime updated_at
         +String body
@@ -320,7 +319,7 @@ classDiagram
     Graph "1" o-- "0..*" Task : indexes
     Task "1" *-- "0..1" Claim : stored as flat claimed_by, claimed_at, lease_until keys
     Task "1" o-- "0..*" Comment : sidecar
-    Task "0..*" --> "0..*" Task : depends_on
+    Task "0..*" --> "0..*" Task : links (blocking)
     Task "0..*" --> "0..1" Task : parent
 ```
 
@@ -364,8 +363,9 @@ stateDiagram-v2
     note left of ready
         Ready is derived, not a Status:
         the workflow's ready status, no claim,
-        no waiting_on, no hold label, no open
-        dependency, and no open SubTask.
+        no blocking link to an open Task or
+        external reference, no hold label, and
+        every SubTask in a closed category.
     end note
 
     note right of done
@@ -388,10 +388,10 @@ These rules live in `src/transition.rs`, which stays pure: every method takes th
 | `active` | `heartbeat` | — | `active` | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
 | `active` | `checkpoint` | — | `active` | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a closed task or a task with no claim. |
 | `active` | `claim --steal` | `claim` | `active` | Replaces the holder and resets `claimed_at` and `lease_until`, preserving the latest checkpoint. `--steal` does not bypass hold labels or dependencies. |
-| `active` | `release` | `release` | Ready Status | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. |
-| open | `done` | `done` | `done` | Every dependency must be in a closed category, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields and `waiting_on`; records the transition's resolution. |
-| open | `cancel` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields and `waiting_on`; records the transition's resolution. Resolves dependents. |
-| closed | `reopen` | `reopen` | Ready Status | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively claimed ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears claim fields, `waiting_on`, and the resolution. |
+| `active` | `release` | `release` | Ready Status | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. Links are untouched. |
+| `active` | `done` | `done` | `done` | Every dependency must be in a closed category, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields; links are untouched. Records the transition's resolution. |
+| `active` | `cancel` | `cancel` | `cancelled` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields; links are untouched. Records the transition's resolution. Resolves dependents. |
+| closed | `reopen` | `reopen` | Ready Status | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively claimed ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears claim fields; links are untouched; clears the resolution. |
 | any | `transition <name>` | named edge | edge target | Runs one Workflow transition directly, honoring the claim-holder check where the edge requires it. |
 | closed | `done --comment` / `cancel --comment` | — | unchanged | Appends a comment and updates `updated_at`; without a comment it is a no-op (`changed: false`). |
 | closed | opposite terminal command | — | rejected | `INVALID_TRANSITION`; reopen first. |
@@ -408,7 +408,7 @@ flowchart TD
     STATUS -->|no| NOTREADY["not ready"]
     STATUS -->|yes| CLAIMED{"claimed_by is null?"}
     CLAIMED -->|no| NOTREADY
-    CLAIMED -->|yes| WAITING{"waiting_on is null?"}
+    CLAIMED -->|yes| WAITING{"no blocking link?"}
     WAITING -->|no| NOTREADY
     WAITING -->|yes| HELD{"any hold label?"}
     HELD -->|yes| NOTREADY
@@ -419,7 +419,7 @@ flowchart TD
     SUBTASKS -->|yes| READY["ready<br/>eligible for ready and claim"]
 ```
 
-The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open SubTasks, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate. `graph::is_ready`, `ready_tasks`, `counts`, `prime`, and the MCP `ready` tool all share this one definition.
+The failure codes follow the gate: `WAITING_EXTERNAL` for an external blocking link, `LABEL_BLOCKED` for a hold label, `DEPENDENCY_BLOCKED` for unfinished dependencies, `SUBTASKS_OPEN` for open SubTasks, `ALREADY_CLAIMED` for a live claim, and `CLAIM_STALE` for an expired one. `--steal` bypasses only the claim checks, never the gate. `graph::is_ready`, `ready_tasks`, `counts`, `prime`, and the MCP `ready` tool all share this one definition.
 
 ### Stored versus derived
 
@@ -429,10 +429,9 @@ The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_B
 | Resolution | yes | `resolution` in frontmatter, set by closing Transitions |
 | Priority | yes | `priority`, a name from `board.priorities` |
 | Labels | yes | `labels`, normalized, sorted, deduplicated |
-| Dependencies | yes | `depends_on` IDs |
+| Links | yes | `links`: type, target (Task ID or external ref), blocking, attributes |
 | Parent | yes | `parent` ID on a SubTask |
 | SubTasks | yes, on the child | `parent` points at the Parent Task |
-| External wait | yes | `waiting_on` text |
 | Claim and lease | yes | `claimed_by`, `claimed_at`, `lease_until` |
 | Checkpoint | yes | `checkpoint` with `by`, `at`, `progress`, `next`, `blocker` |
 | Comments | yes, separately | `comments/ID.md` |
@@ -601,7 +600,7 @@ flowchart LR
 
 `orbit init` resolves the literal `id.prefix` from the repository or Board anchor name before creating a Board. A Board anchored at `~/.orbit` uses `orb` with a warning; an explicit `--slug` overrides. Auto-derived names are normalized and never fail; explicit names are strict. Re-runs preserve the stored prefix, an empty Board can change it, and a hand-edited new-style prefix is detected as `PREFIX_MISMATCH` before task parsing. `src/slug.rs` owns normalization, validation, suggestions, and the anchor rule.
 
-`orbit slug show` reads the stored prefix, task/SubTask counts, and comment-file count without loading the graph. `orbit slug migrate <slug>` is the explicit rewrite path for a populated Board. It keeps each random suffix, rewrites `parent`, `depends_on`, comment filenames and Orbit headers, updates `id.prefix`, and records one commit. It refuses an unhealthy Board, a target collision, and live claims unless `--force`; a dry run reports the plan and claims without writing.
+`orbit slug show` reads the stored prefix, task/SubTask counts, and comment-file count without loading the graph. `orbit slug migrate <slug>` is the explicit rewrite path for a populated Board. It keeps each random suffix, rewrites `parent`, internal `links` targets, comment filenames and Orbit headers, updates `id.prefix`, and records one commit. It refuses an unhealthy Board, a target collision, and live claims unless `--force`; a dry run reports the plan and claims without writing.
 
 ```mermaid
 flowchart TD

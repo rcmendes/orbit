@@ -141,6 +141,10 @@ pub enum Command {
     #[command(long_about = help::UNDEPEND_LONG, after_long_help = help::UNDEPEND_EXAMPLES)]
     Undepend(UndependArgs),
 
+    /// Manage typed links to other tasks or external references.
+    #[command(long_about = help::LINK_LONG, after_long_help = help::LINK_EXAMPLES)]
+    Link(LinkArgs),
+
     /// Permanently delete a task and its comments.
     #[command(long_about = help::DELETE_LONG, after_long_help = help::DELETE_EXAMPLES)]
     Delete(DeleteArgs),
@@ -746,6 +750,103 @@ pub struct UndependArgs {
     /// The dependency to remove.
     #[arg(value_name = "DEP_ID")]
     pub dep_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct LinkArgs {
+    #[command(subcommand)]
+    pub command: LinkCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LinkCommand {
+    /// Add a typed link from a task to another task or an external reference.
+    #[command(
+        long_about = help::LINK_ADD_LONG,
+        after_long_help = help::LINK_ADD_EXAMPLES
+    )]
+    Add(LinkAddArgs),
+    /// Remove links matching a type and target.
+    #[command(
+        long_about = help::LINK_REMOVE_LONG,
+        after_long_help = help::LINK_REMOVE_EXAMPLES
+    )]
+    Remove(LinkRemoveArgs),
+    /// List a task's links with their types, targets, and attributes.
+    #[command(
+        long_about = help::LINK_LIST_LONG,
+        after_long_help = help::LINK_LIST_EXAMPLES
+    )]
+    List(LinkTargetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct LinkAddArgs {
+    /// Task ID, for example orb-a7b2c9. The link is stored on this task.
+    pub id: String,
+
+    /// Link type: blocks, relates-to, duplicates, discovered-from, or a
+    /// custom slug. Defaults to relates-to.
+    #[arg(long = "type", value_name = "TYPE", default_value = "relates-to")]
+    pub kind: String,
+
+    /// Link target: an Orbit Task ID.
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with = "external",
+        required_unless_present = "external"
+    )]
+    pub to: Option<String>,
+
+    /// Link target: an external reference as SYSTEM:ID, for example jira:PROJ-123.
+    #[arg(long, value_name = "SYSTEM:ID")]
+    pub external: Option<String>,
+
+    /// Canonical URL for an external target.
+    #[arg(long, value_name = "URL", requires = "external")]
+    pub url: Option<String>,
+
+    /// Mark the link as blocking (overrides the type's default).
+    #[arg(long, conflicts_with = "no_blocking")]
+    pub blocking: bool,
+
+    /// Mark the link as non-blocking (overrides the type's default).
+    #[arg(long = "no-blocking")]
+    pub no_blocking: bool,
+
+    /// Link attribute as KEY=VALUE. Repeatable; VALUE is parsed as YAML.
+    #[arg(long, value_name = "KEY=VALUE", action = clap::ArgAction::Append)]
+    pub attribute: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct LinkRemoveArgs {
+    /// Task ID, for example orb-a7b2c9.
+    pub id: String,
+
+    /// Only remove links of this type. Omit to match every type.
+    #[arg(long = "type", value_name = "TYPE")]
+    pub kind: Option<String>,
+
+    /// Link target: an Orbit Task ID.
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with = "external",
+        required_unless_present = "external"
+    )]
+    pub to: Option<String>,
+
+    /// Link target: an external reference as SYSTEM:ID.
+    #[arg(long, value_name = "SYSTEM:ID")]
+    pub external: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct LinkTargetArgs {
+    /// Task ID, for example orb-a7b2c9.
+    pub id: String,
 }
 
 #[derive(Debug, Args)]

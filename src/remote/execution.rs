@@ -253,9 +253,8 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
             .filter_map(|candidate| active_link(candidate).map(|l| (candidate.clone(), l)))
             .collect();
         let dependencies: Vec<_> = task
-            .front
-            .depends_on
-            .iter()
+            .blocking_links()
+            .filter_map(|link| link.target_task())
             .filter_map(|dependency| graph.tasks.get(dependency))
             .filter_map(|dependency| active_link(dependency).map(|l| (dependency.clone(), l)))
             .collect();

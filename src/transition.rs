@@ -296,9 +296,10 @@ impl Task {
     }
 
     /// Applies a workflow transition: sets the target status, records the
-    /// resolution when the target is a closed category, clears the claim and
-    /// `waiting_on` when either side of the edge is closed, and clears the
-    /// resolution whenever the target is open.
+    /// resolution when the target is a closed category, clears the claim
+    /// when leaving the active bucket or closing, and clears the resolution
+    /// whenever the target is open. Links and external blockers survive
+    /// every transition; only explicit link commands change them.
     fn apply_transition(
         &mut self,
         transition: &TransitionDef,
@@ -321,13 +322,9 @@ impl Task {
                     .clone()
                     .unwrap_or_else(|| transition.name.clone()),
             );
-            self.front.waiting_on = None;
             self.clear_claim();
         } else {
             self.front.resolution = None;
-            if workflow.is_terminal(&self.front.status) {
-                self.front.waiting_on = None;
-            }
             if was_active {
                 self.clear_claim();
             }
@@ -337,10 +334,12 @@ impl Task {
         Outcome::Changed
     }
 
-    /// Release keeps `waiting_on` on open-to-open edges; only edges touching a
-    /// closed status clear it (see [`Self::apply_transition`]). An unclaimed
-    /// Task outside the `release` transition's sources is `Unchanged`, which
-    /// preserves the historical "was not claimed" no-op.
+    /// Release keeps links on open-to-open edges; only edges touching a
+    /// closed status clear the resolution (see [`Self::apply_transition`]).
+    /// Links and external blockers survive every transition; only explicit
+    /// link commands change them. An unclaimed Task outside the `release`
+    /// transition's sources is `Unchanged`, which preserves the historical
+    /// "was not claimed" no-op.
     pub fn release(
         &mut self,
         caller: Option<&str>,
@@ -492,10 +491,11 @@ impl Task {
         }
         let transition = require_transition(workflow, TRANSITION_CLAIM, &self.front.status, &id)?;
         let target = transition.to.clone();
-        if self.front.waiting_on.is_some() {
+        let waiting_labels = self.waiting_labels();
+        if !waiting_labels.is_empty() {
             return Err(TransitionError::WaitingExternal {
                 id,
-                waiting_on: self.front.waiting_on.clone(),
+                waiting_on: Some(waiting_labels.join(", ")),
             });
         }
         if !gate.hold_labels.is_empty() {
@@ -754,9 +754,8 @@ mod tests {
                 task_type: crate::task::TaskType::Task,
                 priority: "medium".to_string(),
                 labels: Vec::new(),
-                depends_on: Vec::new(),
+                links: vec![crate::task::Link::waiting_on("vendor")],
                 parent: None,
-                waiting_on: Some("vendor".to_string()),
                 checkpoint: None,
                 area: None,
                 verification: None,
@@ -790,7 +789,7 @@ mod tests {
     #[test]
     fn claim_moves_ready_to_in_progress_and_sets_lease() {
         let mut t = task("ready", Held::No);
-        t.front.waiting_on = None;
+        t.front.links.clear();
         t.claim(
             "bob",
             false,
@@ -829,7 +828,7 @@ mod tests {
         // `todo` is a backlog status in the standard workflow: claim is not
         // allowed and the error names the valid transitions.
         let mut backlog = task("todo", Held::No);
-        backlog.front.waiting_on = None;
+        backlog.front.links.clear();
         let error = backlog
             .claim(
                 "bob",
@@ -873,7 +872,7 @@ mod tests {
         assert!(matches!(error, TransitionError::WaitingExternal { .. }));
 
         let mut held = task("ready", Held::Live);
-        held.front.waiting_on = None;
+        held.front.links.clear();
         let error = held
             .claim(
                 "bob",
@@ -887,7 +886,7 @@ mod tests {
         assert!(matches!(error, TransitionError::AlreadyClaimed { .. }));
 
         let mut blocked = task("ready", Held::No);
-        blocked.front.waiting_on = None;
+        blocked.front.links.clear();
         let gate = ClaimGate {
             blocking: vec!["orb-dead".to_string()],
             ..ClaimGate::default()
@@ -912,7 +911,7 @@ mod tests {
         assert_eq!(t.front.status, "ready");
         assert!(t.front.claim.is_none());
         // release keeps waiting_on on open-to-open edges
-        assert_eq!(t.front.waiting_on.as_deref(), Some("vendor"));
+        assert_eq!(t.waiting_labels(), vec!["vendor".to_string()]);
     }
 
     #[test]
@@ -1006,7 +1005,8 @@ mod tests {
         assert_eq!(t.front.status, "done");
         assert_eq!(t.front.resolution.as_deref(), Some("completed"));
         assert!(t.front.claim.is_none());
-        assert!(t.front.waiting_on.is_none());
+        // Links and external blockers survive transitions.
+        assert_eq!(t.waiting_labels(), vec!["vendor".to_string()]);
     }
 
     #[test]
@@ -1033,7 +1033,7 @@ mod tests {
     #[test]
     fn complete_checks_open_subtasks_and_blocking_deps() {
         let mut t = task("ready", Held::No);
-        t.front.waiting_on = None;
+        t.front.links.clear();
         let error = t
             .complete(
                 None,
@@ -1062,7 +1062,7 @@ mod tests {
     #[test]
     fn cancel_records_its_own_resolution() {
         let mut t = task("ready", Held::No);
-        t.front.waiting_on = None;
+        t.front.links.clear();
         t.cancel(None, false, now(), &workflow()).unwrap();
         assert_eq!(t.front.status, "cancelled");
         assert_eq!(t.front.resolution.as_deref(), Some("cancelled"));
@@ -1085,7 +1085,8 @@ mod tests {
         t.reopen(false, &[], now(), &workflow()).unwrap();
         assert_eq!(t.front.status, "ready");
         assert!(t.front.resolution.is_none());
-        assert!(t.front.waiting_on.is_none());
+        // Links and external blockers survive reopen.
+        assert_eq!(t.waiting_labels(), vec!["vendor".to_string()]);
     }
 
     #[test]
@@ -1105,7 +1106,7 @@ mod tests {
     fn transition_to_runs_named_transitions_and_guards_claims() {
         let workflow = Workflow::standard();
         let mut t = task("ready", Held::No);
-        t.front.waiting_on = None;
+        t.front.links.clear();
         // `defer` is a standard-workflow transition ready -> todo.
         let outcome = t
             .transition_to("defer", None, false, now(), &workflow)
@@ -1116,7 +1117,7 @@ mod tests {
         // `promote` is not allowed from `in_progress`; the error names the
         // transitions that are.
         let mut t = task("in_progress", Held::Live);
-        t.front.waiting_on = None;
+        t.front.links.clear();
         let error = t
             .transition_to("promote", Some("alice"), false, now(), &workflow)
             .unwrap_err();
@@ -1152,7 +1153,7 @@ mod tests {
     fn transition_to_a_closed_status_records_resolution() {
         let workflow = Workflow::minimal();
         let mut t = task("in_progress", Held::Live);
-        t.front.waiting_on = None;
+        t.front.links.clear();
         // minimal has no `cancel` from in_progress? it does: [ready,in_progress]
         t.transition_to("cancel", Some("alice"), false, now(), &workflow)
             .unwrap();

@@ -135,9 +135,8 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
             })
             .collect();
         let dependencies: Vec<_> = task
-            .front
-            .depends_on
-            .iter()
+            .blocking_links()
+            .filter_map(|link| link.target_task())
             .filter_map(|id| graph.tasks.get(id))
             .filter_map(|dependency| {
                 github_link(dependency).map(|dep_link| (dependency.clone(), dep_link))
@@ -2337,9 +2336,8 @@ fn create_imported_task(
             task_type: crate::task::TaskType::Task,
             priority: board.config.board.default_priority.clone(),
             labels,
-            depends_on: Vec::new(),
+            links: Vec::new(),
             parent: None,
-            waiting_on: None,
             checkpoint: None,
             area,
             verification,

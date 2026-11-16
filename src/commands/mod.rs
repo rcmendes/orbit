@@ -29,7 +29,7 @@ use lifecycle::{
     cmd_transition,
 };
 use query::{cmd_export, cmd_list, cmd_prime, cmd_ready, cmd_show, cmd_sync, cmd_tree};
-use relations::{cmd_comment, cmd_depend, cmd_label, cmd_undepend};
+use relations::{cmd_comment, cmd_depend, cmd_label, cmd_link, cmd_undepend};
 use repo::run as cmd_repo;
 use slug::cmd_slug;
 
@@ -111,6 +111,7 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
         Command::Undepend(args) => {
             with_board(dir.as_deref(), true, |board| cmd_undepend(board, args))
         }
+        Command::Link(args) => with_board(dir.as_deref(), true, |board| cmd_link(board, args)),
         Command::Delete(args) => with_board(dir.as_deref(), true, |board| cmd_delete(board, args)),
         Command::Prime(args) => prime_with_host_sync(dir.as_deref(), args),
         Command::Export => with_board(dir.as_deref(), false, cmd_export),

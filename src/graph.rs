@@ -274,21 +274,27 @@ impl Graph {
                     ),
                 ));
             }
-            for dep in &task.front.depends_on {
-                if dep == &task.id {
+            for link in &task.front.links {
+                let Some(target) = link.target_task() else {
+                    continue;
+                };
+                if target == task.id {
                     issues.push(Issue::new(
                         code::CYCLE_DETECTED,
                         Some(&task.id),
-                        format!("{} depends on itself", task.id),
+                        format!("{} has a {} link to itself", task.id, link.kind),
                     ));
                     continue;
                 }
 
-                if !self.tasks.contains_key(dep) {
+                if !self.tasks.contains_key(target) {
                     issues.push(Issue::new(
                         code::DANGLING_DEP,
                         Some(&task.id),
-                        format!("{} depends on missing task {dep}", task.id),
+                        format!(
+                            "{} has a {} link to missing task {target}",
+                            task.id, link.kind
+                        ),
                     ));
                 }
             }
@@ -370,7 +376,6 @@ impl Graph {
     pub fn is_ready(&self, task: &Task) -> bool {
         self.workflow.is_ready_status(&task.front.status)
             && task.front.claim.is_none()
-            && task.front.waiting_on.is_none()
             && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
             && self.open_children(&task.id).is_empty()
@@ -385,35 +390,71 @@ impl Graph {
             .collect()
     }
 
-    pub fn blocking_ids(&self, task: &Task) -> Vec<String> {
-        let mut blocking = Vec::new();
-        for dep in &task.front.depends_on {
-            match self.tasks.get(dep) {
-                Some(dependency) if self.workflow.is_terminal(&dependency.front.status) => {}
-                _ => blocking.push(dep.clone()),
-            }
-        }
-        blocking
-    }
-
-    pub fn blocked_by(&self, task: &Task) -> Vec<String> {
-        self.blocking_ids(task)
-            .into_iter()
-            .map(|dep| match self.tasks.get(&dep) {
-                Some(dependency) => format!("{dep} ({})", dependency.front.status),
-                None => format!("{dep} (missing)"),
+    /// Blocking links that still hold the Task back: internal targets that
+    /// are missing or not terminal (fail-closed), plus every blocking
+    /// external reference. External blockers are labelled `system:id`.
+    pub fn blocking_links<'a>(&self, task: &'a Task) -> Vec<&'a crate::task::Link> {
+        task.blocking_links()
+            .filter(|link| match link.target_task() {
+                Some(target) => match self.tasks.get(target) {
+                    Some(dependency) => !self.workflow.is_terminal(&dependency.front.status),
+                    None => true,
+                },
+                None => true,
             })
             .collect()
     }
 
+    pub fn blocking_ids(&self, task: &Task) -> Vec<String> {
+        self.blocking_links(task)
+            .iter()
+            .map(|link| link.target.label())
+            .collect()
+    }
+
+    pub fn blocked_by(&self, task: &Task) -> Vec<String> {
+        self.blocking_links(task)
+            .iter()
+            .map(|link| match link.target_task() {
+                Some(target) => match self.tasks.get(target) {
+                    Some(dependency) => {
+                        format!("{target} ({})", dependency.front.status.as_str())
+                    }
+                    None => format!("{target} (missing)"),
+                },
+                None => format!("{} (external)", link.target.label()),
+            })
+            .collect()
+    }
+
+    /// Tasks holding any link that targets `id`, whatever its type.
     pub fn dependents(&self, id: &str) -> Vec<&Task> {
         let mut dependents: Vec<&Task> = self
             .tasks
             .values()
-            .filter(|task| task.front.depends_on.iter().any(|dep| dep == id))
+            .filter(|task| {
+                task.front
+                    .links
+                    .iter()
+                    .any(|link| link.target_task() == Some(id))
+            })
             .collect();
         dependents.sort_by(|left, right| left.id.cmp(&right.id));
         dependents
+    }
+
+    /// Tasks whose *blocking* link targets `id` — the ones `id` actually
+    /// holds back.
+    pub fn blocking_dependents(&self, id: &str) -> Vec<&Task> {
+        self.dependents(id)
+            .into_iter()
+            .filter(|task| {
+                task.front
+                    .links
+                    .iter()
+                    .any(|link| link.is_blocking() && link.target_task() == Some(id))
+            })
+            .collect()
     }
 
     pub fn children(&self, id: &str) -> Vec<&Task> {
@@ -616,7 +657,9 @@ impl Graph {
             {
                 counts.stale += 1;
             }
-            if !self.workflow.is_terminal(&task.front.status) && task.front.waiting_on.is_some() {
+            if !self.workflow.is_terminal(&task.front.status)
+                && task.external_blockers().next().is_some()
+            {
                 counts.waiting += 1;
             }
             if !self.workflow.is_terminal(&task.front.status)
@@ -646,7 +689,7 @@ impl Graph {
 
         path.push(from.to_string());
         if let Some(task) = self.tasks.get(from) {
-            for dep in &task.front.depends_on {
+            for dep in blocking_link_targets(task) {
                 if self.path_to(dep, target, visited, path) {
                     return true;
                 }
@@ -666,7 +709,7 @@ impl Graph {
         stack.push(id.to_string());
 
         if let Some(task) = self.tasks.get(id) {
-            for dep in &task.front.depends_on {
+            for dep in blocking_link_targets(task) {
                 if !self.tasks.contains_key(dep) {
                     continue;
                 }
@@ -677,9 +720,9 @@ impl Graph {
                         }
                     }
                     1 => {
-                        if let Some(position) = stack.iter().position(|node| node == dep) {
+                        if let Some(position) = stack.iter().position(|node| node.as_str() == dep) {
                             let mut cycle = stack[position..].to_vec();
-                            cycle.push(dep.clone());
+                            cycle.push(dep.to_string());
                             return Some(cycle);
                         }
                     }
@@ -692,6 +735,14 @@ impl Graph {
         state.insert(id.to_string(), 2);
         None
     }
+}
+
+/// Internal targets of a Task's blocking links — the edges cycle detection
+/// and dependency walks follow. Non-blocking link types never participate.
+fn blocking_link_targets(task: &Task) -> Vec<&str> {
+    task.blocking_links()
+        .filter_map(|link| link.target_task())
+        .collect()
 }
 
 #[derive(Debug)]
@@ -755,6 +806,13 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         .iter()
         .map(|transition| transition.name.as_str())
         .collect();
+    // Derived `waiting_on` view over external blocking links.
+    let waiting_labels = task.waiting_labels();
+    let waiting_on = if waiting_labels.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(waiting_labels.join(", "))
+    };
 
     serde_json::json!({
         "id": task.id,
@@ -770,7 +828,13 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "priority": task.front.priority,
         "kind": task.kind(),
         "labels": task.front.labels,
-        "depends_on": task.front.depends_on,
+        "links": task.front.links.iter().map(crate::task::Link::to_json).collect::<Vec<_>>(),
+        // Derived read-only views kept for consumers of the old fields;
+        // `links` is the stored truth.
+        "depends_on": task
+            .blocking_links()
+            .filter_map(|link| link.target_task().map(str::to_string))
+            .collect::<Vec<_>>(),
         "parent": task.front.parent,
         "depth": graph.depth(&task.id),
         "subtasks": subtasks,
@@ -779,7 +843,7 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "resolved_subtask_count": resolved_subtask_count,
         "open_subtask_count": open_subtask_count,
         "eligible_for_close": eligible_for_close,
-        "waiting_on": task.front.waiting_on,
+        "waiting_on": waiting_on,
         "checkpoint": task.front.checkpoint,
         "checkpoint_archived": task
             .front
@@ -844,9 +908,11 @@ mod tests {
                 task_type: TaskType::Task,
                 priority: default_priority(),
                 labels: Vec::new(),
-                depends_on: deps.iter().map(|dep| dep.to_string()).collect(),
+                links: deps
+                    .iter()
+                    .map(|dep| crate::task::Link::dependency(dep))
+                    .collect(),
                 parent: None,
-                waiting_on: None,
                 checkpoint: None,
                 area: None,
                 verification: None,

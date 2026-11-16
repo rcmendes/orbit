@@ -289,8 +289,8 @@ What triggers a push:
   with GitHub `state_reason: completed`; `cancelled` closes it with
   `state_reason: not_planned`; reopen reopens it.
 
-What does not trigger a push: priority, type, `waiting_on`, claims,
-heartbeats, checkpoints, comments, and dependency relationships. Those
+What does not trigger a push: priority, type, links, claims,
+heartbeats, checkpoints, comments, and Remote Issue relationships. Those
 fields either have no GitHub representation or remain explicit. `orbit
 remote *`, `orbit sync`, `orbit board *`, `doctor`, migrations, and `delete`
 are also excluded. `orbit triage apply` is included because it changes

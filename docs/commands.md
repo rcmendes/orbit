@@ -49,7 +49,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Manage member Repositories | `orbit repo list`, `orbit repo refresh` |
 | Convert a pre-ADR-0019 Board | `orbit migrate` |
 | File a new ticket | `orbit add` |
-| Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend` |
+| Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend`, `orbit link` |
 | Triage incoming work | `orbit label add/remove/list` |
 | Find work for an agent | `orbit ready` |
 | Take a specific ticket | `orbit claim` |
@@ -269,7 +269,7 @@ orbit slug migrate atlas --force       # proceed despite live claims
 
 The random suffix is preserved: `orb-a7b2c9` becomes `atlas-a7b2c9`, and
 `orb-a7b2c9.d4b3df` becomes `atlas-a7b2c9.d4b3df`. Migration also rewrites
-`parent` and `depends_on`, renames comment files, updates the Orbit-generated
+`parent` and internal `links` targets, renames comment files, updates the Orbit-generated
 `# Comments: <id>` header, and changes `id.prefix`. It validates the result in a
 temporary Git worktree, commits once as
 `orbit: migrate task prefix from orb- to atlas-`, then fast-forwards the Board.
@@ -459,16 +459,45 @@ orbit update orb-a7b2c9 --area mcp --verification "cargo test --test mcp"
 orbit update orb-a7b2c9 --clear-area --clear-verification
 ```
 
+### `orbit link` — typed relations and external references
+
+A Link is a typed relation stored on a task: a `type` (`blocks`,
+`relates-to`, `duplicates`, `discovered-from`, or a custom slug), a `target`
+(an Orbit Task ID or an external `SYSTEM:ID` reference such as
+`jira:PROJ-123`), an optional `blocking` override, and arbitrary
+`--attribute KEY=VALUE` pairs. `blocks` links block readiness by default;
+every other type is non-blocking unless `--blocking` is passed, and
+`--no-blocking` overrides `blocks`. Only blocking links drive readiness and
+are checked for cycles, so non-blocking links can form cycles freely.
+
+**Good fit:** recording that a task duplicates or was discovered from
+another, relating tasks without blocking, or parking work on an external
+tracker (`--external jira:PROJ-123 --url …`) that blocks readiness until the
+link is removed. `orbit depend`/`undepend` remain shorthand for a blocking
+`blocks` link between two tasks.
+
+```bash
+orbit link add orb-a7b2c9 --type relates-to --to orb-f14c02
+orbit link add orb-a7b2c9 --type blocks --external jira:PROJ-123 \
+  --url https://jira.example.com/browse/PROJ-123
+orbit link add orb-a7b2c9 --type duplicates --to orb-f14c02 \
+  --attribute reason="same root cause"
+orbit link list orb-a7b2c9
+orbit link remove orb-a7b2c9 --type relates-to --to orb-f14c02
+```
+
 ### `orbit depend` and `orbit undepend` — connect work
 
-`depend <id> <dep-id>` makes the first task wait until the second is done or
-cancelled. Cycles, self-dependencies, adding a dependency to a terminal task, and
-parent/child edges in either direction are rejected. `undepend` removes the edge
-and is idempotent.
+`depend <id> <dep-id>` adds a blocking `blocks` link: the first task waits
+until the second is done or cancelled. Cycles through blocking links,
+self-links, linking a terminal task, and parent/child edges in either
+direction are rejected. `undepend` removes the blocking link and is
+idempotent; non-blocking links are untouched — use `orbit link remove` for
+those.
 
-**Good fit:** a blocker is discovered after both tickets exist, or a dependency
-was wrong and must be removed. Use `orbit add --parent` for parentage; a
-dependency blocks the child, while a parent blocks the feature.
+**Good fit:** a blocker is discovered after both tickets exist, or a blocking
+dependency was wrong and must be removed. Use `orbit add --parent` for
+parentage; a dependency blocks the child, while a parent blocks the feature.
 
 ```bash
 orbit depend orb-a7b2c9 orb-f14c02   # orb-a7b2c9 waits for orb-f14c02
@@ -533,8 +562,9 @@ remove).
 A Batch is a JSON list of operations applied under one lock and published as one
 commit. Either every operation applies or none does: a failure writes nothing
 and names the failing operation's `index` and `op` in `error.details`.
-Operations are `add`, `update`, `label`, `depend`, `undepend`, `claim`,
-`heartbeat`, `release`, `done`, `cancel`, `reopen`, `comment`, and `annotate`,
+Operations are `add`, `update`, `label`, `depend`, `undepend`, `link`,
+`unlink`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`,
+`comment`, and `annotate`,
 each with its command's fields (see [SPEC.md](./SPEC.md#batch)). A reference is a
 Task ID or `key:` plus a Source Key, so later operations can point at Tasks the
 same Batch creates.

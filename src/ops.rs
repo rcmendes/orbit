@@ -67,14 +67,21 @@ pub fn add(
     let task_type = new.task_type.unwrap_or(TaskType::Task);
     let labels = normalize_labels(&new.labels)?;
 
-    let mut depends_on = Vec::new();
+    // `depends_on` ids become blocking `blocks` links; `waiting_on` becomes a
+    // blocking `waiting-on` link to an external reference.
+    let mut links: Vec<task::Link> = Vec::new();
     for dep in new.depends_on {
         if !graph.tasks.contains_key(&dep) {
             return Err(OrbitError::not_found(&dep));
         }
-        if !depends_on.contains(&dep) {
-            depends_on.push(dep);
+        let link = task::Link::dependency(&dep);
+        if !links.contains(&link) {
+            links.push(link);
         }
+    }
+    let waiting_on = normalize_waiting(new.waiting_on)?;
+    if let Some(waiting) = &waiting_on {
+        links.push(task::Link::waiting_on(waiting));
     }
 
     let parent = match new.parent {
@@ -113,7 +120,9 @@ pub fn add(
     }
 
     if let Some(parent_id) = &parent
-        && depends_on.iter().any(|dep| dep == parent_id)
+        && links
+            .iter()
+            .any(|link| link.is_blocking() && link.target_task() == Some(parent_id.as_str()))
     {
         return Err(OrbitError::invalid_argument(
             "a SubTask cannot depend on its Parent Task; parentage already makes the parent wait",
@@ -127,7 +136,6 @@ pub fn add(
             "repo `{repo}` is not a valid Repository name"
         )));
     }
-    let waiting_on = normalize_waiting(new.waiting_on)?;
     let area = parse_area_option(board, new.area)?;
     let verification = task::normalize_verification(new.verification)?;
     for (owner, value) in &new.annotations {
@@ -144,9 +152,8 @@ pub fn add(
             task_type,
             priority,
             labels,
-            depends_on,
+            links,
             parent,
-            waiting_on,
             checkpoint: None,
             area,
             verification,
@@ -260,7 +267,9 @@ pub fn update(
         }
         None => None,
     };
-    let waiting_on = match change.waiting_on {
+    // `waiting_on` is a convenience over `waiting-on` links to an external
+    // reference: Set replaces them, Clear removes them.
+    let waiting_change = match change.waiting_on {
         FieldUpdate::Set(value) => match normalize_waiting(Some(value))? {
             Some(value) => FieldUpdate::Set(value),
             None => FieldUpdate::Keep,
@@ -296,12 +305,29 @@ pub fn update(
     if let Some(task_type) = change.task_type {
         task.front.task_type = task_type;
     }
-    apply_field(&mut task.front.waiting_on, waiting_on);
+    apply_waiting_links(&mut task.front.links, waiting_change);
     apply_field(&mut task.front.area, area);
     apply_field(&mut task.front.verification, verification);
     let changed = front_differs(&before.0, &task.front) || before.1 != task.body;
     task.touch(now);
     Ok(changed)
+}
+
+/// Replaces or removes `waiting-on` external links — the stored form of the
+/// `waiting_on` convenience field.
+fn apply_waiting_links(links: &mut Vec<task::Link>, change: FieldUpdate<String>) {
+    let is_waiting = |link: &task::Link| {
+        link.kind == task::LINK_TYPE_WAITING_ON
+            && matches!(link.target, task::LinkTarget::External(_))
+    };
+    match change {
+        FieldUpdate::Keep => {}
+        FieldUpdate::Clear => links.retain(|link| !is_waiting(link)),
+        FieldUpdate::Set(value) => {
+            links.retain(|link| !is_waiting(link));
+            links.push(task::Link::waiting_on(&value));
+        }
+    }
 }
 
 fn apply_field(field: &mut Option<String>, change: FieldUpdate<String>) {
@@ -316,7 +342,7 @@ fn front_differs(before: &TaskFrontmatter, after: &TaskFrontmatter) -> bool {
     before.title != after.title
         || before.priority != after.priority
         || before.task_type != after.task_type
-        || before.waiting_on != after.waiting_on
+        || before.links != after.links
         || before.area != after.area
         || before.verification != after.verification
 }
@@ -337,42 +363,138 @@ pub fn label(
     Ok(added || removed)
 }
 
-/// Makes `id` wait for `on`. An existing edge is unchanged (`Ok(false)`).
-pub fn depend(graph: &mut Graph, id: &str, on: &str, now: DateTime<Utc>) -> Result<bool> {
+/// Adds a typed link from `id` to `link.target`. An identical link is
+/// unchanged (`Ok(false)`). Blocking links to Orbit Tasks reject cycles and
+/// links on terminal Tasks; non-blocking links only need the target to exist.
+pub fn link(graph: &mut Graph, id: &str, link: task::Link, now: DateTime<Utc>) -> Result<bool> {
     {
         let task = graph.get(id)?;
-        let dep = graph.get(on)?;
-        if task.front.parent.as_deref() == Some(on) || dep.front.parent.as_deref() == Some(id) {
-            return Err(OrbitError::invalid_argument(
-                "parentage is not a dependency; use `orbit add --parent` to create a SubTask",
-            ));
+        if let Some(target) = link.target_task() {
+            graph.get(target)?;
+            if link.is_blocking()
+                && (task.front.parent.as_deref() == Some(target)
+                    || graph.get(target)?.front.parent.as_deref() == Some(id))
+            {
+                return Err(OrbitError::invalid_argument(
+                    "parentage is not a dependency; use `orbit add --parent` to create a SubTask",
+                ));
+            }
         }
-        if graph.workflow.is_terminal(&task.front.status) {
+        if link.is_blocking() && graph.workflow.is_terminal(&task.front.status) {
             return Err(OrbitError::new(
                 code::INVALID_TRANSITION,
                 format!(
-                    "{id} is {}; cannot add a dependency to a terminal task",
+                    "{id} is {}; cannot add a blocking link to a terminal task",
                     task.front.status
                 ),
             ));
         }
     }
-    if id == on {
-        return Err(cycle_error(&[id.to_string(), on.to_string()]));
+    if link.is_blocking() && link.target_task() == Some(id) {
+        return Err(cycle_error(&[id.to_string(), id.to_string()]));
     }
-    if graph.get(id)?.front.depends_on.iter().any(|dep| dep == on) {
+    if graph
+        .get(id)?
+        .front
+        .links
+        .iter()
+        .any(|existing| existing.kind == link.kind && existing.target.same_reference(&link.target))
+    {
         return Ok(false);
     }
-    if let Some(cycle) = graph.would_create_cycle(id, on) {
+    if link.is_blocking()
+        && let Some(target) = link.target_task()
+        && let Some(cycle) = graph.would_create_cycle(id, target)
+    {
         return Err(cycle_error(&cycle));
     }
-    graph.get_mut(id)?.add_dependency(on, now);
+    graph.get_mut(id)?.add_link(link, now);
     Ok(true)
 }
 
-/// Removes the edge from `id` to `on`. A missing edge is unchanged (`Ok(false)`).
+/// Removes links from `id` matching `kind` (when given) and `target`.
+/// A missing link is unchanged (`Ok(false)`).
+pub fn unlink(
+    graph: &mut Graph,
+    id: &str,
+    kind: Option<&str>,
+    target: &task::LinkTarget,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    Ok(graph.get_mut(id)?.remove_links(kind, target, now))
+}
+
+/// Makes `id` wait for `on` through a blocking `blocks` link.
+pub fn depend(graph: &mut Graph, id: &str, on: &str, now: DateTime<Utc>) -> Result<bool> {
+    link(graph, id, task::Link::dependency(on), now)
+}
+
+/// Parses a link target spec: `to` is an Orbit Task ID, `external` is
+/// `SYSTEM:ID` (split at the first colon). Exactly one must be given.
+pub fn link_target(to: Option<&str>, external: Option<&str>) -> Result<task::LinkTarget> {
+    match (to, external) {
+        (Some(id), None) => {
+            if id.trim().is_empty() {
+                return Err(OrbitError::invalid_argument(
+                    "link target must not be empty",
+                ));
+            }
+            Ok(task::LinkTarget::Task(id.trim().to_string()))
+        }
+        (None, Some(spec)) => {
+            let (system, id) = spec.split_once(':').ok_or_else(|| {
+                OrbitError::invalid_argument(
+                    "external link target must be SYSTEM:ID, for example jira:PROJ-123",
+                )
+            })?;
+            let reference = task::ExternalRef {
+                system: system.trim().to_string(),
+                id: id.trim().to_string(),
+                url: None,
+            };
+            reference.validate().map_err(OrbitError::invalid_argument)?;
+            Ok(task::LinkTarget::External(reference))
+        }
+        _ => Err(OrbitError::invalid_argument(
+            "a link needs exactly one target: --to ID or --external SYSTEM:ID",
+        )),
+    }
+}
+
+/// Parses repeatable `KEY=VALUE` attribute pairs; VALUE is read as YAML so
+/// numbers, booleans, and lists keep their type.
+pub fn link_attributes(pairs: &[String]) -> Result<BTreeMap<String, serde_yaml_ng::Value>> {
+    let mut attributes = BTreeMap::new();
+    for pair in pairs {
+        let (key, value) = pair.split_once('=').ok_or_else(|| {
+            OrbitError::invalid_argument(format!("invalid attribute `{pair}`; expected KEY=VALUE"))
+        })?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(OrbitError::invalid_argument(
+                "link attribute names must not be empty",
+            ));
+        }
+        let parsed = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(value)
+            .unwrap_or_else(|_| serde_yaml_ng::Value::String(value.to_string()));
+        attributes.insert(key.to_string(), parsed);
+    }
+    Ok(attributes)
+}
+
+/// Removes blocking links from `id` to `on`. Non-blocking links stay.
 pub fn undepend(graph: &mut Graph, id: &str, on: &str, now: DateTime<Utc>) -> Result<bool> {
-    Ok(graph.get_mut(id)?.remove_dependency(on, now))
+    let target = task::LinkTarget::Task(on.to_string());
+    let task = graph.get_mut(id)?;
+    let before = task.front.links.len();
+    task.front
+        .links
+        .retain(|existing| !(existing.is_blocking() && existing.target == target));
+    let changed = task.front.links.len() != before;
+    if changed {
+        task.touch(now);
+    }
+    Ok(changed)
 }
 
 pub(crate) fn cycle_error(path: &[String]) -> OrbitError {
@@ -567,7 +689,7 @@ pub fn reopen(graph: &mut Graph, id: &str, force: bool, now: DateTime<Utc>) -> R
 
 fn done_dependents(graph: &Graph, id: &str) -> Vec<String> {
     graph
-        .dependents(id)
+        .blocking_dependents(id)
         .iter()
         .filter(|dependent| {
             graph.workflow.category_of(&dependent.front.status) == Some(StatusCategory::Done)

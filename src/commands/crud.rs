@@ -194,7 +194,7 @@ fn delete_subtree(
         for dependent in &dependent_ids {
             let updated = {
                 let task = graph.get_mut(dependent)?;
-                task.remove_dependency(id, now);
+                task.remove_links_to(id, now);
                 task.clone()
             };
             crate::mutation::write_task(board, &updated)?;

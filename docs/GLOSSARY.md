@@ -15,7 +15,7 @@ _Avoid_: Project name, namespace
 The Board may also accept legacy prefixes from imported Tasks in `id.accepted_prefixes`; new Task IDs continue to use the one primary Slug.
 
 **Slug migration**:
-An explicit, one-commit rewrite of every Task and SubTask ID from the Board's current prefix to a new Slug. It preserves random suffixes and rewrites structured `parent` and `depends_on` references, comment filenames, and Orbit comment headers. It never rewrites task bodies, checkpoint text, comment text, Git history, or external links.
+An explicit, one-commit rewrite of every Task and SubTask ID from the Board's current prefix to a new Slug. It preserves random suffixes and rewrites structured `parent` and internal `links` targets, comment filenames, and Orbit comment headers. It never rewrites task bodies, checkpoint text, comment text, Git history, or external links.
 _Avoid_: Multi-prefix mode, alias table
 
 **SubTask**:

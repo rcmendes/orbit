@@ -43,7 +43,7 @@ fn concurrent_ready_claims_are_distinct() {
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["ok"], true, "{value}");
         let id = value["data"]["id"].as_str().unwrap().to_string();
-        let holder = value["data"]["claimed_by"].as_str().unwrap().to_string();
+        let holder = value["data"]["assignee"].as_str().unwrap().to_string();
         assert!(claimed.insert(id), "the same task was claimed twice");
         assert!(holders.insert(holder), "two claims had the same holder");
     }
@@ -55,7 +55,7 @@ fn concurrent_ready_claims_are_distinct() {
     assert_eq!(all["data"]["count"], 8);
     for task in all["data"]["tasks"].as_array().unwrap() {
         assert_eq!(task["status"], "in_progress");
-        assert!(task["claimed_by"].is_string());
+        assert!(task["assignee"].is_string());
     }
 
     let ready = repo.ok_json(&["ready", "--json"]);

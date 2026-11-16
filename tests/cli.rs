@@ -89,7 +89,7 @@ fn done_with_comment_closes_and_records_the_note_in_one_step() {
         "--json",
     ]);
     assert_eq!(done["data"]["status"], "done");
-    assert_eq!(done["data"]["claimed_by"], Value::Null);
+    assert_eq!(done["data"]["assignee"], Value::Null);
     assert_eq!(done["data"]["comment_count"], 1);
     assert_eq!(done["data"]["comments"][0]["author"], "agent");
     assert_eq!(
@@ -220,7 +220,7 @@ fn claims_have_leases_and_holder_checks() {
 
     let claimed = repo.ok_json(&["claim", id.as_str(), "--by", "agent-1", "--json"]);
     assert_eq!(claimed["data"]["status"], "in_progress");
-    assert_eq!(claimed["data"]["claimed_by"], "agent-1");
+    assert_eq!(claimed["data"]["assignee"], "agent-1");
     assert!(claimed["data"]["lease_until"].is_string());
 
     let (_, error) = repo.err_json(&["claim", id.as_str(), "--by", "agent-2", "--json"]);
@@ -235,10 +235,48 @@ fn claims_have_leases_and_holder_checks() {
 
     let released = repo.ok_json(&["release", id.as_str(), "--by", "agent-1", "--json"]);
     assert_eq!(released["data"]["status"], "ready");
-    assert!(released["data"]["claimed_by"].is_null());
+    assert!(released["data"]["assignee"].is_null());
 
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
+}
+
+#[test]
+fn assign_sets_a_human_assignee_without_a_lease() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Assign me", &[]);
+
+    let assigned = repo.ok_json(&["assign", id.as_str(), "--to", "alice", "--json"]);
+    assert_eq!(assigned["data"]["assignee"], "alice");
+    assert_eq!(assigned["data"]["assignee_kind"], "human");
+    assert!(assigned["data"]["lease_until"].is_null());
+
+    // A lease-less assignee has no lease to heartbeat.
+    let (_, error) = repo.err_json(&["heartbeat", id.as_str(), "--by", "alice", "--json"]);
+    assert_eq!(error["error"]["code"], "INVALID_TRANSITION");
+
+    // The assignment keeps the task out of the ready queue.
+    let ready = repo.ok_json(&["ready", "--json"]);
+    assert_eq!(ready["data"]["count"], 0);
+
+    // Re-assigning someone else needs --force and drops nothing else.
+    let (_, error) = repo.err_json(&["assign", id.as_str(), "--to", "bob", "--json"]);
+    assert_eq!(error["error"]["code"], "ALREADY_CLAIMED");
+    repo.ok_json(&["assign", id.as_str(), "--to", "bob", "--force", "--json"]);
+
+    let released = repo.ok_json(&["release", id.as_str(), "--by", "bob", "--json"]);
+    assert!(released["data"]["assignee"].is_null());
+}
+
+#[test]
+fn reporter_is_recorded_at_creation() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Reported", &["--reporter", "alice"]);
+
+    let shown = repo.ok_json(&["show", id.as_str(), "--json"]);
+    assert_eq!(shown["data"]["reporter"], "alice");
 }
 
 #[test]
@@ -255,7 +293,7 @@ fn stale_claims_are_visible_and_stealable() {
     assert_eq!(error["error"]["details"]["holder"], "agent-1");
 
     let stolen = repo.ok_json(&["claim", id.as_str(), "--by", "agent-2", "--steal", "--json"]);
-    assert_eq!(stolen["data"]["claimed_by"], "agent-2");
+    assert_eq!(stolen["data"]["assignee"], "agent-2");
     assert_eq!(stolen["data"]["status"], "in_progress");
 }
 
@@ -486,7 +524,7 @@ fn linked_worktrees_share_one_board() {
 
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["status"], "in_progress");
-    assert_eq!(show["data"]["claimed_by"], "worktree-agent");
+    assert_eq!(show["data"]["assignee"], "worktree-agent");
 
     repo.git(&["worktree", "remove", "--force", worktree.to_str().unwrap()]);
 }

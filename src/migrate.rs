@@ -122,10 +122,10 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
     let mut claims = Vec::new();
     if changed {
         for task in graph.tasks.values() {
-            let Some(claim) = task.front.claim.as_ref() else {
+            let (Some(assignee), Some(lease)) = (&task.front.assignee, &task.front.lease) else {
                 continue;
             };
-            if !claim.is_live(now) {
+            if !lease.is_live(now) {
                 continue;
             }
             let Some(to) = old_to_new.get(&task.id) else {
@@ -134,8 +134,8 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
             claims.push(ClaimMapping {
                 from: task.id.clone(),
                 to: to.clone(),
-                holder: claim.holder.clone(),
-                lease_until: claim.lease_until,
+                holder: assignee.name.clone(),
+                lease_until: lease.lease_until,
             });
         }
         claims.sort_by(|left, right| left.from.cmp(&right.from));

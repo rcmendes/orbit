@@ -53,7 +53,8 @@ Git and at `./.orbit/board` inside a repository. See
 | Triage incoming work | `orbit label add/remove/list` |
 | Find work for an agent | `orbit ready` |
 | Take a specific ticket | `orbit claim` |
-| Keep a claim alive | `orbit heartbeat` |
+| Assign without a lease | `orbit assign` |
+| Keep a lease alive | `orbit heartbeat` |
 | Hand work back | `orbit release` |
 | Finish or abandon work | `orbit done`, `orbit cancel` |
 | Undo a close or remove a mistake | `orbit reopen`, `orbit delete` |
@@ -354,7 +355,7 @@ Runs the Model Context Protocol server over stdio with 14 tools and the
 `orbit://tasks/{id}` resource. Editors launch it from their MCP configuration.
 `create` accepts `parent`, `type`, `component`, `external_id`, `verification`,
 and `body`; `update` accepts `type`, `component`, `repository`, `external_id`,
-and `verification`; `checkpoint` records the claim holder's handoff; `list` and
+and `verification`; `checkpoint` records the assignee's handoff; `list` and
 `ready` accept `parent`, `repository`, `components`, `exclude_components`,
 `labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature,
 repository, or component.
@@ -401,11 +402,17 @@ orbit add "Ship the API" -p high --depends-on orb-f14c02 --label ready-for-agent
 # returns the first Task (meta.matched: true) instead of creating another
 orbit add "Step 3" --source-key planner:plan-7:step-3
 
+# Name the reporter explicitly; it defaults to ORBIT_AGENT, then USER
+orbit add "Filed by ops" --reporter alice
+
 # Break a feature into a SubTask (run inside the api member Repository, or set
 # it afterwards with `orbit update <id> --repository api`)
 orbit add "API: add the endpoint" --parent orb-a7b2c9
 # created orb-a7b2c9.b3c4d5  medium  API: add the endpoint  (subtask of orb-a7b2c9)
 ```
+
+`--reporter` records who created the Task. It defaults to `ORBIT_AGENT`, then
+`USER`, and is never changed afterwards.
 
 `--parent` creates a SubTask under an existing Parent Task. The SubTask ID is the
 parent ID, a dot, and a fresh suffix (`orb-a7b2c9.b3c4d5`); the `parent` field
@@ -452,7 +459,7 @@ commands for agents; shared project defaults live in
 ### `orbit update` — edit a ticket in place
 
 Changes the title, body, priority, type, component, repository, external id, verification, or external blocker
-without touching status, claims, labels, or dependencies. `--type epic` is refused on a SubTask.
+without touching status, assignments, labels, or dependencies. `--type epic` is refused on a SubTask.
 
 **Good fit:** scope changed after triage, a spec needs refinement, or an external
 blocker was resolved.
@@ -549,7 +556,7 @@ orbit comment list orb-a7b2c9
 A Property is a JSON object that one tool keeps on a Task under its own name,
 the owner — the property's namespace (a lowercase slug such as `ci`). Orbit
 stores and shows it but never reads it: Properties do not affect readiness,
-claims, or status, and they are never synchronized with a Remote Tracker.
+assignments, or status, and they are never synchronized with a Remote Tracker.
 `set` replaces the owner's whole object (at most 8192 bytes); `remove` deletes
 it. Other owners are untouched.
 
@@ -571,8 +578,8 @@ A Batch is a JSON list of operations applied under one lock and published as one
 commit. Either every operation applies or none does: a failure writes nothing
 and names the failing operation's `index` and `op` in `error.details`.
 Operations are `add`, `update`, `label`, `depend`, `undepend`, `link`,
-`unlink`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`,
-`comment`, and `property`,
+`unlink`, `claim`, `assign`, `heartbeat`, `release`, `done`, `cancel`, `reopen`,
+`transition`, `comment`, and `property`,
 each with its command's fields (see [SPEC.md](./SPEC.md#batch)). A reference is a
 Task ID or `key:` plus a Source Key, so later operations can point at Tasks the
 same Batch creates.
@@ -655,7 +662,7 @@ Human output with `--group` looks like this:
 ```
 
 The table is intentionally not a machine interface. Column widths grow with the
-data, labels are joined with commas, a claim holder appears in the last column,
+data, labels are joined with commas, an assignee appears in the last column,
 and long titles are truncated. Parse `--json` instead.
 
 `--linked` keeps only Tasks with an active Remote Issue link; `--local` keeps
@@ -682,7 +689,7 @@ work, including blocked tasks.
 
 ### `orbit ready` — the agent queue
 
-Shows tasks sitting in the workflow's ready status, unclaimed, not waiting on an
+Shows tasks sitting in the workflow's ready status, unassigned, not waiting on an
 external blocker, carrying no hold label, and with every dependency and SubTask
 in a closed status category. A Parent Task is not Ready while any SubTask is
 open. Results are ordered by priority, then creation
@@ -712,13 +719,13 @@ orbit ready --json              # NO_READY_TASKS means wait and retry
 `--parent`, `--repository`, `--component`, `--exclude-component`, repeatable
 `--label`, `--type`, and `--exclude-label` combine with AND. `--type` matches any listed shape; `--exclude-type` hides any
 listed shape. `--exclude-label` remains for legacy label-only boards. A released
-task can still carry the previous claimant's checkpoint; `--json` includes it so
+task can still carry the previous assignee's checkpoint; `--json` includes it so
 the next claim starts with the handoff context.
 
 ### `orbit show` — load one ticket
 
 Prints the full task: body, labels, dependencies, kind, type, parent, SubTasks,
-dependents, claim state, checkpoint, and comments. A `github:`/`remote:` line
+dependents, assignment state, checkpoint, and comments. A `github:`/`remote:` line
 reports the Task's Remote Issue link only when the Board has remote material
 or the Task itself carries one; a connected Board shows `github: -` for an
 unlinked Task. `--json` is the form an agent
@@ -798,22 +805,26 @@ and `data.tasks`; each task has the same shape as `show --json`, plus comments.
 ### `orbit claim` — take a specific task
 
 Claims one task by ID instead of taking the top of the ready queue. The task must
-be active and unclaimed (a stale claim needs `--steal`), not waiting on an
+be active and unassigned (a stale lease needs `--steal`), not waiting on an
 external blocker or an unfinished dependency, free of hold labels, and, if it is
-a Parent Task, have no open SubTasks. The claim result includes any checkpoint
-left by the previous holder. A claim by the current holder renews its own lease,
-live or stale, so repeating a claim is safe.
+a Parent Task, have no open SubTasks. A claim sets the assignee — a human or an
+agent, recorded with `--kind` (`agent` by default) — and a fresh lease together.
+The claim result includes any checkpoint left by the previous assignee. A claim
+by the current assignee renews its own lease, live or stale, so repeating a
+claim is safe.
 
-**Good fit:** a human assigns a ticket, an agent resumes known work, or another
-agent's lease expired and the task must be recovered.
+**Good fit:** an agent takes work it will heartbeat and finish, a human assigns a
+ticket to an agent, or another agent's lease expired and the task must be
+recovered.
 
 ```bash
 orbit claim orb-a7b2c9 --by claude
-orbit claim orb-a7b2c9 --by claude --steal   # take over a live or stale claim
+orbit claim orb-a7b2c9 --by claude --kind human   # a person claims with a lease
+orbit claim orb-a7b2c9 --by claude --steal   # take over a live or stale lease
 orbit claim orb-a7b2c9 --by claude --worktree # claim and create the task worktree
 ```
 
-`--steal` overrides the holder's lease, not the readiness rules: hold labels and
+`--steal` overrides the assignee's lease, not the readiness rules: hold labels and
 unfinished dependencies still block the claim.
 
 `--worktree` claims and creates the Task's worktree in one step:
@@ -824,7 +835,7 @@ local default branch (the local branch named by `origin/HEAD`, else `main`,
 `master`, or the currently checked-out branch); no fetch is performed. An
 existing `ticket/<id>` branch is checked out without resetting its commits.
 An existing worktree is reused only at the expected path on that branch, so
-repeating the claim by the same holder is safe. A branch checked out elsewhere
+repeating the claim by the same assignee is safe. A branch checked out elsewhere
 or an incompatible target path is rejected before changing the claim.
 `.worktrees/` is hidden through the Repository's `.git/info/exclude`. The JSON
 result carries `data.worktree` with `repository`, `path`, `branch`, and `created`.
@@ -832,15 +843,33 @@ result carries `data.worktree` with `repository`, `path`, `branch`, and `created
 Claim and worktree creation are not one transaction. If preparation fails after
 the claim commits (including a concurrent Git change), the command exits 1 with
 `CLAIM_WORKTREE_FAILED`, but the claim remains active; Orbit never automatically
-releases it, including an existing claim renewed by the same holder. JSON
+releases it, including an existing lease renewed by the same assignee. JSON
 `error.details.claim` contains the successful claim result, `worktree` describes
 the intended target, and `cause` contains the original error. Human output also
 states that the claim remains active. Fix the cause and retry the same command,
 or explicitly release the claim if you no longer intend to work on it.
 
-### `orbit heartbeat` — keep a claim alive
+### `orbit assign` — set an assignee without a lease
 
-Extends the lease from now. Only the holder can heartbeat. Heartbeats are
+Sets who is responsible for a task without taking a lease — how humans take
+work. The assignee's `--kind` is `human` by default (`agent` allowed). A
+different existing assignee is only replaced with `--force`, which also drops
+the old lease; assigning the same identity again just updates its kind. A
+lease-less assignee cannot `heartbeat` (there is no lease to extend) but can
+still `checkpoint`, and the task stays out of the ready queue until released.
+
+**Good fit:** routing work to a person, recording ownership ahead of a claim,
+or handing a task to a human reviewer.
+
+```bash
+orbit assign orb-a7b2c9 --to alice
+orbit assign orb-a7b2c9 --to bob --kind agent --force
+```
+
+### `orbit heartbeat` — keep a lease alive
+
+Extends the lease from now. Only the assignee holding a lease can heartbeat —
+a lease-less (human) assignee has nothing to extend. Heartbeats are
 lease-only writes and are not committed until the next mutation or `orbit sync`.
 
 **Good fit:** a long build or test run would outlive the default 30-minute lease,
@@ -852,18 +881,18 @@ orbit heartbeat orb-a7b2c9 --by claude
 
 ### `orbit checkpoint` — hand off active work
 
-Records or replaces the claim holder's latest checkpoint: current progress, the
+Records or replaces the assignee's latest checkpoint: current progress, the
 next useful action, and any blocker. The first write requires `--progress`; later
 writes can update only the fields that changed, and `--clear-next` or
-`--clear-blocker` removes one. The caller must hold the claim. A stale lease still
-counts until another agent takes the task over, so the outgoing holder can hand
+`--clear-blocker` removes one. The caller must be the assignee. A stale lease still
+counts until another agent takes the task over, so the outgoing assignee can hand
 off after a long run.
 
 The checkpoint is visible in `show` (human and JSON), the JSON of `ready`,
 `list`, and `prime`, the claim result, MCP `get`, and `export`. It survives
 `release`, `claim --steal`, and `reopen`; it never changes readiness, claim
 eligibility, or dependencies. Each write attributes the record to the current
-claimant, even when a partial update keeps the previous progress text. On a done
+assignee, even when a partial update keeps the previous progress text. On a done
 or cancelled task the latest checkpoint is retained in the task file as archived
 history, but new checkpoints are refused there.
 
@@ -886,9 +915,9 @@ orbit release orb-a7b2c9 --by claude
 
 ### `orbit release` — hand work back
 
-Clears the claim and returns the task to the workflow's release target (the ready status in the shipped templates). The holder can release; `--force`
-releases someone else's claim. Terminal tasks cannot be released. The latest
-checkpoint is kept for the next claimant.
+Clears the assignee and lease and returns the task to the workflow's release target (the ready status in the shipped templates). The assignee can release; `--force`
+releases someone else's assignment. Terminal tasks cannot be released. The latest
+checkpoint is kept for the next assignee.
 
 **Good fit:** work is deliberately handed back, a human takes over, or a claim was
 taken by mistake and the queue should see the task again.
@@ -918,7 +947,7 @@ orbit done orb-a7b2c9 --force --comment "Deferred the remaining pieces"
 ### `orbit cancel` — abandon work
 
 Cancels a task without completing it. Cancelled tasks count as resolved, so
-dependents can become ready. A live claim from another agent blocks cancellation
+dependents can become ready. A live lease from another agent blocks cancellation
 unless `--force` is passed. A Parent Task with open SubTasks is refused; `--force`
 cancels every open descendant SubTask too.
 
@@ -971,7 +1000,7 @@ orbit show orb-a7b2c9 --json   # allowed_transitions lists the valid edges
 ### `orbit delete` — remove a mistake
 
 Permanently deletes a task and its comment thread. It refuses when dependents
-exist, when the task has SubTasks, or when another agent holds a live claim;
+exist, when the task has SubTasks, or when another agent holds a live lease;
 `--force` also removes the ID from each dependent's dependency list and deletes
 the whole SubTask subtree.
 
@@ -1020,7 +1049,7 @@ orbit --dir <board> migrate --apply   # migrate a specific Board directory
 ```
 
 Re-running after `--apply` is a no-op, so an interrupted conversion can be
-retried safely. Task IDs, bodies, comments, claims, and Git history are
+retried safely. Task IDs, bodies, comments, assignments, and Git history are
 preserved; the report lists every content change and the resulting commit.
 
 ### `orbit doctor` — health check
@@ -1148,10 +1177,10 @@ command writes the Board config and commits it, reports the previous value, and
 warns when no single repository can receive newly created Issues. It is
 push-only: `orbit add` creates an Issue when exactly one repository is
 available, title/body/label/status/`component`/`verification` changes are pushed, and
-`orbit:in-progress` tracks claims. It never pulls, never overwrites a remote
+`orbit:in-progress` tracks assignments. It never pulls, never overwrites a remote
 conflict, and never creates an Issue for an existing Local Task. `done` closes
 with `state_reason: completed`; `cancelled` with `not_planned`. Priority, type,
-comments, claims, checkpoints, and relationships do not trigger a push. Use
+comments, assignments, checkpoints, and relationships do not trigger a push. Use
 `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation;
 explicit `orbit remote sync` is unaffected. See
 [github-sync.md#automatic-push](./github-sync.md#automatic-push).
@@ -1254,7 +1283,7 @@ orbit claim orb-a7b2c9 --by agent-b --steal
 orbit heartbeat orb-a7b2c9 --by agent-b
 ```
 
-Use `release --force` instead when the task should go back to the queue unclaimed.
+Use `release --force` instead when the task should go back to the queue unassigned.
 
 ### A release train with ordered work
 
@@ -1373,7 +1402,7 @@ orbit sync              # commit anything left uncommitted
 | `DEPENDENCY_BLOCKED` | Finish or cancel the IDs in `error.details.blocking`. |
 | `WAITING_EXTERNAL` | Resolve the blocker, then `orbit update <id> --clear-waiting`. |
 | `LABEL_BLOCKED` | Remove the hold label (`needs-triage`, `needs-info`, `ready-for-human`). |
-| `NOT_CLAIM_HOLDER` | Use the holder's `--by`, or `--force` where the command allows it. |
+| `NOT_CLAIM_HOLDER` | Use the assignee's `--by`, or `--force` where the command allows it. |
 | `SUBTASKS_OPEN` | Finish or cancel the IDs in `error.details.subtasks`, or pass `--force` to `done` or `cancel`. |
 | `SUBTASKS_EXIST` | The Parent Task still has SubTasks. Use `delete --force` to remove the whole subtree, or delete the SubTasks first. |
 | `PARENT_MISMATCH` | The SubTask ID and its `parent` field disagree. Rename the file or fix the frontmatter so the ID encodes the same parent. |

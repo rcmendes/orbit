@@ -415,11 +415,11 @@ impl Graph {
     }
 
     /// Ready means the Task sits in the workflow's Ready status and the
-    /// derived conditions hold: unclaimed, not waiting, no hold labels, no
+    /// derived conditions hold: unassigned, not waiting, no hold labels, no
     /// open blocking dependencies, and no open SubTasks.
     pub fn is_ready(&self, task: &Task) -> bool {
         self.workflow.is_ready_status(&task.front.status)
-            && task.front.claim.is_none()
+            && task.front.assignee.is_none()
             && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
             && self.open_children(&task.id).is_empty()
@@ -625,9 +625,9 @@ impl Graph {
                 self.workflow.category_of(&task.front.status) == Some(StatusCategory::Active)
                     && task
                         .front
-                        .claim
+                        .lease
                         .as_ref()
-                        .is_some_and(|claim| claim.is_stale(now))
+                        .is_some_and(|lease| lease.is_stale(now))
             })
             .collect();
         stale.sort_by(|left, right| left.id.cmp(&right.id));
@@ -695,9 +695,9 @@ impl Graph {
             if self.workflow.category_of(&task.front.status) == Some(StatusCategory::Active)
                 && task
                     .front
-                    .claim
+                    .lease
                     .as_ref()
-                    .is_some_and(|claim| claim.is_stale(now))
+                    .is_some_and(|lease| lease.is_stale(now))
             {
                 counts.stale += 1;
             }
@@ -902,9 +902,11 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "properties": task.front.properties,
         "github": crate::remote::link::github_compat_json(task),
         "remote": crate::remote::link::link_json(task),
-        "claimed_by": task.holder(),
+        "assignee": task.assignee_name(),
+        "assignee_kind": task.front.assignee.as_ref().map(|a| a.kind.as_str()),
         "claimed_at": task.claimed_at(),
         "lease_until": task.lease_until(),
+        "reporter": task.front.reporter,
         "created_at": task.front.created_at,
         "updated_at": task.front.updated_at,
         "ready": graph.is_ready(task),
@@ -966,8 +968,10 @@ mod tests {
                 remote: None,
                 repository: None,
                 external_id: None,
-                claim: None,
-                stray_claim_times: None,
+                assignee: None,
+                lease: None,
+                reporter: None,
+                stray_lease_times: None,
                 created_at: now,
                 updated_at: now,
                 source_key: None,

@@ -26,6 +26,7 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
         verification: args.verification,
         repository,
         external_id: args.external_id,
+        reporter: args.reporter.or_else(|| optional_agent(None)),
         body,
         source_key: args.source_key,
         properties: Default::default(),

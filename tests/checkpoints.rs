@@ -327,7 +327,7 @@ fn claim_by_current_holder_renews_the_lease() {
     let first_lease = first["data"]["lease_until"].as_str().unwrap().to_string();
     std::thread::sleep(std::time::Duration::from_millis(20));
     let again = repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
-    assert_eq!(again["data"]["claimed_by"], "a");
+    assert_eq!(again["data"]["assignee"], "a");
     assert!(
         again["data"]["lease_until"].as_str().unwrap() > first_lease.as_str(),
         "{again}"
@@ -344,7 +344,7 @@ fn claim_by_current_holder_takes_back_a_stale_claim() {
     repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
     repo.make_stale(&id);
     let again = repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
-    assert_eq!(again["data"]["claimed_by"], "a");
+    assert_eq!(again["data"]["assignee"], "a");
     let (_, error) = repo.err_json(&["claim", &id, "--by", "b", "--json"]);
     assert_eq!(error["error"]["code"], "ALREADY_CLAIMED");
 }

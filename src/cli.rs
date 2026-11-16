@@ -4,7 +4,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::help;
 use crate::setup::{SetupClient, SetupScope};
-use crate::task::TaskType;
+use crate::task::{IdentityKind, TaskType};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -85,6 +85,10 @@ pub enum Command {
     /// Claim a specific task and start its lease.
     #[command(long_about = help::CLAIM_LONG, after_long_help = help::CLAIM_EXAMPLES)]
     Claim(ClaimArgs),
+
+    /// Assign a task to a person or agent without a lease.
+    #[command(long_about = help::ASSIGN_LONG, after_long_help = help::ASSIGN_EXAMPLES)]
+    Assign(AssignArgs),
 
     /// Release a claim and return the task to todo.
     #[command(long_about = help::RELEASE_LONG, after_long_help = help::RELEASE_EXAMPLES)]
@@ -394,6 +398,10 @@ pub struct AddArgs {
     /// Caller-chosen identity; an add whose Source Key exists returns that Task.
     #[arg(long = "source-key", value_name = "KEY")]
     pub source_key: Option<String>,
+
+    /// Reporter recorded at creation. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub reporter: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -407,9 +415,9 @@ pub struct ListArgs {
     #[arg(long, value_name = "NAME")]
     pub priority: Option<String>,
 
-    /// Filter by claim holder.
-    #[arg(long = "claimed-by", value_name = "NAME")]
-    pub claimed_by: Option<String>,
+    /// Filter by assignee name.
+    #[arg(long = "assignee", visible_alias = "claimed-by", value_name = "NAME")]
+    pub assignee: Option<String>,
 
     /// Only tasks waiting on an external blocker.
     #[arg(long)]
@@ -548,6 +556,10 @@ pub struct ClaimArgs {
     #[arg(long, value_name = "NAME")]
     pub by: Option<String>,
 
+    /// The assignee's kind.
+    #[arg(long, value_enum, default_value_t = IdentityKind::Agent)]
+    pub kind: IdentityKind,
+
     /// Take over another agent's claim, even while its lease is live.
     #[arg(long)]
     pub steal: bool,
@@ -555,6 +567,24 @@ pub struct ClaimArgs {
     /// Create .worktrees/<id> on branch ticket/<id> in the Task's Repository.
     #[arg(long)]
     pub worktree: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AssignArgs {
+    /// Task ID, for example orb-a7b2c9.
+    pub id: String,
+
+    /// The assignee's name — a person or an agent.
+    #[arg(long, value_name = "NAME")]
+    pub to: String,
+
+    /// The assignee's kind.
+    #[arg(long, value_enum, default_value_t = IdentityKind::Human)]
+    pub kind: IdentityKind,
+
+    /// Replace a different assignee.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]

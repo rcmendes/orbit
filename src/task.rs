@@ -54,16 +54,50 @@ pub fn default_priorities() -> Vec<String> {
         .collect()
 }
 
-/// Who holds a Task and until when. Times are optional so hand-edited files with a
-/// partial claim still load; `orbit doctor` reports them as incomplete.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Claim {
-    pub holder: String,
+/// Whether an assignee is a person or an agent (ADR 0022). Informational
+/// only: the lease, not the kind, decides claim semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum IdentityKind {
+    #[default]
+    Agent,
+    Human,
+}
+
+impl std::fmt::Display for IdentityKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl IdentityKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IdentityKind::Agent => "agent",
+            IdentityKind::Human => "human",
+        }
+    }
+}
+
+/// A named actor on the Board: the assignee of a Task or its reporter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identity {
+    pub name: String,
+    #[serde(default)]
+    pub kind: IdentityKind,
+}
+
+/// A time-bounded lease held by the assignee (ADR 0022). An assignee may
+/// carry no lease at all — that is how humans take work. Times are optional
+/// so hand-edited files with a partial lease still load; `orbit doctor`
+/// reports them as incomplete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lease {
     pub claimed_at: Option<DateTime<Utc>>,
     pub lease_until: Option<DateTime<Utc>>,
 }
 
-impl Claim {
+impl Lease {
     pub fn is_live(&self, now: DateTime<Utc>) -> bool {
         self.lease_until.is_some_and(|until| until > now)
     }
@@ -77,10 +111,11 @@ impl Claim {
     }
 }
 
-/// Claim times found in a file without a `claimed_by`. Kept so such hand-edited files
-/// rewrite unchanged and `orbit doctor` can still report them.
+/// Lease times found in a file without an `assignee`. Kept so such
+/// hand-edited files rewrite unchanged and `orbit doctor` can still report
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StrayClaimTimes {
+pub struct StrayLeaseTimes {
     pub claimed_at: Option<DateTime<Utc>>,
     pub lease_until: Option<DateTime<Utc>>,
 }
@@ -488,6 +523,18 @@ struct RawFrontmatter {
     repository: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     external_id: Option<String>,
+    /// The assignee: who is responsible for the Task, human or agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    assignee: Option<Identity>,
+    /// The optional time-bounded lease held by the assignee; absent for
+    /// lease-less (human) assignments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lease: Option<Lease>,
+    /// Who created the Task; set at creation and never changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reporter: Option<String>,
+    /// Legacy claim fields, read once into `assignee`/`lease` and never
+    /// written back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claimed_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -506,18 +553,42 @@ struct RawFrontmatter {
 
 impl From<RawFrontmatter> for TaskFrontmatter {
     fn from(raw: RawFrontmatter) -> Self {
-        let (claimed_at, lease_until) = (raw.claimed_at, raw.lease_until);
-        let claim = raw.claimed_by.map(|holder| Claim {
-            holder,
-            claimed_at,
-            lease_until,
-        });
-        let stray_claim_times = (claim.is_none()
-            && (claimed_at.is_some() || lease_until.is_some()))
-        .then_some(StrayClaimTimes {
-            claimed_at,
-            lease_until,
-        });
+        // Legacy `claimed_by`/`claimed_at`/`lease_until` keys upgrade into
+        // `assignee`/`lease` on read; the legacy keys are never written back.
+        let mut assignee = raw.assignee;
+        let mut lease = raw.lease;
+        // Legacy `claimed_by` upgrades into `assignee`; its flat times upgrade
+        // into `lease` only when no `lease:` map was written.
+        if assignee.is_none()
+            && let Some(name) = raw.claimed_by
+        {
+            assignee = Some(Identity {
+                name,
+                kind: IdentityKind::Agent,
+            });
+            if lease.is_none() {
+                lease = Some(Lease {
+                    claimed_at: raw.claimed_at,
+                    lease_until: raw.lease_until,
+                });
+            }
+        }
+        // A lease without an assignee is stray times: keep them so the file
+        // rewrites unchanged and `orbit doctor` can report them.
+        let stray_lease_times = if assignee.is_none() {
+            let times = lease.take().map(|lease| StrayLeaseTimes {
+                claimed_at: lease.claimed_at.or(raw.claimed_at),
+                lease_until: lease.lease_until.or(raw.lease_until),
+            });
+            times.or_else(|| {
+                (raw.claimed_at.is_some() || raw.lease_until.is_some()).then_some(StrayLeaseTimes {
+                    claimed_at: raw.claimed_at,
+                    lease_until: raw.lease_until,
+                })
+            })
+        } else {
+            None
+        };
         // Legacy `depends_on`/`waiting_on` keys upgrade into `links` on read;
         // `links` itself is written back, the legacy keys never are.
         let mut links = raw.links;
@@ -551,8 +622,10 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             remote: raw.remote,
             repository: raw.repository,
             external_id: raw.external_id,
-            claim,
-            stray_claim_times,
+            assignee,
+            lease,
+            reporter: raw.reporter,
+            stray_lease_times,
             source_key: raw.source_key,
             properties: raw.properties,
             created_at: raw.created_at,
@@ -564,10 +637,11 @@ impl From<RawFrontmatter> for TaskFrontmatter {
 
 impl From<TaskFrontmatter> for RawFrontmatter {
     fn from(front: TaskFrontmatter) -> Self {
-        let (claimed_by, claimed_at, lease_until) = match (front.claim, front.stray_claim_times) {
-            (Some(claim), _) => (Some(claim.holder), claim.claimed_at, claim.lease_until),
-            (None, Some(stray)) => (None, stray.claimed_at, stray.lease_until),
-            (None, None) => (None, None, None),
+        // Lease times write back flat (`claimed_at`/`lease_until`) only for
+        // stray times with no assignee; a real lease serializes as `lease:`.
+        let (claimed_at, lease_until) = match (&front.lease, &front.stray_lease_times) {
+            (None, Some(stray)) => (stray.claimed_at, stray.lease_until),
+            _ => (None, None),
         };
         Self {
             title: front.title,
@@ -587,7 +661,10 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             remote: front.remote,
             repository: front.repository,
             external_id: front.external_id,
-            claimed_by,
+            assignee: front.assignee,
+            lease: front.lease,
+            reporter: front.reporter,
+            claimed_by: None,
             claimed_at,
             lease_until,
             source_key: front.source_key,
@@ -630,8 +707,14 @@ pub struct TaskFrontmatter {
     pub repository: Option<String>,
     /// The Task's identity in an external system; unique per Board.
     pub external_id: Option<String>,
-    pub claim: Option<Claim>,
-    pub stray_claim_times: Option<StrayClaimTimes>,
+    /// Who is responsible for the Task: a human or agent identity (ADR 0022).
+    pub assignee: Option<Identity>,
+    /// The assignee's optional time-bounded lease; absent for lease-less
+    /// (human) assignments.
+    pub lease: Option<Lease>,
+    /// Who created the Task; set at creation and never changed.
+    pub reporter: Option<String>,
+    pub stray_lease_times: Option<StrayLeaseTimes>,
     /// Caller-chosen identity that makes `add` retry-safe; unique per Board.
     pub source_key: Option<String>,
     /// Tool-owned data namespaced by owner slug; Orbit stores it but never
@@ -852,6 +935,20 @@ pub fn parse_task(id: String, content: &str) -> Result<Task> {
     {
         return Err(OrbitError::corrupt_task(format!(
             "task {id} has an empty parent id"
+        )));
+    }
+    if let Some(assignee) = &front.assignee
+        && assignee.name.trim().is_empty()
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an empty assignee name"
+        )));
+    }
+    if let Some(reporter) = &front.reporter
+        && reporter.trim().is_empty()
+    {
+        return Err(OrbitError::corrupt_task(format!(
+            "task {id} has an empty reporter"
         )));
     }
     if let Some(checkpoint) = &front.checkpoint
@@ -1147,8 +1244,10 @@ mod tests {
                 remote: None,
                 repository: None,
                 external_id: None,
-                claim: None,
-                stray_claim_times: None,
+                assignee: None,
+                lease: None,
+                reporter: None,
+                stray_lease_times: None,
                 created_at: now(),
                 updated_at: now(),
                 source_key: None,
@@ -1355,32 +1454,61 @@ Body.
     }
 
     #[test]
-    fn claim_round_trips_byte_identical_and_keeps_unknown_fields() {
+    fn legacy_claim_keys_upgrade_to_assignee_and_lease() {
         let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: medium\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
-        assert_eq!(task.holder(), Some("alice"));
+        let assignee = task.front.assignee.as_ref().unwrap();
+        assert_eq!(assignee.name, "alice");
+        assert_eq!(assignee.kind, IdentityKind::Agent);
+        let lease = task.front.lease.as_ref().unwrap();
+        assert!(lease.is_live(now()));
+        // The legacy keys are never written back.
+        let rendered = render_task(&task).unwrap();
+        assert!(rendered.contains("assignee:"));
+        assert!(rendered.contains("lease:"));
+        assert!(!rendered.contains("claimed_by:"));
+        assert!(rendered.contains("owner_note: keep me"));
+    }
+
+    #[test]
+    fn assignee_without_lease_still_loads() {
+        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: medium\nassignee:\n  name: alice\n  kind: agent\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        assert!(task.front.lease.is_none());
+        let rendered = render_task(&task).unwrap();
+        assert_eq!(rendered, content);
+    }
+
+    #[test]
+    fn human_assignee_without_lease_round_trips() {
+        let content = "---\ntitle: t\nstatus: ready\ntype: task\npriority: medium\nassignee:\n  name: bob\n  kind: human\nreporter: alice\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        assert_eq!(task.front.reporter.as_deref(), Some("alice"));
+        assert!(task.front.lease.is_none());
         assert_eq!(render_task(&task).unwrap(), content);
     }
 
     #[test]
-    fn partial_claim_still_loads() {
-        let content = "---\ntitle: t\nstatus: in_progress\nclaimed_by: alice\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
-        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
-        let claim = task.front.claim.unwrap();
-        assert!(!claim.has_times() && !claim.is_live(now()) && !claim.is_stale(now()));
-    }
-
-    #[test]
-    fn stray_claim_times_survive_a_round_trip() {
+    fn stray_lease_times_survive_a_round_trip() {
         let content = "---\ntitle: t\nstatus: todo\ntype: task\npriority: medium\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
-        assert!(task.front.claim.is_none() && task.front.stray_claim_times.is_some());
+        assert!(task.front.assignee.is_none() && task.front.stray_lease_times.is_some());
         assert_eq!(render_task(&task).unwrap(), content);
+    }
+
+    #[test]
+    fn lease_without_assignee_becomes_stray_times() {
+        let content = "---\ntitle: t\nstatus: todo\nlease:\n  claimed_at: 2026-10-23T12:00:00Z\n  lease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+        let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
+        assert!(task.front.assignee.is_none());
+        assert!(task.front.lease.is_none());
+        let stray = task.front.stray_lease_times.as_ref().unwrap();
+        assert_eq!(stray.claimed_at, Some(now()));
     }
 
     #[test]
     fn checkpoint_round_trips_and_preserves_unknown_fields() {
-        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: medium\ncheckpoint:\n  by: alice\n  at: 2026-10-23T12:00:00Z\n  progress: Parser done\n  next: Wire the CLI\n  blocker: Waiting on review\nclaimed_by: alice\nclaimed_at: 2026-10-23T12:00:00Z\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
+        let content = "---\ntitle: t\nstatus: in_progress\ntype: task\npriority: medium\ncheckpoint:\n  by: alice\n  at: 2026-10-23T12:00:00Z\n  progress: Parser done\n  next: Wire the CLI\n  blocker: Waiting on review\nassignee:\n  name: alice\n  kind: agent\nlease:\n  claimed_at: 2026-10-23T12:00:00Z\n  lease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\nowner_note: keep me\n---\n\nBody.";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         let checkpoint = task.front.checkpoint.as_ref().unwrap();
         assert_eq!(checkpoint.by, "alice");

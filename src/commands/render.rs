@@ -107,8 +107,8 @@ fn task_cells(task: &Task, remote: bool) -> Vec<String> {
     cells.extend([
         truncate(&task.front.title, 60),
         task.front.labels.join(", "),
-        task.holder()
-            .map(|holder| holder.to_string())
+        task.assignee_name()
+            .map(|name| name.to_string())
             .unwrap_or_default(),
     ]);
     cells
@@ -184,8 +184,8 @@ fn group_meta(task: &Task) -> String {
     if !task.front.labels.is_empty() {
         parts.push(task.front.labels.join(", "));
     }
-    if let Some(holder) = task.holder() {
-        parts.push(format!("claimed by {holder}"));
+    if let Some(name) = task.assignee_name() {
+        parts.push(format!("assigned to {name}"));
     }
     parts.join(" · ")
 }
@@ -257,8 +257,8 @@ pub(super) fn format_summary(task: &Task) -> String {
 
 fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
     let claim = task
-        .holder()
-        .map(|holder| format!("  claimed by {holder}"))
+        .assignee_name()
+        .map(|name| format!("  assigned to {name}"))
         .unwrap_or_default();
     let labels = if task.front.labels.is_empty() {
         String::new()
@@ -406,12 +406,24 @@ pub(super) fn format_detail(
             push_field_lines(&mut lines, "blocker", blocker);
         }
     }
-    if let Some(claim) = &task.front.claim {
-        let until = claim
-            .lease_until
-            .map(|until| until.to_rfc3339())
-            .unwrap_or_else(|| "unknown".to_string());
-        lines.push(format!("claimed_by: {} (until {until})", claim.holder));
+    if let Some(assignee) = &task.front.assignee {
+        let kind = assignee.kind.as_str();
+        match &task.front.lease {
+            Some(lease) => {
+                let until = lease
+                    .lease_until
+                    .map(|until| until.to_rfc3339())
+                    .unwrap_or_else(|| "unknown".to_string());
+                lines.push(format!(
+                    "assignee: {} ({kind}, lease until {until})",
+                    assignee.name
+                ));
+            }
+            None => lines.push(format!("assignee: {} ({kind})", assignee.name)),
+        }
+    }
+    if let Some(reporter) = &task.front.reporter {
+        lines.push(format!("reporter: {reporter}"));
     }
     lines.push(format!("ready: {}", graph.is_ready(task)));
     let blocking = graph.blocked_by(task);

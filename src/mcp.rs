@@ -159,7 +159,8 @@ fn tool_definitions() -> Vec<Value> {
             json!({
                 "status": { "type": "string", "description": "Workflow status name; `orbit show` lists each task's status and allowed transitions." },
                 "priority": { "type": "string", "description": "Priority name from the Board's configured list (default: highest, high, medium, low)." },
-                "claimed_by": { "type": "string" },
+                "assignee": { "type": "string", "description": "Only tasks assigned to this name." },
+                "claimed_by": { "type": "string", "description": "Deprecated alias for `assignee`." },
                 "waiting": { "type": "boolean", "description": "Only tasks with an external blocker." },
                 "label": { "type": "string", "description": "Filter by label." },
                 "unlabeled": { "type": "boolean", "description": "Only tasks with no labels." },
@@ -198,6 +199,7 @@ fn tool_definitions() -> Vec<Value> {
                 "component": { "type": "string", "description": "Optional Component slug; restricted to the Board's configured components when set." },
                 "external_id": { "type": "string", "description": "The task's identity in an external system; unique per Board." },
                 "verification": { "type": "string", "description": "Concise checks or commands for agents." },
+                "reporter": { "type": "string", "description": "Reporter recorded at creation; defaults to the caller identity." },
                 "body": { "type": "string", "description": "Markdown body and acceptance criteria." }
             }),
             &["title"],
@@ -226,13 +228,25 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "claim",
-            "Claim a specific task.",
+            "Claim a specific task: set the assignee and start a lease.",
             json!({
                 "id": { "type": "string" },
                 "by": { "type": "string", "description": "Agent identity." },
+                "kind": { "type": "string", "enum": ["agent", "human"], "description": "The assignee's kind; defaults to agent." },
                 "steal": { "type": "boolean", "description": "Take over a live or stale claim." }
             }),
             &["id"],
+        ),
+        tool(
+            "assign",
+            "Assign a task to a person or agent without a lease.",
+            json!({
+                "id": { "type": "string" },
+                "to": { "type": "string", "description": "The assignee's name." },
+                "kind": { "type": "string", "enum": ["agent", "human"], "description": "The assignee's kind; defaults to human." },
+                "force": { "type": "boolean", "description": "Replace a different assignee." }
+            }),
+            &["id", "to"],
         ),
         tool(
             "release",
@@ -616,9 +630,11 @@ fn dispatch_tool(
                 args.push("--priority".to_string());
                 args.push(priority);
             }
-            if let Some(claimed_by) = optional_str(arguments, "claimed_by") {
-                args.push("--claimed-by".to_string());
-                args.push(claimed_by);
+            let assignee = optional_str(arguments, "assignee")
+                .or_else(|| optional_str(arguments, "claimed_by"));
+            if let Some(assignee) = assignee {
+                args.push("--assignee".to_string());
+                args.push(assignee);
             }
             if let Some(label) = optional_str(arguments, "label") {
                 args.push("--label".to_string());
@@ -767,6 +783,10 @@ fn dispatch_tool(
                 args.push("--verification".to_string());
                 args.push(verification);
             }
+            if let Some(reporter) = optional_str(arguments, "reporter") {
+                args.push("--reporter".to_string());
+                args.push(reporter);
+            }
             if let Some(body) = optional_str(arguments, "body") {
                 args.push("--body".to_string());
                 args.push(body);
@@ -840,8 +860,31 @@ fn dispatch_tool(
                 args.push("--by".to_string());
                 args.push(by);
             }
+            if let Some(kind) = optional_str(arguments, "kind") {
+                args.push("--kind".to_string());
+                args.push(kind);
+            }
             if bool_arg(arguments, "steal") {
                 args.push("--steal".to_string());
+            }
+        }
+        "assign" => {
+            let Some(id) = required_str(arguments, "id") else {
+                return tool_invalid("missing or invalid `id`");
+            };
+            let Some(to) = required_str(arguments, "to") else {
+                return tool_invalid("missing or invalid `to`");
+            };
+            args.push("assign".to_string());
+            args.push(id);
+            args.push("--to".to_string());
+            args.push(to);
+            if let Some(kind) = optional_str(arguments, "kind") {
+                args.push("--kind".to_string());
+                args.push(kind);
+            }
+            if bool_arg(arguments, "force") {
+                args.push("--force".to_string());
             }
         }
         "release" => {
@@ -1343,7 +1386,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 18);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -1355,6 +1398,7 @@ mod tests {
             "create",
             "update",
             "claim",
+            "assign",
             "release",
             "heartbeat",
             "checkpoint",

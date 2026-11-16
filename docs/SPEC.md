@@ -123,11 +123,12 @@ The canonical vocabulary lives in `docs/GLOSSARY.md`. In short:
 - A **Parent Task** groups **SubTasks**, and its completion depends on them. A **SubTask** is a Task with a `parent`; it is claimable and completable in its own right. Parentage is capped by `board.max_subtask_depth` (1–4, default 1: one level deep) and is not a Dependency.
 - **Kind** is structural and derived: `task` or `subtask`.
 - **Type** is the stored work shape: `task` (default), `epic`, `spike`, `chore`, or `decision`. Type is metadata and does not affect readiness. An **Epic** or **spec** is a top-level Task with `type: epic`; `epic` is refused on a SubTask. External trackers call the unit an Issue and a child a Sub-issue; see [`docs/GLOSSARY.md`](./GLOSSARY.md), [ADR 0009](./adr/0009-keep-task-vocabulary.md), and [ADR 0010](./adr/0010-structural-type-field.md).
-- **Ready** is derived: the Task sits in the Workflow's Ready Status (the one Status flagged `ready`), has no Claim (including no Stale Claim), is not Waiting, carries no Hold Label, has no open Dependency (a blocking Link to a Task not in a closed Status Category), and has no open SubTask.
+- **Ready** is derived: the Task sits in the Workflow's Ready Status (the one Status flagged `ready`), has no Assignee (claimed or assigned), is not Waiting, carries no Hold Label, has no open Dependency (a blocking Link to a Task not in a closed Status Category), and has no open SubTask.
 - **Blocked** is derived: at least one Dependency is not in a closed Status Category, or a Parent Task has at least one open SubTask.
 - **Waiting** is an external blocker recorded as a blocking Link to an external reference; it is not a Status.
-- A **Claim** is exclusive, time-bounded responsibility for a Task. The time window is a **Lease**. An expired, unreleased Claim is **Stale**: the Task is not Ready, but it can be released or stolen.
-- A **Checkpoint** is the claim holder's latest handoff note: progress, the next useful action, and any blocker. It is stored on the Task, survives release and takeover, and never affects readiness or claim eligibility.
+- An **Assignee** is the human or agent identity responsible for a Task, with an identity **Kind** (`human` or `agent`). An assignee may hold a **Lease** — the time window a `claim` sets — or none: `assign` sets an assignee without a lease, which is how humans take work. A `claim` sets the assignee and a fresh lease together; `heartbeat` requires a lease and extends it. An expired, unreleased lease makes the assignment **Stale**: the Task is not Ready, but it can be released or stolen, and the previous assignee can still record a Checkpoint until takeover.
+- The **Reporter** is the identity that created the Task, recorded at creation (`add --reporter`, defaulting to `ORBIT_AGENT` then `USER`) and never changed.
+- A **Checkpoint** is the assignee's latest handoff note: progress, the next useful action, and any blocker. It is stored on the Task, survives release and takeover, and never affects readiness or claim eligibility.
 - **Done** and **Cancelled** Statuses (the `done` and `canceled` categories) both resolve dependents. Cancelled exists so abandoned work does not have to lie with `done` or destroy history with `delete`. A closing Transition records its **Resolution** on the Task; returning to an open Status clears it.
 - **Priority** is a name from the Board's ordered `board.priorities` list — `highest`, `high`, `medium`, `low` by default, most important first. Tasks store the name and sort by its ordinal in that list, so a Board can rename or reorder priorities; a stored name outside the list sorts after every configured name.
 - **Label** is a short lowercase string attached to a Task for filtering or workflow state. **Hold Labels** are configured labels that suspend readiness; the defaults are `needs-triage`, `needs-info`, and `ready-for-human`. `ready-for-agent`, `bug`, and `enhancement` are neutral.
@@ -152,16 +153,17 @@ The built-in commands drive named Workflow edges:
 | From category | Command | Transition | Effect |
 | --- | --- | --- | --- |
 | any | `add` | — | Creates `tasks/ID.md` in the initial Status. |
-| ready Status | `claim`, `ready --claim` | `claim` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
-| `active` | `heartbeat` | — | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
-| `active` | `checkpoint` | — | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a closed Status or a task with no claim. |
-| `active` | `claim --steal` | `claim` | Replaces the holder and resets `claimed_at` and `lease_until`, preserving the latest checkpoint. `--steal` does not bypass hold labels or dependencies. |
-| `active` | `release` | `release` | The holder must release unless `--force`; clears all claim fields and preserves the latest checkpoint. Releasing an unclaimed task is a no-op. |
-| open | `done` | `done` | Every Dependency must be in a closed category, and every SubTask must be resolved or cancelled by `--force` first. A **live** claim requires the caller to be the holder unless `--force`; a stale claim does not block. Clears claim fields and `waiting_on`; records the transition's resolution. |
-| open | `cancel` | `cancel` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live claim requires the holder unless `--force`. Clears claim fields and `waiting_on`; records the transition's resolution. Resolves dependents. |
-| closed | `reopen` | `reopen` | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively claimed ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears claim fields, `waiting_on`, and the resolution. |
-| any | `transition <name>` | any defined edge | Runs one named Workflow transition directly, honoring the claim-holder check where the edge requires it. An unknown name or an edge that does not start from the current Status fails with `INVALID_TRANSITION` naming the valid transitions. |
-| any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live claim requires the holder unless `--force`. With dependents or SubTasks, requires `--force`, which first removes edges from dependents and deletes the whole SubTask subtree. |
+| ready Status | `claim`, `ready --claim` | `claim` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent; `--kind` records the assignee's identity kind (`agent` by default, `human` allowed). Sets the assignee and a fresh lease. A live lease returns `ALREADY_CLAIMED`; a stale lease returns `CLAIM_STALE` unless `--steal`. |
+| ready Status | `assign <id> --to NAME` | — | Sets the assignee without a lease — how humans take work. `--kind` defaults to `human`; replacing a different assignee needs `--force` and drops the old lease. A lease-less assignee blocks `heartbeat` but not `checkpoint`. |
+| `active` | `heartbeat` | — | Only the assignee holding a live lease; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
+| `active` | `checkpoint` | — | Only the assignee; a stale lease still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a closed Status or a task with no assignee. |
+| `active` | `claim --steal` | `claim` | Replaces the assignee and resets the lease times, preserving the latest checkpoint. `--steal` does not bypass hold labels or dependencies. |
+| `active` | `release` | `release` | The assignee must release unless `--force`; clears the assignee and lease and preserves the latest checkpoint. Releasing an unassigned task is a no-op. |
+| open | `done` | `done` | Every Dependency must be in a closed category, and every SubTask must be resolved or cancelled by `--force` first. A **live** lease requires the caller to be the assignee unless `--force`; a stale lease does not block. Clears assignee and lease and `waiting_on`; records the transition's resolution. |
+| open | `cancel` | `cancel` | A Parent Task with open SubTasks requires `--force`, which cancels them first. A live lease requires the assignee unless `--force`. Clears assignee and lease and `waiting_on`; records the transition's resolution. Resolves dependents. |
+| closed | `reopen` | `reopen` | Reopening a SubTask reopens every closed ancestor too, nearest first; an actively leased ancestor ends the walk. Refuses when a dependent is already closed unless `--force`. Clears assignee and lease, `waiting_on`, and the resolution. |
+| any | `transition <name>` | any defined edge | Runs one named Workflow transition directly, honoring the assignee check where the edge requires it. An unknown name or an edge that does not start from the current Status fails with `INVALID_TRANSITION` naming the valid transitions. |
+| any | `delete` | removed | Not a Status transition. Removes `tasks/ID.md` and `comments/ID.md`. A live lease requires the assignee unless `--force`. With dependents or SubTasks, requires `--force`, which first removes edges from dependents and deletes the whole SubTask subtree. |
 
 Closed categories (`done`, `canceled`) resolve dependents; `reopen`-style transitions return a Task to an open Status; `cancel` is not `delete`. `orbit show` reports `status_category`, `resolution`, and `allowed_transitions` — the Workflow edges valid from the current Status. Waiting, hold labels, and dependency edges are gates on readiness and claims, not Statuses. The full transition table and readiness gate are in [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md).
 
@@ -229,9 +231,13 @@ checkpoint:
   progress: Parser and tests pass.
   next: Wire the CLI.
   blocker: Waiting for review.
-claimed_by: claude-1
-claimed_at: 2026-10-23T12:00:00Z
-lease_until: 2026-10-23T12:30:00Z
+assignee:
+  name: claude-1
+  kind: agent
+lease:
+  claimed_at: 2026-10-23T12:00:00Z
+  lease_until: 2026-10-23T12:30:00Z
+reporter: alice
 properties:
   ci:
     passed: true
@@ -266,7 +272,7 @@ Comments are append-only; there is no edit or delete command. A correction is a 
 
 ### Checkpoints
 
-A Task stores at most one **Checkpoint** in its frontmatter: the claim holder's latest handoff note. `by` and `at` identify the last writer and the time of that write; `progress` is required; `next` and `blocker` are optional. `orbit checkpoint` replaces the record. The first write requires `progress`; later writes may update one field and keep the rest, and `--clear-next` or `--clear-blocker` removes an optional field. A partial update rewrites `by` and `at` even when it keeps the previous `progress` text, so the record always names the claimant who last accepted responsibility for it.
+A Task stores at most one **Checkpoint** in its frontmatter: the assignee's latest handoff note. `by` and `at` identify the last writer and the time of that write; `progress` is required; `next` and `blocker` are optional. `orbit checkpoint` replaces the record. The first write requires `progress`; later writes may update one field and keep the rest, and `--clear-next` or `--clear-blocker` removes an optional field. A partial update rewrites `by` and `at` even when it keeps the previous `progress` text, so the record always names the assignee who last accepted responsibility for it.
 
 The caller must hold the Claim; a Stale Claim still counts until another agent steals it. The command refuses a task with no Claim and a terminal task with `INVALID_TRANSITION`. A Checkpoint does not change Status, readiness, Claim eligibility, links, or blockers.
 
@@ -530,12 +536,13 @@ orbit init [DIR] [--slug SLUG] [--visible[=NAME]] [--host[=REPO|URL]] [--agents 
 orbit repo <add|remove|list|refresh>
 orbit slug show
 orbit slug migrate <SLUG> [--dry-run] [--force]
-orbit add <TITLE> [-p N] [--type TYPE] [--depends-on ID]... [--parent ID] [--waiting-on TEXT] [--label LABEL]... [--body TEXT|--body-file PATH|-]
+orbit add <TITLE> [-p N] [--type TYPE] [--depends-on ID]... [--parent ID] [--waiting-on TEXT] [--label LABEL]... [--body TEXT|--body-file PATH|-] [--reporter NAME]
 orbit list [--status S] [--priority NAME] [--claimed-by NAME] [--waiting] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--repository NAME|--unlabeled] [--linked|--local] [--parent ID] [--group] [--all] [--include-closed]
 orbit ready [--limit N] [--parent ID] [--repository NAME] [--type TYPE]... [--exclude-type TYPE]... [--label LABEL]... [--exclude-label LABEL]... [--all] [--claim] [--by NAME]
 orbit show <id>
 orbit tree <id>
-orbit claim <id> [--by NAME] [--steal] [--worktree]
+orbit claim <id> [--by NAME] [--kind KIND] [--steal] [--worktree]
+orbit assign <id> --to NAME [--kind KIND] [--force]
 orbit release <id> [--by NAME] [--force]
 orbit heartbeat <id> [--by NAME]
 orbit checkpoint <id> [--progress TEXT] [--next TEXT|--clear-next] [--blocker TEXT|--clear-blocker] [--by NAME]
@@ -715,9 +722,9 @@ Entries record what each release delivered. Some name commands that were later r
 - `doctor` runs without a Board. It reports the discovery trace and the layout findings `LEGACY_LAYOUT`, `AMBIGUOUS_BOARD`, `ORPHAN_WORKTREE`, `STORAGE_MISMATCH`, and `ABSOLUTE_BOARD_PATH`, then runs task-level checks when a Board is resolved. From a Board anchor or a member Repository it also names the resolved Board and reports member Repository discovery and access failures, interrupted migrations and local Board remnants, duplicate Remote identities, orphaned links, field-level sync conflicts, and managed agent setup drift or collisions. Findings carry `severity`, the affected repository/Task/Issue when applicable, `cause`, and a safe `next_action`. Plain non-Git child directories are reported as non-blocking warnings, not findings.
 - `doctor --fix` removes stale temp files and re-attaches an orphan `orbit` worktree whose `DIR` was deleted; it repairs the repository that holds `--dir`/`ORBIT_DIR` when given, else the current one. It does not rewrite tasks or comments. `orbit migrate` performs the explicit legacy migration described in [Legacy layouts and migration](#legacy-layouts-and-migration): it previews by default, `--apply` converts the Board into a standalone repository in one commit, and a re-run is a no-op. Before it deletes a legacy copy it requires the Task and comment Markdown of both copies to be byte-identical and refuses with `MIGRATION_BLOCKED` otherwise, or when the legacy worktree has uncommitted changes. After `init` merges child Boards on an anchor it notes that other Repositories that shared the old Board must run `orbit repo add` again.
 - `undepend` is idempotent.
-- `cancel` resolves dependents. It requires the claim holder unless `--force`; on a Parent Task, `--force` also cancels open SubTasks.
+- `cancel` resolves dependents. It requires the assignee unless `--force`; on a Parent Task, `--force` also cancels open SubTasks.
 - `label add` and `label remove` are idempotent. Labels are lowercase slugs; invalid labels are rejected with `INVALID_LABEL`.
-- `claim` by the current holder renews that holder's Lease, whether the Claim is live or Stale, and succeeds; any other agent still gets `ALREADY_CLAIMED` or `CLAIM_STALE` without `--steal`.
+- `claim` by the current assignee renews that assignee's lease, live or stale, and succeeds; any other identity still gets `ALREADY_CLAIMED` or `CLAIM_STALE` without `--steal`.
 - A Task carrying a configured hold label is not Ready; `claim` returns `LABEL_BLOCKED`. `--steal` does not bypass hold labels; remove the label first.
 - `done` and `cancel` accept `--comment TEXT` or `--comment-file PATH`; the note is appended in the same locked operation as the terminal status change, so an agent cannot record a completion note before the task is closed.
 - `comment add` is append-only and immutable. A comment has an author and RFC 3339 timestamp; corrections are new comments. `delete` removes the task's comment file.
@@ -759,7 +766,7 @@ Error:
 
 ### Batch
 
-`orbit batch --file PATH|-` reads `{"operations": [...]}`. Each operation has an `op` (`add`, `update`, `label`, `depend`, `undepend`, `link`, `unlink`, `claim`, `heartbeat`, `release`, `done`, `cancel`, `reopen`, `transition`, `comment`, `property`) and the fields of its command: `add` takes `key` (Source Key), `title`, `type`, `parent`, `labels`, `depends_on`, `body`, `priority`, `repository`, `waiting_on`, `component`, `verification`, `external_id`, `properties`; `update` takes `id` plus `title`, `body`, `priority`, `type`, `waiting_on`/`clear_waiting`, `component`/`clear_component`, `verification`/`clear_verification`, `repository`/`clear_repository`, `external_id`/`clear_external_id`; `label` takes `id`, `add`, `remove`; `depend`/`undepend` take `id`, `on`; `link` takes `id`, `type` (optional, default `relates-to`), `to` or `external` (exactly one), optional `url`, `blocking`, and `attributes` (an object); `unlink` takes `id`, optional `type`, and `to` or `external`; `claim` takes `id`, `by`, `steal`; `heartbeat` takes `id`, `by`; `release`, `done`, and `cancel` take `id`, `by`, `force` (and `comment` for `done`/`cancel`); `reopen` takes `id`, `force`; `transition` takes `id`, `name`, `by`, `force`; `comment` takes `id`, `by`, `body`; `property` takes `id`, `owner`, `value` (an object, or null to remove). Unknown fields fail with `INVALID_BATCH`.
+`orbit batch --file PATH|-` reads `{"operations": [...]}`. Each operation has an `op` (`add`, `update`, `label`, `depend`, `undepend`, `link`, `unlink`, `claim`, `assign`, `heartbeat`, `release`, `done`, `cancel`, `reopen`, `transition`, `comment`, `property`) and the fields of its command: `add` takes `key` (Source Key), `title`, `type`, `parent`, `labels`, `depends_on`, `body`, `priority`, `repository`, `waiting_on`, `component`, `verification`, `external_id`, `reporter`, `properties`; `update` takes `id` plus `title`, `body`, `priority`, `type`, `waiting_on`/`clear_waiting`, `component`/`clear_component`, `verification`/`clear_verification`, `repository`/`clear_repository`, `external_id`/`clear_external_id`; `label` takes `id`, `add`, `remove`; `depend`/`undepend` take `id`, `on`; `link` takes `id`, `type` (optional, default `relates-to`), `to` or `external` (exactly one), optional `url`, `blocking`, and `attributes` (an object); `unlink` takes `id`, optional `type`, and `to` or `external`; `claim` takes `id`, `by`, `kind`, `steal`; `assign` takes `id`, `to`, `kind`, `force`; `heartbeat` takes `id`, `by`; `release`, `done`, and `cancel` take `id`, `by`, `force` (and `comment` for `done`/`cancel`); `reopen` takes `id`, `force`; `transition` takes `id`, `name`, `by`, `force`; `comment` takes `id`, `by`, `body`; `property` takes `id`, `owner`, `value` (an object, or null to remove). Unknown fields fail with `INVALID_BATCH`.
 
 A reference (`id`, `on`, `parent`, `depends_on` entries) is a Task ID or `key:` plus a Source Key added earlier in the Batch or already on the Board. `by` defaults to `--by`, then `ORBIT_AGENT`, then `USER`.
 
@@ -797,9 +804,11 @@ Operations run in order on one in-memory snapshot under the exclusive lock. On t
       "waiting_on": null,
       "checkpoint": null,
       "checkpoint_archived": null,
-      "claimed_by": null,
+      "assignee": null,
+      "assignee_kind": null,
       "claimed_at": null,
       "lease_until": null,
+      "reporter": "alice",
       "created_at": "2026-10-23T11:00:00Z",
       "updated_at": "2026-10-23T12:00:00Z",
       "ready": true,
@@ -841,7 +850,7 @@ CLI + `orbit prime` is the primary interface. `prime` prints ~1k tokens: workflo
 
 `orbit init` creates the Board only; it writes harness files when the TTY prompt is accepted or `--agents` names clients. `orbit setup` writes one harness explicitly. Project scope (`--scope project`, the default) writes repository-level files: Claude (`CLAUDE.md`, optional SessionStart hook in `.claude/settings.json`, `.mcp.json`), Cursor (`.cursor/rules/orbit.mdc`, `.agents/skills/orbit/SKILL.md`, `.cursor/mcp.json`), Codex (`.agents/skills/orbit/SKILL.md`, `AGENTS.md`, `.codex/config.toml`), OpenCode (`AGENTS.md`, `opencode.json`), and Devin (`.devin/rules/orbit.md`, `.devin/skills/orbit/SKILL.md`, optional SessionStart hook in `.devin/hooks.v1.json`, `.devin/mcp_config.json`). Matt Pocock (`docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`) remains an explicit compatibility setup path, not an init harness. User scope (`--scope user`) writes the same managed content at the harness's user-level locations. `init` selects harnesses by detection or `--agents`; `setup` selects one explicitly named client. Orbit-managed sections and files use markers or key-level merging; `--remove` removes only those sections, files, hooks, and MCP entries. Generated configs record the Orbit binary but not the Board path, so moving `DIR` does not stale them; a managed config that still contains an absolute Board path is reported by `doctor` as `ABSOLUTE_BOARD_PATH`. MCP entries use an absolute binary path by default, or the portable `orbit` command with `--portable-mcp`; the portable form requires the editor's `PATH`. Hand-written Matt Pocock guides without the marker are reported as `skipped` and left untouched.
 
-MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 14 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `release`, `heartbeat`, `checkpoint`, `finish`, `link`, `delete`, `label`, `comment`, `property`. `create` accepts `parent` to make a SubTask and `type` to set the work shape; `update` accepts `type`; `checkpoint` records the claim holder's handoff; `list` and `ready` accept `parent`, `repository`, `components`, `exclude_components`, `labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature or component. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
+MCP complements the CLI and is installed by default for clients that support it; `--no-mcp` keeps an instructions-only setup. `orbit mcp` speaks JSON-RPC 2.0 over stdio and exposes 18 tools: `ready`, `list`, `get`, `create`, `update`, `claim`, `assign`, `release`, `heartbeat`, `checkpoint`, `finish`, `transition`, `link`, `delete`, `label`, `comment`, `property`, `batch`. `create` accepts `parent` to make a SubTask, `type` to set the work shape, and `reporter` to name the creator; `update` accepts `type`; `claim` accepts `kind` (the assignee's identity kind) and `assign` sets an assignee without a lease; `checkpoint` records the assignee's handoff; `list` and `ready` accept `parent`, `repository`, `components`, `exclude_components`, `labels`, `exclude_labels`, `types`, and `exclude_types` to scope a feature or component. It also exposes `orbit://tasks/{id}` as a Markdown resource, with `resources/list` and `resources/templates/list`. The server invokes the installed `orbit` binary for each tool call, so it reuses the same lock, atomic-write, auto-commit, and error-envelope path; it holds no board lock between calls. Tool results carry the Orbit envelope as `content[0].text`; `isError` is true when `ok` is false or the CLI exits non-zero.
 
 ## 10. Milestones
 

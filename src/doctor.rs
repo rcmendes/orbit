@@ -425,20 +425,20 @@ fn diagnose_tasks(
 
     for task in graph.stale_tasks() {
         warnings.push(format!(
-            "{}: stale claim by {}",
+            "{}: stale lease held by {}",
             task.id,
-            task.holder().unwrap_or("unknown")
+            task.assignee_name().unwrap_or("unknown")
         ));
     }
 
     for task in graph.tasks.values() {
         let no_times = task
             .front
-            .claim
+            .lease
             .as_ref()
-            .is_some_and(|claim| !claim.has_times());
-        if no_times || task.front.stray_claim_times.is_some() {
-            warnings.push(format!("{}: claim metadata is incomplete", task.id));
+            .is_some_and(|lease| !lease.has_times());
+        if no_times || task.front.stray_lease_times.is_some() {
+            warnings.push(format!("{}: lease metadata is incomplete", task.id));
         }
 
         if graph

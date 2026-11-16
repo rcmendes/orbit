@@ -752,7 +752,7 @@ mod tests {
                 status: status.to_string(),
                 resolution: None,
                 task_type: crate::task::TaskType::Task,
-                priority: 2,
+                priority: "medium".to_string(),
                 labels: Vec::new(),
                 depends_on: Vec::new(),
                 parent: None,

@@ -341,9 +341,9 @@ pub struct AddArgs {
     /// Task title. Required and must not be empty.
     pub title: String,
 
-    /// Priority from 0 (highest) to 3 (lowest).
-    #[arg(short = 'p', long, value_name = "N")]
-    pub priority: Option<u8>,
+    /// Priority name from the Board's `board.priorities` list.
+    #[arg(short = 'p', long, value_name = "NAME")]
+    pub priority: Option<String>,
 
     /// Work shape: task, epic, spike, chore, or decision.
     #[arg(long = "type", value_name = "TYPE", value_enum)]
@@ -394,9 +394,9 @@ pub struct ListArgs {
     #[arg(long, value_name = "STATUS")]
     pub status: Option<String>,
 
-    /// Filter by priority (0-3).
-    #[arg(long, value_name = "N")]
-    pub priority: Option<u8>,
+    /// Filter by priority name.
+    #[arg(long, value_name = "NAME")]
+    pub priority: Option<String>,
 
     /// Filter by claim holder.
     #[arg(long = "claimed-by", value_name = "NAME")]
@@ -690,9 +690,9 @@ pub struct UpdateArgs {
     #[arg(long = "body-file", value_name = "PATH", conflicts_with = "body")]
     pub body_file: Option<PathBuf>,
 
-    /// New priority (0-3).
-    #[arg(long, value_name = "N")]
-    pub priority: Option<u8>,
+    /// New priority name.
+    #[arg(long, value_name = "NAME")]
+    pub priority: Option<String>,
 
     /// New work shape: task, epic, spike, chore, or decision.
     #[arg(long = "type", value_name = "TYPE", value_enum)]

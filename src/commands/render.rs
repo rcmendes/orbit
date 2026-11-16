@@ -9,7 +9,7 @@ use super::*;
 pub(super) fn list_sort_key<'a>(
     graph: &'a Graph,
     task: &'a Task,
-) -> (u8, i64, &'a str, bool, u8, i64, &'a str) {
+) -> (usize, i64, &'a str, bool, usize, i64, &'a str) {
     let root = task
         .front
         .parent
@@ -17,11 +17,11 @@ pub(super) fn list_sort_key<'a>(
         .and_then(|parent_id| graph.get(parent_id).ok())
         .unwrap_or(task);
     (
-        root.front.priority,
+        graph.priority_ordinal(&root.front.priority),
         root.front.created_at.timestamp_millis(),
         root.id.as_str(),
         task.front.parent.is_some(),
-        task.front.priority,
+        graph.priority_ordinal(&task.front.priority),
         task.front.created_at.timestamp_millis(),
         task.id.as_str(),
     )
@@ -71,7 +71,7 @@ pub(super) fn group_tasks<'a>(graph: &'a Graph, tasks: &[&'a Task]) -> Result<Ve
 }
 
 fn group_headers(remote: bool) -> Vec<String> {
-    let mut headers: Vec<String> = ["ID", "STATUS", "P", "TYPE"]
+    let mut headers: Vec<String> = ["ID", "STATUS", "PRIORITY", "TYPE"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -98,7 +98,7 @@ fn task_cells(task: &Task, remote: bool) -> Vec<String> {
     let mut cells: Vec<String> = vec![
         task.id.to_string(),
         task.front.status.as_str().to_string(),
-        format!("P{}", task.front.priority),
+        task.front.priority.clone(),
         task.front.task_type.as_str().to_string(),
     ];
     if remote {
@@ -179,7 +179,7 @@ fn group_meta(task: &Task) -> String {
     let mut parts = vec![
         task.front.task_type.as_str().to_string(),
         task.front.status.as_str().to_string(),
-        format!("P{}", task.front.priority),
+        task.front.priority.clone(),
     ];
     if !task.front.labels.is_empty() {
         parts.push(task.front.labels.join(", "));
@@ -280,7 +280,7 @@ fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
         String::new()
     };
     format!(
-        "{}  {:<11}  P{}  {}{}{}{}{}",
+        "{}  {:<11}  {}  {}{}{}{}{}",
         task.id,
         task.front.status.as_str(),
         task.front.priority,
@@ -363,7 +363,7 @@ pub(super) fn format_detail(
             None => "github: -".to_string(),
         });
     }
-    lines.push(format!("priority: P{}", task.front.priority));
+    lines.push(format!("priority: {}", task.front.priority));
     if let Some(parent) = &task.front.parent {
         lines.push(format!("parent: {parent}"));
     }

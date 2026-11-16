@@ -92,7 +92,7 @@ The outcome a closing Transition records on the Task — for example `completed`
 _Avoid_: Close reason, result
 
 **Priority**:
-The stored ordering weight of a Task, from P0 (highest) to P3 (lowest).
+The stored ordering weight of a Task: a name from the Board's ordered `board.priorities` list (`highest`, `high`, `medium`, `low` by default). Tasks sort by the name's ordinal, so a Board can rename or reorder priorities.
 _Avoid_: Rank, severity
 
 **Label**:

@@ -659,9 +659,9 @@ fn merge_task(
         outcome,
     );
     let priority = pick(
-        base_front.map(|f| f.priority),
-        local.front.priority,
-        remote.front.priority,
+        base_front.map(|f| f.priority.clone()),
+        local.front.priority.clone(),
+        remote.front.priority.clone(),
         &key("priority"),
         outcome,
     );
@@ -1083,7 +1083,7 @@ mod tests {
 
     const TASK_PATH: &str = "tasks/orbit-test.md";
 
-    fn task_content(title: &str, priority: u8, status_and_claim: &str) -> String {
+    fn task_content(title: &str, priority: &str, status_and_claim: &str) -> String {
         format!(
             "---\ntitle: {title}\npriority: {priority}\n{status_and_claim}\ncreated_at: 2025-01-01T00:00:00Z\nupdated_at: 2025-01-01T00:00:00Z\n---\n\nTask body\n"
         )
@@ -1111,21 +1111,21 @@ mod tests {
 
     #[test]
     fn different_fields_merge() {
-        let base = task_content("Original", 2, "status: todo");
-        let local = task_content("Local title", 2, "status: todo");
-        let host = task_content("Original", 3, "status: todo");
+        let base = task_content("Original", "medium", "status: todo");
+        let local = task_content("Local title", "medium", "status: todo");
+        let host = task_content("Original", "low", "status: todo");
         let merged = merge_tasks(&base, &local, &host, &[]);
         assert!(merged.conflicts.is_empty());
         let task = merged_task(&merged);
         assert_eq!(task.front.title, "Local title");
-        assert_eq!(task.front.priority, 3);
+        assert_eq!(task.front.priority, "low");
     }
 
     #[test]
     fn same_field_conflicts_until_resolved_to_either_side() {
-        let base = task_content("Original", 2, "status: todo");
-        let local = task_content("Local title", 2, "status: todo");
-        let host = task_content("Host title", 2, "status: todo");
+        let base = task_content("Original", "medium", "status: todo");
+        let local = task_content("Local title", "medium", "status: todo");
+        let host = task_content("Host title", "medium", "status: todo");
         let unresolved = merge_tasks(&base, &local, &host, &[]);
         assert_eq!(unresolved.conflicts.len(), 1);
         assert_eq!(unresolved.conflicts[0].field, "orbit-test.title");
@@ -1188,15 +1188,15 @@ mod tests {
 
     #[test]
     fn earlier_claim_wins_and_loser_receives_a_comment() {
-        let base = task_content("Claimed", 2, "status: todo");
+        let base = task_content("Claimed", "medium", "status: todo");
         let local = task_content(
             "Claimed",
-            2,
+            "medium",
             "status: in_progress\nclaimed_by: local\nclaimed_at: 2025-03-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z",
         );
         let host = task_content(
             "Claimed",
-            2,
+            "medium",
             "status: in_progress\nclaimed_by: host\nclaimed_at: 2025-02-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z",
         );
         for (local, host) in [(&local, &host), (&host, &local)] {
@@ -1217,10 +1217,10 @@ mod tests {
     fn finished_task_drops_host_claim() {
         let base = task_content(
             "Finished",
-            2,
+            "medium",
             "status: in_progress\nclaimed_by: local\nclaimed_at: 2025-02-01T00:00:00Z\nlease_until: 2030-01-01T00:00:00Z",
         );
-        let local = task_content("Finished", 2, "status: done");
+        let local = task_content("Finished", "medium", "status: done");
         let host = base
             .replace("claimed_by: local", "claimed_by: host")
             .replace("2025-02-01", "2025-03-01");
@@ -1274,8 +1274,8 @@ mod tests {
 
     #[test]
     fn unparseable_task_conflicts_as_a_whole_task() {
-        let base = task_content("Original", 2, "status: todo");
-        let host = task_content("Host", 2, "status: todo");
+        let base = task_content("Original", "medium", "status: todo");
+        let host = task_content("Host", "medium", "status: todo");
         let merged = merge_tasks(&base, "not a task", &host, &[]);
         assert_eq!(merged.conflicts.len(), 1);
         assert_eq!(merged.conflicts[0].field, "orbit-test");

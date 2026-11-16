@@ -868,11 +868,11 @@ fn list_parent_filters_and_group_layout() {
 fn list_orders_by_priority_then_parent_then_subtasks() {
     let repo = TestRepo::new();
     repo.init();
-    let parent = repo.add("Parent", &["-p", "2", "--type", "epic"]);
+    let parent = repo.add("Parent", &["-p", "medium", "--type", "epic"]);
     let child = subtask(&repo, &parent, "Urgent child");
-    repo.ok_json(&["update", &child, "--priority", "0", "--json"]);
-    let middle = repo.add("Middle", &["-p", "1"]);
-    let first = repo.add("First", &["-p", "0"]);
+    repo.ok_json(&["update", &child, "--priority", "highest", "--json"]);
+    let middle = repo.add("Middle", &["-p", "high"]);
+    let first = repo.add("First", &["-p", "highest"]);
 
     let output = repo.orbit(&["list"]);
     assert!(output.status.success());

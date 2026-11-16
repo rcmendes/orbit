@@ -214,7 +214,7 @@ non-auto-push wrapper. The publish path is selected by
 
 ### Human output and JSON
 
-Board commands have two output paths. Human output is for terminals: `list` renders an aligned table with `ID`, `STATUS`, `P`, `TYPE`, `ISSUE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns, while `ready`, `tree`, and `prime` use compact summary lines. `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Table widths follow the current data, labels are comma-joined, and titles longer than 60 characters are shortened. Root Tasks are ordered by priority, then creation time and ID; each Parent Task is followed by its SubTasks, also ordered by priority. `--group` renders one outlined table with a banner for each Parent Task, its SubTasks underneath, and a final `No parent` section.
+Board commands have two output paths. Human output is for terminals: `list` renders an aligned table with `ID`, `STATUS`, `PRIORITY`, `TYPE`, `ISSUE`, `TITLE`, `LABELS`, and `CLAIMED BY` columns, while `ready`, `tree`, and `prime` use compact summary lines. `ISSUE` is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Table widths follow the current data, labels are comma-joined, and titles longer than 60 characters are shortened. Root Tasks are ordered by priority, then creation time and ID; each Parent Task is followed by its SubTasks, also ordered by priority. `--group` renders one outlined table with a banner for each Parent Task, its SubTasks underneath, and a final `No parent` section.
 
 `--json` is the contract. It always returns the full title and every field through the standard envelope, so the table's layout, truncation, and column set can change without breaking a consumer. Agents and scripts should parse JSON, not scrape the table.
 
@@ -276,7 +276,7 @@ classDiagram
         +String title
         +String status
         +Option resolution
-        +u8 priority
+        +String priority
         +Vec labels
         +Vec depends_on
         +String parent
@@ -383,7 +383,7 @@ These rules live in `src/transition.rs`, which stays pure: every method takes th
 
 | From | Command | Transition | To | Rules |
 | --- | --- | --- | --- | --- |
-| none | `add` | — | initial Status | Creates `tasks/ID.md`. Type defaults to `task`; priority defaults to `2`; dependencies must exist. `--parent` must name an existing, non-terminal Task whose depth stays within `board.max_subtask_depth`, and cannot be combined with `--type epic`. |
+| none | `add` | — | initial Status | Creates `tasks/ID.md`. Type defaults to `task`; priority defaults to `board.default_priority`; dependencies must exist. `--parent` must name an existing, non-terminal Task whose depth stays within `board.max_subtask_depth`, and cannot be combined with `--type epic`. |
 | Ready Status | `claim` or `ready --claim` | `claim` | `in_progress` | The readiness gate must pass, including open SubTasks. `--by` is required unless `ORBIT_AGENT`, `USER`, or `USERNAME` identifies the agent. A live claim returns `ALREADY_CLAIMED`; a stale claim returns `CLAIM_STALE` unless `--steal`. |
 | `active` | `heartbeat` | — | `active` | Only the claim holder; extends `lease_until` by `lease_minutes`. The heartbeat write is not auto-committed. |
 | `active` | `checkpoint` | — | `active` | Only the claim holder; a stale claim still counts. Replaces `checkpoint`, keeping omitted optional fields; the first write needs `progress`; `--clear-next` and `--clear-blocker` remove one. Never changes Status or readiness. Rejected on a closed task or a task with no claim. |
@@ -427,7 +427,7 @@ The failure codes follow the gate: `WAITING_EXTERNAL` for `waiting_on`, `LABEL_B
 | --- | --- | --- |
 | Status | yes | `status` in frontmatter, a Workflow status name |
 | Resolution | yes | `resolution` in frontmatter, set by closing Transitions |
-| Priority | yes | `priority`, integer `0`–`3` |
+| Priority | yes | `priority`, a name from `board.priorities` |
 | Labels | yes | `labels`, normalized, sorted, deduplicated |
 | Dependencies | yes | `depends_on` IDs |
 | Parent | yes | `parent` ID on a SubTask |
@@ -770,7 +770,7 @@ sequenceDiagram
     participant GIT as Git
 
     Note over Agent,GIT: add
-    Agent->>CLI: orbit add "Build the router" -p 1
+    Agent->>CLI: orbit add "Build the router" -p high
     CLI->>BRD: discover
     BRD->>LCK: acquire exclusive
     CLI->>FS: read all tasks, hydrate graph

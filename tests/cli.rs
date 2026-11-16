@@ -37,12 +37,12 @@ fn add_list_show_and_ready_round_trip() {
     let repo = TestRepo::new();
     repo.init();
 
-    let first = repo.add("First", &["-p", "0", "--body", "Body A"]);
+    let first = repo.add("First", &["-p", "highest", "--body", "Body A"]);
     let second = repo.add(
         "Second",
         &[
             "-p",
-            "2",
+            "medium",
             "--depends-on",
             first.as_str(),
             "--body",
@@ -346,11 +346,11 @@ fn cancel_resolves_dependents_and_reopen_restores_the_block() {
 fn list_filters_are_applied() {
     let repo = TestRepo::new();
     repo.init();
-    let first = repo.add("First", &["-p", "0"]);
-    let second = repo.add("Second", &["-p", "0", "--waiting-on", "human"]);
-    repo.add("Third", &["-p", "1"]);
+    let first = repo.add("First", &["-p", "highest"]);
+    let second = repo.add("Second", &["-p", "highest", "--waiting-on", "human"]);
+    repo.add("Third", &["-p", "high"]);
 
-    let by_priority = repo.ok_json(&["list", "--priority", "0", "--json"]);
+    let by_priority = repo.ok_json(&["list", "--priority", "highest", "--json"]);
     assert_eq!(by_priority["data"]["count"], 2);
 
     let waiting = repo.ok_json(&["list", "--waiting", "--json"]);
@@ -375,21 +375,21 @@ fn update_and_add_validate_their_inputs() {
     let repo = TestRepo::new();
     repo.init();
 
-    let (_, error) = repo.err_json(&["add", "Bad", "-p", "9", "--json"]);
+    let (_, error) = repo.err_json(&["add", "Bad", "-p", "bogus", "--json"]);
     assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
     let (_, error) = repo.err_json(&["add", "", "--json"]);
     assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
     let (_, error) = repo.err_json(&["add", "Bad", "--depends-on", "orb-aaaaaa", "--json"]);
     assert_eq!(error["error"]["code"], "NOT_FOUND");
 
-    let id = repo.add("Original", &["-p", "2", "--body", "Old body"]);
+    let id = repo.add("Original", &["-p", "medium", "--body", "Old body"]);
     repo.ok_json(&[
         "update",
         id.as_str(),
         "--title",
         "Changed",
         "--priority",
-        "0",
+        "highest",
         "--body",
         "New body",
         "--waiting-on",
@@ -398,7 +398,7 @@ fn update_and_add_validate_their_inputs() {
     ]);
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["title"], "Changed");
-    assert_eq!(show["data"]["priority"], 0);
+    assert_eq!(show["data"]["priority"], "highest");
     assert_eq!(show["data"]["body"], "New body");
     assert_eq!(show["data"]["waiting_on"], "human");
 

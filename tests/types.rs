@@ -21,7 +21,7 @@ fn type_defaults_to_task_and_is_serialized() {
     repo.write_task(&id, &legacy);
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["type"], "task");
-    repo.ok_json(&["update", id.as_str(), "--priority", "1", "--json"]);
+    repo.ok_json(&["update", id.as_str(), "--priority", "high", "--json"]);
     assert!(repo.read_task(&id).contains("type: task"));
 }
 

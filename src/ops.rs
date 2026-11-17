@@ -6,12 +6,10 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 
 use crate::board::Board;
-use crate::commands::{
-    normalize_labels, normalize_waiting, parse_component_option, validate_priority,
-};
 use crate::error::{OrbitError, Result, code};
 use crate::graph::Graph;
 use crate::mutation::TerminalKind;
+use crate::task::normalize_labels;
 use crate::task::{self, Identity, IdentityKind, Task, TaskFrontmatter};
 use crate::transition::{ClaimGate, FieldUpdate, Outcome, TransitionError};
 use crate::workflow::StatusCategory;
@@ -24,9 +22,7 @@ pub struct NewTask {
     /// hierarchy's leaf type when `parent` is set.
     pub task_type: Option<String>,
     pub labels: Vec<String>,
-    pub depends_on: Vec<String>,
     pub parent: Option<String>,
-    pub waiting_on: Option<String>,
     pub component: Option<String>,
     pub verification: Option<String>,
     pub repository: Option<String>,
@@ -68,7 +64,7 @@ pub fn add(
     }
 
     let priority = match &new.priority {
-        Some(priority) => validate_priority(board, priority)?,
+        Some(priority) => board.config.board.validate_priority(priority)?,
         None => board.config.board.default_priority.clone(),
     };
     let parent = match new.parent {
@@ -124,32 +120,6 @@ pub fn add(
 
     let labels = normalize_labels(&new.labels)?;
 
-    // `depends_on` ids become blocking `blocks` links; `waiting_on` becomes a
-    // blocking `waiting-on` link to an external reference.
-    let mut links: Vec<task::Link> = Vec::new();
-    for dep in new.depends_on {
-        // Link targets store internal IDs; resolve keys and aliases first.
-        let dep = graph.resolve(&dep)?;
-        let link = task::Link::dependency(&dep);
-        if !links.contains(&link) {
-            links.push(link);
-        }
-    }
-    let waiting_on = normalize_waiting(new.waiting_on)?;
-    if let Some(waiting) = &waiting_on {
-        links.push(task::Link::waiting_on(waiting));
-    }
-
-    if let Some(parent_id) = &parent_id
-        && links
-            .iter()
-            .any(|link| link.is_blocking() && link.target_task() == Some(parent_id.as_str()))
-    {
-        return Err(OrbitError::invalid_argument(
-            "a SubTask cannot depend on its Parent Task; parentage already makes the parent wait",
-        ));
-    }
-
     if let Some(repository) = &new.repository
         && !task::is_valid_repository(repository)
     {
@@ -173,7 +143,7 @@ pub fn add(
         .reporter
         .map(|reporter| reporter.trim().to_string())
         .filter(|reporter| !reporter.is_empty());
-    let component = parse_component_option(board, new.component)?;
+    let component = board.config.board.parse_component_option(new.component)?;
     let verification = task::normalize_verification(new.verification)?;
     for (owner, value) in &new.properties {
         task::validate_property(owner, value)?;
@@ -194,7 +164,7 @@ pub fn add(
             task_type,
             priority,
             labels,
-            links,
+            links: Vec::new(),
             parent: parent_id,
             checkpoint: None,
             component,
@@ -206,7 +176,6 @@ pub fn add(
             assignee: None,
             lease: None,
             reporter,
-            stray_lease_times: None,
             created_at: now,
             updated_at: now,
             source_key: new.source_key,
@@ -281,7 +250,6 @@ pub struct TaskUpdate {
     /// New Issue type name; must keep the Task's `parent` edge and its
     /// children's edges valid under the Board hierarchy.
     pub task_type: Option<String>,
-    pub waiting_on: FieldUpdate<String>,
     pub component: FieldUpdate<String>,
     pub verification: FieldUpdate<String>,
     pub repository: FieldUpdate<String>,
@@ -299,7 +267,7 @@ pub fn update(
     let priority = change
         .priority
         .as_deref()
-        .map(|priority| validate_priority(board, priority))
+        .map(|priority| board.config.board.validate_priority(priority))
         .transpose()?;
     let current = graph.get(id)?;
     let next_type = match &change.task_type {
@@ -355,17 +323,8 @@ pub fn update(
         }
         None => None,
     };
-    // `waiting_on` is a convenience over `waiting-on` links to an external
-    // reference: Set replaces them, Clear removes them.
-    let waiting_change = match change.waiting_on {
-        FieldUpdate::Set(value) => match normalize_waiting(Some(value))? {
-            Some(value) => FieldUpdate::Set(value),
-            None => FieldUpdate::Keep,
-        },
-        other => other,
-    };
     let component = match change.component {
-        FieldUpdate::Set(value) => match parse_component_option(board, Some(value))? {
+        FieldUpdate::Set(value) => match board.config.board.parse_component_option(Some(value))? {
             Some(value) => FieldUpdate::Set(value),
             None => FieldUpdate::Keep,
         },
@@ -412,7 +371,6 @@ pub fn update(
     if change.task_type.is_some() {
         task.front.task_type = next_type.clone();
     }
-    apply_waiting_links(&mut task.front.links, waiting_change);
     apply_field(&mut task.front.component, component);
     apply_field(&mut task.front.verification, verification);
     apply_field(&mut task.front.repository, change.repository);
@@ -424,23 +382,6 @@ pub fn update(
         return Err(crate::hierarchy::missing_field_error(id, &missing));
     }
     Ok(changed)
-}
-
-/// Replaces or removes `waiting-on` external links — the stored form of the
-/// `waiting_on` convenience field.
-fn apply_waiting_links(links: &mut Vec<task::Link>, change: FieldUpdate<String>) {
-    let is_waiting = |link: &task::Link| {
-        link.kind == task::LINK_TYPE_WAITING_ON
-            && matches!(link.target, task::LinkTarget::External(_))
-    };
-    match change {
-        FieldUpdate::Keep => {}
-        FieldUpdate::Clear => links.retain(|link| !is_waiting(link)),
-        FieldUpdate::Set(value) => {
-            links.retain(|link| !is_waiting(link));
-            links.push(task::Link::waiting_on(&value));
-        }
-    }
 }
 
 fn apply_field(field: &mut Option<String>, change: FieldUpdate<String>) {
@@ -499,7 +440,7 @@ pub fn link(graph: &mut Graph, id: &str, mut link: task::Link, now: DateTime<Utc
                     || graph.get(target)?.front.parent.as_deref() == Some(id))
             {
                 return Err(OrbitError::invalid_argument(
-                    "parentage is not a dependency; use `orbit add --parent` to create a SubTask",
+                    "parentage is not a dependency; use `orbit add --parent` to create a sub-issue",
                 ));
             }
         }
@@ -668,7 +609,7 @@ fn ask_open_error(task: &Task) -> OrbitError {
         ),
     )
     .with_details(serde_json::json!({
-        "task": task.id,
+        "issue": task.id,
         "ask": crate::review::open_ask(task),
     }))
 }
@@ -826,7 +767,7 @@ pub struct FinishOutcome {
 }
 
 /// Moves a Task to Done or Cancelled through the workflow's closing
-/// transitions, cancelling open SubTasks when forced.
+/// transitions, cancelling open sub-issues when forced.
 pub fn finish(
     graph: &mut Graph,
     id: &str,
@@ -842,9 +783,9 @@ pub fn finish(
     if !open_descendants.is_empty() && !force {
         return Err(OrbitError::new(
             code::SUBTASKS_OPEN,
-            format!("{id} has open SubTasks: {}", open_descendants.join(", ")),
+            format!("{id} has open sub-issues: {}", open_descendants.join(", ")),
         )
-        .with_details(serde_json::json!({"task": id, "subtasks": open_descendants})));
+        .with_details(serde_json::json!({"issue": id, "sub_issues": open_descendants})));
     }
     // An unanswered Ask blocks completion; cancelling stays allowed so
     // blocked work can still be abandoned.
@@ -1012,7 +953,7 @@ pub fn reopen(graph: &mut Graph, id: &str, force: bool, now: DateTime<Utc>) -> R
                 return Err(OrbitError::new(
                     code::INVALID_TRANSITION,
                     format!(
-                        "{id} is a SubTask of cancelled {ancestor_id}; reopen the parent first"
+                        "{id} is a sub-issue of cancelled {ancestor_id}; reopen the parent first"
                     ),
                 ));
             }
@@ -1185,7 +1126,6 @@ pub fn review(
             kind,
         });
         task.front.lease = None;
-        task.front.stray_lease_times = None;
         crate::review::record_verdict(task, verdict, reason, by, kind, now);
     }
     let status = graph.get(&resolved)?.front.status.clone();
@@ -1249,7 +1189,6 @@ fn restore_review_assignee(task: &mut Task, verdict: crate::review::Verdict) {
         }
     }
     task.front.lease = None;
-    task.front.stray_lease_times = None;
 }
 
 /// Reroutes a `request-changes` verdict whose only violations are

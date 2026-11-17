@@ -26,6 +26,7 @@ pub mod lock;
 pub mod mcp;
 pub mod migrate;
 pub mod model_migrate;
+pub mod modules;
 pub mod mutation;
 pub mod ops;
 pub mod output;

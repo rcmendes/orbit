@@ -30,7 +30,7 @@ fn blocking_links_drive_readiness() {
 
     // The dependent is not ready; the blocker is.
     let ready = repo.ok_json(&["ready", "--json"]);
-    let ids: Vec<&str> = ready["data"]["tasks"]
+    let ids: Vec<&str> = ready["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -39,7 +39,7 @@ fn blocking_links_drive_readiness() {
     assert!(ids.contains(&blocker.as_str()));
     assert!(!ids.contains(&dependent.as_str()));
     assert_eq!(show["data"]["ready"], false);
-    assert_eq!(show["data"]["depends_on"][0], blocker);
+    assert_eq!(show["data"]["blocking"][0], blocker);
 
     // Completing the blocker makes the dependent ready.
     repo.ok_json(&[
@@ -52,7 +52,7 @@ fn blocking_links_drive_readiness() {
         "--json",
     ]);
     let ready = repo.ok_json(&["ready", "--json"]);
-    let ids: Vec<&str> = ready["data"]["tasks"]
+    let ids: Vec<&str> = ready["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -88,7 +88,7 @@ fn non_blocking_links_do_not_drive_readiness() {
     // Non-blocking: the task stays ready even though the target is open.
     assert_eq!(show["data"]["ready"], true);
     let ready = repo.ok_json(&["ready", "--json"]);
-    let ids: Vec<&str> = ready["data"]["tasks"]
+    let ids: Vec<&str> = ready["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -243,12 +243,11 @@ fn external_blocker_is_a_link_and_blocks_readiness() {
     );
     assert_eq!(links[0]["blocking"], true);
 
-    // The external blocker keeps the task out of `ready` and is surfaced as
-    // `waiting_on` for consumers of the old field.
+    // The external blocker keeps the task out of `ready`.
     assert_eq!(show["data"]["ready"], false);
-    assert_eq!(show["data"]["waiting_on"], "jira:PROJ-123");
+    assert_eq!(show["data"]["blocking"][0], "jira:PROJ-123");
     let ready = repo.ok_json(&["ready", "--json"]);
-    let ids: Vec<&str> = ready["data"]["tasks"]
+    let ids: Vec<&str> = ready["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -293,7 +292,7 @@ fn non_blocking_external_links_do_not_block() {
 
     let show = repo.ok_json(&["show", &task, "--json"]);
     assert_eq!(show["data"]["ready"], true);
-    assert_eq!(show["data"]["waiting_on"], Value::Null);
+    assert!(show["data"]["blocking"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -404,7 +403,8 @@ fn depend_and_undepend_still_manage_blocking_links() {
     let repo = TestRepo::new();
     repo.init();
     let first = repo.add("First", &[]);
-    let second = repo.add("Second", &["--depends-on", first.as_str()]);
+    let second = repo.add("Second", &[]);
+    repo.ok_json(&["depend", second.as_str(), first.as_str(), "--json"]);
 
     let show = repo.ok_json(&["show", &second, "--json"]);
     let links = link_json(&show["data"]);

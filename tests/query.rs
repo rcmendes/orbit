@@ -4,7 +4,7 @@ use common::TestRepo;
 use serde_json::Value;
 
 fn ids(value: &Value) -> Vec<String> {
-    value["data"]["tasks"]
+    value["data"]["issues"]
         .as_array()
         .expect("tasks array")
         .iter()
@@ -136,7 +136,7 @@ fn list_filter_json_and_fields_project_the_output() {
 
     // --fields projects each task object to the requested keys.
     let value = repo.ok_json(&["list", "--fields", "id,title,status", "--json"]);
-    let task = &value["data"]["tasks"][0];
+    let task = &value["data"]["issues"][0];
     assert!(task.get("id").is_some());
     assert!(task.get("title").is_some());
     assert!(task.get("status").is_some());
@@ -195,10 +195,8 @@ fn digest_reports_issue_state_and_epic_rollup_counts() {
     let done_child = repo.add("Done child", &["--parent", &epic]);
     repo.ok_json(&["claim", &done_child, "--by", "claude", "--json"]);
     repo.ok_json(&["done", &done_child, "--by", "claude", "--json"]);
-    let blocked_child = repo.add(
-        "Blocked child",
-        &["--parent", &epic, "--depends-on", &blocker],
-    );
+    let blocked_child = repo.add("Blocked child", &["--parent", &epic]);
+    repo.ok_json(&["depend", blocked_child.as_str(), blocker.as_str(), "--json"]);
     let open_child = repo.add("Open child", &["--parent", &epic]);
 
     let value = repo.ok_json(&["digest", &epic, "--json"]);

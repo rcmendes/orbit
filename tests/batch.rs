@@ -31,7 +31,8 @@ fn plan() -> Value {
          "parent": "key:planner:plan-7:epic", "labels": ["needs-triage"],
          "properties": {"planner": {"order": 1}}},
         {"op": "add", "key": "planner:plan-7:step-2", "title": "Step 2",
-         "parent": "key:planner:plan-7:epic", "depends_on": ["key:planner:plan-7:step-1"]}
+         "parent": "key:planner:plan-7:epic"},
+        {"op": "depend", "id": "key:planner:plan-7:step-2", "on": "key:planner:plan-7:step-1"}
     ]})
 }
 
@@ -60,14 +61,14 @@ fn batch_creates_parent_subtasks_and_dependencies_in_one_commit() {
     let step1 = keys["planner:plan-7:step-1"].as_str().unwrap();
     let step2 = keys["planner:plan-7:step-2"].as_str().unwrap();
     let show = repo.ok_json(&["show", step2, "--json"]);
-    assert_eq!(show["data"]["depends_on"], json!([step1]));
+    assert_eq!(show["data"]["blocking"], json!([step1]));
     let step1_show = repo.ok_json(&["show", step1, "--json"]);
     assert_eq!(
         step1_show["data"]["properties"],
         json!({"planner": {"order": 1}})
     );
     assert_eq!(step1_show["data"]["source_key"], "planner:plan-7:step-1");
-    assert_eq!(value["data"]["results"].as_array().unwrap().len(), 3);
+    assert_eq!(value["data"]["results"].as_array().unwrap().len(), 4);
     assert_eq!(value["data"]["results"][0]["op"], "add");
     assert_eq!(value["data"]["results"][0]["changed"], true);
 }
@@ -121,7 +122,7 @@ fn batch_dry_run_validates_without_writing() {
     assert_eq!(status, 0, "{value}");
     assert_eq!(value["data"]["dry_run"], true);
     assert_eq!(value["data"]["committed"], false);
-    assert_eq!(value["data"]["results"].as_array().unwrap().len(), 3);
+    assert_eq!(value["data"]["results"].as_array().unwrap().len(), 4);
     assert_eq!(board_commits(&repo), before);
     assert_eq!(task_files(&repo), files);
 }
@@ -294,7 +295,6 @@ fn batch_adds_a_subtask_under_a_subtask_from_the_same_batch() {
     assert!(!part.contains('.'), "flat ID: {part}");
     assert!(!step.contains('.'), "flat ID: {step}");
     let shown = repo.ok_json(&["show", step, "--json"]);
-    assert_eq!(shown["data"]["kind"], "subtask");
     assert_eq!(shown["data"]["type"], "detail");
     assert_eq!(shown["data"]["parent"], part);
     assert_eq!(board_commits(&repo), before + 1);

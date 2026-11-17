@@ -35,12 +35,9 @@ enum Operation {
         parent: Option<String>,
         #[serde(default)]
         labels: Vec<String>,
-        #[serde(default)]
-        depends_on: Vec<String>,
         body: Option<String>,
         priority: Option<String>,
         repository: Option<String>,
-        waiting_on: Option<String>,
         component: Option<String>,
         verification: Option<String>,
         external_id: Option<String>,
@@ -58,9 +55,6 @@ enum Operation {
         priority: Option<String>,
         #[serde(rename = "type")]
         task_type: Option<String>,
-        waiting_on: Option<String>,
-        #[serde(default)]
-        clear_waiting: bool,
         component: Option<String>,
         #[serde(default)]
         clear_component: bool,
@@ -324,11 +318,9 @@ impl Applier<'_> {
                 task_type,
                 parent,
                 labels,
-                depends_on,
                 body,
                 priority,
                 repository,
-                waiting_on,
                 component,
                 verification,
                 external_id,
@@ -342,10 +334,6 @@ impl Applier<'_> {
                     ));
                 }
                 let parent = parent.map(|p| self.resolve(&p)).transpose()?;
-                let depends_on = depends_on
-                    .iter()
-                    .map(|dep| self.resolve(dep))
-                    .collect::<Result<Vec<_>>>()?;
                 let repository = match repository {
                     Some(repository) => Some(repository),
                     None => crate::repository::current_member_name(self.board)?,
@@ -355,9 +343,7 @@ impl Applier<'_> {
                     priority,
                     task_type,
                     labels,
-                    depends_on,
                     parent,
-                    waiting_on,
                     component,
                     verification,
                     repository,
@@ -382,8 +368,6 @@ impl Applier<'_> {
                 body,
                 priority,
                 task_type,
-                waiting_on,
-                clear_waiting,
                 component,
                 clear_component,
                 verification,
@@ -408,7 +392,6 @@ impl Applier<'_> {
                     body,
                     priority,
                     task_type,
-                    waiting_on: field(waiting_on, clear_waiting),
                     component: field(component, clear_component),
                     verification: field(verification, clear_verification),
                     repository: field(repository, clear_repository),
@@ -934,7 +917,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: None,
-                stray_lease_times: None,
                 source_key: None,
                 properties: BTreeMap::new(),
                 created_at: now,

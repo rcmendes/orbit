@@ -17,7 +17,7 @@ use crate::board::{Board, Config};
 use crate::comment;
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
-use crate::graph::{Graph, Issue, LoadMode};
+use crate::graph::{Graph, LoadIssue, LoadMode};
 use crate::slug;
 use crate::task;
 
@@ -195,11 +195,11 @@ fn detect_collisions(old_to_new: &BTreeMap<String, String>) -> Vec<Collision> {
 /// Doctor-equivalent issues that make a migration unsafe. Strict loading already
 /// covers task parsing and graph structure; this adds the checks doctor performs
 /// over comments and the checked-out branch.
-pub fn health_issues(board: &Board, graph: &Graph) -> Result<Vec<Issue>> {
+pub fn health_issues(board: &Board, graph: &Graph) -> Result<Vec<LoadIssue>> {
     health_issues_inner(board, graph, true)
 }
 
-fn health_issues_inner(board: &Board, graph: &Graph, check_branch: bool) -> Result<Vec<Issue>> {
+fn health_issues_inner(board: &Board, graph: &Graph, check_branch: bool) -> Result<Vec<LoadIssue>> {
     let mut issues = Vec::new();
     crate::health::comment_files(board, graph, true, &mut issues)?;
     if check_branch {
@@ -208,7 +208,7 @@ fn health_issues_inner(board: &Board, graph: &Graph, check_branch: bool) -> Resu
     Ok(issues)
 }
 
-pub fn blocked_by_issues(issues: Vec<Issue>) -> OrbitError {
+pub fn blocked_by_issues(issues: Vec<LoadIssue>) -> OrbitError {
     OrbitError::new(
         code::MIGRATION_BLOCKED,
         "the Board is not healthy enough to migrate; run `orbit doctor` and fix the reported issues",
@@ -337,6 +337,7 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
     let mut config: Config = board.config.clone();
     config.id.prefix = plan.new_prefix.clone();
     config.validate()?;
+    crate::modules::validate(&config)?;
     std::fs::write(root.join("config.toml"), config.to_toml()?.as_bytes())
         .map_err(|error| OrbitError::io("write migrated config.toml", error))?;
 
@@ -420,8 +421,8 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
         migrated_graph.get(&mapping.to)?;
         if migrated_graph.tasks.contains_key(&mapping.from) {
             return Err(OrbitError::board_corrupt(
-                "migration left an old task ID in the temporary Board",
-                serde_json::json!({ "task": mapping.from }),
+                "migration left an old Issue ID in the temporary Board",
+                serde_json::json!({ "issue": mapping.from }),
             ));
         }
     }
@@ -434,7 +435,7 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
     }
 
     let message = format!(
-        "orbit: migrate task prefix from {} to {}",
+        "orbit: migrate issue prefix from {} to {}",
         plan.old_prefix, plan.new_prefix
     );
     match git::commit(root, &message)? {

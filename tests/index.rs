@@ -37,7 +37,7 @@ fn index_path(repo: &TestRepo) -> PathBuf {
 
 fn titles(repo: &TestRepo) -> Vec<String> {
     let value = repo.ok_json(&["list", "--include-closed", "--json"]);
-    value["data"]["tasks"]
+    value["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()

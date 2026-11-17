@@ -10,16 +10,42 @@ use crate::hierarchy::Hierarchy;
 use crate::task::{self, Task};
 use crate::workflow::{StatusCategory, Workflow};
 
+/// What a [`ReadIndex`] plan hands back: `tasks` are served immediately,
+/// `rescan` must be read from disk. `state` is opaque module data the
+/// kernel carries untouched to [`ReadIndex::store`] — the index stamps its
+/// provenance on it; the kernel never looks inside.
+pub struct IndexPlan {
+    pub tasks: HashMap<String, Task>,
+    pub rescan: Vec<String>,
+    pub state: Option<Box<dyn std::any::Any + Send>>,
+}
+
+/// The opt-in derived read index as the kernel sees it (ADR 0022). The
+/// application layer supplies the implementation — `index.rs` supplies it —
+/// so nothing in the kernel names the module.
+pub trait ReadIndex {
+    /// Serves still-fresh cached parses and lists the ids to re-read.
+    fn plan(&self, board: &Board, ids: &[String]) -> IndexPlan;
+    /// Persists what was actually loaded; best-effort, never fails a read.
+    fn store(&self, board: &Board, tasks: &HashMap<String, Task>, plan: &IndexPlan);
+}
+
+/// A diagnostic found while loading or validating the Board: a corrupt Task
+/// file, a dangling link, a rule violation. Named `LoadIssue` to stay clear
+/// of the domain term **Issue** (the tracked unit, ADR 0022).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct Issue {
+pub struct LoadIssue {
     pub code: String,
     pub severity: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub task: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repository: Option<String>,
+    /// The Issue the diagnostic concerns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    /// An external identity (profile name, Remote Issue ref) when the
+    /// diagnostic is about something outside the Board.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external: Option<String>,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<String>,
@@ -27,14 +53,14 @@ pub struct Issue {
     pub next_action: Option<String>,
 }
 
-impl Issue {
+impl LoadIssue {
     pub fn new(code: &str, task: Option<&str>, message: impl Into<String>) -> Self {
         Self {
             code: code.to_string(),
             severity: "error".to_string(),
-            task: task.map(str::to_string),
+            issue: task.map(str::to_string),
             repository: None,
-            issue: None,
+            external: None,
             message: message.into(),
             cause: None,
             next_action: None,
@@ -49,7 +75,7 @@ impl Issue {
     }
 
     pub fn with_task(mut self, task: impl Into<String>) -> Self {
-        self.task = Some(task.into());
+        self.issue = Some(task.into());
         self
     }
 
@@ -58,8 +84,8 @@ impl Issue {
         self
     }
 
-    pub fn with_issue(mut self, issue: impl Into<String>) -> Self {
-        self.issue = Some(issue.into());
+    pub fn with_external(mut self, external: impl Into<String>) -> Self {
+        self.external = Some(external.into());
         self
     }
 
@@ -183,7 +209,7 @@ impl Graph {
             .unwrap_or(self.priorities.len())
     }
 
-    pub fn load(board: &Board, mode: LoadMode) -> Result<(Self, Vec<Issue>)> {
+    pub fn load(board: &Board, mode: LoadMode) -> Result<(Self, Vec<LoadIssue>)> {
         let mut tasks = HashMap::new();
         let mut issues = Vec::new();
         let ids = board.task_ids()?;
@@ -201,21 +227,26 @@ impl Graph {
         Self::assemble(board, tasks, issues, mode)
     }
 
-    /// [`load`] through the opt-in derived index (`[index] enabled`): Tasks
-    /// whose index entry still matches their file's fingerprint are served
-    /// from the cache; every other file is read and parsed exactly as
-    /// [`load`], and the index is refreshed afterwards. Task files remain
-    /// the only source of truth — a missing, stale, or corrupt index simply
-    /// costs a re-parse (ADR 0022). Read commands use this; mutation paths
-    /// keep the authoritative [`load`].
-    pub fn load_indexed(board: &Board, mode: LoadMode) -> Result<(Self, Vec<Issue>)> {
-        if !board.config.index.enabled {
+    /// [`load`] through the opt-in derived read index (ADR 0022). The
+    /// application layer passes the index implementation — `index.rs`'s —
+    /// as `index`; `None` is the plain scan. Tasks whose index entry still
+    /// matches their file's fingerprint are served from the cache; every
+    /// other file is read and parsed exactly as [`load`], and the index is
+    /// refreshed afterwards. Task files remain the only source of truth —
+    /// a missing, stale, or corrupt index simply costs a re-parse. Read
+    /// commands use this; mutation paths keep the authoritative [`load`].
+    pub fn load_indexed(
+        board: &Board,
+        mode: LoadMode,
+        index: Option<&dyn ReadIndex>,
+    ) -> Result<(Self, Vec<LoadIssue>)> {
+        let Some(index) = index else {
             return Self::load(board, mode);
-        }
+        };
         let mut issues = Vec::new();
         let ids = board.task_ids()?;
         let accept_observed_prefix = Self::check_prefix(board, &ids, mode, &mut issues)?;
-        let mut plan = crate::index::plan(board, &ids);
+        let mut plan = index.plan(board, &ids);
         let mut tasks = std::mem::take(&mut plan.tasks);
         for id in std::mem::take(&mut plan.rescan) {
             Self::load_one(
@@ -228,7 +259,7 @@ impl Graph {
             )?;
         }
         let loaded = Self::assemble(board, tasks, issues, mode)?;
-        crate::index::store(board, &loaded.0.tasks, &plan);
+        index.store(board, &loaded.0.tasks, &plan);
         Ok(loaded)
     }
 
@@ -240,7 +271,7 @@ impl Graph {
         board: &Board,
         ids: &[String],
         mode: LoadMode,
-        issues: &mut Vec<Issue>,
+        issues: &mut Vec<LoadIssue>,
     ) -> Result<bool> {
         let Some(mismatch) = detect_prefix_mismatch(ids, &board.config.id) else {
             return Ok(false);
@@ -254,29 +285,29 @@ impl Graph {
                 OrbitError::new(code::PREFIX_MISMATCH, message).with_details(serde_json::json!({
                     "configured": mismatch.configured,
                     "observed": mismatch.observed,
-                    "tasks": mismatch.tasks,
+                    "issue_count": mismatch.tasks,
                 })),
             );
         }
-        issues.push(Issue::new(code::PREFIX_MISMATCH, None, message));
+        issues.push(LoadIssue::new(code::PREFIX_MISMATCH, None, message));
         Ok(true)
     }
 
     /// Reads and parses one Task file into `tasks`, honoring `mode`: Strict
-    /// returns the first failure, Lenient collects it as an [`Issue`].
+    /// returns the first failure, Lenient collects it as an [`LoadIssue`].
     fn load_one(
         board: &Board,
         id: &str,
         accept_observed_prefix: bool,
         mode: LoadMode,
         tasks: &mut HashMap<String, Task>,
-        issues: &mut Vec<Issue>,
+        issues: &mut Vec<LoadIssue>,
     ) -> Result<()> {
         // With one PREFIX_MISMATCH reported, the files are known to use the
         // observed prefix, so accept their IDs instead of one CORRUPT_TASK
         // per file. Structural validation still runs below.
         if !accept_observed_prefix && !board.config.id.is_valid_task_id(id) {
-            let issue = Issue::new(
+            let issue = LoadIssue::new(
                 code::CORRUPT_TASK,
                 Some(id),
                 format!("filename {id}.md is not a valid task id"),
@@ -296,7 +327,7 @@ impl Graph {
                 if mode == LoadMode::Strict {
                     return Err(error);
                 }
-                issues.push(Issue::new(error.code, Some(id), error.message));
+                issues.push(LoadIssue::new(error.code, Some(id), error.message));
                 return Ok(());
             }
         };
@@ -309,7 +340,7 @@ impl Graph {
                 if mode == LoadMode::Strict {
                     return Err(error);
                 }
-                issues.push(Issue::new(error.code, Some(id), error.message));
+                issues.push(LoadIssue::new(error.code, Some(id), error.message));
             }
         }
         Ok(())
@@ -320,9 +351,9 @@ impl Graph {
     fn assemble(
         board: &Board,
         tasks: HashMap<String, Task>,
-        mut issues: Vec<Issue>,
+        mut issues: Vec<LoadIssue>,
         mode: LoadMode,
-    ) -> Result<(Self, Vec<Issue>)> {
+    ) -> Result<(Self, Vec<LoadIssue>)> {
         let workflow = board.workflow()?;
         let (keys, aliases) = Self::build_key_indices(&tasks);
         let graph = Self {
@@ -414,12 +445,12 @@ impl Graph {
         Some(task)
     }
 
-    pub fn validate(&self) -> Vec<Issue> {
+    pub fn validate(&self) -> Vec<LoadIssue> {
         let mut issues = Vec::new();
 
         for task in self.tasks.values() {
             if self.workflow.status(&task.front.status).is_none() {
-                issues.push(Issue::new(
+                issues.push(LoadIssue::new(
                     code::CORRUPT_TASK,
                     Some(&task.id),
                     format!(
@@ -433,7 +464,7 @@ impl Graph {
                     continue;
                 };
                 if target == task.id {
-                    issues.push(Issue::new(
+                    issues.push(LoadIssue::new(
                         code::CYCLE_DETECTED,
                         Some(&task.id),
                         format!("{} has a {} link to itself", task.id, link.kind),
@@ -442,7 +473,7 @@ impl Graph {
                 }
 
                 if !self.tasks.contains_key(target) {
-                    issues.push(Issue::new(
+                    issues.push(LoadIssue::new(
                         code::DANGLING_DEP,
                         Some(&task.id),
                         format!(
@@ -454,7 +485,7 @@ impl Graph {
             }
 
             if !self.hierarchy.is_known_type(&task.front.task_type) {
-                issues.push(Issue::new(
+                issues.push(LoadIssue::new(
                     code::INVALID_TYPE,
                     Some(&task.id),
                     format!(
@@ -467,7 +498,7 @@ impl Graph {
             }
             let missing = self.hierarchy.missing_required_fields(task);
             if !missing.is_empty() {
-                issues.push(Issue::new(
+                issues.push(LoadIssue::new(
                     code::MISSING_REQUIRED_FIELD,
                     Some(&task.id),
                     format!(
@@ -484,7 +515,7 @@ impl Graph {
                 if parent_id == &task.id {
                     // covered by find_parent_cycle
                 } else if !self.tasks.contains_key(parent_id) {
-                    issues.push(Issue::new(
+                    issues.push(LoadIssue::new(
                         code::DANGLING_PARENT,
                         Some(&task.id),
                         format!("{} has missing parent {parent_id}", task.id),
@@ -495,7 +526,7 @@ impl Graph {
                         .hierarchy
                         .parent_rule_violation(&task.front.task_type, parent_type)
                     {
-                        issues.push(Issue::new(
+                        issues.push(LoadIssue::new(
                             code::INVALID_TYPE,
                             Some(&task.id),
                             format!("{} has parent {parent_id}: {reason}", task.id),
@@ -517,7 +548,7 @@ impl Graph {
                 })
                 .map(|task| task.id.as_str())
                 .collect();
-            issues.push(Issue::new(
+            issues.push(LoadIssue::new(
                 code::DUPLICATE_KEY,
                 carriers.first().copied(),
                 format!(
@@ -528,7 +559,7 @@ impl Graph {
         }
 
         if let Some(cycle) = self.find_parent_cycle() {
-            issues.push(Issue::new(
+            issues.push(LoadIssue::new(
                 code::PARENT_CYCLE,
                 cycle.first().map(String::as_str),
                 format!("parent cycle: {}", cycle.join(" -> ")),
@@ -536,7 +567,7 @@ impl Graph {
         }
 
         if let Some(cycle) = self.find_cycle() {
-            issues.push(Issue::new(
+            issues.push(LoadIssue::new(
                 code::CYCLE_DETECTED,
                 cycle.first().map(String::as_str),
                 format!("dependency cycle: {}", cycle.join(" -> ")),
@@ -556,7 +587,7 @@ impl Graph {
             }
         }
         for (external_id, ids) in external_ids.into_iter().filter(|(_, ids)| ids.len() > 1) {
-            issues.push(Issue::new(
+            issues.push(LoadIssue::new(
                 code::DUPLICATE_EXTERNAL_ID,
                 ids.first().copied(),
                 format!(
@@ -1099,13 +1130,13 @@ fn inferred_prefix(id: &str) -> Option<String> {
 }
 
 pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
-    // `subtasks` covers the whole subtree at any depth; `children` remains
+    // `sub_issues` covers the whole subtree at any depth; `children` remains
     // the direct-children view used by `tree`, `delete`, and grouping.
-    let subtasks: Vec<String> = graph.descendants(&task.id);
-    let open_subtasks = graph.open_descendants(&task.id);
-    let subtask_count = subtasks.len();
-    let open_subtask_count = open_subtasks.len();
-    let resolved_subtask_count = subtask_count.saturating_sub(open_subtask_count);
+    let sub_issues: Vec<String> = graph.descendants(&task.id);
+    let open_sub_issues = graph.open_descendants(&task.id);
+    let sub_issue_count = sub_issues.len();
+    let open_sub_issue_count = open_sub_issues.len();
+    let resolved_sub_issue_count = sub_issue_count.saturating_sub(open_sub_issue_count);
     let eligible_for_close = graph.eligible_for_close(task);
     let allowed_transitions: Vec<&str> = graph
         .workflow
@@ -1113,14 +1144,6 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         .iter()
         .map(|transition| transition.name.as_str())
         .collect();
-    // Derived `waiting_on` view over external blocking links.
-    let waiting_labels = task.waiting_labels();
-    let waiting_on = if waiting_labels.is_empty() {
-        serde_json::Value::Null
-    } else {
-        serde_json::Value::String(waiting_labels.join(", "))
-    };
-
     let mut value = serde_json::json!({
         "id": task.id,
         "title": task.front.title,
@@ -1133,24 +1156,16 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "allowed_transitions": allowed_transitions,
         "type": task.front.task_type,
         "priority": task.front.priority,
-        "kind": task.kind(),
         "labels": task.front.labels,
         "links": task.front.links.iter().map(crate::task::Link::to_json).collect::<Vec<_>>(),
-        // Derived read-only views kept for consumers of the old fields;
-        // `links` is the stored truth.
-        "depends_on": task
-            .blocking_links()
-            .filter_map(|link| link.target_task().map(str::to_string))
-            .collect::<Vec<_>>(),
         "parent": task.front.parent,
         "depth": graph.depth(&task.id),
-        "subtasks": subtasks,
-        "open_subtasks": open_subtasks,
-        "subtask_count": subtask_count,
-        "resolved_subtask_count": resolved_subtask_count,
-        "open_subtask_count": open_subtask_count,
+        "sub_issues": sub_issues,
+        "open_sub_issues": open_sub_issues,
+        "sub_issue_count": sub_issue_count,
+        "resolved_sub_issue_count": resolved_sub_issue_count,
+        "open_sub_issue_count": open_sub_issue_count,
         "eligible_for_close": eligible_for_close,
-        "waiting_on": waiting_on,
         "checkpoint": task.front.checkpoint,
         "checkpoint_archived": task
             .front
@@ -1163,7 +1178,6 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "verification": task.front.verification,
         "source_key": task.front.source_key,
         "properties": task.front.properties,
-        "github": crate::remote::link::github_compat_json(task),
         "remote": crate::remote::link::link_json(task),
         "assignee": task.assignee_name(),
         "assignee_kind": task.front.assignee.as_ref().map(|a| a.kind.as_str()),
@@ -1239,7 +1253,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: None,
-                stray_lease_times: None,
                 created_at: now,
                 updated_at: now,
                 source_key: None,

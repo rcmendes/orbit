@@ -18,9 +18,7 @@ pub(super) fn cmd_add(board: &Board, args: AddArgs) -> Result<crate::output::Com
         priority: args.priority,
         task_type: args.task_type,
         labels: args.label,
-        depends_on: args.depends_on,
         parent: args.parent,
-        waiting_on: args.waiting_on,
         component: args.component,
         verification: args.verification,
         repository,
@@ -72,7 +70,7 @@ fn subtasks_exist_error(id: &str, subtasks: &[String]) -> OrbitError {
         code::SUBTASKS_EXIST,
         format!("{id} has SubTasks: {}", subtasks.join(", ")),
     )
-    .with_details(json!({ "task": id, "subtasks": subtasks }))
+    .with_details(json!({ "issue": id, "sub_issues": subtasks }))
 }
 
 pub(super) fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::output::CommandOutput> {
@@ -83,8 +81,6 @@ pub(super) fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::outpu
         || args.body_file.is_some()
         || args.priority.is_some()
         || args.task_type.is_some()
-        || args.waiting_on.is_some()
-        || args.clear_waiting
         || args.component.is_some()
         || args.clear_component
         || args.repository.is_some()
@@ -95,7 +91,7 @@ pub(super) fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::outpu
         || args.clear_verification;
     if !has_changes {
         return Err(OrbitError::invalid_argument(
-            "nothing to update; pass --title, --body, --priority, --type, --component, --repository, --external-id, --verification, or --waiting-on",
+            "nothing to update; pass --title, --body, --priority, --type, --component, --repository, --external-id, or --verification",
         ));
     }
 
@@ -116,7 +112,6 @@ pub(super) fn cmd_update(board: &Board, args: UpdateArgs) -> Result<crate::outpu
         body,
         priority: args.priority,
         task_type: args.task_type,
-        waiting_on: field(args.waiting_on, args.clear_waiting),
         component: field(args.component, args.clear_component),
         verification: field(args.verification, args.clear_verification),
         repository: field(args.repository, args.clear_repository),
@@ -206,7 +201,7 @@ fn delete_subtree(
             code::DEPENDENCY_BLOCKED,
             format!("{id} has dependents: {}", dependent_ids.join(", ")),
         )
-        .with_details(json!({ "task": id, "dependents": dependent_ids })));
+        .with_details(json!({ "issue": id, "dependents": dependent_ids })));
     }
 
     if force {

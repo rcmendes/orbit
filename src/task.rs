@@ -94,15 +94,6 @@ impl Lease {
     }
 }
 
-/// Lease times found in a file without an `assignee`. Kept so such
-/// hand-edited files rewrite unchanged and `orbit doctor` can still report
-/// them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StrayLeaseTimes {
-    pub claimed_at: Option<DateTime<Utc>>,
-    pub lease_until: Option<DateTime<Utc>>,
-}
-
 /// The latest handoff note from the claim holder: where the work stands, what to
 /// do next, and what is blocking it. Replaced on each update; retained on the
 /// Task as archived history after a terminal transition.
@@ -355,10 +346,12 @@ impl Link {
         }
     }
 
-    /// Whether the link participates in readiness and cycle checks.
+    /// Whether the link participates in readiness and cycle checks. `blocks`
+    /// and `waiting-on` default to blocking (a waiting external reference is
+    /// a blocker by definition); every other type defaults to non-blocking.
     pub fn is_blocking(&self) -> bool {
         self.blocking
-            .unwrap_or_else(|| self.kind == LINK_TYPE_BLOCKS)
+            .unwrap_or_else(|| self.kind == LINK_TYPE_BLOCKS || self.kind == LINK_TYPE_WAITING_ON)
     }
 
     /// The internal Task ID this link points at, when it has one.
@@ -563,22 +556,26 @@ impl From<RawFrontmatter> for TaskFrontmatter {
                 });
             }
         }
-        // A lease without an assignee is stray times: keep them so the file
-        // rewrites unchanged and `orbit doctor` can report them.
-        let stray_lease_times = if assignee.is_none() {
-            let times = lease.take().map(|lease| StrayLeaseTimes {
-                claimed_at: lease.claimed_at.or(raw.claimed_at),
-                lease_until: lease.lease_until.or(raw.lease_until),
-            });
-            times.or_else(|| {
-                (raw.claimed_at.is_some() || raw.lease_until.is_some()).then_some(StrayLeaseTimes {
-                    claimed_at: raw.claimed_at,
-                    lease_until: raw.lease_until,
-                })
-            })
-        } else {
-            None
-        };
+        // A lease with no assignee — a `lease:` map on a hand-edited file or
+        // flat legacy times without `claimed_by` — stays a `lease` so the
+        // file rewrites in canonical form; `orbit doctor` reports a lease
+        // with no assignee as incomplete metadata.
+        if assignee.is_none() {
+            match &mut lease {
+                Some(lease) => {
+                    lease.claimed_at = lease.claimed_at.or(raw.claimed_at);
+                    lease.lease_until = lease.lease_until.or(raw.lease_until);
+                }
+                None => {
+                    if raw.claimed_at.is_some() || raw.lease_until.is_some() {
+                        lease = Some(Lease {
+                            claimed_at: raw.claimed_at,
+                            lease_until: raw.lease_until,
+                        });
+                    }
+                }
+            }
+        }
         // Legacy `depends_on`/`waiting_on` keys upgrade into `links` on read;
         // `links` itself is written back, the legacy keys never are.
         let mut links = raw.links;
@@ -617,7 +614,6 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             assignee,
             lease,
             reporter: raw.reporter,
-            stray_lease_times,
             source_key: raw.source_key,
             properties: raw.properties,
             created_at: raw.created_at,
@@ -629,12 +625,6 @@ impl From<RawFrontmatter> for TaskFrontmatter {
 
 impl From<TaskFrontmatter> for RawFrontmatter {
     fn from(front: TaskFrontmatter) -> Self {
-        // Lease times write back flat (`claimed_at`/`lease_until`) only for
-        // stray times with no assignee; a real lease serializes as `lease:`.
-        let (claimed_at, lease_until) = match (&front.lease, &front.stray_lease_times) {
-            (None, Some(stray)) => (stray.claimed_at, stray.lease_until),
-            _ => (None, None),
-        };
         Self {
             title: front.title,
             status: front.status,
@@ -659,8 +649,8 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             lease: front.lease,
             reporter: front.reporter,
             claimed_by: None,
-            claimed_at,
-            lease_until,
+            claimed_at: None,
+            lease_until: None,
             source_key: front.source_key,
             properties: front.properties,
             created_at: front.created_at,
@@ -720,7 +710,6 @@ pub struct TaskFrontmatter {
     pub lease: Option<Lease>,
     /// Who created the Task; set at creation and never changed.
     pub reporter: Option<String>,
-    pub stray_lease_times: Option<StrayLeaseTimes>,
     /// Caller-chosen identity that makes `add` retry-safe; unique per Board.
     pub source_key: Option<String>,
     /// Tool-owned data namespaced by owner slug; Orbit stores it but never
@@ -756,10 +745,6 @@ impl Task {
 
     pub fn is_subtask(&self) -> bool {
         self.front.parent.is_some()
-    }
-
-    pub fn kind(&self) -> &'static str {
-        if self.is_subtask() { "subtask" } else { "task" }
     }
 
     /// The Task's configured Issue type name.
@@ -1237,6 +1222,18 @@ pub fn normalize_label(input: &str) -> Result<String> {
     Ok(label)
 }
 
+/// Normalizes, sorts, and deduplicates a label list. Shared by every surface
+/// that accepts `--label`/`label add` values.
+pub fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {
+    let mut normalized = Vec::with_capacity(labels.len());
+    for label in labels {
+        normalized.push(normalize_label(label)?);
+    }
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
 pub fn generate_id(prefix: &str, len: usize) -> String {
     format!("{prefix}{}", generate_rand(len))
 }
@@ -1284,7 +1281,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: None,
-                stray_lease_times: None,
                 created_at: now(),
                 updated_at: now(),
                 source_key: None,
@@ -1496,21 +1492,30 @@ Body.
     }
 
     #[test]
-    fn stray_lease_times_survive_a_round_trip() {
+    fn legacy_flat_lease_until_becomes_a_canonical_lease() {
         let content = "---\ntitle: t\nstatus: todo\ntype: task\npriority: medium\nlease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
-        assert!(task.front.assignee.is_none() && task.front.stray_lease_times.is_some());
-        assert_eq!(render_task(&task).unwrap(), content);
+        let lease = task.front.lease.as_ref().unwrap();
+        assert!(task.front.assignee.is_none());
+        assert_eq!(
+            lease.lease_until,
+            Some(Utc.with_ymd_and_hms(2026, 10, 23, 12, 30, 0).unwrap())
+        );
+        let rendered = render_task(&task).unwrap();
+        assert!(
+            rendered.contains("lease:")
+                && !rendered.contains("lease_until: 2026-10-23T12:30:00Z\nstatus")
+        );
     }
 
     #[test]
-    fn lease_without_assignee_becomes_stray_times() {
-        let content = "---\ntitle: t\nstatus: todo\nlease:\n  claimed_at: 2026-10-23T12:00:00Z\n  lease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
+    fn lease_without_assignee_round_trips() {
+        let content = "---\ntitle: t\nstatus: todo\ntype: task\npriority: medium\nlease:\n  claimed_at: 2026-10-23T12:00:00Z\n  lease_until: 2026-10-23T12:30:00Z\ncreated_at: 2026-10-23T12:00:00Z\nupdated_at: 2026-10-23T12:00:00Z\n---\n\n";
         let task = parse_task("orb-a7b2c9".to_string(), content).unwrap();
         assert!(task.front.assignee.is_none());
-        assert!(task.front.lease.is_none());
-        let stray = task.front.stray_lease_times.as_ref().unwrap();
-        assert_eq!(stray.claimed_at, Some(now()));
+        let lease = task.front.lease.as_ref().unwrap();
+        assert_eq!(lease.claimed_at, Some(now()));
+        assert_eq!(render_task(&task).unwrap(), content);
     }
 
     #[test]

@@ -22,8 +22,6 @@
 
 use std::process::{Command, Stdio};
 
-use serde::{Deserialize, Serialize};
-
 use crate::board::{Board, board_cache_dir};
 use crate::error::{OrbitError, Result};
 use crate::feed::{self, BoardEvent};
@@ -42,14 +40,9 @@ pub const EVENT_KINDS: &[&str] = &[
     "board.changed",
 ];
 
-/// One `[[hooks]]` rule: run `command` for each event in `events`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HookRule {
-    /// Event kinds to fire on; `"*"` matches every event.
-    pub events: Vec<String>,
-    /// Shell command spawned detached via `sh -c` with `ORBIT_EVENT_*` env.
-    pub command: String,
-}
+// The `[[hooks]]` rule schema lives in `crate::board` (kernel-owned
+// config.toml schema); this module matches, validates, and spawns rules.
+pub use crate::board::HookRule;
 
 impl HookRule {
     /// Whether this rule fires for `kind`.
@@ -60,8 +53,9 @@ impl HookRule {
     }
 }
 
-/// Validates `[[hooks]]` rules; called from `Config::validate` so a
-/// misspelled event name or empty rule fails any Board command loudly.
+/// Validates `[[hooks]]` rules; called from `crate::modules::validate` in
+/// the application layer so a misspelled event name or empty rule fails
+/// any Board command loudly.
 pub fn validate(rules: &[HookRule]) -> Result<()> {
     for (index, rule) in rules.iter().enumerate() {
         if rule.events.is_empty() {

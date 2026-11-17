@@ -30,7 +30,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{OrbitError, Result};
@@ -67,46 +66,27 @@ impl Strategy {
     }
 
     fn parse(name: &str) -> Option<Self> {
-        STRATEGIES
-            .iter()
-            .position(|candidate| *candidate == name)
-            .map(|index| match index {
-                0 => Self::Default,
-                1 => Self::CriticalPath,
-                2 => Self::Touches,
-                3 => Self::Capability,
-                _ => Self::Wip,
-            })
+        match name {
+            "default" => Some(Self::Default),
+            "critical-path" => Some(Self::CriticalPath),
+            "touches" => Some(Self::Touches),
+            "capability" => Some(Self::Capability),
+            "wip" => Some(Self::Wip),
+            _ => None,
+        }
+        .filter(|strategy| STRATEGIES.contains(&strategy.name()))
     }
 }
 
-/// The `[scheduler]` section of `config.toml`: the opt-in module's Board
-/// settings. Absent or empty keeps the kernel's default queue behavior.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SchedulerConfig {
-    /// Comma-separated strategy names applied in order, for example
-    /// `"critical-path,touches"`. Overrides nothing by itself; `--strategy`
-    /// beats it per invocation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strategy: Option<String>,
-    /// Most non-terminal assigned Tasks one agent may hold under the `wip`
-    /// strategy. Required when `wip` is an active strategy.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wip_limit: Option<u32>,
-    /// Agent name → capabilities that agent can claim, consulted by the
-    /// `capability` strategy.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub capabilities: BTreeMap<String, Vec<String>>,
-}
+// The `[scheduler]` config schema lives in `crate::board` (kernel-owned
+// config.toml schema); this module interprets and validates it.
+pub use crate::board::SchedulerConfig;
 
 impl SchedulerConfig {
-    pub fn is_empty(&self) -> bool {
-        self.strategy.is_none() && self.wip_limit.is_none() && self.capabilities.is_empty()
-    }
-
-    /// Semantic checks run by `Config::validate`: known strategy names, a
-    /// positive WIP limit, a limit whenever `wip` is configured, and
-    /// label-shaped agent/capability names.
+    /// Semantic checks run by `crate::modules::validate` in the application
+    /// layer: known strategy names, a positive WIP limit, a limit whenever
+    /// `wip` is configured, and label-shaped agent/capability names. The
+    /// kernel never calls this.
     pub fn validate(&self) -> Result<()> {
         if let Some(raw) = &self.strategy {
             for name in raw.split(',').map(str::trim).filter(|n| !n.is_empty()) {
@@ -430,7 +410,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: None,
-                stray_lease_times: None,
                 created_at: now,
                 updated_at: now,
                 source_key: None,

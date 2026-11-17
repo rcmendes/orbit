@@ -2650,24 +2650,24 @@ fn workflow_section(remote_details: bool) -> String {
     let list = list_guidance(remote_details);
     format!(
         "{BEGIN_MARKER}
-## Orbit task tracking
+## Orbit issue tracking
 
-Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
+Orbit is the issue tracker for this project. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
 
-From any member Repository, these commands resolve the shared Board across the Git boundary. Tasks, dependencies, and claims are shared across its Repositories.
+From any member Repository, these commands resolve the shared Board across the Git boundary. Issues, dependencies, and claims are shared across its Repositories.
 
-- `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
-- `orbit claim <id> --by <agent> --worktree` claims one task and creates `.worktrees/<id>` on `ticket/<id>` in the Task's Repository.
-- `orbit assign <id> --to <name>` assigns a task to a person or agent without a lease.
+- `orbit ready --claim --by <agent>` claims the highest-priority ready Issue atomically.
+- `orbit claim <id> --by <agent> --worktree` claims one Issue and creates `.worktrees/<id>` on `ticket/<id>` in the Issue's Repository.
+- `orbit assign <id> --to <name>` assigns an Issue to a person or agent without a lease.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 - `orbit checkpoint <id> --by <agent> --progress \"...\" [--next \"...\"] [--blocker \"...\"]` records a handoff that survives release and takeover.
 {COMPLETION_LINE}
-- `orbit add \"title\" -p high --depends-on <id>` creates work.
+- `orbit add \"title\" -p high` creates work; `orbit depend <id> <dep-id>` adds a blocker.
 - `orbit add \"title\" --parent <id>` creates a child Issue. Issue types and the parent hierarchy are configured per Board under `board.types` and `board.hierarchy` (default: `epic` above `story`/`task`/`bug` above `sub-task`); a child must sit below its parent in the hierarchy, `--parent` without `--type` files a `sub-task`, and the parent waits for every descendant to resolve.
-- Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
+- Never use `done --force` or `cancel --force` on a parent with open sub-issues; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
-- Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
-- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Tasks; `--all` widens to the whole Board.
+- Use `orbit tree <id>` to inspect one epic/spec with its sub-issues and blockers.
+- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Issues; `--all` widens to the whole Board.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.
@@ -2684,7 +2684,7 @@ Parse the JSON envelope: `ok`, `data`, `error.code`, and `error.retryable`. If a
 fn cursor_rule(remote_details: bool) -> String {
     format!(
         "---
-description: \"Orbit task tracker workflow\"
+description: \"Orbit issue tracker workflow\"
 globs: [\"**/*\"]
 alwaysApply: true
 ---
@@ -2698,7 +2698,7 @@ alwaysApply: true
 fn devin_rule(remote_details: bool) -> String {
     format!(
         "---
-description: \"Orbit task tracker workflow\"
+description: \"Orbit issue tracker workflow\"
 trigger: always_on
 ---
 
@@ -2767,20 +2767,20 @@ fn mattpocock_section(remote_details: bool) -> String {
 
 We use Orbit, a Git-native issue tracker for coding agents. Issues live as Markdown on the board and are served by the `orbit` CLI; the board is shared by every Git worktree. This repository applies the `mattpocock` profile: the five triage roles are workflow statuses and transitions, not labels — see `docs/agents/triage-labels.md` for the mapping.
 
-- To find actionable work, run `orbit ready --json` and parse `data.tasks`. Only Issues in the `{ready}` status appear there.
+- To find actionable work, run `orbit ready --json` and parse `data.issues`. Only Issues in the `{ready}` status appear there.
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
-- To claim a known Task and prepare its worktree, run `orbit claim <ID> --by <agent> --worktree`; it creates or reuses `.worktrees/<ID>` on `ticket/<ID>` in the Task's Repository. If preparation fails after claiming, `CLAIM_WORKTREE_FAILED` means the claim remains active; fix the cause and retry.
+- To claim a known Issue and prepare its worktree, run `orbit claim <ID> --by <agent> --worktree`; it creates or reuses `.worktrees/<ID>` on `ticket/<ID>` in the Issue's Repository. If preparation fails after claiming, `CLAIM_WORKTREE_FAILED` means the claim remains active; fix the cause and retry.
 - To hand off work, run `orbit checkpoint <ID> --by <agent> --progress \"...\" --next \"...\"`; the record survives release and takeover, and never affects readiness.
 - To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change. Closing an Issue as `wontfix` instead runs `orbit transition <ID> wontfix`, which records resolution `Won't Do`.
-- To create work, run `orbit add \"Title\" -p high --depends-on <ID>`. New Issues start in `{initial}`.
-- Orbit calls the unit a Task. A skill's \"issue\" is a Task; a \"sub-issue\" is a SubTask; an \"epic\" or \"spec\" is a top-level Task with `--type epic`.
+- To create work, run `orbit add \"Title\" -p high`; `orbit depend <ID> <DEP-ID>` adds a blocker. New Issues start in `{initial}`.
+- Orbit calls the unit an Issue; a child Issue is a sub-issue filed with `--parent`; an \"epic\" or \"spec\" is a top-level Issue with `--type epic`.
 - To publish tickets under an existing issue or spec, run `orbit add \"Title\" --parent <PARENT_ID>`; the parent waits for every descendant to resolve.
 - `type` is a Board-configured Issue type. This profile maps the `bug` category to type `bug` and `enhancement` to type `story`; pass `--type` on `orbit add` or `orbit update` rather than adding category labels.
 - Triage state moves with `orbit transition <ID> <role>`: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. `ready-for-human` work is assigned to a person with `orbit assign <ID> --to <name>` (assignee kind `human`), which takes it out of the agent queue.
-- Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
+- Never use `done --force` or `cancel --force` on a parent with open sub-issues; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
-- Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
-- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Tasks; `--all` widens to the whole Board.
+- Use `orbit tree <id>` to inspect one epic/spec with its sub-issues and blockers.
+- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Issues; `--all` widens to the whole Board.
 - To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`. Labels are free-form metadata — triage state is a status, not a label.
 - To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.
 - Never edit task frontmatter directly; that bypasses dependency validation, leases, and the write lock.

@@ -76,7 +76,7 @@ fn model_migrate_previews_without_writing() {
 
     assert_eq!(value["data"]["migrated"], true, "{value}");
     assert_eq!(value["data"]["applied"], false, "{value}");
-    assert_eq!(value["data"]["tasks"], 1, "{value}");
+    assert_eq!(value["data"]["issues_scanned"], 1, "{value}");
     assert_eq!(value["data"]["keys_allocated"], 1, "{value}");
     assert_eq!(
         std::fs::read_to_string(board.join("tasks/orb-aaa111.md")).unwrap(),

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -160,33 +161,114 @@ pub struct Config {
     /// Opt-in ready-queue scheduler (`[scheduler]`): strategy selection,
     /// WIP limit, and per-agent capabilities. Absent keeps the kernel's
     /// default `(priority, created_at, id)` ordering (ADR 0022).
-    #[serde(
-        default,
-        skip_serializing_if = "crate::scheduler::SchedulerConfig::is_empty"
-    )]
-    pub scheduler: crate::scheduler::SchedulerConfig,
+    #[serde(default, skip_serializing_if = "SchedulerConfig::is_empty")]
+    pub scheduler: SchedulerConfig,
     /// Local command hooks (`[[hooks]]`): each rule binds feed event kinds to
     /// a shell command spawned detached after a write commits. Best-effort —
     /// hooks never block or fail a write (ADR 0022 opt-in module).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hooks: Vec<crate::hooks::HookRule>,
+    pub hooks: Vec<HookRule>,
     /// The opt-in derived read index (`[index]`): caches Task parses under
     /// the Board cache dir to accelerate `list`/`ready`/`search` reads on
     /// large Boards. Rebuildable from the Task files; never a source of
     /// truth (ADR 0022 opt-in module).
-    #[serde(default, skip_serializing_if = "crate::index::IndexConfig::is_default")]
-    pub index: crate::index::IndexConfig,
+    #[serde(default, skip_serializing_if = "IndexConfig::is_default")]
+    pub index: IndexConfig,
     /// Profiles applied to this Board (`orbit setup <plugin>`), recorded so
     /// `orbit doctor` and `orbit capabilities` can re-negotiate their
     /// requirements without re-reading the profile files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub profiles: Vec<crate::profile::AppliedProfile>,
+    pub profiles: Vec<AppliedProfile>,
     /// The contract version the Board was written for (ADR 0022). A binary
     /// refuses a Board whose contract is newer than its own; see
     /// [`crate::contract`]. Boards predating the field read as the current
     /// contract.
     #[serde(default = "crate::contract::default_version")]
     pub contract: String,
+}
+
+/// The `[scheduler]` section schema (ADR 0022 opt-in module). The kernel
+/// owns the config.toml schema; the `scheduler` module interprets and
+/// validates it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SchedulerConfig {
+    /// Comma-separated strategy names applied in order, for example
+    /// `"critical-path,touches"`. `--strategy` beats it per invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<String>,
+    /// Most non-terminal assigned Issues one agent may hold under the `wip`
+    /// strategy. Required when `wip` is an active strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wip_limit: Option<u32>,
+    /// Agent name → capabilities that agent can claim, consulted by the
+    /// `capability` strategy.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub capabilities: BTreeMap<String, Vec<String>>,
+}
+
+impl SchedulerConfig {
+    pub fn is_empty(&self) -> bool {
+        self.strategy.is_none() && self.wip_limit.is_none() && self.capabilities.is_empty()
+    }
+}
+
+/// One `[[hooks]]` rule schema: run `command` for each event in `events`.
+/// The `hooks` module matches, validates, and spawns rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookRule {
+    /// Event kinds to fire on; `"*"` matches every event.
+    pub events: Vec<String>,
+    /// Shell command spawned detached via `sh -c` with `ORBIT_EVENT_*` env.
+    pub command: String,
+}
+
+/// The `[index]` section schema: `enabled = true` opts the Board into the
+/// derived read index (ADR 0022 opt-in module).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl IndexConfig {
+    /// serde `skip_serializing_if`: a Board without the index writes no
+    /// `[index]` section at all.
+    pub fn is_default(&self) -> bool {
+        !self.enabled
+    }
+}
+
+/// The `[[profiles]]` record `orbit setup <plugin>` writes into
+/// `config.toml`. It captures everything `doctor` and `capabilities` need
+/// to re-negotiate the profile's requirements without re-reading the
+/// profile file, which may have moved or changed since it was applied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppliedProfile {
+    pub name: String,
+    /// Where the profile came from: `builtin`, `board`, `orbit`, `user`,
+    /// `project`, `local`, or `file:<path>` for an explicit path argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The minimum contract version the profile was written for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional: Vec<String>,
+    /// Hold names the profile contributed to `board.non_ready_labels`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holds: Vec<String>,
+    /// Role name → assignee kind (`agent` or `human`) the plugin uses.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub roles: BTreeMap<String, String>,
+    /// Plugin-term → Orbit-term maps, one string→string table per
+    /// vocabulary area (`status`, `label`, `priority`, `type`, `link`,
+    /// `resolution`, `component`, or a plugin-defined area).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vocabulary: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Default for Config {
@@ -200,9 +282,9 @@ impl Default for Config {
             workspace: crate::workspace::WorkspaceConfig::default(),
             workflow: crate::workflow::WorkflowConfig::default(),
             policy: crate::policy::PolicyConfig::default(),
-            scheduler: crate::scheduler::SchedulerConfig::default(),
+            scheduler: SchedulerConfig::default(),
             hooks: Vec::new(),
-            index: crate::index::IndexConfig::default(),
+            index: IndexConfig::default(),
             profiles: Vec::new(),
             contract: crate::contract::default_version(),
         }
@@ -310,8 +392,9 @@ impl Config {
         self.workflow.validate()?;
         crate::workflow::Workflow::from_config(self)?;
         crate::policy::Policy::from_config(self)?;
-        self.scheduler.validate()?;
-        crate::hooks::validate(&self.hooks)?;
+        // Module semantics (`[scheduler]`, `[[hooks]]`, `[index]`) are
+        // validated by `crate::modules::validate` in the application layer;
+        // the kernel only owns their schema (ADR 0022).
         let mut profile_names = std::collections::BTreeSet::new();
         for profile in &self.profiles {
             if !task::is_valid_label(&profile.name) {
@@ -467,6 +550,43 @@ impl HostSyncMode {
             Self::Manual => "manual",
             Self::Auto => "auto",
         }
+    }
+}
+
+impl BoardConfig {
+    /// Validates a priority name against `board.priorities`, returning the
+    /// configured spelling. Shared by every surface that sets a priority.
+    pub fn validate_priority(&self, priority: &str) -> Result<String> {
+        let name = priority.trim().to_lowercase();
+        match self.priorities.iter().find(|candidate| *candidate == &name) {
+            Some(configured) => Ok(configured.clone()),
+            None => Err(OrbitError::invalid_argument(format!(
+                "unknown priority `{priority}`; expected one of: {}",
+                self.priorities.join(", ")
+            ))),
+        }
+    }
+
+    /// Normalizes one Component value and validates it against
+    /// `board.components`; an empty list accepts any component.
+    pub fn normalize_component(&self, value: &str) -> Result<String> {
+        task::normalize_component(value, &self.components)
+    }
+
+    /// Normalizes an optional Component option the same way as
+    /// [`BoardConfig::normalize_component`].
+    pub fn parse_component_option(&self, component: Option<String>) -> Result<Option<String>> {
+        component
+            .map(|value| self.normalize_component(&value))
+            .transpose()
+    }
+
+    /// Normalizes repeatable Component filter flags.
+    pub fn normalize_components(&self, components: &[String]) -> Result<Vec<String>> {
+        components
+            .iter()
+            .map(|component| self.normalize_component(component))
+            .collect()
     }
 }
 
@@ -1274,7 +1394,7 @@ impl Board {
         config.validate()?;
         let toml = config.to_toml()?;
         crate::atomic::write_atomic(&self.root.join("config.toml"), toml.as_bytes(), true)?;
-        self.commit(&format!("orbit: set task prefix to {prefix}"), false)
+        self.commit(&format!("orbit: set issue prefix to {prefix}"), false)
     }
 }
 
@@ -1289,7 +1409,7 @@ pub(crate) fn slug_locked_error(current: &str, requested: &str, tasks: usize) ->
     .with_details(serde_json::json!({
         "current": current,
         "requested": requested,
-        "tasks": tasks,
+        "issue_count": tasks,
     }))
 }
 

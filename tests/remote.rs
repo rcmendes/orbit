@@ -276,11 +276,11 @@ fn remote_connect_and_link_use_fixture_client() {
         &["remote", "link", id.as_str(), "acme/widget#42", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(adopt["data"]["github"]["number"], 42);
-    assert_eq!(adopt["data"]["issue"]["title"], "Imported issue");
+    assert_eq!(adopt["data"]["remote"]["id"], "42");
+    assert_eq!(adopt["data"]["remote_issue"]["title"], "Imported issue");
 
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert_eq!(show["data"]["github"]["repo"], "acme/widget");
+    assert_eq!(show["data"]["remote"]["project"], "acme/widget");
     assert_eq!(show["data"]["title"], "Imported issue");
     assert_eq!(show["data"]["component"], "cli");
 }
@@ -294,19 +294,19 @@ fn list_shows_and_filters_github_links() {
     let local = repo.add("Local task", &[]);
 
     let all = repo.ok_json(&["list", "--json"]);
-    let tasks = all["data"]["tasks"].as_array().unwrap();
+    let tasks = all["data"]["issues"].as_array().unwrap();
     let linked_row = tasks.iter().find(|task| task["id"] == linked).unwrap();
-    assert_eq!(linked_row["github"]["number"], 42);
+    assert_eq!(linked_row["remote"]["id"], "42");
     let local_row = tasks.iter().find(|task| task["id"] == local).unwrap();
-    assert!(local_row["github"].is_null());
+    assert!(local_row["remote"].is_null());
 
     let only_linked = repo.ok_json(&["list", "--linked", "--json"]);
     assert_eq!(only_linked["data"]["count"], 1);
-    assert_eq!(only_linked["data"]["tasks"][0]["id"], linked);
+    assert_eq!(only_linked["data"]["issues"][0]["id"], linked);
 
     let only_local = repo.ok_json(&["list", "--local", "--json"]);
     assert_eq!(only_local["data"]["count"], 1);
-    assert_eq!(only_local["data"]["tasks"][0]["id"], local);
+    assert_eq!(only_local["data"]["issues"][0]["id"], local);
 
     let human = repo.orbit(&["list"]);
     assert!(human.status.success());
@@ -568,7 +568,7 @@ fn github_sync_dry_run_reports_assignee_warning() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(plan["data"]["count"], 1);
-    let warnings = plan["data"]["tasks"][0]["plan"]["warnings"]
+    let warnings = plan["data"]["issues"][0]["plan"]["warnings"]
         .as_array()
         .unwrap();
     assert!(
@@ -626,15 +626,15 @@ fn basic_mode_rejects_create_when_task_has_structured_metadata() {
     );
     assert_eq!(status, 0);
     assert_eq!(value["data"]["failure_count"], 1);
-    assert_eq!(value["data"]["tasks"][0]["success"], false);
+    assert_eq!(value["data"]["issues"][0]["success"], false);
     assert!(
-        value["data"]["tasks"][0]["error"]
+        value["data"]["issues"][0]["error"]
             .as_str()
             .unwrap()
             .contains("area")
     );
     assert!(
-        value["data"]["tasks"][0]["error"]
+        value["data"]["issues"][0]["error"]
             .as_str()
             .unwrap()
             .contains("verification")
@@ -662,16 +662,13 @@ fn basic_mode_creates_personal_repository_issue_without_setup() {
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
+    assert_eq!(created["data"]["issues"][0]["title"], "Personal issue");
     assert_eq!(
-        created["data"]["tasks"][0]["issue"]["title"],
-        "Personal issue"
-    );
-    assert_eq!(
-        created["data"]["tasks"][0]["issue"]["labels"],
+        created["data"]["issues"][0]["labels"],
         serde_json::json!(["bug"])
     );
-    assert!(created["data"]["tasks"][0]["issue"]["area"].is_null());
-    assert!(created["data"]["tasks"][0]["issue"]["verification"].is_null());
+    assert!(created["data"]["issues"][0]["area"].is_null());
+    assert!(created["data"]["issues"][0]["verification"].is_null());
 }
 
 #[test]
@@ -726,8 +723,8 @@ fn basic_mode_adopts_and_syncs_without_importing_issue_fields() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(sync["data"]["count"], 1);
-    assert!(sync["data"]["tasks"][0]["plan"]["apply_area"].is_null());
-    assert!(sync["data"]["tasks"][0]["plan"]["push_verification"].is_null());
+    assert!(sync["data"]["issues"][0]["plan"]["apply_area"].is_null());
+    assert!(sync["data"]["issues"][0]["plan"]["push_verification"].is_null());
 
     repo.ok_json(&[
         "update",
@@ -1069,10 +1066,10 @@ fn orbit_title_edits_are_previewed_as_github_pushes() {
     );
 
     assert_eq!(
-        preview["data"]["tasks"][0]["plan"]["push_title"],
+        preview["data"]["issues"][0]["plan"]["push_title"],
         "Orbit-owned title"
     );
-    assert!(preview["data"]["tasks"][0]["plan"]["apply_title"].is_null());
+    assert!(preview["data"]["issues"][0]["plan"]["apply_title"].is_null());
     let unchanged: serde_json::Value =
         serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
     assert_eq!(
@@ -1102,10 +1099,10 @@ fn github_sync_treats_reordered_labels_as_unchanged() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(
-        preview["data"]["tasks"][0]["plan"]["push_labels"].is_null(),
+        preview["data"]["issues"][0]["plan"]["push_labels"].is_null(),
         "{preview}"
     );
-    assert!(preview["data"]["tasks"][0]["plan"]["apply_labels"].is_null());
+    assert!(preview["data"]["issues"][0]["plan"]["apply_labels"].is_null());
 
     repo.ok_json_with_env(
         &["remote", "sync", id.as_str(), "--apply", "--json"],
@@ -1116,7 +1113,7 @@ fn github_sync_treats_reordered_labels_as_unchanged() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(
-        again["data"]["tasks"][0]["plan"]["push_labels"].is_null(),
+        again["data"]["issues"][0]["plan"]["push_labels"].is_null(),
         "{again}"
     );
 }
@@ -1138,7 +1135,7 @@ fn linked_task_status_labels_and_metadata_push_from_orbit() {
         &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    let plan = &preview["data"]["tasks"][0]["plan"];
+    let plan = &preview["data"]["issues"][0]["plan"];
     assert_eq!(plan["push_status"], "done");
     assert_eq!(plan["push_labels"], serde_json::json!(["feature"]));
     assert_eq!(plan["push_area"], serde_json::json!("setup"));
@@ -1163,8 +1160,8 @@ fn linked_task_status_labels_and_metadata_push_from_orbit() {
         "cargo test sync"
     );
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert_eq!(show["data"]["github"]["last_sync"]["status"], "done");
-    assert_eq!(show["data"]["github"]["last_sync"]["issue_state"], "closed");
+    assert_eq!(show["data"]["remote"]["baseline"]["status"], "done");
+    assert_eq!(show["data"]["remote"]["baseline"]["remote_status"], "done");
 }
 
 #[test]
@@ -1190,7 +1187,7 @@ fn remote_only_label_and_metadata_changes_pull_when_orbit_is_unchanged() {
         &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    let plan = &preview["data"]["tasks"][0]["plan"];
+    let plan = &preview["data"]["issues"][0]["plan"];
     assert_eq!(plan["apply_labels"], serde_json::json!(["remote-label"]));
     assert_eq!(plan["apply_area"], serde_json::json!("setup"));
     assert_eq!(
@@ -1225,14 +1222,14 @@ fn remote_issue_close_pulls_a_terminal_orbit_status() {
         &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(preview["data"]["tasks"][0]["plan"]["apply_status"], "done");
+    assert_eq!(preview["data"]["issues"][0]["plan"]["apply_status"], "done");
     repo.ok_json_with_env(
         &["remote", "sync", id.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["status"], "done");
-    assert_eq!(show["data"]["github"]["last_sync"]["issue_state"], "closed");
+    assert_eq!(show["data"]["remote"]["baseline"]["remote_status"], "done");
 }
 
 #[test]
@@ -1253,11 +1250,11 @@ fn supported_subtask_relationships_are_previewed_and_applied() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(
-        preview["data"]["tasks"][0]["relationships"]["supported"][0]["kind"],
-        "subtask"
+        preview["data"]["issues"][0]["relationships"]["supported"][0]["kind"],
+        "sub-task"
     );
     assert_eq!(
-        preview["data"]["tasks"][0]["relationships"]["changes"][0]["action"],
+        preview["data"]["issues"][0]["relationships"]["changes"][0]["action"],
         "add"
     );
 
@@ -1335,7 +1332,7 @@ fn nested_subtask_relationships_sync_at_depth_two() {
 
     // A second sync finds nothing left to push: the nested parentage is stable.
     let preview = repo.ok_json_with_env(&["remote", "sync", "--json"], &env);
-    for task in preview["data"]["tasks"].as_array().unwrap() {
+    for task in preview["data"]["issues"].as_array().unwrap() {
         let adds: Vec<_> = task["relationships"]["changes"]
             .as_array()
             .unwrap()
@@ -1377,7 +1374,7 @@ fn supported_blocked_by_relationships_are_previewed_and_applied() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(
-        preview["data"]["tasks"][0]["relationships"]["supported"][0]["kind"],
+        preview["data"]["issues"][0]["relationships"]["supported"][0]["kind"],
         "blocked_by"
     );
     repo.ok_json_with_env(
@@ -1421,7 +1418,7 @@ fn removing_a_synced_dependency_removes_the_github_blocked_by_relationship() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert!(
-        preview["data"]["tasks"][0]["relationships"]["changes"]
+        preview["data"]["issues"][0]["relationships"]["changes"]
             .as_array()
             .unwrap()
             .iter()
@@ -1473,7 +1470,7 @@ fn batch_sync_reports_partial_failures_and_retries_without_advancing_failed_base
     );
     assert_eq!(first_apply["data"]["success_count"], 1);
     assert_eq!(first_apply["data"]["failure_count"], 1);
-    assert_eq!(first_apply["data"]["failures"][0]["task"], second);
+    assert_eq!(first_apply["data"]["failures"][0]["issue"], second);
     let after_partial: serde_json::Value =
         serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
     assert_eq!(
@@ -1486,8 +1483,8 @@ fn batch_sync_reports_partial_failures_and_retries_without_advancing_failed_base
     );
     let second_after = repo.ok_json(&["show", second.as_str(), "--json"]);
     assert_eq!(
-        second_after["data"]["github"]["last_sync"]["title"],
-        second_before["data"]["github"]["last_sync"]["title"]
+        second_after["data"]["remote"]["baseline"]["title"],
+        second_before["data"]["remote"]["baseline"]["title"]
     );
 
     data["update_failures"] = serde_json::json!({});
@@ -1541,7 +1538,7 @@ fn github_sync_human_dry_run_shows_conflicting_values_and_keeps_json_plan() {
         &["remote", "sync", id.as_str(), "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    let plan = &json["data"]["tasks"][0]["plan"];
+    let plan = &json["data"]["issues"][0]["plan"];
     let conflict = &plan["conflicts"][0];
     assert_eq!(json["data"]["apply"], false);
     assert_eq!(conflict["field"], "title");
@@ -1554,7 +1551,7 @@ fn github_sync_human_dry_run_shows_conflicting_values_and_keeps_json_plan() {
     );
     assert_eq!(status, 1);
     assert_eq!(error["error"]["code"], "REMOTE_ISSUE_CONFLICT");
-    assert_eq!(error["error"]["details"]["task"], id);
+    assert_eq!(error["error"]["details"]["issue"], id);
     assert_eq!(error["error"]["details"]["project"], "acme/widget");
     assert_eq!(error["error"]["details"]["id"], "42");
     assert_eq!(error["error"]["details"]["conflicting_fields"], "title");
@@ -1607,7 +1604,7 @@ fn github_sync_can_keep_orbit_value_for_a_field_conflict() {
 
     assert_eq!(result["data"]["apply"], true);
     assert_eq!(
-        result["data"]["tasks"][0]["plan"]["conflicts"],
+        result["data"]["issues"][0]["plan"]["conflicts"],
         serde_json::json!([])
     );
     let applied: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
@@ -1634,8 +1631,8 @@ fn github_adopt_accepts_issue_url_and_legacy_arguments() {
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(adopted["data"]["github"]["repo"], "acme/widget");
-    assert_eq!(adopted["data"]["github"]["number"], 42);
+    assert_eq!(adopted["data"]["remote"]["project"], "acme/widget");
+    assert_eq!(adopted["data"]["remote"]["id"], "42");
 
     let legacy = repo.add("Legacy issue", &[]);
     let adopted = repo.ok_json_with_env(
@@ -1648,8 +1645,8 @@ fn github_adopt_accepts_issue_url_and_legacy_arguments() {
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(adopted["data"]["github"]["repo"], "acme/widget");
-    assert_eq!(adopted["data"]["github"]["number"], 43);
+    assert_eq!(adopted["data"]["remote"]["project"], "acme/widget");
+    assert_eq!(adopted["data"]["remote"]["id"], "43");
 }
 
 #[test]
@@ -1725,7 +1722,10 @@ fn github_create_applies_to_only_linked_repository() {
         &["remote", "create", id.as_str(), "--apply", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(created["data"]["tasks"][0]["github"]["repo"], "acme/widget");
+    assert_eq!(
+        created["data"]["issues"][0]["remote"]["project"],
+        "acme/widget"
+    );
 }
 
 #[test]
@@ -1751,10 +1751,13 @@ fn github_create_previews_issue_without_writing_until_apply() {
     assert_eq!(preview["data"]["count"], 1);
     assert_eq!(preview["data"]["preview_count"], 1);
     assert!(preview["data"]["success_count"].is_null());
-    assert_eq!(preview["data"]["tasks"][0]["task"], id);
-    assert_eq!(preview["data"]["tasks"][0]["project"], "github:acme/widget");
-    assert_eq!(preview["data"]["tasks"][0]["title"], "Preview issue");
-    assert_eq!(preview["data"]["tasks"][0]["labels"][0], "bug");
+    assert_eq!(preview["data"]["issues"][0]["issue"], id);
+    assert_eq!(
+        preview["data"]["issues"][0]["project"],
+        "github:acme/widget"
+    );
+    assert_eq!(preview["data"]["issues"][0]["title"], "Preview issue");
+    assert_eq!(preview["data"]["issues"][0]["labels"][0], "bug");
     assert_eq!(fs::read(&fixture).unwrap(), fixture_before);
     assert_eq!(repo.read_task(&id), task_before);
 
@@ -1800,14 +1803,11 @@ fn github_create_batches_report_partial_failures_and_persist_successful_links() 
 
     assert_eq!(result["data"]["success_count"], 1);
     assert_eq!(result["data"]["failure_count"], 1);
-    assert_eq!(result["data"]["tasks"][0]["success"], true);
+    assert_eq!(result["data"]["issues"][0]["success"], true);
+    assert_eq!(result["data"]["issues"][0]["labels"][0], "enhancement");
+    assert_eq!(result["data"]["issues"][1]["success"], false);
     assert_eq!(
-        result["data"]["tasks"][0]["issue"]["labels"][0],
-        "enhancement"
-    );
-    assert_eq!(result["data"]["tasks"][1]["success"], false);
-    assert_eq!(
-        result["data"]["tasks"][1]["error"],
+        result["data"]["issues"][1]["error"],
         "fixture rejected this Issue"
     );
 
@@ -1838,13 +1838,10 @@ fn github_create_includes_configured_issue_fields_in_the_created_issue() {
     );
 
     assert_eq!(result["data"]["success_count"], 1);
-    assert_eq!(result["data"]["tasks"][0]["area"], "cli");
-    assert_eq!(result["data"]["tasks"][0]["verification"], "cargo test");
-    assert_eq!(result["data"]["tasks"][0]["issue"]["area"], "cli");
-    assert_eq!(
-        result["data"]["tasks"][0]["issue"]["verification"],
-        "cargo test"
-    );
+    assert_eq!(result["data"]["issues"][0]["area"], "cli");
+    assert_eq!(result["data"]["issues"][0]["verification"], "cargo test");
+    assert_eq!(result["data"]["issues"][0]["area"], "cli");
+    assert_eq!(result["data"]["issues"][0]["verification"], "cargo test");
 }
 
 #[test]
@@ -1863,7 +1860,7 @@ fn github_create_requires_closed_opt_in_and_closes_opted_in_tasks() {
     );
     assert_eq!(refused["data"]["failure_count"], 1);
     assert!(
-        refused["data"]["tasks"][0]["error"]
+        refused["data"]["issues"][0]["error"]
             .as_str()
             .unwrap()
             .contains("--include-closed")
@@ -1883,7 +1880,10 @@ fn github_create_requires_closed_opt_in_and_closes_opted_in_tasks() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(result["data"]["success_count"], 1);
-    assert_eq!(result["data"]["tasks"][0]["issue"]["state"], "closed");
+    assert_eq!(
+        result["data"]["issues"][0]["remote_issue"]["state"],
+        "closed"
+    );
     assert!(repo.read_task(&id).contains("project: acme/widget"));
     let task = repo.ok_json(&["show", &id, "--json"]);
     assert_eq!(task["data"]["status"], "done");
@@ -1911,7 +1911,10 @@ fn github_create_accepts_legacy_terminal_alias() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(result["data"]["success_count"], 1);
-    assert_eq!(result["data"]["tasks"][0]["issue"]["state"], "closed");
+    assert_eq!(
+        result["data"]["issues"][0]["remote_issue"]["state"],
+        "closed"
+    );
 }
 
 #[test]
@@ -1929,7 +1932,7 @@ fn github_create_retry_rejects_already_linked_task_without_duplicate_issue() {
     let second = repo.ok_json_with_env(&["remote", "create", &id, "--apply", "--json"], &env);
     assert_eq!(second["data"]["failure_count"], 1);
     assert!(
-        second["data"]["tasks"][0]["error"]
+        second["data"]["issues"][0]["error"]
             .as_str()
             .unwrap()
             .contains("orbit remote sync")
@@ -1974,7 +1977,10 @@ fn github_create_requires_repo_when_selection_is_ambiguous_or_missing() {
         ],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(created["data"]["tasks"][0]["github"]["repo"], "acme/other");
+    assert_eq!(
+        created["data"]["issues"][0]["remote"]["project"],
+        "acme/other"
+    );
 }
 
 #[test]
@@ -2010,7 +2016,7 @@ fn github_status_reports_healthy_configuration_and_is_read_only() {
     assert_eq!(status["data"]["fields"]["area"]["configured"], true);
     assert_eq!(status["data"]["fields"]["area"]["resolved"], true);
     assert_eq!(status["data"]["fields"]["verification"]["resolved"], true);
-    assert_eq!(status["data"]["linked_tasks"], 1);
+    assert_eq!(status["data"]["linked_issues"], 1);
     assert_eq!(status["data"]["pending"]["pull"], 0);
     assert_eq!(status["data"]["pending"]["push"], 0);
     assert_eq!(status["data"]["conflicts"], 0);
@@ -2138,7 +2144,7 @@ fn github_status_reports_conflicts_and_doctor_reports_configuration_problems() {
     assert_eq!(status["data"]["conflicts"], 1, "{status}");
     assert_eq!(status["data"]["pending"]["pull"], 0);
     assert!(status["data"]["pending"]["push"].as_u64().unwrap() > 0);
-    assert_eq!(status["data"]["conflict_details"][0]["task"], id);
+    assert_eq!(status["data"]["conflict_details"][0]["issue"], id);
     assert_eq!(
         status["data"]["next_action"],
         "resolve_github_sync_conflicts"
@@ -2157,7 +2163,7 @@ fn github_status_reports_conflicts_and_doctor_reports_configuration_problems() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(exit, 1);
-    assert_eq!(doctor["data"]["tasks"], 1);
+    assert_eq!(doctor["data"]["issue_count"], 1);
     assert!(
         doctor["data"]["issues"]
             .as_array()
@@ -2225,7 +2231,7 @@ fn github_status_reports_unlinked_repositories_and_cross_repo_relationships() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|issue| issue["code"] == "GITHUB_REPO_NOT_LINKED" && issue["task"] == child)
+            .any(|issue| issue["code"] == "GITHUB_REPO_NOT_LINKED" && issue["issue"] == child)
     );
 }
 
@@ -2772,7 +2778,7 @@ fn auto_push_warns_and_preserves_a_remote_conflict() {
     );
     assert_eq!(fixture_issue(&fixture, 1)["title"], "Remote edit");
     let shown = repo.ok_json_with_env(&["show", &id, "--json"], &env);
-    assert_eq!(shown["data"]["github"]["last_sync"]["title"], "Original");
+    assert_eq!(shown["data"]["remote"]["baseline"]["title"], "Original");
 }
 
 #[test]
@@ -2851,7 +2857,7 @@ fn auto_push_works_with_auto_commit_disabled() {
     let add = repo.ok_json_with_env(&["add", "No commit", "--json"], &env);
     let id = add["data"]["id"].as_str().unwrap();
     let shown = repo.ok_json_with_env(&["show", id, "--json"], &env);
-    assert_eq!(shown["data"]["github"]["number"], 1);
+    assert_eq!(shown["data"]["remote"]["id"], "1");
     assert_eq!(fixture_issue(&fixture, 1)["title"], "No commit");
 }
 
@@ -2893,8 +2899,8 @@ fn github_status_reports_auto_push_state() {
         status["data"]["auto_push"]["reserved_label"],
         "orbit:in-progress"
     );
-    assert_eq!(status["data"]["linked_tasks"], 0);
-    assert_eq!(status["data"]["local_tasks"], 0);
+    assert_eq!(status["data"]["linked_issues"], 0);
+    assert_eq!(status["data"]["local_issues"], 0);
 }
 
 #[test]
@@ -3098,7 +3104,7 @@ fn remote_import_previews_then_creates_and_links_tasks() {
         .iter()
         .find(|entry| entry["identity"] == "github:acme/widget#42")
         .expect("bug import entry");
-    let task_id = bug["task"].as_str().unwrap();
+    let task_id = bug["issue"].as_str().unwrap();
     let shown = repo.ok_json(&["show", task_id, "--json"]);
     assert_eq!(shown["data"]["title"], "Catalog bug");
     assert_eq!(shown["data"]["remote"]["tracker"], "github");
@@ -3151,7 +3157,7 @@ fn remote_import_links_an_issue_to_an_existing_task() {
         &env,
     );
     assert_eq!(preview["data"]["links"].as_array().unwrap().len(), 1);
-    assert_eq!(preview["data"]["links"][0]["task"], id);
+    assert_eq!(preview["data"]["links"][0]["issue"], id);
 
     let applied = repo.ok_json_with_env(
         &[
@@ -3166,7 +3172,7 @@ fn remote_import_links_an_issue_to_an_existing_task() {
         &env,
     );
     assert_eq!(applied["data"]["imported"][0]["action"], "linked");
-    assert_eq!(applied["data"]["imported"][0]["task"], id);
+    assert_eq!(applied["data"]["imported"][0]["issue"], id);
     let shown = repo.ok_json(&["show", &id, "--json"]);
     assert_eq!(shown["data"]["remote"]["id"], "42");
     // Linking preserves the Local Task's own title; sync reconciles later.
@@ -3203,7 +3209,7 @@ fn remote_detach_and_reattach_toggle_the_link_without_touching_the_tracker() {
         &["remote", "detach", "acme/widget#42", "--apply", "--json"],
         &env,
     );
-    assert_eq!(detached["data"]["detached"][0]["task"], id);
+    assert_eq!(detached["data"]["detached"][0]["issue"], id);
     let shown = repo.ok_json(&["show", &id, "--json"]);
     assert_eq!(shown["data"]["remote"]["active"], false);
     // Detached provenance stays visible but inactive.
@@ -3215,13 +3221,13 @@ fn remote_detach_and_reattach_toggle_the_link_without_touching_the_tracker() {
     let reattach_preview =
         repo.ok_json_with_env(&["remote", "reattach", "acme/widget#42", "--json"], &env);
     assert_eq!(reattach_preview["data"]["apply"], false);
-    assert!(reattach_preview["data"]["tasks"][0]["sync_plan"].is_object());
+    assert!(reattach_preview["data"]["issues"][0]["sync_plan"].is_object());
 
     let reattached = repo.ok_json_with_env(
         &["remote", "reattach", "acme/widget#42", "--apply", "--json"],
         &env,
     );
-    assert_eq!(reattached["data"]["reattached"][0]["task"], id);
+    assert_eq!(reattached["data"]["reattached"][0]["issue"], id);
     assert_eq!(
         repo.ok_json(&["show", &id, "--json"])["data"]["remote"]["active"],
         true
@@ -3231,7 +3237,7 @@ fn remote_detach_and_reattach_toggle_the_link_without_touching_the_tracker() {
 
     // Detach also accepts a Task id target.
     let by_task = repo.ok_json_with_env(&["remote", "detach", &id, "--apply", "--json"], &env);
-    assert_eq!(by_task["data"]["detached"][0]["task"], id);
+    assert_eq!(by_task["data"]["detached"][0]["issue"], id);
     assert_eq!(
         repo.ok_json(&["show", &id, "--json"])["data"]["remote"]["active"],
         false
@@ -3338,7 +3344,7 @@ fn remote_status_repo_scope_skips_other_repositories() {
         &["remote", "status", "--json"],
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
-    assert_eq!(full["data"]["linked_tasks"], 2);
+    assert_eq!(full["data"]["linked_issues"], 2);
     assert_eq!(full["data"]["repositories"].as_array().unwrap().len(), 2);
 
     let scoped = repo.ok_json_with_env(
@@ -3346,18 +3352,18 @@ fn remote_status_repo_scope_skips_other_repositories() {
         &[("ORBIT_GITHUB_FIXTURE", fixture.to_str().unwrap())],
     );
     assert_eq!(scoped["data"]["repository_scope"], "acme/other");
-    assert_eq!(scoped["data"]["linked_tasks"], 1);
+    assert_eq!(scoped["data"]["linked_issues"], 1);
     let repositories = scoped["data"]["repositories"].as_array().unwrap();
     assert_eq!(repositories.len(), 1);
     assert_eq!(repositories[0]["name"], "acme/other");
     // The scoped Task is the only one checked for pending changes.
-    for task in scoped["data"]["pending"]["pull_tasks"]
+    for task in scoped["data"]["pending"]["pull_issues"]
         .as_array()
         .unwrap()
         .iter()
-        .chain(scoped["data"]["pending"]["push_tasks"].as_array().unwrap())
+        .chain(scoped["data"]["pending"]["push_issues"].as_array().unwrap())
     {
-        assert_eq!(task["task"], second);
+        assert_eq!(task["issue"], second);
     }
 }
 
@@ -3398,17 +3404,17 @@ fn whole_board_sync_reports_tasks_it_could_not_check() {
     );
     assert_eq!(report["data"]["count"], 2);
     assert_eq!(report["data"]["failure_count"], 1);
-    assert_eq!(report["data"]["failures"][0]["task"], second);
+    assert_eq!(report["data"]["failures"][0]["issue"], second);
     assert_eq!(report["data"]["failures"][0]["retry_safe"], true);
-    let tasks = report["data"]["tasks"].as_array().unwrap();
+    let tasks = report["data"]["issues"].as_array().unwrap();
     let second_plan = tasks
         .iter()
-        .find(|entry| entry["task"] == second)
+        .find(|entry| entry["issue"] == second)
         .expect("second task plan");
     assert_eq!(second_plan["success"], false);
     let first_plan = tasks
         .iter()
-        .find(|entry| entry["task"] == first)
+        .find(|entry| entry["issue"] == first)
         .expect("first task plan");
     assert_ne!(first_plan["success"], false);
 

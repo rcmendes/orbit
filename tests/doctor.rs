@@ -64,7 +64,7 @@ fn doctor_runs_without_a_board_and_reports_the_discovery_trace() {
     let value = doctor_json(&repo, &["doctor", "--json"]);
 
     assert_eq!(value["data"]["healthy"], true);
-    assert_eq!(value["data"]["tasks"], 0);
+    assert_eq!(value["data"]["issue_count"], 0);
     assert!(value["data"]["issues"].as_array().unwrap().is_empty());
     assert!(value["data"]["discovery"]["root"].is_null());
     assert_eq!(value["data"]["discovery"]["source"], "none");
@@ -193,7 +193,7 @@ fn codes_and_tasks(value: &serde_json::Value, code: &str) -> Vec<String> {
         .unwrap()
         .iter()
         .filter(|issue| issue["code"] == code)
-        .filter_map(|issue| issue["task"].as_str().map(str::to_string))
+        .filter_map(|issue| issue["issue"].as_str().map(str::to_string))
         .collect()
 }
 

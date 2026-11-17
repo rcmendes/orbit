@@ -41,7 +41,8 @@ fn project_keys_resolve_like_internal_ids() {
     repo.init();
 
     let blocker = repo.add("Blocker", &[]);
-    let waiting = repo.add("Waiting", &["--depends-on", "ORB-1"]);
+    let waiting = repo.add("Waiting", &[]);
+    repo.ok_json(&["depend", waiting.as_str(), "ORB-1", "--json"]);
 
     // `show` accepts the key, case-insensitively, and reports both handles.
     let shown = repo.ok_json(&["show", "orb-1", "--json"]);
@@ -104,7 +105,7 @@ fn batch_and_delete_accept_project_keys() {
     assert_eq!(batch["data"]["committed"], true, "{batch}");
 
     // The batch-created child got the next sequential key.
-    let child_key = repo.ok_json(&["list", "--json"])["data"]["tasks"]
+    let child_key = repo.ok_json(&["list", "--json"])["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()

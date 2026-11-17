@@ -83,7 +83,7 @@ fn checkpoint_survives_release_and_takeover() {
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
     assert_eq!(
-        ready["data"]["tasks"][0]["checkpoint"]["progress"],
+        ready["data"]["issues"][0]["checkpoint"]["progress"],
         "Finished the schema"
     );
 
@@ -158,7 +158,8 @@ fn checkpoints_do_not_change_readiness() {
     let repo = TestRepo::new();
     repo.init();
     let first = repo.add("First", &[]);
-    let second = repo.add("Second", &["--depends-on", first.as_str()]);
+    let second = repo.add("Second", &[]);
+    repo.ok_json(&["depend", second.as_str(), first.as_str(), "--json"]);
 
     let before = repo.ok_json(&["list", "--json"]);
     assert_eq!(before["data"]["count"], 2);
@@ -183,7 +184,7 @@ fn checkpoints_do_not_change_readiness() {
 
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], first.as_str());
+    assert_eq!(ready["data"]["issues"][0]["id"], first.as_str());
 }
 
 #[test]

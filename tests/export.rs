@@ -13,7 +13,7 @@ fn ids(tasks: &Value) -> Vec<&str> {
 }
 
 fn exported<'a>(value: &'a Value, id: &str) -> &'a Value {
-    value["data"]["tasks"]
+    value["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -43,7 +43,8 @@ fn export_is_deterministic_and_includes_edges_comments_and_terminal_work() {
     repo.ok_json(&[
         "comment", "add", &child, "--by", "test", "--body", "note", "--json",
     ]);
-    let dependent = repo.add("Downstream", &["--depends-on", child.as_str()]);
+    let dependent = repo.add("Downstream", &[]);
+    repo.ok_json(&["depend", dependent.as_str(), child.as_str(), "--json"]);
 
     let first = repo.ok_json(&["export", "--json"]);
     let second = repo.ok_json(&["export", "--json"]);
@@ -51,26 +52,25 @@ fn export_is_deterministic_and_includes_edges_comments_and_terminal_work() {
     assert_eq!(first["data"], second["data"]);
     assert_eq!(first["data"]["schema_version"], 5);
     assert_eq!(first["data"]["board"]["branch"], "orbit");
-    assert_eq!(first["data"]["board"]["task_count"], 4);
+    assert_eq!(first["data"]["board"]["issue_count"], 4);
     assert_eq!(first["data"]["board"]["comment_count"], 1);
 
-    let task_ids = ids(&first["data"]["tasks"]);
+    let task_ids = ids(&first["data"]["issues"]);
     let mut sorted = task_ids.clone();
     sorted.sort();
     assert_eq!(task_ids, sorted);
 
     let parent_json = exported(&first, &parent);
-    assert_eq!(parent_json["kind"], "task");
     assert_eq!(parent_json["type"], "task");
     assert!(parent_json["parent"].is_null());
-    assert_eq!(parent_json["subtasks"][0], child.as_str());
-    assert_eq!(parent_json["subtask_count"], 1);
-    assert_eq!(parent_json["resolved_subtask_count"], 0);
-    assert_eq!(parent_json["open_subtask_count"], 1);
+    assert_eq!(parent_json["sub_issues"][0], child.as_str());
+    assert_eq!(parent_json["sub_issue_count"], 1);
+    assert_eq!(parent_json["resolved_sub_issue_count"], 0);
+    assert_eq!(parent_json["open_sub_issue_count"], 1);
     assert_eq!(parent_json["eligible_for_close"], false);
 
     let child_json = exported(&first, &child);
-    assert_eq!(child_json["kind"], "subtask");
+    assert_eq!(child_json["type"], "sub-task");
     assert_eq!(child_json["parent"], parent.as_str());
     assert_eq!(child_json["labels"][0], "repo:api");
     assert_eq!(child_json["comments"][0]["body"], "note");
@@ -80,7 +80,7 @@ fn export_is_deterministic_and_includes_edges_comments_and_terminal_work() {
     assert_eq!(done_json["status"], "done");
 
     let dependent_json = exported(&first, &dependent);
-    assert_eq!(dependent_json["depends_on"][0], child.as_str());
+    assert_eq!(dependent_json["blocking"][0], child.as_str());
     assert_eq!(dependent_json["ready"], false);
 }
 
@@ -101,7 +101,7 @@ fn repository_and_label_filters_scope_list_ready_and_prime() {
 
     let list = repo.ok_json(&["list", "--repository", "api", "--json"]);
     assert_eq!(list["data"]["count"], 2);
-    let listed = ids(&list["data"]["tasks"]);
+    let listed = ids(&list["data"]["issues"]);
     assert!(listed.contains(&api.as_str()));
     assert!(listed.contains(&bug.as_str()));
     assert!(!listed.contains(&web.as_str()));
@@ -116,20 +116,20 @@ fn repository_and_label_filters_scope_list_ready_and_prime() {
         "--json",
     ]);
     assert_eq!(list["data"]["count"], 1);
-    assert_eq!(list["data"]["tasks"][0]["id"], api.as_str());
+    assert_eq!(list["data"]["issues"][0]["id"], api.as_str());
 
     let list = repo.ok_json(&["list", "--label", "backend", "--label", "missing", "--json"]);
     assert_eq!(list["data"]["count"], 0);
 
     let ready = repo.ok_json(&["ready", "--repository", "api", "--json"]);
     assert_eq!(ready["data"]["count"], 2);
-    let ready_ids = ids(&ready["data"]["tasks"]);
+    let ready_ids = ids(&ready["data"]["issues"]);
     assert!(ready_ids.contains(&api.as_str()));
     assert!(ready_ids.contains(&bug.as_str()));
 
     let ready = repo.ok_json(&["ready", "--label", "ready-for-agent", "--json"]);
     assert_eq!(ready["data"]["count"], 2);
-    let ready_ids = ids(&ready["data"]["tasks"]);
+    let ready_ids = ids(&ready["data"]["issues"]);
     assert!(ready_ids.contains(&api.as_str()));
     assert!(ready_ids.contains(&web.as_str()));
 
@@ -142,7 +142,7 @@ fn repository_and_label_filters_scope_list_ready_and_prime() {
         "--json",
     ]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], api.as_str());
+    assert_eq!(ready["data"]["issues"][0]["id"], api.as_str());
 
     let prime = repo.ok_json(&["prime", "--repository", "api", "--json"]);
     assert_eq!(prime["data"]["labels"], serde_json::json!([]));
@@ -169,9 +169,9 @@ fn export_of_an_empty_board_has_the_schema_envelope() {
 
     assert_eq!(value["data"]["schema_version"], 5);
     assert_eq!(value["data"]["board"]["branch"], "orbit");
-    assert_eq!(value["data"]["board"]["task_count"], 0);
+    assert_eq!(value["data"]["board"]["issue_count"], 0);
     assert_eq!(value["data"]["board"]["comment_count"], 0);
-    assert!(value["data"]["tasks"].as_array().unwrap().is_empty());
+    assert!(value["data"]["issues"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -202,15 +202,15 @@ fn export_at_depth_two_keeps_the_nested_parent() {
 
     assert_eq!(value["data"]["schema_version"], 5);
     let child_json = exported(&value, &child);
-    assert_eq!(child_json["kind"], "subtask");
+    assert_eq!(child_json["type"], "task");
     assert_eq!(child_json["parent"], parent.as_str());
     assert_eq!(child_json["depth"], 1);
     let grandchild_json = exported(&value, &grandchild);
-    assert_eq!(grandchild_json["kind"], "subtask");
+    assert_eq!(grandchild_json["type"], "sub-task");
     assert_eq!(grandchild_json["parent"], child.as_str());
     assert_eq!(grandchild_json["depth"], 2);
     assert!(
-        exported(&value, &child)["subtasks"]
+        exported(&value, &child)["sub_issues"]
             .as_array()
             .unwrap()
             .contains(&serde_json::json!(grandchild.as_str())),

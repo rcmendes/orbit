@@ -468,19 +468,11 @@ pub struct AddArgs {
     #[arg(long = "type", value_name = "TYPE")]
     pub task_type: Option<String>,
 
-    /// Make the new task wait for an existing task. Repeatable.
-    #[arg(long = "depends-on", value_name = "ID", action = clap::ArgAction::Append)]
-    pub depends_on: Vec<String>,
-
     /// Nest the new Task under this parent. The Board's `board.hierarchy`
     /// decides which types may parent which; `--type` picks the child's type
     /// (the leaf type, `sub-task` by default, when omitted).
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
-
-    /// Record a blocker that lives outside the Board.
-    #[arg(long, value_name = "TEXT")]
-    pub waiting_on: Option<String>,
 
     /// Initial labels. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -528,7 +520,7 @@ pub struct ListArgs {
     pub priority: Option<String>,
 
     /// Filter by assignee name.
-    #[arg(long = "assignee", visible_alias = "claimed-by", value_name = "NAME")]
+    #[arg(long = "assignee", value_name = "NAME")]
     pub assignee: Option<String>,
 
     /// Only tasks waiting on an external blocker.
@@ -1017,18 +1009,6 @@ pub struct UpdateArgs {
     /// New Issue type name from the Board's `board.types`.
     #[arg(long = "type", value_name = "TYPE")]
     pub task_type: Option<String>,
-
-    /// New external blocker.
-    #[arg(
-        long = "waiting-on",
-        value_name = "TEXT",
-        conflicts_with = "clear_waiting"
-    )]
-    pub waiting_on: Option<String>,
-
-    /// Remove the external blocker.
-    #[arg(long = "clear-waiting")]
-    pub clear_waiting: bool,
 
     /// New Component slug. Restricted to the Board's `board.components` when
     /// the Board configures them; any lowercase slug otherwise.

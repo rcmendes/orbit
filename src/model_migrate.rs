@@ -21,7 +21,7 @@ use crate::board::{self, Board, Config};
 use crate::cli::ModelMigrateArgs;
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
-use crate::graph::{Graph, Issue, LoadMode};
+use crate::graph::{Graph, LoadIssue, LoadMode};
 use crate::hierarchy::{Hierarchy, IssueTypeConfig};
 use crate::key::{self, KeyState};
 use crate::output::CommandOutput;
@@ -59,9 +59,9 @@ pub struct Stats {
     pub config_changes: Vec<String>,
     /// Graph issues the planned result introduces; a non-empty list blocks
     /// `--apply` (pre-existing issues are left for `orbit doctor`).
-    pub new_issues: Vec<Issue>,
+    pub new_issues: Vec<LoadIssue>,
     /// Issues the un-migrated Board already reports, for delta reporting.
-    pub baseline_issues: Vec<Issue>,
+    pub baseline_issues: Vec<LoadIssue>,
     pub warnings: Vec<String>,
 }
 
@@ -171,7 +171,7 @@ fn plan_data(plan: &Plan, applied: bool) -> Value {
         "migrated": plan.needed,
         "applied": applied,
         "board": plan.root,
-        "tasks": stats.tasks_scanned,
+        "issues_scanned": stats.tasks_scanned,
         "files_changed": stats.files_changed,
         "already_migrated": !plan.needed,
         "statuses": stats.statuses,
@@ -225,7 +225,7 @@ fn human_summary(plan: &Plan, applied: bool) -> String {
     human
 }
 
-fn blocked_by_issues(issues: &[Issue]) -> OrbitError {
+fn blocked_by_issues(issues: &[LoadIssue]) -> OrbitError {
     OrbitError::new(
         code::MIGRATION_BLOCKED,
         "the migration would introduce Board issues; fix them or adjust board.types/board.hierarchy first",
@@ -318,6 +318,7 @@ fn load_config(root: &Path) -> Result<(Config, bool)> {
         .try_into()
         .map_err(|error| OrbitError::config(format!("invalid {}: {error}", path.display())))?;
     config.validate()?;
+    crate::modules::validate(&config)?;
     Ok((config, remap_statuses))
 }
 
@@ -897,16 +898,16 @@ fn task_files(tasks_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     Ok(files)
 }
 
-fn issue_key(issue: &Issue) -> String {
+fn issue_key(issue: &LoadIssue) -> String {
     format!(
         "{}|{}|{}",
         issue.code,
-        issue.task.clone().unwrap_or_default(),
+        issue.issue.clone().unwrap_or_default(),
         issue.message
     )
 }
 
-fn issue_keys(issues: &[Issue]) -> BTreeSet<String> {
+fn issue_keys(issues: &[LoadIssue]) -> BTreeSet<String> {
     issues.iter().map(issue_key).collect()
 }
 
@@ -1025,7 +1026,7 @@ fn build_and_commit(plan: &Plan, root: &Path) -> Result<String> {
     let (graph, mut issues) = Graph::load(&temp_board, LoadMode::Lenient)?;
     crate::health::comment_files(&temp_board, &graph, true, &mut issues)?;
     let baseline = issue_keys(&plan.stats.baseline_issues);
-    let fresh: Vec<Issue> = issues
+    let fresh: Vec<LoadIssue> = issues
         .into_iter()
         .filter(|issue| !baseline.contains(&issue_key(issue)))
         .collect();
@@ -1124,7 +1125,6 @@ mod tests {
                     assignee: None,
                     lease: None,
                     reporter: None,
-                    stray_lease_times: None,
                     source_key: None,
                     properties: Default::default(),
                     created_at: now,

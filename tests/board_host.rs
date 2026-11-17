@@ -836,7 +836,7 @@ fn sync_rekeys_colliding_project_keys_without_losing_issues() {
     // Exactly one Issue keeps ORB-2; the other was re-keyed to ORB-3 with
     // ORB-2 recorded as an alias, and the internal IDs never changed.
     let list = repo.ok_json(&["list", "--json"]);
-    let tasks = list["data"]["tasks"].as_array().unwrap();
+    let tasks = list["data"]["issues"].as_array().unwrap();
     assert_eq!(tasks.len(), 3, "{list}");
     let by_key = |key: &str| {
         tasks

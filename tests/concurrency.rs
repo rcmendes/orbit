@@ -53,7 +53,7 @@ fn concurrent_ready_claims_are_distinct() {
 
     let all = repo.ok_json(&["list", "--all", "--json"]);
     assert_eq!(all["data"]["count"], 8);
-    for task in all["data"]["tasks"].as_array().unwrap() {
+    for task in all["data"]["issues"].as_array().unwrap() {
         assert_eq!(task["status"], "in_progress");
         assert!(task["assignee"].is_string());
     }
@@ -105,8 +105,10 @@ fn concurrent_deletes_leave_a_healthy_board() {
     repo.init();
 
     let first = repo.add("First", &[]);
-    let second = repo.add("Second", &["--depends-on", first.as_str()]);
-    let third = repo.add("Third", &["--depends-on", first.as_str()]);
+    let second = repo.add("Second", &[]);
+    let third = repo.add("Third", &[]);
+    repo.ok_json(&["depend", second.as_str(), first.as_str(), "--json"]);
+    repo.ok_json(&["depend", third.as_str(), first.as_str(), "--json"]);
 
     let mut children = Vec::new();
     for id in [&first, &second] {
@@ -128,7 +130,7 @@ fn concurrent_deletes_leave_a_healthy_board() {
     assert_eq!(doctor["data"]["healthy"], true);
 
     let third = repo.ok_json(&["show", third.as_str(), "--json"]);
-    assert!(third["data"]["depends_on"].as_array().unwrap().is_empty());
+    assert!(third["data"]["blocking"].as_array().unwrap().is_empty());
 }
 
 // --- --if-version and --idempotency-key --------------------------------------
@@ -168,7 +170,7 @@ fn if_version_accepts_the_current_version_and_rejects_a_stale_one() {
     ]);
     assert_eq!(conflict["error"]["code"], "VERSION_CONFLICT", "{conflict}");
     assert_eq!(conflict["error"]["retryable"], true, "{conflict}");
-    assert_eq!(conflict["error"]["details"]["task"], id, "{conflict}");
+    assert_eq!(conflict["error"]["details"]["issue"], id, "{conflict}");
 
     // The version `orbit show` now reports is accepted.
     let current = updated_at(&repo, &id);

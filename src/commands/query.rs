@@ -20,7 +20,7 @@ fn check_parent_filter(graph: &Graph, parent: &str) -> Result<()> {
 }
 
 pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
+    let (graph, _) = crate::index::load(board, LoadMode::Strict)?;
     if let Some(parent) = args.parent.as_deref() {
         check_parent_filter(&graph, parent)?;
     }
@@ -29,7 +29,7 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
     let priority = args
         .priority
         .as_deref()
-        .map(|priority| validate_priority(board, priority))
+        .map(|priority| board.config.board.validate_priority(priority))
         .transpose()?;
     let json_filter = args
         .filter
@@ -44,8 +44,11 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
     let label_filters = normalize_labels(&args.label)?;
     let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
-    let components = normalize_components(board, &args.component)?;
-    let excluded_components = normalize_components(board, &args.exclude_component)?;
+    let components = board.config.board.normalize_components(&args.component)?;
+    let excluded_components = board
+        .config
+        .board
+        .normalize_components(&args.exclude_component)?;
     let scope = repository_scope(board, args.all)?;
     if let Some(status) = args.status.as_deref()
         && graph.workflow.status(status).is_none()
@@ -192,7 +195,7 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
 
     Ok(crate::output::CommandOutput::new(
         json!({
-            "tasks": summaries,
+            "issues": summaries,
             "count": count,
             "total": total,
             "next_cursor": next_cursor,
@@ -212,7 +215,7 @@ pub(super) fn cmd_ready(
     let (graph, _) = if args.claim {
         Graph::load(board, LoadMode::Strict)?
     } else {
-        Graph::load_indexed(board, LoadMode::Strict)?
+        crate::index::load(board, LoadMode::Strict)?
     };
     if let Some(parent) = args.parent.as_deref() {
         check_parent_filter(&graph, parent)?;
@@ -222,8 +225,11 @@ pub(super) fn cmd_ready(
     let label_filters = normalize_labels(&args.label)?;
     let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
-    let components = normalize_components(board, &args.component)?;
-    let excluded_components = normalize_components(board, &args.exclude_component)?;
+    let components = board.config.board.normalize_components(&args.component)?;
+    let excluded_components = board
+        .config
+        .board
+        .normalize_components(&args.exclude_component)?;
     let scope = repository_scope(board, args.all)?;
 
     let filters = ReadyFilters {
@@ -333,7 +339,7 @@ pub(super) fn cmd_ready(
     };
 
     Ok(
-        crate::output::CommandOutput::new(json!({ "tasks": summaries, "count": count }), human)
+        crate::output::CommandOutput::new(json!({ "issues": summaries, "count": count }), human)
             .with_meta(json!({ "count": count })),
     )
 }
@@ -400,7 +406,7 @@ fn query_options(filter: Option<&str>, fields: Option<&str>) -> Result<QueryOpti
 }
 
 pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
+    let (graph, _) = crate::index::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.id)?;
     let comments = board.read_comments(&task.id)?;
     let remote = crate::remote::details_visible(board, &graph);
@@ -417,7 +423,7 @@ pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::C
 }
 
 pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
+    let (graph, _) = crate::index::load(board, LoadMode::Strict)?;
     let root = graph.get(&args.id)?;
     if root.front.parent.is_some() && graph.children(&root.id).is_empty() {
         return Err(OrbitError::invalid_argument(format!(
@@ -463,7 +469,7 @@ pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::C
     }
 
     Ok(crate::output::CommandOutput::new(
-        json!({ "root": root.id, "tasks": summaries, "count": count }),
+        json!({ "root": root.id, "issues": summaries, "count": count }),
         human,
     )
     .with_meta(json!({ "count": count })))
@@ -472,7 +478,7 @@ pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::C
 /// `orbit search <query>`: free text plus `key:value` qualifiers, ranked
 /// title → metadata → body, each hit carrying a `snippet`.
 pub(super) fn cmd_search(board: &Board, args: SearchArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
+    let (graph, _) = crate::index::load(board, LoadMode::Strict)?;
     let query = crate::search::parse_query(&args.query)?;
     let (json_filter, fields) = query_options(args.filter.as_deref(), args.fields.as_deref())?;
     let scope = repository_scope(board, args.all)?;
@@ -578,7 +584,7 @@ pub(super) fn cmd_search(board: &Board, args: SearchArgs) -> Result<crate::outpu
 /// `orbit digest <id>`: one Issue's compact state, plus a subtree rollup
 /// (`done`/`cancelled`/`blocked`/`open` counts) when it has SubTasks.
 pub(super) fn cmd_digest(board: &Board, args: DigestArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
+    let (graph, _) = crate::index::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.id)?;
     let comments = board.read_comments(&task.id)?;
     let descendants = graph.descendants(&task.id);
@@ -670,7 +676,7 @@ pub(super) fn cmd_digest(board: &Board, args: DigestArgs) -> Result<crate::outpu
             .iter()
             .filter(|child| !graph.workflow.is_terminal(&child.front.status))
             .count();
-        data["subtasks"] = json!({
+        data["sub_issues"] = json!({
             "total": direct_total,
             "open": direct_open,
             "done": direct_total - direct_open,
@@ -737,7 +743,7 @@ pub(super) fn cmd_digest(board: &Board, args: DigestArgs) -> Result<crate::outpu
 }
 
 pub(super) fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
+    let (graph, _) = crate::index::load(board, LoadMode::Strict)?;
     let label_filters = normalize_labels(&args.label)?;
     let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
     let matches = |task: &Task| {
@@ -951,7 +957,7 @@ fn prime_human(
 }
 
 pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
+    let (graph, _) = crate::index::load(board, LoadMode::Strict)?;
     let mut ids: Vec<&String> = graph.tasks.keys().collect();
     ids.sort();
 
@@ -970,10 +976,10 @@ pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> 
         "board": {
             "branch": board.config.board.branch,
             "prefix": board.config.id.prefix,
-            "task_count": task_count,
+            "issue_count": task_count,
             "comment_count": comment_count,
         },
-        "tasks": tasks,
+        "issues": tasks,
     });
     Ok(crate::output::CommandOutput::new(
         snapshot,

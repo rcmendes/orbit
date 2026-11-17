@@ -907,6 +907,7 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
     let mut tasks = std::collections::BTreeMap::<PathBuf, Vec<u8>>::new();
     let mut comments = std::collections::BTreeMap::new();
     let mut config = crate::board::Config::load(&board.root)?;
+    crate::modules::validate(&config)?;
     let mut notes = Vec::new();
     for child in children {
         let source = Board::at_root(child.board.clone(), Vec::new())?;
@@ -990,6 +991,7 @@ fn apply_child_merge(anchor: &Path, board: &Board, children: &[ChildBoard]) -> R
     }
 
     config.validate()?;
+    crate::modules::validate(&config)?;
     // Preflight every child before publishing; a late collision must leave imports untouched.
     for (path, bytes) in tasks.into_iter().chain(comments) {
         crate::atomic::write_atomic(&path, &bytes, false)?;

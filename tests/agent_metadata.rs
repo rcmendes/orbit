@@ -87,7 +87,7 @@ fn component_accepts_any_lowercase_slug_when_the_board_defines_no_components() {
 
     let list = repo.ok_json(&["list", "--component", "mobile-api", "--json"]);
     assert_eq!(list["data"]["count"], 1);
-    assert_eq!(list["data"]["tasks"][0]["id"], id.as_str());
+    assert_eq!(list["data"]["issues"][0]["id"], id.as_str());
 }
 
 /// Writes `components = [...]` into the Board's `[board]` config table.
@@ -170,7 +170,7 @@ fn component_filters_scope_list_and_ready() {
 
     let list = repo.ok_json(&["list", "--component", "cli", "--component", "mcp", "--json"]);
     assert_eq!(list["data"]["count"], 2);
-    let ids: Vec<&str> = list["data"]["tasks"]
+    let ids: Vec<&str> = list["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -181,7 +181,7 @@ fn component_filters_scope_list_and_ready() {
     assert!(!ids.contains(&unset.as_str()));
 
     let list = repo.ok_json(&["list", "--exclude-component", "cli", "--json"]);
-    let ids: Vec<&str> = list["data"]["tasks"]
+    let ids: Vec<&str> = list["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -193,7 +193,7 @@ fn component_filters_scope_list_and_ready() {
 
     let ready = repo.ok_json(&["ready", "--component", "mcp", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], mcp.as_str());
+    assert_eq!(ready["data"]["issues"][0]["id"], mcp.as_str());
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn export_includes_component_and_verification() {
         &["--component", "docs", "--verification", "cargo test export"],
     );
     let export = repo.ok_json(&["export", "--json"]);
-    let task = export["data"]["tasks"]
+    let task = export["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()

@@ -420,7 +420,6 @@ pub(super) fn format_detail(
     if !allowed.is_empty() {
         lines.push(format!("allowed_transitions: {}", allowed.join(", ")));
     }
-    lines.push(format!("kind: {}", task.kind()));
     lines.push(format!("type: {}", task.front.task_type));
     if remote {
         lines.push(match crate::remote::link::link_view(task) {
@@ -537,7 +536,7 @@ pub(super) fn format_detail(
         .map(|child| graph.display_id(&child.id))
         .collect();
     if !children.is_empty() {
-        lines.push(format!("subtasks: {}", children.join(", ")));
+        lines.push(format!("sub-issues: {}", children.join(", ")));
     }
     let open_subtasks: Vec<String> = graph
         .open_children(&task.id)
@@ -545,7 +544,7 @@ pub(super) fn format_detail(
         .map(|id| graph.display_id(id))
         .collect();
     if !open_subtasks.is_empty() {
-        lines.push(format!("open_subtasks: {}", open_subtasks.join(", ")));
+        lines.push(format!("open sub-issues: {}", open_subtasks.join(", ")));
     }
     if !comments.is_empty() {
         lines.push(format!("comments: {}", comments.len()));

@@ -29,21 +29,9 @@ use crate::task::{self, Task, TaskFrontmatter};
 const INDEX_FILE: &str = "index.json";
 const INDEX_VERSION: u32 = 1;
 
-/// The `[index]` section of `config.toml`: `enabled = true` opts the Board
-/// into the derived read index (ADR 0022 opt-in module).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct IndexConfig {
-    #[serde(default)]
-    pub enabled: bool,
-}
-
-impl IndexConfig {
-    /// serde `skip_serializing_if`: a Board without the index writes no
-    /// `[index]` section at all.
-    pub fn is_default(&self) -> bool {
-        !self.enabled
-    }
-}
+// The `[index]` config schema lives in `crate::board` (kernel-owned
+// config.toml schema); this module interprets it.
+pub use crate::board::IndexConfig;
 
 /// File metadata of `tasks/<id>.md` when the entry was indexed: byte length
 /// plus modification time, re-stated on every indexed load. A mismatch marks
@@ -90,16 +78,61 @@ struct IndexFile {
 
 /// The plan [`plan`] computes for one indexed load: cached parses, the ids
 /// that need an authoritative re-parse, and the pre-read fingerprints used
-/// to stamp [`store`] conservatively.
-pub struct Plan {
+/// to stamp [`store`] conservatively. It travels inside
+/// [`crate::graph::IndexPlan::state`] so the kernel never sees it.
+struct Plan {
     /// Tasks served from still-fresh index entries.
-    pub tasks: HashMap<String, Task>,
+    tasks: HashMap<String, Task>,
     /// Task ids whose entry was absent, stale, or unreadable — the caller
     /// re-reads and re-parses them exactly as [`crate::graph::Graph::load`].
-    pub rescan: Vec<String>,
+    rescan: Vec<String>,
     /// The fingerprint of every Task file captured before any read, so the
     /// stored index never claims a file fresher than the bytes parsed.
     prints: HashMap<String, Option<Fingerprint>>,
+}
+
+/// The `ReadIndex` implementation the application layer hands to
+/// [`crate::graph::Graph::load_indexed`]. [`load`] is the entry point: it
+/// checks `[index] enabled` and falls back to the plain scan.
+pub struct DerivedIndex;
+
+impl crate::graph::ReadIndex for DerivedIndex {
+    fn plan(&self, board: &Board, ids: &[String]) -> crate::graph::IndexPlan {
+        let mut plan = plan(board, ids);
+        crate::graph::IndexPlan {
+            tasks: std::mem::take(&mut plan.tasks),
+            rescan: std::mem::take(&mut plan.rescan),
+            state: Some(Box::new(plan)),
+        }
+    }
+
+    fn store(&self, board: &Board, tasks: &HashMap<String, Task>, plan: &crate::graph::IndexPlan) {
+        let Some(plan) = plan
+            .state
+            .as_ref()
+            .and_then(|state| state.downcast_ref::<Plan>())
+        else {
+            return;
+        };
+        store(board, tasks, plan);
+    }
+}
+
+/// `Graph::load` through the derived index when `[index] enabled = true`,
+/// the plain scan otherwise. The kernel decides nothing about the module;
+/// the application layer calls this where it used `load_indexed`.
+pub fn load(
+    board: &Board,
+    mode: crate::graph::LoadMode,
+) -> Result<(crate::graph::Graph, Vec<crate::graph::LoadIssue>)> {
+    let index = board.config.index.enabled.then_some(DerivedIndex);
+    crate::graph::Graph::load_indexed(
+        board,
+        mode,
+        index
+            .as_ref()
+            .map(|index| index as &dyn crate::graph::ReadIndex),
+    )
 }
 
 /// `cache/index.json` beside the Board folder — untracked, like the other
@@ -117,7 +150,7 @@ fn read_index(board: &Board) -> Option<IndexFile> {
 /// Plans an indexed load over `ids` (the current `Board::task_ids`): Tasks
 /// whose index entry still matches their file's fingerprint are served from
 /// the cache; new, changed, and vanished-stat files land in `rescan`.
-pub fn plan(board: &Board, ids: &[String]) -> Plan {
+fn plan(board: &Board, ids: &[String]) -> Plan {
     let mut entries = read_index(board)
         .map(|file| file.entries)
         .unwrap_or_default();
@@ -152,7 +185,7 @@ pub fn plan(board: &Board, ids: &[String]) -> Plan {
 /// stamped with the fingerprint captured *before* its file was read so a
 /// file that changed mid-load rescans next time rather than reading stale
 /// forever. Best-effort — a store failure costs a rescan, never data.
-pub fn store(board: &Board, tasks: &HashMap<String, Task>, plan: &Plan) {
+fn store(board: &Board, tasks: &HashMap<String, Task>, plan: &Plan) {
     let _ = store_inner(board, tasks, plan);
 }
 

@@ -452,7 +452,7 @@ fn mattpocock_profile_drives_the_skills_flow_end_to_end() {
     assert_eq!(status_of(&id), "Ready");
     let ready = repo.ok_json(&["ready", "--json"]);
     assert!(
-        ready["data"]["tasks"]
+        ready["data"]["issues"]
             .as_array()
             .unwrap()
             .iter()

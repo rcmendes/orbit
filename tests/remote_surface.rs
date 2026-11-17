@@ -147,7 +147,7 @@ fn json_output_is_unchanged_without_remote_material() {
     let id = repo.add("Plain task", &[]);
 
     let list = repo.ok_json(&["list", "--json"]);
-    let row = &list["data"]["tasks"][0];
+    let row = &list["data"]["issues"][0];
     assert!(row["github"].is_null(), "{row}");
     assert!(row["remote"].is_null(), "{row}");
 

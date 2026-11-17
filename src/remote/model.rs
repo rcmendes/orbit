@@ -350,7 +350,8 @@ pub enum SyncResolution {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationKind {
-    /// A SubTask edge: this Remote Issue is a remote child of another.
+    /// A sub-issue edge: this Remote Issue is a remote child of another.
+    #[serde(rename = "sub-task")]
     Subtask,
     /// A dependency edge: this Remote Issue is blocked by another.
     BlockedBy,
@@ -359,7 +360,7 @@ pub enum RelationKind {
 impl RelationKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Subtask => "subtask",
+            Self::Subtask => "sub-task",
             Self::BlockedBy => "blocked_by",
         }
     }

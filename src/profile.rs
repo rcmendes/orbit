@@ -145,38 +145,9 @@ from = ["Done", "Cancelled"]
 to = "Triage"
 "#;
 
-/// The `[[profiles]]` record `orbit setup <plugin>` writes into
-/// `config.toml`. It captures everything doctor and capabilities need to
-/// re-negotiate the profile's requirements without re-reading the profile
-/// file, which may have moved or changed since it was applied.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AppliedProfile {
-    pub name: String,
-    /// Where the profile came from: `builtin`, `board`, `orbit`, `user`,
-    /// `project`, `local`, or `file:<path>` for an explicit path argument.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// The minimum contract version the profile was written for.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub contract: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requires: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub optional: Vec<String>,
-    /// Hold names the profile contributed to `board.non_ready_labels`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub holds: Vec<String>,
-    /// Role name → assignee kind (`agent` or `human`) the plugin uses.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub roles: BTreeMap<String, String>,
-    /// Plugin-term → Orbit-term maps, one string→string table per
-    /// vocabulary area (`status`, `label`, `priority`, `type`, `link`,
-    /// `resolution`, `component`, or a plugin-defined area).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub vocabulary: BTreeMap<String, BTreeMap<String, String>>,
-}
+// The `[[profiles]]` record schema lives in `crate::board` (kernel-owned
+// config.toml schema); this module resolves and applies profiles.
+pub use crate::board::AppliedProfile;
 
 /// The optional `[board]` overrides a profile may carry. Every field is
 /// optional; an absent field leaves the Board's current value alone.

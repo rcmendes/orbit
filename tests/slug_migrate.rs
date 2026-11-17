@@ -79,8 +79,8 @@ fn slug_show_reports_identity_and_counts() {
     let value = repo.ok_json(&["slug", "show", "--json"]);
     assert_eq!(value["data"]["slug"], "orb");
     assert_eq!(value["data"]["prefix"], "orb-");
-    assert_eq!(value["data"]["tasks"], 2);
-    assert_eq!(value["data"]["subtasks"], 1);
+    assert_eq!(value["data"]["issues"], 2);
+    assert_eq!(value["data"]["sub_issues"], 1);
     assert_eq!(value["data"]["comment_files"], 1);
 
     let output = repo.orbit(&["slug", "show"]);
@@ -92,7 +92,7 @@ fn slug_show_reports_identity_and_counts() {
     let human = String::from_utf8_lossy(&output.stdout);
     assert!(human.contains("slug     orb"), "{human}");
     assert!(human.contains("prefix   orb-"), "{human}");
-    assert!(human.contains("tasks    2 (1 SubTask)"), "{human}");
+    assert!(human.contains("issues   2 (1 sub-issue)"), "{human}");
     assert!(human.contains("comments 1 file"), "{human}");
 }
 
@@ -109,7 +109,8 @@ fn dry_run_prints_every_count_and_writes_nothing() {
         ],
     );
     let child = repo.add("Child", &["--parent", &parent]);
-    let dependent = repo.add("Dependent", &["--depends-on", &parent]);
+    let dependent = repo.add("Dependent", &[]);
+    repo.ok_json(&["depend", dependent.as_str(), parent.as_str(), "--json"]);
     repo.ok_json(&[
         "comment", "add", &parent, "--by", "alice", "--body", "A note.", "--json",
     ]);
@@ -123,8 +124,8 @@ fn dry_run_prints_every_count_and_writes_nothing() {
     assert_eq!(value["data"]["target"]["slug"], "atlas");
     assert_eq!(value["data"]["target"]["prefix"], "atlas-");
     assert_eq!(value["data"]["changed"], true);
-    assert_eq!(value["data"]["tasks"], 3);
-    assert_eq!(value["data"]["subtasks"], 1);
+    assert_eq!(value["data"]["issues"], 3);
+    assert_eq!(value["data"]["sub_issues"], 1);
     assert_eq!(value["data"]["comment_files"], 1);
     assert_eq!(value["data"]["references"], 2);
     assert_eq!(value["data"]["mappings"].as_array().unwrap().len(), 3);
@@ -150,7 +151,8 @@ fn migrate_rewrites_ids_references_comments_and_commits_once() {
     let board = repo.board_path();
     let parent = repo.add("Parent", &["--body", "The body keeps the old ID in prose."]);
     let child = repo.add("Child", &["--parent", &parent]);
-    let dependent = repo.add("Dependent", &["--depends-on", &parent]);
+    let dependent = repo.add("Dependent", &[]);
+    repo.ok_json(&["depend", dependent.as_str(), parent.as_str(), "--json"]);
     repo.ok_json(&[
         "comment",
         "add",
@@ -205,21 +207,21 @@ fn migrate_rewrites_ids_references_comments_and_commits_once() {
 
     let export = repo.ok_json(&["export", "--json"]);
     assert_eq!(export["data"]["board"]["prefix"], "atlas-");
-    let tasks = export["data"]["tasks"].as_array().unwrap();
+    let tasks = export["data"]["issues"].as_array().unwrap();
     let parent_task = tasks.iter().find(|task| task["id"] == new_parent).unwrap();
-    assert_eq!(parent_task["subtask_count"], 1);
+    assert_eq!(parent_task["sub_issue_count"], 1);
     let child_task = tasks.iter().find(|task| task["id"] == new_child).unwrap();
     assert_eq!(child_task["parent"], new_parent);
     let dependent_task = tasks
         .iter()
         .find(|task| task["id"] == new_dependent)
         .unwrap();
-    assert_eq!(dependent_task["depends_on"][0], new_parent);
+    assert_eq!(dependent_task["blocking"][0], new_parent);
 
     assert_eq!(commit_count(&repo, &board), baseline + 1);
     let log = git_stdout(&repo, &board, &["log", "--oneline", "-2"]);
     assert!(
-        log.contains("orbit: migrate task prefix from orb- to atlas-"),
+        log.contains("orbit: migrate issue prefix from orb- to atlas-"),
         "{log}"
     );
     let worktrees = git_stdout(&repo, &board, &["worktree", "list"]);
@@ -272,7 +274,7 @@ fn live_claims_require_force_and_force_lists_the_holders() {
     );
 
     let export = repo.ok_json(&["export", "--json"]);
-    let task = export["data"]["tasks"]
+    let task = export["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -386,7 +388,7 @@ fn migrate_works_on_an_empty_board() {
     let value = repo.ok_json(&["slug", "migrate", "acme", "--json"]);
 
     assert_eq!(value["data"]["applied"], true);
-    assert_eq!(value["data"]["tasks"], 0);
+    assert_eq!(value["data"]["issues"], 0);
     assert_eq!(value["data"]["mappings"].as_array().unwrap().len(), 0);
     assert_eq!(commit_count(&repo, &board), baseline + 1);
     assert!(
@@ -498,7 +500,7 @@ fn migrate_flushes_pending_heartbeat_writes_before_the_single_commit() {
     let log = git_stdout(&repo, &board, &["log", "--oneline", "-3"]);
     assert!(log.contains("orbit: sync"), "{log}");
     assert!(
-        log.contains("orbit: migrate task prefix from orb- to atlas-"),
+        log.contains("orbit: migrate issue prefix from orb- to atlas-"),
         "{log}"
     );
     assert_eq!(
@@ -506,7 +508,7 @@ fn migrate_flushes_pending_heartbeat_writes_before_the_single_commit() {
         ""
     );
     let export = repo.ok_json(&["export", "--json"]);
-    let task = export["data"]["tasks"]
+    let task = export["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()

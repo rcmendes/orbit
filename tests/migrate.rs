@@ -67,7 +67,7 @@ fn migrate_previews_the_legacy_local_board_without_writing() {
             .to_str()
             .unwrap()
     );
-    assert_eq!(value["data"]["tasks"], 1);
+    assert_eq!(value["data"]["issues_scanned"], 1);
     // The preview is read-only: the legacy Board is untouched.
     assert!(board.join("config.toml").is_file());
     assert!(!repo.board_path().exists());
@@ -110,7 +110,7 @@ fn migrate_apply_moves_the_legacy_local_board() {
     assert!(!repo.path().join(".gitignore").exists());
 
     let listed = repo.ok_json(&["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], "orb-a7b2c9");
+    assert_eq!(listed["data"]["issues"][0]["id"], "orb-a7b2c9");
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn migrate_apply_converts_a_worktree_backed_board() {
     assert!(!config.contains("storage"), "{config}");
 
     let listed = repo.ok_json(&["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], "orb-b8c3d0");
+    assert_eq!(listed["data"]["issues"][0]["id"], "orb-b8c3d0");
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn migrate_apply_converts_a_worktree_board_already_at_its_final_folder() {
     assert!(board.join(".git").is_dir());
     assert!(board.join("tasks").join("orb-f2a7b4.md").is_file());
     let listed = repo.ok_json(&["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], "orb-f2a7b4");
+    assert_eq!(listed["data"]["issues"][0]["id"], "orb-f2a7b4");
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn migrate_apply_moves_a_legacy_workspace_board() {
         "--json",
     ]);
     let listed = joiner.ok_json(&["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], "orb-c9d4e1");
+    assert_eq!(listed["data"]["issues"][0]["id"], "orb-c9d4e1");
 }
 
 #[test]

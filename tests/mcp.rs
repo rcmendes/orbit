@@ -242,7 +242,7 @@ fn create_claim_heartbeat_and_finish_round_trip() {
     let ready = client.call(11, "ready", json!({}));
     let ready = tool_envelope(&ready);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], id);
+    assert_eq!(ready["data"]["issues"][0]["id"], id);
 
     let claimed = client.call(12, "ready", json!({ "claim": true, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
@@ -273,7 +273,7 @@ fn create_claim_heartbeat_and_finish_round_trip() {
     let list = client.call(16, "list", json!({ "include_closed": true }));
     let list = tool_envelope(&list);
     assert_eq!(list["data"]["count"], 1);
-    assert_eq!(list["data"]["tasks"][0]["status"], "done");
+    assert_eq!(list["data"]["issues"][0]["status"], "done");
 }
 
 #[test]
@@ -360,7 +360,7 @@ fn subtasks_are_available_over_mcp() {
     let ready = client.call(72, "ready", json!({ "parent": parent_id.clone() }));
     let ready = tool_envelope(&ready);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], child_id.as_str());
+    assert_eq!(ready["data"]["issues"][0]["id"], child_id.as_str());
 
     let list = client.call(
         73,
@@ -369,7 +369,7 @@ fn subtasks_are_available_over_mcp() {
     );
     let list = tool_envelope(&list);
     assert_eq!(list["data"]["count"], 1);
-    assert_eq!(list["data"]["tasks"][0]["id"], child_id.as_str());
+    assert_eq!(list["data"]["issues"][0]["id"], child_id.as_str());
 
     let set_repository = client.call(77, "update", json!({ "id": child_id, "repository": "api" }));
     assert_eq!(tool_envelope(&set_repository)["ok"], true);
@@ -377,12 +377,12 @@ fn subtasks_are_available_over_mcp() {
     let scoped = client.call(74, "list", json!({ "repository": "api", "all": true }));
     let scoped = tool_envelope(&scoped);
     assert_eq!(scoped["data"]["count"], 1);
-    assert_eq!(scoped["data"]["tasks"][0]["id"], child_id.as_str());
+    assert_eq!(scoped["data"]["issues"][0]["id"], child_id.as_str());
 
     let ready_scoped = client.call(75, "ready", json!({ "labels": ["bug"] }));
     let ready_scoped = tool_envelope(&ready_scoped);
     assert_eq!(ready_scoped["data"]["count"], 1);
-    assert_eq!(ready_scoped["data"]["tasks"][0]["id"], child_id.as_str());
+    assert_eq!(ready_scoped["data"]["issues"][0]["id"], child_id.as_str());
 
     let excluded = client.call(
         76,
@@ -413,12 +413,12 @@ fn type_is_available_over_mcp() {
     let listed = client.call(82, "list", json!({ "types": ["epic"] }));
     let listed = tool_envelope(&listed);
     assert_eq!(listed["data"]["count"], 1);
-    assert_eq!(listed["data"]["tasks"][0]["id"], epic_id.as_str());
+    assert_eq!(listed["data"]["issues"][0]["id"], epic_id.as_str());
 
     let ready = client.call(83, "ready", json!({ "exclude_types": ["epic"] }));
     let ready = tool_envelope(&ready);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], task_id.as_str());
+    assert_eq!(ready["data"]["issues"][0]["id"], task_id.as_str());
 
     let updated = client.call(84, "update", json!({ "id": task_id, "type": "bug" }));
     let updated = tool_envelope(&updated);
@@ -454,7 +454,7 @@ fn link_and_delete_are_available_over_mcp() {
 
     let get = client.call(21, "get", json!({ "id": second }));
     let get = tool_envelope(&get);
-    assert_eq!(get["data"]["depends_on"][0], first);
+    assert_eq!(get["data"]["blocking"][0], first);
 
     let unlinked = client.call(
         22,
@@ -598,7 +598,7 @@ fn resources_expose_task_markdown() {
     let templates = client.request(30, "resources/templates/list", json!({}));
     assert_eq!(
         templates["result"]["resourceTemplates"][0]["uriTemplate"],
-        "orbit://tasks/{id}"
+        "orbit://issues/{id}"
     );
 
     let resources = client.request(31, "resources/list", json!({}));
@@ -606,10 +606,10 @@ fn resources_expose_task_markdown() {
     assert!(
         resources
             .iter()
-            .any(|resource| resource["uri"] == format!("orbit://tasks/{id}"))
+            .any(|resource| resource["uri"] == format!("orbit://issues/{id}"))
     );
 
-    let uri = format!("orbit://tasks/{id}");
+    let uri = format!("orbit://issues/{id}");
     let read = client.request(32, "resources/read", json!({ "uri": uri }));
     let text = read["result"]["contents"][0]["text"].as_str().unwrap();
     assert!(text.contains("Resource task"));
@@ -618,7 +618,7 @@ fn resources_expose_task_markdown() {
     let missing = client.request(
         33,
         "resources/read",
-        json!({ "uri": "orbit://tasks/orb-aaaaaa" }),
+        json!({ "uri": "orbit://issues/orb-aaaaaa" }),
     );
     assert_eq!(missing["error"]["code"], -32002);
 }
@@ -690,7 +690,8 @@ fn batch_tool_applies_operations_in_one_call() {
         "batch",
         json!({ "operations": [
             { "op": "add", "key": "planner:p:1", "title": "One" },
-            { "op": "add", "key": "planner:p:2", "title": "Two", "depends_on": ["key:planner:p:1"] }
+            { "op": "add", "key": "planner:p:2", "title": "Two" },
+            { "op": "depend", "id": "key:planner:p:2", "on": "key:planner:p:1" }
         ]}),
     );
     let envelope = tool_envelope(&response);
@@ -698,7 +699,7 @@ fn batch_tool_applies_operations_in_one_call() {
     let one = envelope["data"]["keys"]["planner:p:1"].as_str().unwrap();
     let two = envelope["data"]["keys"]["planner:p:2"].as_str().unwrap();
     let show = repo.ok_json(&["show", two, "--json"]);
-    assert_eq!(show["data"]["depends_on"], json!([one]));
+    assert_eq!(show["data"]["blocking"], json!([one]));
 }
 
 #[test]

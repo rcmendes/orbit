@@ -284,7 +284,7 @@ const fn tool(
     }
 }
 
-const ID_DESC: &str = "Task ID or project key, for example orb-a7b2c9 or ORB-12.";
+const ID_DESC: &str = "Issue ID or project key, for example orb-a7b2c9 or ORB-12.";
 const BY_DESC: &str = "Agent identity. Defaults to ORBIT_AGENT, then USER.";
 const TYPE_DESC: &str =
     "Issue type name from the Board's `board.types` (defaults: epic, story, task, bug, sub-task).";
@@ -293,9 +293,9 @@ const PRIORITY_DESC: &str =
     "Priority name from the Board's configured list (default: highest, high, medium, low).";
 const COMPONENT_DESC: &str =
     "Component slug; restricted to the Board's configured components when set.";
-const IF_VERSION_DESC: &str = "Optimistic-concurrency guard: the Task's `updated_at` version \
+const IF_VERSION_DESC: &str = "Optimistic-concurrency guard: the Issue's `updated_at` version \
      from `orbit show`; a stale version fails with a retryable VERSION_CONFLICT. Only valid on \
-     Task mutations (`orbit batch` takes a per-operation `if_version` instead).";
+     Issue mutations (`orbit batch` takes a per-operation `if_version` instead).";
 const IDEMPOTENCY_KEY_DESC: &str = "Idempotency key for this write: repeating the call with the \
      same key returns the first recorded result instead of running again.";
 
@@ -316,7 +316,7 @@ pub static TOOLS: &[Tool] = &[
                 "Comma-separated ready-queue strategies applied in order: default, critical-path, touches, capability, wip. Overrides `scheduler.strategy` in config.toml.",
             ),
             cint("limit", "Maximum tasks to list."),
-            cstr("parent", "Only Ready SubTasks of this Parent Task."),
+            cstr("parent", "Only Ready sub-issues of this parent Issue."),
             cstr(
                 "repository",
                 "Only tasks with this member Repository; matches the `repository` field.",
@@ -348,7 +348,7 @@ pub static TOOLS: &[Tool] = &[
             ),
             cbool(
                 "all",
-                "Include Ready tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks.",
+                "Include Ready Issues from every Repository; default scopes to the current Repository plus Board-wide Issues.",
             ),
             cstr("if_version", IF_VERSION_DESC),
             cstr("idempotency_key", IDEMPOTENCY_KEY_DESC),
@@ -370,11 +370,10 @@ pub static TOOLS: &[Tool] = &[
             ),
             cstr("priority", PRIORITY_DESC),
             cstr("assignee", "Only tasks assigned to this name."),
-            cstr("claimed_by", "Deprecated alias for `assignee`."),
             cbool("waiting", "Only tasks with an external blocker."),
             cstr("label", "Filter by label."),
             cbool("unlabeled", "Only tasks with no labels."),
-            cstr("parent", "Only SubTasks of this Parent Task."),
+            cstr("parent", "Only sub-issues of this parent Issue."),
             cstr(
                 "repository",
                 "Only tasks with this member Repository; matches the `repository` field.",
@@ -406,13 +405,13 @@ pub static TOOLS: &[Tool] = &[
             ),
             cbool(
                 "all",
-                "Include tasks from every Repository; default scopes to the current Repository plus Board-wide Tasks.",
+                "Include Issues from every Repository; default scopes to the current Repository plus Board-wide Issues.",
             ),
             cbool("include_closed", "Include done and cancelled tasks."),
-            cbool("linked", "Only Tasks with an active Remote Issue link."),
+            cbool("linked", "Only Issues with an active Remote Issue link."),
             cbool(
                 "local",
-                "Only Tasks without an active Remote Issue link; includes detached provenance.",
+                "Only Issues without an active Remote Issue link; includes detached provenance.",
             ),
             cobj(
                 "filter",
@@ -453,11 +452,11 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "tree",
-        "Show a Task, its SubTasks at every level, and blocking edges.",
+        "Show an Issue, its sub-issues at every level, and blocking edges.",
         &["tree"],
         &[pos(
             "id",
-            "Parent Task ID or project key, for example orb-a7b2c9 or ORB-12.",
+            "Parent Issue ID or project key, for example orb-a7b2c9 or ORB-12.",
         )],
         false,
         true,
@@ -605,7 +604,7 @@ pub static TOOLS: &[Tool] = &[
             ),
             switch(
                 "all",
-                "Search every Repository; default scopes to the current Repository plus Board-wide Tasks.",
+                "Search every Repository; default scopes to the current Repository plus Board-wide Issues.",
                 "--all",
             ),
         ],
@@ -617,7 +616,7 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "digest",
-        "Read one Issue's compact digest — state, people, blockers, children — with an epic rollup (done/cancelled/blocked/open counts) when it has SubTasks.",
+        "Read one Issue's compact digest — state, people, blockers, children — with an epic rollup (done/cancelled/blocked/open counts) when it has sub-issues.",
         &["digest"],
         &[pos("id", ID_DESC)],
         false,
@@ -632,13 +631,11 @@ pub static TOOLS: &[Tool] = &[
         "Create a task. Returns the new task id.",
         &["add"],
         &[
-            creq("title", "Task title. Required and must not be empty."),
+            creq("title", "Issue title. Required and must not be empty."),
             cenum("type", TYPE_DESC, TYPE_VALUES, false),
             cstr("priority", PRIORITY_DESC),
             cstrs("labels", "Initial labels."),
-            cstrs("depends_on", "Make the new task wait for existing tasks."),
-            cstr("parent", "Create a SubTask under this Parent Task."),
-            cstr("waiting_on", "External blocker."),
+            cstr("parent", "Create a sub-issue under this parent Issue."),
             cstr("component", COMPONENT_DESC),
             cstr(
                 "external_id",
@@ -668,7 +665,6 @@ pub static TOOLS: &[Tool] = &[
             cstr("body", "New body."),
             cenum("type", "New Issue type.", TYPE_VALUES, false),
             cstr("priority", PRIORITY_DESC),
-            cstr("waiting_on", "New external blocker."),
             cbool("clear_waiting", "Remove the external blocker."),
             cstr("component", COMPONENT_DESC),
             cbool("clear_component", "Remove the Component classification."),
@@ -780,7 +776,7 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "checkpoint",
-        "Record or update the active work checkpoint on a claimed task.",
+        "Record or update the active work checkpoint on a claimed Issue.",
         &["checkpoint"],
         &[
             creq("id", ID_DESC),
@@ -1003,7 +999,7 @@ pub static TOOLS: &[Tool] = &[
             creq("id", ID_DESC),
             cstr(
                 "dep_id",
-                "Orbit Task ID or project key target; omit when `external` is given or action is `list`.",
+                "Orbit Issue ID or project key target; omit when `external` is given or action is `list`.",
             ),
             cstr(
                 "external",
@@ -1183,7 +1179,7 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "index_status",
-        "Report the derived read index state: whether `[index]` is enabled, entry count, and freshness against the Task files.",
+        "Report the derived read index state: whether `[index]` is enabled, entry count, and freshness against the Issue files.",
         &["index", "status"],
         &[],
         false,
@@ -1194,7 +1190,7 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "index_rebuild",
-        "Rebuild the derived read index from the Task files. The index is a rebuildable cache under the Board cache dir, never a source of truth.",
+        "Rebuild the derived read index from the Issue files. The index is a rebuildable cache under the Board cache dir, never a source of truth.",
         &["index", "rebuild"],
         &[],
         false,
@@ -1215,7 +1211,7 @@ pub static TOOLS: &[Tool] = &[
             ),
             long(
                 "name",
-                "Member name Tasks record in their `repo` field.",
+                "Member name Issues record in their `repo` field.",
                 "--name",
             ),
             cstr("idempotency_key", IDEMPOTENCY_KEY_DESC),
@@ -1279,7 +1275,7 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "slug_migrate",
-        "Rewrite every Task and SubTask ID to a new slug.",
+        "Rewrite every Issue ID to a new slug.",
         &["slug", "migrate"],
         &[
             pos("slug", "New slug. Bare word: atlas, not atlas-."),
@@ -1325,7 +1321,7 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "migrate_model",
-        "Rewrite a pre-ADR-0022 Board's Tasks to the Issue model: workflow statuses, named priorities, typed links, properties, components/repository fields, Issue types, and project keys. Previews by default; apply=true rewrites in one commit.",
+        "Rewrite a pre-ADR-0022 Board's Issues to the Issue model: workflow statuses, named priorities, typed links, properties, components/repository fields, Issue types, and project keys. Previews by default; apply=true rewrites in one commit.",
         &["migrate", "model"],
         &[
             switch(
@@ -1360,7 +1356,6 @@ pub static TOOLS: &[Tool] = &[
                 "Clear the host without deleting the remote `orbit` branch.",
                 "--none",
             ),
-            cstr("idempotency_key", IDEMPOTENCY_KEY_DESC),
         ],
         false,
         false,
@@ -1404,7 +1399,7 @@ pub static TOOLS: &[Tool] = &[
         &["remote", "status"],
         &[long(
             "repo",
-            "Limit checks to Linked Tasks on one repository (`owner/repo`).",
+            "Limit checks to Linked Issues on one repository (`owner/repo`).",
             "--repo",
         )],
         false,
@@ -1498,12 +1493,12 @@ pub static TOOLS: &[Tool] = &[
             ),
             switch(
                 "linked",
-                "Show only Issues linked to Orbit Tasks.",
+                "Show only Remote Issues linked to local Issues.",
                 "--linked",
             ),
             switch(
                 "unlinked",
-                "Show only Issues without an Orbit Task link.",
+                "Show only Issues without an Orbit Issue link.",
                 "--unlinked",
             ),
         ],
@@ -1546,7 +1541,7 @@ pub static TOOLS: &[Tool] = &[
             pos_list("issues", "Explicit Remote Issue identities to review."),
             repeat(
                 "links",
-                "Link this selected Issue to a specific Local Task. Repeat as IDENTITY=TASK.",
+                "Link this selected Issue to a specific Issue. Repeat as IDENTITY=TASK.",
                 "--link",
             ),
             switch(
@@ -1564,10 +1559,10 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "remote_link",
-        "Link a Local Task to a Remote Issue.",
+        "Link a Issue to a Remote Issue.",
         &["remote", "link"],
         &[
-            pos("task", "Local Task ID or project key."),
+            pos("issue", "Issue ID or project key."),
             pos(
                 "issue",
                 "Remote Issue identity or URL: `TRACKER:PROJECT#ID`, `PROJECT#ID`, or a Remote Tracker Issue URL.",
@@ -1582,10 +1577,10 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "remote_create",
-        "Preview or create Remote Issues for selected Local Tasks.",
+        "Preview or create Remote Issues for selected Issues.",
         &["remote", "create"],
         &[
-            pos_list("tasks", "One or more Local Task IDs to export."),
+            pos_list("issues", "One or more Issue IDs or keys to export."),
             long(
                 "project",
                 "Choose a connected Remote Project (inferred only when one is available).",
@@ -1593,12 +1588,12 @@ pub static TOOLS: &[Tool] = &[
             ),
             switch(
                 "apply",
-                "Create Issues and link Tasks. Without this flag, show a read-only preview.",
+                "Create Remote Issues and link local Issues. Without this flag, show a read-only preview.",
                 "--apply",
             ),
             switch(
                 "include_closed",
-                "Include done and cancelled Tasks in the export.",
+                "Include done and cancelled Issues in the export.",
                 "--include-closed",
             ),
             cstr("idempotency_key", IDEMPOTENCY_KEY_DESC),
@@ -1611,12 +1606,12 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "remote_detach",
-        "Preview or detach a Linked Task from its Remote Issue.",
+        "Preview or detach a Linked Issue from its Remote Issue.",
         &["remote", "detach"],
         &[
             pos(
                 "target",
-                "Remote Issue identity (`TRACKER:PROJECT#ID`, `PROJECT#ID`) or a Task id whose Remote link should be detached.",
+                "Remote Issue identity (`TRACKER:PROJECT#ID`, `PROJECT#ID`) or an Issue id whose Remote link should be detached.",
             ),
             switch(
                 "apply",
@@ -1633,12 +1628,12 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "remote_reattach",
-        "Preview or reattach a Local Task by its inactive Remote provenance.",
+        "Preview or reattach a Issue by its inactive Remote provenance.",
         &["remote", "reattach"],
         &[
             pos(
                 "target",
-                "Remote Issue identity (`TRACKER:PROJECT#ID`, `PROJECT#ID`) or a Task id whose Remote link should be reattached.",
+                "Remote Issue identity (`TRACKER:PROJECT#ID`, `PROJECT#ID`) or an Issue id whose Remote link should be reattached.",
             ),
             switch(
                 "apply",
@@ -1655,12 +1650,12 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "remote_sync",
-        "Preview or apply synchronization for Linked Tasks.",
+        "Preview or apply synchronization for Linked Issues.",
         &["remote", "sync"],
         &[
             opt_pos(
-                "task",
-                "Local Task ID or project key to sync; omit for all Linked Tasks.",
+                "issue",
+                "Issue ID or project key to sync; omit for all Linked Issues.",
             ),
             long_enum(
                 "direction",
@@ -1688,7 +1683,7 @@ pub static TOOLS: &[Tool] = &[
     ),
     tool(
         "remote_auto_push",
-        "Enable or disable automatic push of Task changes to Remote Issues.",
+        "Enable or disable automatic push of Issue changes to Remote Issues.",
         &["remote", "auto-push"],
         &[
             pos_enum("state", "Turn automatic push on or off.", &["on", "off"]),
@@ -1705,7 +1700,7 @@ pub static TOOLS: &[Tool] = &[
         "triage_context",
         "Load task context, project guidance, and allowed triage fields.",
         &["triage", "context"],
-        &[pos("task", "Task ID or project key.")],
+        &[pos("issue", "Issue ID or project key.")],
         false,
         true,
         false,
@@ -1717,7 +1712,7 @@ pub static TOOLS: &[Tool] = &[
         "Validate and review a proposal JSON file or stdin without publishing.",
         &["triage", "review"],
         &[
-            pos("task", "Task ID or project key."),
+            pos("issue", "Issue ID or project key."),
             long_req(
                 "proposal_file",
                 "Proposal JSON path on this machine, or `-` is not supported over MCP; pass a file path.",
@@ -1735,7 +1730,7 @@ pub static TOOLS: &[Tool] = &[
         "Apply an approved proposal to Orbit only; approve=true is required after reviewing the preview.",
         &["triage", "apply"],
         &[
-            pos("task", "Task ID or project key."),
+            pos("issue", "Issue ID or project key."),
             long_req(
                 "proposal_file",
                 "Proposal JSON path on this machine.",
@@ -1815,7 +1810,7 @@ pub static COMMANDS: &[CommandEntry] = &[
     cmd(&["slug", "show"], "Show the Board's slug.", "slug_show"),
     cmd(
         &["slug", "migrate"],
-        "Rewrite every Task ID to a new slug.",
+        "Rewrite every Issue ID to a new slug.",
         "slug_migrate",
     ),
     cmd(&["migrate"], "Convert a pre-ADR-0019 Board.", "migrate"),
@@ -1828,13 +1823,13 @@ pub static COMMANDS: &[CommandEntry] = &[
     cmd(&["list"], "List tasks with filters.", "list"),
     cmd(&["ready"], "List or claim the next ready task.", "ready"),
     cmd(&["show"], "Show a task.", "get"),
-    cmd(&["tree"], "Show a Task tree.", "tree"),
+    cmd(&["tree"], "Show an Issue tree.", "tree"),
     cmd(&["claim"], "Claim a task.", "claim"),
     cmd(&["assign"], "Assign without a lease.", "assign"),
     cmd(&["release"], "Release a claim.", "release"),
     cmd(&["heartbeat"], "Extend a lease.", "heartbeat"),
     cmd(&["checkpoint"], "Record a work checkpoint.", "checkpoint"),
-    cmd(&["done"], "Complete a claimed task.", "finish"),
+    cmd(&["done"], "Complete a claimed Issue.", "finish"),
     cmd(&["cancel"], "Cancel a task.", "finish"),
     cmd(&["reopen"], "Reopen a closed task.", "reopen"),
     cmd(&["transition"], "Run a workflow transition.", "transition"),
@@ -1894,7 +1889,7 @@ pub static COMMANDS: &[CommandEntry] = &[
     ),
     cmd(
         &["index", "rebuild"],
-        "Rebuild the derived read index from Task files.",
+        "Rebuild the derived read index from Issue files.",
         "index_rebuild",
     ),
     cmd(
@@ -1957,27 +1952,27 @@ pub static COMMANDS: &[CommandEntry] = &[
     ),
     cmd(
         &["remote", "link"],
-        "Link a Task to a Remote Issue.",
+        "Link an Issue to a Remote Issue.",
         "remote_link",
     ),
     cmd(
         &["remote", "create"],
-        "Create Remote Issues for Tasks.",
+        "Create Remote Issues for local Issues.",
         "remote_create",
     ),
     cmd(
         &["remote", "detach"],
-        "Detach a Task from its Remote Issue.",
+        "Detach an Issue from its Remote Issue.",
         "remote_detach",
     ),
     cmd(
         &["remote", "reattach"],
-        "Reattach a Task to its Remote Issue.",
+        "Reattach an Issue to its Remote Issue.",
         "remote_reattach",
     ),
     cmd(
         &["remote", "sync"],
-        "Synchronize Linked Tasks.",
+        "Synchronize Linked Issues.",
         "remote_sync",
     ),
     cmd(

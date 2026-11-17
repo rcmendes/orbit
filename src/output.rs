@@ -252,7 +252,7 @@ fn actionable_error(error: &OrbitError) -> (String, String, Option<String>, Opti
         }
         crate::error::code::REMOTE_ISSUE_CONFLICT => {
             let task = details
-                .get("task")
+                .get("issue")
                 .and_then(Value::as_str)
                 .unwrap_or("<task-id>")
                 .to_string();
@@ -291,7 +291,7 @@ fn actionable_error(error: &OrbitError) -> (String, String, Option<String>, Opti
         }
         crate::error::code::TRIAGE_APPROVAL_REQUIRED => {
             let task = details
-                .get("task")
+                .get("issue")
                 .and_then(Value::as_str)
                 .unwrap_or("<task-id>");
             let proposal = details

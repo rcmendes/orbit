@@ -29,14 +29,14 @@ fn properties_appear_in_show_list_and_export() {
 
     let list = repo.ok_json(&["list", "--json"]);
     assert_eq!(
-        list["data"]["tasks"][0]["properties"],
+        list["data"]["issues"][0]["properties"],
         json!({"ci": {"passed": true}})
     );
 
     let export = repo.ok_json(&["export", "--json"]);
     assert_eq!(export["data"]["schema_version"], 5);
     assert_eq!(
-        export["data"]["tasks"][0]["properties"],
+        export["data"]["issues"][0]["properties"],
         json!({"ci": {"passed": true}})
     );
 }
@@ -71,7 +71,7 @@ fn properties_do_not_affect_ready() {
     let id = with_property(&repo);
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], id);
+    assert_eq!(ready["data"]["issues"][0]["id"], id);
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn properties_survive_slug_migration() {
     with_property(&repo);
     repo.ok_json(&["slug", "migrate", "atlas", "--json"]);
     let list = repo.ok_json(&["list", "--json"]);
-    let task = &list["data"]["tasks"][0];
+    let task = &list["data"]["issues"][0];
     assert!(task["id"].as_str().unwrap().starts_with("atlas-"), "{task}");
     assert_eq!(task["properties"], json!({"ci": {"passed": true}}));
 }

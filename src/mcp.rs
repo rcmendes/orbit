@@ -138,10 +138,10 @@ fn tool_definitions() -> Vec<Value> {
 
 fn resource_template() -> Value {
     json!({
-        "uriTemplate": "orbit://tasks/{id}",
-        "name": "orbit-task",
-        "title": "Orbit task",
-        "description": "A task's Markdown body, acceptance criteria, claim state, and checkpoint.",
+        "uriTemplate": "orbit://issues/{id}",
+        "name": "orbit-issue",
+        "title": "Orbit issue",
+        "description": "An Issue's Markdown body, acceptance criteria, assignee and lease state, and checkpoint.",
         "mimeType": "text/markdown"
     })
 }
@@ -198,12 +198,6 @@ fn dispatch_tool(
     {
         return tool_invalid("`status` must be `done` or `cancelled`");
     }
-    if name == "update"
-        && arguments.get("waiting_on").is_some()
-        && bool_arg(arguments, "clear_waiting")
-    {
-        return tool_invalid("`waiting_on` and `clear_waiting` are mutually exclusive");
-    }
     if name == "checkpoint" {
         if arguments.get("next").is_some() && bool_arg(arguments, "clear_next") {
             return tool_invalid("`next` and `clear_next` are mutually exclusive");
@@ -235,12 +229,6 @@ fn dispatch_tool(
         && bool_arg(arguments, "clear_verification")
     {
         return tool_invalid("`verification` and `clear_verification` are mutually exclusive");
-    }
-    if name == "create"
-        && let Some(depends_on) = arguments.get("depends_on")
-        && !depends_on.is_array()
-    {
-        return tool_invalid("`depends_on` must be an array of task ids");
     }
     if name == "create"
         && let Some(labels) = arguments.get("labels")
@@ -385,8 +373,7 @@ fn dispatch_tool(
                 args.push("--priority".to_string());
                 args.push(priority);
             }
-            let assignee = optional_str(arguments, "assignee")
-                .or_else(|| optional_str(arguments, "claimed_by"));
+            let assignee = optional_str(arguments, "assignee");
             if let Some(assignee) = assignee {
                 args.push("--assignee".to_string());
                 args.push(assignee);
@@ -537,19 +524,6 @@ fn dispatch_tool(
                     args.push(label.to_string());
                 }
             }
-            if let Some(depends_on) = arguments.get("depends_on").and_then(Value::as_array) {
-                for dependency in depends_on {
-                    let Some(dependency) = dependency.as_str() else {
-                        return tool_invalid("`depends_on` must be an array of task ids");
-                    };
-                    args.push("--depends-on".to_string());
-                    args.push(dependency.to_string());
-                }
-            }
-            if let Some(waiting_on) = optional_str(arguments, "waiting_on") {
-                args.push("--waiting-on".to_string());
-                args.push(waiting_on);
-            }
             if let Some(component) = optional_str(arguments, "component") {
                 args.push("--component".to_string());
                 args.push(component);
@@ -592,13 +566,6 @@ fn dispatch_tool(
             if let Some(priority) = optional_str(arguments, "priority") {
                 args.push("--priority".to_string());
                 args.push(priority);
-            }
-            if let Some(waiting_on) = optional_str(arguments, "waiting_on") {
-                args.push("--waiting-on".to_string());
-                args.push(waiting_on);
-            }
-            if bool_arg(arguments, "clear_waiting") {
-                args.push("--clear-waiting".to_string());
             }
             if let Some(component) = optional_str(arguments, "component") {
                 args.push("--component".to_string());
@@ -1036,7 +1003,7 @@ fn resources_list(executable: &Path, dir: Option<&Path>) -> Value {
     if let Ok(run) = run_orbit(executable, dir, &args, true)
         && run.success
         && let Ok(envelope) = serde_json::from_str::<Value>(run.stdout.trim())
-        && let Some(tasks) = envelope.pointer("/data/tasks").and_then(Value::as_array)
+        && let Some(tasks) = envelope.pointer("/data/issues").and_then(Value::as_array)
     {
         for task in tasks.iter().take(200) {
             let id = task.get("id").and_then(Value::as_str).unwrap_or("");
@@ -1045,9 +1012,9 @@ fn resources_list(executable: &Path, dir: Option<&Path>) -> Value {
             }
             let title = task.get("title").and_then(Value::as_str).unwrap_or(id);
             resources.push(json!({
-                "uri": format!("orbit://tasks/{id}"),
+                "uri": format!("orbit://issues/{id}"),
                 "name": title,
-                "description": format!("Orbit task {id}"),
+                "description": format!("Orbit issue {id}"),
                 "mimeType": "text/markdown"
             }));
         }
@@ -1065,11 +1032,11 @@ fn resources_read(
         .get("uri")
         .and_then(Value::as_str)
         .ok_or((-32602, "missing resource uri".to_string()))?;
-    let Some(id) = uri.strip_prefix("orbit://tasks/") else {
+    let Some(id) = uri.strip_prefix("orbit://issues/") else {
         return Err((-32602, format!("unsupported resource uri: {uri}")));
     };
     if id.is_empty() || id.contains('/') {
-        return Err((-32602, "invalid task id in resource uri".to_string()));
+        return Err((-32602, "invalid Issue id in resource uri".to_string()));
     }
 
     let args = vec!["show".to_string(), id.to_string()];

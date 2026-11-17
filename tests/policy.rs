@@ -297,7 +297,7 @@ require_fields = ["verification"]
     repo.ok_json(&["update", &briefed, "--verification", "cargo test", "--json"]);
 
     let ready = repo.ok_json(&["ready", "--json"]);
-    let ids: Vec<&str> = ready["data"]["tasks"]
+    let ids: Vec<&str> = ready["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -388,7 +388,7 @@ require_fields = ["verification"]
     let id = repo.add("acme task", &[]);
     // The profile's lint rule drops the Task from the ready queue.
     let ready = repo.ok_json(&["ready", "--json"]);
-    let ids: Vec<&str> = ready["data"]["tasks"]
+    let ids: Vec<&str> = ready["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()

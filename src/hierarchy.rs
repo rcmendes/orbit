@@ -335,7 +335,7 @@ pub fn missing_field_error(id: &str, fields: &[String]) -> OrbitError {
         code::MISSING_REQUIRED_FIELD,
         format!("{id} is missing required field(s): {}", fields.join(", ")),
     )
-    .with_details(serde_json::json!({ "task": id, "fields": fields }))
+    .with_details(serde_json::json!({ "issue": id, "fields": fields }))
 }
 
 #[cfg(test)]
@@ -370,7 +370,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: None,
-                stray_lease_times: None,
                 source_key: None,
                 properties: BTreeMap::new(),
                 created_at: now,

@@ -4,7 +4,7 @@ use common::TestRepo;
 use serde_json::Value;
 
 fn ids(value: &Value) -> Vec<String> {
-    value["data"]["tasks"]
+    value["data"]["issues"]
         .as_array()
         .expect("tasks array")
         .iter()

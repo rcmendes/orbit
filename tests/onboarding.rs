@@ -461,11 +461,11 @@ fn repo_add_shares_one_board_between_repositories() {
     let id = first.add("Cross-repo task", &[]);
 
     let listed = second.ok_json(&["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
 
     second.ok_json(&["done", &id, "--by", "test", "--json"]);
     let listed = first.ok_json(&["list", "--all", "--include-closed", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["status"], "done");
+    assert_eq!(listed["data"]["issues"][0]["status"], "done");
 }
 
 #[test]
@@ -493,7 +493,7 @@ fn dir_overrides_a_member_link_for_one_command() {
     let other_board_arg = other_board.to_str().unwrap();
 
     let listed = member.ok_json(&["--dir", other_board_arg, "list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], other_id);
+    assert_eq!(listed["data"]["issues"][0]["id"], other_id);
 }
 
 #[test]
@@ -524,7 +524,7 @@ fn orbit_dir_overrides_a_member_link() {
         &[("ORBIT_DIR", other_board.to_str().unwrap())],
     );
     assert_eq!(status, 0, "{value}");
-    assert_eq!(value["data"]["tasks"][0]["id"], other_id);
+    assert_eq!(value["data"]["issues"][0]["id"], other_id);
 }
 
 #[test]
@@ -551,13 +551,13 @@ fn a_member_worktree_resolves_the_shared_board() {
 
     let id = repo.add("From main", &[]);
     let listed = repo.ok_json_in(&worktree, &["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
 
     let added = repo.ok_json_in(&worktree, &["add", "From worktree", "--json"]);
     let worktree_id = added["data"]["id"].as_str().unwrap();
     let listed = repo.ok_json(&["list", "--all", "--json"]);
     assert!(
-        listed["data"]["tasks"]
+        listed["data"]["issues"]
             .as_array()
             .unwrap()
             .iter()
@@ -592,7 +592,7 @@ fn repo_remove_restores_the_local_board() {
     owner.ok_json(&["--dir", board_arg, "repo", "remove", "repo", "--json"]);
 
     let listed = repo.ok_json(&["list", "--all", "--json"]);
-    let ids: Vec<&str> = listed["data"]["tasks"]
+    let ids: Vec<&str> = listed["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -650,7 +650,7 @@ fn repo_add_warns_when_it_shadows_a_local_board() {
         "--all",
         "--json",
     ]);
-    assert_eq!(local["data"]["tasks"][0]["id"], local_id);
+    assert_eq!(local["data"]["issues"][0]["id"], local_id);
 }
 
 #[test]

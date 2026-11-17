@@ -80,7 +80,7 @@ pub fn plan_relationship_sync(
             }
         } else {
             unsupported.push(format!(
-                "SubTask {} links to {} on {} but the parent links to {} on {}; cross-project sub-tasks are not synced",
+                "sub-issue {} links to {} on {} but the parent links to {} on {}; cross-project sub-tasks are not synced",
                 child.id, child_link.project, child_link.tracker, link.project, link.tracker
             ));
         }
@@ -136,7 +136,7 @@ pub fn plan_relationship_sync(
             });
         } else {
             unsupported.push(format!(
-                "remote sub-task {}#{} has no matching linked Orbit SubTask; it is preserved",
+                "remote sub-task {}#{} has no matching linked Orbit sub-issue; it is preserved",
                 remote_child.project, remote_child.id
             ));
         }
@@ -217,7 +217,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: None,
-                stray_lease_times: None,
                 created_at: now,
                 updated_at: now,
                 component: None,

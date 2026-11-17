@@ -27,18 +27,18 @@ fn cmd_slug_show(board: &Board) -> Result<crate::output::CommandOutput> {
     let slug = slug::slug_of_prefix(&board.config.id.prefix);
 
     let human = format!(
-        "slug     {slug}\nprefix   {}\ntasks    {} ({})\ncomments {}\n",
+        "slug     {slug}\nprefix   {}\nissues   {} ({})\ncomments {}\n",
         board.config.id.prefix,
         ids.len(),
-        plural(subtasks, "SubTask", "SubTasks"),
+        plural(subtasks, "sub-issue", "sub-issues"),
         plural(comment_files, "file", "files"),
     );
     Ok(crate::output::CommandOutput::new(
         json!({
             "slug": slug,
             "prefix": board.config.id.prefix,
-            "tasks": ids.len(),
-            "subtasks": subtasks,
+            "issues": ids.len(),
+            "sub_issues": subtasks,
             "comment_files": comment_files,
         }),
         human,
@@ -103,8 +103,8 @@ fn slug_plan_json(plan: &Plan, dry_run: bool, applied: bool, commit: Option<&str
             "prefix": &plan.new_prefix,
         },
         "changed": plan.changed,
-        "tasks": plan.task_count,
-        "subtasks": plan.subtask_count,
+        "issues": plan.task_count,
+        "sub_issues": plan.subtask_count,
         "comment_files": plan.comment_files.len(),
         "references": plan.references,
         "mappings": &plan.mappings,
@@ -134,9 +134,9 @@ fn slug_plan_human(plan: &Plan, dry_run: bool) -> String {
         plan.old_prefix, plan.new_prefix
     ));
     human.push_str(&format!(
-        "tasks      {} ({})\n",
+        "issues     {} ({})\n",
         plan.task_count,
-        plural(plan.subtask_count, "SubTask", "SubTasks")
+        plural(plan.subtask_count, "sub-issue", "sub-issues")
     ));
     human.push_str(&format!(
         "comments   {}\n",
@@ -153,8 +153,8 @@ fn slug_plan_human(plan: &Plan, dry_run: bool) -> String {
 fn slug_applied_human(plan: &Plan, commit: &str) -> String {
     let mut human = format!(
         "migrated {}, {}, and {}\n",
-        plural(plan.task_count, "task", "tasks"),
-        plural(plan.subtask_count, "SubTask", "SubTasks"),
+        plural(plan.task_count, "Issue", "Issues"),
+        plural(plan.subtask_count, "sub-issue", "sub-issues"),
         plural(plan.comment_files.len(), "comment file", "comment files"),
     );
     human.push_str(&format!(

@@ -193,7 +193,7 @@ pub fn finish(
     // Commit failures precede comment failures, matching the pre-module order.
     warnings.extend(comment_warning);
     if !open.is_empty() {
-        warnings.push(format!("cancelled open SubTasks: {}", open.join(", ")));
+        warnings.push(format!("cancelled open sub-issues: {}", open.join(", ")));
     }
     let task = graph.get(id)?.clone();
     Ok(MutationResult {

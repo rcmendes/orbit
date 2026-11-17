@@ -38,17 +38,8 @@ fn add_list_show_and_ready_round_trip() {
     repo.init();
 
     let first = repo.add("First", &["-p", "highest", "--body", "Body A"]);
-    let second = repo.add(
-        "Second",
-        &[
-            "-p",
-            "medium",
-            "--depends-on",
-            first.as_str(),
-            "--body",
-            "Body B",
-        ],
-    );
+    let second = repo.add("Second", &["-p", "medium", "--body", "Body B"]);
+    repo.ok_json(&["depend", second.as_str(), first.as_str(), "--json"]);
 
     let list = repo.ok_json(&["list", "--json"]);
     assert_eq!(list["data"]["count"], 2);
@@ -56,12 +47,11 @@ fn add_list_show_and_ready_round_trip() {
 
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], first);
+    assert_eq!(ready["data"]["issues"][0]["id"], first);
 
     let show = repo.ok_json(&["show", second.as_str(), "--json"]);
     assert_eq!(show["data"]["title"], "Second");
     assert_eq!(show["data"]["body"], "Body B");
-    assert_eq!(show["data"]["depends_on"][0], first);
     assert_eq!(show["data"]["blocking"][0], first);
     assert_eq!(show["data"]["ready"], false);
 
@@ -69,7 +59,7 @@ fn add_list_show_and_ready_round_trip() {
     assert_eq!(done["data"]["status"], "done");
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], second);
+    assert_eq!(ready["data"]["issues"][0]["id"], second);
 }
 
 #[test]
@@ -198,7 +188,8 @@ fn dependencies_block_completion_and_cycles_are_rejected() {
     repo.init();
 
     let first = repo.add("First", &[]);
-    let second = repo.add("Second", &["--depends-on", first.as_str()]);
+    let second = repo.add("Second", &[]);
+    repo.ok_json(&["depend", second.as_str(), first.as_str(), "--json"]);
 
     let (_, error) = repo.err_json(&["done", second.as_str(), "--by", "agent", "--json"]);
     assert_eq!(error["error"]["code"], "DEPENDENCY_BLOCKED");
@@ -301,7 +292,17 @@ fn stale_claims_are_visible_and_stealable() {
 fn waiting_tasks_are_not_ready() {
     let repo = TestRepo::new();
     repo.init();
-    let id = repo.add("Blocked externally", &["--waiting-on", "API credentials"]);
+    let id = repo.add("Blocked externally", &[]);
+    repo.ok_json(&[
+        "link",
+        "add",
+        id.as_str(),
+        "--type",
+        "waiting-on",
+        "--external",
+        "external:API credentials",
+        "--json",
+    ]);
 
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 0);
@@ -312,7 +313,14 @@ fn waiting_tasks_are_not_ready() {
     let waiting = repo.ok_json(&["list", "--waiting", "--json"]);
     assert_eq!(waiting["data"]["count"], 1);
 
-    repo.ok_json(&["update", id.as_str(), "--clear-waiting", "--json"]);
+    repo.ok_json(&[
+        "link",
+        "remove",
+        id.as_str(),
+        "--external",
+        "external:API credentials",
+        "--json",
+    ]);
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
 }
@@ -322,7 +330,8 @@ fn delete_refuses_dependents_and_force_cleans_them() {
     let repo = TestRepo::new();
     repo.init();
     let first = repo.add("First", &[]);
-    let second = repo.add("Second", &["--depends-on", first.as_str()]);
+    let second = repo.add("Second", &[]);
+    repo.ok_json(&["depend", second.as_str(), first.as_str(), "--json"]);
 
     let (_, error) = repo.err_json(&["delete", first.as_str(), "--json"]);
     assert_eq!(error["error"]["code"], "DEPENDENCY_BLOCKED");
@@ -335,7 +344,7 @@ fn delete_refuses_dependents_and_force_cleans_them() {
     assert_eq!(error["error"]["code"], "NOT_FOUND");
 
     let show = repo.ok_json(&["show", second.as_str(), "--json"]);
-    assert!(show["data"]["depends_on"].as_array().unwrap().is_empty());
+    assert!(show["data"]["blocking"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -343,12 +352,13 @@ fn cancel_resolves_dependents_and_reopen_restores_the_block() {
     let repo = TestRepo::new();
     repo.init();
     let first = repo.add("First", &[]);
-    let second = repo.add("Second", &["--depends-on", first.as_str()]);
+    let second = repo.add("Second", &[]);
+    repo.ok_json(&["depend", second.as_str(), first.as_str(), "--json"]);
 
     repo.ok_json(&["cancel", first.as_str(), "--by", "agent", "--json"]);
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], second);
+    assert_eq!(ready["data"]["issues"][0]["id"], second);
 
     repo.ok_json(&["reopen", first.as_str(), "--json"]);
     let (_, error) = repo.err_json(&["done", second.as_str(), "--by", "agent", "--json"]);
@@ -385,7 +395,17 @@ fn list_filters_are_applied() {
     let repo = TestRepo::new();
     repo.init();
     let first = repo.add("First", &["-p", "highest"]);
-    let second = repo.add("Second", &["-p", "highest", "--waiting-on", "human"]);
+    let second = repo.add("Second", &["-p", "highest"]);
+    repo.ok_json(&[
+        "link",
+        "add",
+        second.as_str(),
+        "--type",
+        "waiting-on",
+        "--external",
+        "external:human",
+        "--json",
+    ]);
     repo.add("Third", &["-p", "high"]);
 
     let by_priority = repo.ok_json(&["list", "--priority", "highest", "--json"]);
@@ -393,10 +413,10 @@ fn list_filters_are_applied() {
 
     let waiting = repo.ok_json(&["list", "--waiting", "--json"]);
     assert_eq!(waiting["data"]["count"], 1);
-    assert_eq!(waiting["data"]["tasks"][0]["id"], second);
+    assert_eq!(waiting["data"]["issues"][0]["id"], second);
 
     repo.ok_json(&["claim", first.as_str(), "--by", "agent-1", "--json"]);
-    let claimed = repo.ok_json(&["list", "--claimed-by", "agent-1", "--json"]);
+    let claimed = repo.ok_json(&["list", "--assignee", "agent-1", "--json"]);
     assert_eq!(claimed["data"]["count"], 1);
 
     repo.ok_json(&["done", first.as_str(), "--by", "agent-1", "--json"]);
@@ -417,10 +437,10 @@ fn update_and_add_validate_their_inputs() {
     assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
     let (_, error) = repo.err_json(&["add", "", "--json"]);
     assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
-    let (_, error) = repo.err_json(&["add", "Bad", "--depends-on", "orb-aaaaaa", "--json"]);
+    let id = repo.add("Original", &["-p", "medium", "--body", "Old body"]);
+    let (_, error) = repo.err_json(&["depend", id.as_str(), "orb-aaaaaa", "--json"]);
     assert_eq!(error["error"]["code"], "NOT_FOUND");
 
-    let id = repo.add("Original", &["-p", "medium", "--body", "Old body"]);
     repo.ok_json(&[
         "update",
         id.as_str(),
@@ -430,15 +450,23 @@ fn update_and_add_validate_their_inputs() {
         "highest",
         "--body",
         "New body",
-        "--waiting-on",
-        "human",
+        "--json",
+    ]);
+    repo.ok_json(&[
+        "link",
+        "add",
+        id.as_str(),
+        "--type",
+        "waiting-on",
+        "--external",
+        "external:human",
         "--json",
     ]);
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
     assert_eq!(show["data"]["title"], "Changed");
     assert_eq!(show["data"]["priority"], "highest");
     assert_eq!(show["data"]["body"], "New body");
-    assert_eq!(show["data"]["waiting_on"], "human");
+    assert_eq!(show["data"]["blocking"][0], "external:human");
 
     let (_, error) = repo.err_json(&["update", id.as_str(), "--json"]);
     assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
@@ -558,7 +586,8 @@ fn doctor_reports_dangling_dependencies() {
     let repo = TestRepo::new();
     repo.init();
     let first = repo.add("First", &[]);
-    let second = repo.add("Second", &["--depends-on", first.as_str()]);
+    let second = repo.add("Second", &[]);
+    repo.ok_json(&["depend", second.as_str(), first.as_str(), "--json"]);
 
     std::fs::remove_file(repo.task_path(&first)).unwrap();
 
@@ -571,7 +600,7 @@ fn doctor_reports_dangling_dependencies() {
     assert!(
         issues
             .iter()
-            .any(|issue| { issue["code"] == "DANGLING_DEP" && issue["task"] == second.as_str() })
+            .any(|issue| { issue["code"] == "DANGLING_DEP" && issue["issue"] == second.as_str() })
     );
 }
 
@@ -585,7 +614,7 @@ fn json_errors_have_a_stable_envelope() {
     assert_eq!(error["ok"], false);
     assert_eq!(error["error"]["code"], "NOT_FOUND");
     assert_eq!(error["error"]["retryable"], false);
-    assert_eq!(error["error"]["details"]["task"], "orb-aaaaaa");
+    assert_eq!(error["error"]["details"]["issue"], "orb-aaaaaa");
 
     let no_ready = repo.ok_json(&["ready", "--claim", "--by", "agent", "--json"]);
     assert!(no_ready["data"].is_null());
@@ -654,5 +683,5 @@ fn depend_existing_edge_is_unchanged() {
     repo.ok_json(&["depend", &second, &first, "--json"]);
     let again = repo.ok_json(&["depend", &second, &first, "--json"]);
     assert_eq!(again["meta"]["changed"], false);
-    assert_eq!(again["data"]["depends_on"], serde_json::json!([first]));
+    assert_eq!(again["data"]["blocking"], serde_json::json!([first]));
 }

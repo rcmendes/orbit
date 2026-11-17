@@ -226,7 +226,7 @@ fn reruns_preserve_the_prefix_and_same_slug_does_not_commit() {
     assert_eq!(commit_count(&repo, &board), baseline + 1);
 
     let log = repo.git_in(&board, &["log", "--oneline"]);
-    assert!(String::from_utf8_lossy(&log.stdout).contains("orbit: set task prefix to other-"));
+    assert!(String::from_utf8_lossy(&log.stdout).contains("orbit: set issue prefix to other-"));
 }
 
 #[test]
@@ -317,7 +317,7 @@ fn populated_boards_refuse_a_slug_change() {
     assert_eq!(value["error"]["code"], "SLUG_LOCKED");
     assert_eq!(value["error"]["details"]["current"], "teramigo-");
     assert_eq!(value["error"]["details"]["requested"], "other-");
-    assert_eq!(value["error"]["details"]["tasks"], 1);
+    assert_eq!(value["error"]["details"]["issue_count"], 1);
     let message = value["error"]["message"].as_str().unwrap();
     assert!(message.contains("1 task"), "{message}");
     assert!(message.contains("orbit slug migrate other"), "{message}");
@@ -341,7 +341,7 @@ fn hand_editing_the_prefix_yields_one_prefix_mismatch() {
     assert_eq!(value["error"]["code"], "PREFIX_MISMATCH");
     assert_eq!(value["error"]["details"]["configured"], "teramigo-");
     assert_eq!(value["error"]["details"]["observed"], "orb-");
-    assert_eq!(value["error"]["details"]["tasks"], 2);
+    assert_eq!(value["error"]["details"]["issue_count"], 2);
 
     let (status, value) = repo.json(&["doctor", "--json"]);
     assert_eq!(status, 1);
@@ -349,7 +349,7 @@ fn hand_editing_the_prefix_yields_one_prefix_mismatch() {
     let issues = value["data"]["issues"].as_array().unwrap();
     assert_eq!(issues.len(), 1, "{value}");
     assert_eq!(issues[0]["code"], "PREFIX_MISMATCH");
-    assert_eq!(value["data"]["tasks"], 2);
+    assert_eq!(value["data"]["issue_count"], 2);
 }
 
 #[test]

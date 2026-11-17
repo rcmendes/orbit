@@ -1,5 +1,5 @@
 //! Board-health checks shared by `orbit doctor` and migration preflight. Each
-//! function appends `Issue`s; the caller decides which checks run and whether
+//! function appends `LoadIssue`s; the caller decides which checks run and whether
 //! an error aborts or becomes an issue.
 
 use std::path::Path;
@@ -8,7 +8,7 @@ use crate::board::Board;
 use crate::comment;
 use crate::error::{OrbitError, Result, code};
 use crate::git;
-use crate::graph::{Graph, Issue};
+use crate::graph::{Graph, LoadIssue};
 
 /// Flags `comments/{id}.md` files with no matching task or unreadable content.
 /// `verify_header` additionally requires the `# Comments: {id}` header that
@@ -17,11 +17,11 @@ pub fn comment_files(
     board: &Board,
     graph: &Graph,
     verify_header: bool,
-    issues: &mut Vec<Issue>,
+    issues: &mut Vec<LoadIssue>,
 ) -> Result<()> {
     for id in board.comment_ids()? {
         if !graph.tasks.contains_key(&id) {
-            issues.push(Issue::new(
+            issues.push(LoadIssue::new(
                 code::ORPHAN_COMMENT,
                 Some(&id),
                 format!("comments/{id}.md has no matching task"),
@@ -29,13 +29,13 @@ pub fn comment_files(
             continue;
         }
         if let Err(error) = board.read_comments(&id) {
-            issues.push(Issue::new(error.code, Some(&id), error.message));
+            issues.push(LoadIssue::new(error.code, Some(&id), error.message));
             continue;
         }
         if verify_header {
             match header_matches(&board.comment_path(&id), &id) {
                 Ok(true) => {}
-                Ok(false) => issues.push(Issue::new(
+                Ok(false) => issues.push(LoadIssue::new(
                     code::CORRUPT_COMMENT,
                     Some(&id),
                     format!(
@@ -43,7 +43,7 @@ pub fn comment_files(
                         comment::header(&id)
                     ),
                 )),
-                Err(error) => issues.push(Issue::new(error.code, Some(&id), error.message)),
+                Err(error) => issues.push(LoadIssue::new(error.code, Some(&id), error.message)),
             }
         }
     }
@@ -57,9 +57,9 @@ fn header_matches(path: &Path, id: &str) -> Result<bool> {
 }
 
 /// Flags a Board checked out on a branch other than `board.config.board.branch`.
-pub fn branch_mismatch(board: &Board, issues: &mut Vec<Issue>) {
+pub fn branch_mismatch(board: &Board, issues: &mut Vec<LoadIssue>) {
     match git::current_branch(&board.root) {
-        Ok(branch) if branch != board.config.board.branch => issues.push(Issue::new(
+        Ok(branch) if branch != board.config.board.branch => issues.push(LoadIssue::new(
             code::BOARD_CORRUPT,
             None,
             format!(
@@ -68,6 +68,6 @@ pub fn branch_mismatch(board: &Board, issues: &mut Vec<Issue>) {
             ),
         )),
         Ok(_) => {}
-        Err(error) => issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message)),
+        Err(error) => issues.push(LoadIssue::new(code::BOARD_CORRUPT, None, error.message)),
     }
 }

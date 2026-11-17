@@ -81,7 +81,7 @@ fn commands_from_a_nested_directory_find_the_project_orbit_folder() {
 
     let listed = repo.ok_json_in(&nested, &["list", "--all", "--json"]);
 
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn a_secondary_worktree_resolves_the_main_orbit_folder() {
 
     let listed = repo.ok_json_in(&worktree, &["list", "--all", "--json"]);
 
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
 }
 
 #[test]
@@ -118,14 +118,14 @@ fn explicit_dir_and_orbit_dir_name_the_orbit_folder_directly() {
         "--all",
         "--json",
     ]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], first_id);
+    assert_eq!(listed["data"]["issues"][0]["id"], first_id);
 
     let (status, value) = second.json_with_env(
         &["list", "--all", "--json"],
         &[("ORBIT_DIR", second_dir.to_str().unwrap())],
     );
     assert_eq!(status, 0, "{value}");
-    assert_eq!(value["data"]["tasks"][0]["id"], second_id);
+    assert_eq!(value["data"]["issues"][0]["id"], second_id);
 }
 
 #[test]
@@ -311,7 +311,7 @@ fn repo_add_links_another_repository_to_the_board() {
     assert!(second.path().join(".git/orbit/link").is_file());
 
     let listed = second.ok_json(&["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
 }
 
 #[test]
@@ -469,7 +469,7 @@ fn workspace_board_resolves_from_root_and_every_nested_repository_level() {
     for cwd in [&workspace, &child, &nested] {
         let listed = repo.ok_json_in(cwd, &["list", "--all", "--json"]);
         assert_eq!(
-            listed["data"]["tasks"][0]["id"],
+            listed["data"]["issues"][0]["id"],
             id,
             "from {}",
             cwd.display()
@@ -504,14 +504,14 @@ fn dir_and_orbit_dir_accept_a_workspace_root() {
         "--all",
         "--json",
     ]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
 
     let (status, listed) = repo.json_with_env(
         &["list", "--all", "--json"],
         &[("ORBIT_DIR", workspace.to_str().unwrap())],
     );
     assert_eq!(status, 0, "{listed}");
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
 }
 
 #[test]
@@ -547,7 +547,7 @@ fn an_outside_repository_can_join_the_workspace_board_as_a_member() {
     );
     let listed = outside.ok_json(&["list", "--all", "--json"]);
 
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
 }
 
 #[test]
@@ -589,7 +589,7 @@ fn workspace_init_merges_a_child_repository_board() {
 
     // The merged Task keeps its ID and records its Repository.
     let listed = repo.ok_json_in(&workspace, &["list", "--all", "--json"]);
-    let tasks = listed["data"]["tasks"].as_array().unwrap();
+    let tasks = listed["data"]["issues"].as_array().unwrap();
     assert_eq!(tasks.len(), 1, "{listed}");
     assert_eq!(tasks[0]["id"], child_task);
     let content =
@@ -606,7 +606,7 @@ fn workspace_init_merges_a_child_repository_board() {
         "{members}"
     );
     let from_child = repo.ok_json_in(&child, &["list", "--all", "--json"]);
-    assert_eq!(from_child["data"]["tasks"][0]["id"], child_task);
+    assert_eq!(from_child["data"]["issues"][0]["id"], child_task);
 }
 
 #[test]
@@ -760,8 +760,8 @@ fn child_board_retry_accepts_previously_imported_repository_attribution() {
     assert!(anchor.join(".orbit/backups/api/config.toml").is_file());
     assert!(!source.exists());
     let listed = repo.ok_json_in(&child, &["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"].as_array().unwrap().len(), 1);
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
     let config: toml::Value =
         toml::from_str(&std::fs::read_to_string(destination.join("config.toml")).unwrap()).unwrap();
     assert_eq!(
@@ -879,7 +879,7 @@ fn a_child_board_under_the_anchor_is_merged_not_ambiguous() {
     let id = added["data"]["id"].as_str().unwrap();
 
     let listed = repo.ok_json_in(&child, &["list", "--all", "--json"]);
-    assert_eq!(listed["data"]["tasks"][0]["id"], id);
+    assert_eq!(listed["data"]["issues"][0]["id"], id);
     assert!(listed["meta"].get("warnings").is_none(), "{listed}");
 }
 

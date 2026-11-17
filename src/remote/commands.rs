@@ -150,7 +150,7 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         );
         unsupported.extend(relationships.unsupported.into_iter().map(|message| {
             json!({
-                "task": task.id,
+                "issue": task.id,
                 "message": message,
             })
         }));
@@ -195,13 +195,13 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
                 let pull_count = count_pull_changes(&plan);
                 let push_count = count_push_changes(&plan);
                 if pull_count > 0 {
-                    pending_pull.push(json!({ "task": task.id, "repository": link.project, "number": link.id, "changes": pull_count }));
+                    pending_pull.push(json!({ "issue": task.id, "repository": link.project, "number": link.id, "changes": pull_count }));
                 }
                 if push_count > 0 {
-                    pending_push.push(json!({ "task": task.id, "repository": link.project, "number": link.id, "changes": push_count }));
+                    pending_push.push(json!({ "issue": task.id, "repository": link.project, "number": link.id, "changes": push_count }));
                 }
                 if !plan.conflicts.is_empty() {
-                    conflicts.push(json!({ "task": task.id, "repository": link.project, "number": link.id, "conflicts": plan.conflicts }));
+                    conflicts.push(json!({ "issue": task.id, "repository": link.project, "number": link.id, "conflicts": plan.conflicts }));
                 }
             }
             Err(error) => {
@@ -242,7 +242,7 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
         has_conflicts: !conflicts.is_empty(),
         first_conflict_task: conflicts
             .first()
-            .and_then(|conflict| conflict["task"].as_str()),
+            .and_then(|conflict| conflict["issue"].as_str()),
         pending_changes: !pending_pull.is_empty() || !pending_push.is_empty(),
         repo_not_linked: first_repo_not_linked.is_some(),
         repo_not_linked_repository: first_repo_not_linked
@@ -292,13 +292,13 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
             "reserved_label": crate::github::status::IN_PROGRESS_LABEL,
         },
         "repository_scope": repo_scope,
-        "linked_tasks": targets.len(),
-        "local_tasks": graph.iter().filter(|task| github_link(task).is_none()).count(),
+        "linked_issues": targets.len(),
+        "local_issues": graph.iter().filter(|task| github_link(task).is_none()).count(),
         "pending": {
             "pull": pending_pull.iter().map(|entry| entry["changes"].as_u64().unwrap_or(0)).sum::<u64>(),
             "push": pending_push.iter().map(|entry| entry["changes"].as_u64().unwrap_or(0)).sum::<u64>(),
-            "pull_tasks": pending_pull,
-            "push_tasks": pending_push,
+            "pull_issues": pending_pull,
+            "push_issues": pending_push,
         },
         "conflicts": conflicts.iter().map(|entry| entry["conflicts"].as_array().map(Vec::len).unwrap_or(0)).sum::<usize>(),
         "conflict_details": conflicts,
@@ -318,7 +318,7 @@ fn cmd_status(board: &Board, args: RemoteStatusArgs) -> Result<crate::output::Co
 /// Repository origins, the same set `remote status` reports. A Board with
 /// no GitHub configuration reports nothing; a client or diagnosis failure
 /// degrades to a single issue entry rather than aborting doctor.
-pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
+pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::LoadIssue> {
     let github = github_config(board);
     if !github.is_enabled() {
         return Vec::new();
@@ -326,7 +326,11 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
     let client = match client_from_env() {
         Ok(client) => client,
         Err(error) => {
-            return vec![crate::graph::Issue::new(error.code, None, error.message)];
+            return vec![crate::graph::LoadIssue::new(
+                error.code,
+                None,
+                error.message,
+            )];
         }
     };
     match diagnosis::diagnose(
@@ -339,7 +343,11 @@ pub(crate) fn doctor_issues(board: &Board) -> Vec<crate::graph::Issue> {
         },
     ) {
         Ok(diagnosis) => diagnosis.doctor_issues(),
-        Err(error) => vec![crate::graph::Issue::new(error.code, None, error.message)],
+        Err(error) => vec![crate::graph::LoadIssue::new(
+            error.code,
+            None,
+            error.message,
+        )],
     }
 }
 
@@ -424,7 +432,7 @@ fn render_status(data: &Value) -> String {
                 .join(", ");
             output.push_str(&format!(
                 "conflict: {} ({fields})\n",
-                detail["task"].as_str().unwrap_or("unknown task")
+                detail["issue"].as_str().unwrap_or("unknown task")
             ));
         }
     }
@@ -475,7 +483,7 @@ fn render_status(data: &Value) -> String {
                 data["auto_push"]["reserved_label"]
                     .as_str()
                     .unwrap_or("orbit:in-progress"),
-                data["local_tasks"].as_u64().unwrap_or(0)
+                data["local_issues"].as_u64().unwrap_or(0)
             )
         } else {
             String::new()
@@ -498,7 +506,7 @@ fn render_status(data: &Value) -> String {
     }
     output.push_str(&format!(
         "linked Tasks: {}; pending pull: {}; pending push: {}; conflicts: {}; unsupported relationships: {}\n",
-        data["linked_tasks"].as_u64().unwrap_or(0),
+        data["linked_issues"].as_u64().unwrap_or(0),
         data["pending"]["pull"].as_u64().unwrap_or(0),
         data["pending"]["push"].as_u64().unwrap_or(0),
         data["conflicts"].as_u64().unwrap_or(0),
@@ -1062,7 +1070,7 @@ fn cmd_disconnect(board: &Board, args: RemoteProjectArgs) -> Result<crate::outpu
             "tracker": tracker,
             "project": project,
             "connected": false,
-            "linked_tasks": linked_tasks,
+            "linked_issues": linked_tasks,
         }),
         format!("Disconnected Remote Project `{tracker}:{project}`"),
     );
@@ -1228,10 +1236,10 @@ fn cmd_link(board: &Board, args: RemoteLinkArgs) -> Result<crate::output::Comman
     );
     let mut output = crate::output::CommandOutput::new(
         json!({
-            "task": task.id,
+            "issue": task.id,
             "github": github_compat_json(&task),
             "remote": link_json(&task),
-            "issue": github_issue_json(&issue),
+            "remote_issue": github_issue_json(&issue),
         }),
         human,
     );
@@ -1303,7 +1311,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
         };
         if let Some(error) = rejected {
             results.push(json!({
-                "task": task.id,
+                "issue": task.id,
                 "project": project_label,
                 "title": task.front.title,
                 "body": task.body,
@@ -1323,7 +1331,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
         }
 
         let preview = json!({
-            "task": task.id,
+            "issue": task.id,
             "project": project_label,
             "title": task.front.title,
             "body": task.body,
@@ -1352,7 +1360,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
             Ok(created) => created,
             Err(error) => {
                 results.push(json!({
-                    "task": task.id,
+                    "issue": task.id,
                     "project": project_label,
                     "title": task.front.title,
                     "body": task.body,
@@ -1419,11 +1427,11 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
                 CreateFollowUp::CatalogUpdateFailed(_) => unreachable!("handled above"),
             };
             results.push(json!({
-                "task": task.id,
+                "issue": task.id,
                 "project": project_label,
                 "github": if linked { github_compat_json(&task) } else { Value::Null },
                 "remote": if linked { link_json(&task) } else { Value::Null },
-                "issue": github_issue_json(&final_issue),
+                "remote_issue": github_issue_json(&final_issue),
                 "success": false,
                 "created": true,
                 "linked": linked,
@@ -1440,7 +1448,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
         }
         warnings.append(&mut commit_warnings);
         results.push(json!({
-            "task": task.id,
+            "issue": task.id,
             "project": project_label,
             "title": task.front.title,
             "body": task.body,
@@ -1451,7 +1459,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
             "issue_state": issue_state,
             "github": github_compat_json(&task),
             "remote": link_json(&task),
-            "issue": github_issue_json(&final_issue),
+            "remote_issue": github_issue_json(&final_issue),
             "success": true,
         }));
         human.push(format!(
@@ -1478,7 +1486,7 @@ fn cmd_create(board: &Board, args: RemoteCreateArgs) -> Result<crate::output::Co
         "preview_count": if args.apply { Value::Null } else { json!(count) },
         "success_count": if args.apply { json!(successes) } else { Value::Null },
         "failure_count": if args.apply { json!(failures) } else { Value::Null },
-        "tasks": results,
+        "issues": results,
     });
     let summary = if args.apply {
         format!("Exported {successes} Task(s); {failures} failed")
@@ -1577,7 +1585,7 @@ fn cmd_sync(board: &Board, args: RemoteSyncArgs) -> Result<crate::output::Comman
     )?;
     if report.tasks.is_empty() {
         return Ok(crate::output::CommandOutput::new(
-            json!({ "tasks": [], "count": 0 }),
+            json!({ "issues": [], "count": 0 }),
             "No linked Tasks to sync (nothing was written).",
         ));
     }
@@ -1606,7 +1614,7 @@ fn cmd_sync(board: &Board, args: RemoteSyncArgs) -> Result<crate::output::Comman
         .iter()
         .map(|item| {
             let mut value = json!({
-                "task": item.task.id,
+                "issue": item.task.id,
                 "github": github_compat_json(&item.task),
                 "remote": link_json(&item.task),
                 "plan": item.plan,
@@ -1625,7 +1633,7 @@ fn cmd_sync(board: &Board, args: RemoteSyncArgs) -> Result<crate::output::Comman
         .collect();
     let mut output = crate::output::CommandOutput::new(
         json!({
-            "tasks": plans, "count": plans.len(), "apply": args.apply,
+            "issues": plans, "count": plans.len(), "apply": args.apply,
             "success_count": report.success_count, "failure_count": report.failures.len(), "failures": report.failures,
         }),
         human,
@@ -2080,7 +2088,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
             skipped_duplicates.push(json!({
                 "identity": identity,
                 "reason": "issue_already_linked",
-                "task": task,
+                "issue": task,
             }));
             continue;
         }
@@ -2089,7 +2097,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
             let Some(task) = graph.tasks.get(task_id) else {
                 errors.push(json!({
                     "identity": identity,
-                    "task": task_id,
+                    "issue": task_id,
                     "message": format!("Local Task `{task_id}` does not exist"),
                 }));
                 continue;
@@ -2097,7 +2105,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
             if let Some(link) = link_view(task).filter(|link| !link.active) {
                 errors.push(json!({
                     "identity": identity,
-                    "task": task_id,
+                    "issue": task_id,
                     "message": format!(
                         "Local Task `{task_id}` retains inactive {} provenance from {}#{}; use `orbit remote reattach`",
                         link.tracker, link.project, link.id
@@ -2109,7 +2117,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
                 skipped_duplicates.push(json!({
                     "identity": identity,
                     "reason": "task_already_linked",
-                    "task": task_id,
+                    "issue": task_id,
                 }));
                 continue;
             }
@@ -2117,7 +2125,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
                 skipped_duplicates.push(json!({
                     "identity": identity,
                     "reason": "task_selected_more_than_once",
-                    "task": task_id,
+                    "issue": task_id,
                 }));
                 continue;
             }
@@ -2149,7 +2157,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
                 let differences = task_issue_differences(&task, &issue);
                 links.push(json!({
                     "identity": identity,
-                    "task": task.id,
+                    "issue": task.id,
                     "status": task.front.status,
                     "remote_status": issue.status,
                     "differences": differences,
@@ -2157,7 +2165,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
                 if graph.workflow.is_terminal(&task.front.status) {
                     terminal_tasks.push(json!({
                         "identity": identity,
-                        "task": task.id,
+                        "issue": task.id,
                         "status": task.front.status,
                     }));
                 }
@@ -2239,7 +2247,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
             }
             imported.push(json!({
                 "identity": identity,
-                "task": task.id,
+                "issue": task.id,
                 "action": if *created { "created" } else { "linked" },
                 "status": task.front.status,
             }));
@@ -2263,7 +2271,7 @@ fn cmd_import(board: &Board, args: RemoteImportArgs) -> Result<crate::output::Co
         "apply": args.apply,
         "creates": creates,
         "links": links,
-        "terminal_tasks": terminal_tasks,
+        "terminal_issues": terminal_tasks,
         "skipped_duplicates": skipped_duplicates,
         "errors": errors,
         "imported": imported,
@@ -2386,7 +2394,6 @@ fn create_imported_task(
             assignee: None,
             lease: None,
             reporter: None,
-            stray_lease_times: None,
             source_key: None,
             properties: std::collections::BTreeMap::new(),
             created_at: now,
@@ -2466,7 +2473,7 @@ fn cmd_detach(board: &Board, args: RemoteMutationArgs) -> Result<crate::output::
         .iter()
         .map(|(task, link, _)| {
             json!({
-                "task": task.id,
+                "issue": task.id,
                 "title": task.front.title,
                 "identity": format!("{}:{}#{}", link.tracker, link.project, link.id),
             })
@@ -2489,7 +2496,7 @@ fn cmd_detach(board: &Board, args: RemoteMutationArgs) -> Result<crate::output::
             task.touch(Utc::now());
             crate::mutation::write_task(board, &task)?;
             detached.push(json!({
-                "task": task.id,
+                "issue": task.id,
                 "identity": format!("{}:{}#{}", link.tracker, link.project, link.id),
             }));
         }
@@ -2506,7 +2513,7 @@ fn cmd_detach(board: &Board, args: RemoteMutationArgs) -> Result<crate::output::
         "identity": identity,
         "apply": args.apply,
         "already_detached": already_detached,
-        "tasks": tasks_preview,
+        "issues": tasks_preview,
         "detached": detached,
     });
     let summary = if args.apply {
@@ -2595,7 +2602,7 @@ fn cmd_reattach(board: &Board, args: RemoteMutationArgs) -> Result<crate::output
                     "identity": identity,
                     "apply": args.apply,
                     "already_attached": true,
-                    "tasks": [],
+                    "issues": [],
                     "reattached": [],
                 }),
                 format!("{identity} is already attached"),
@@ -2631,7 +2638,7 @@ fn cmd_reattach(board: &Board, args: RemoteMutationArgs) -> Result<crate::output
         &board.workflow()?,
     );
     let preview = json!({
-        "task": task.id,
+        "issue": task.id,
         "identity": identity,
         "issue_title": issue.title,
         "sync_plan": sync_plan,
@@ -2657,12 +2664,12 @@ fn cmd_reattach(board: &Board, args: RemoteMutationArgs) -> Result<crate::output
         );
         catalog::save(&catalog_path, &catalog)?;
         commit_warning = crate::mutation::commit(board, "orbit: remote reattach")?;
-        reattached.push(json!({ "task": task.id, "identity": identity }));
+        reattached.push(json!({ "issue": task.id, "identity": identity }));
     }
     let data = json!({
         "identity": identity,
         "apply": args.apply,
-        "tasks": [preview],
+        "issues": [preview],
         "reattached": reattached,
     });
     let summary = if args.apply {

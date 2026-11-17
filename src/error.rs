@@ -119,8 +119,8 @@ impl OrbitError {
     }
 
     pub fn not_found(id: &str) -> Self {
-        Self::new(code::NOT_FOUND, format!("task {id} does not exist"))
-            .with_details(serde_json::json!({ "task": id }))
+        Self::new(code::NOT_FOUND, format!("Issue {id} does not exist"))
+            .with_details(serde_json::json!({ "issue": id }))
     }
 
     pub fn board_not_found() -> Self {

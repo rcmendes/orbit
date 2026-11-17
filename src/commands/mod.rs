@@ -193,6 +193,22 @@ fn version_target(command: &Command) -> Result<VersionTarget> {
             crate::cli::TriageCommand::Apply(inner) => task(&inner.task),
             _ => return Err(unsupported("orbit triage context|review")),
         },
+        Command::Remote(args) => match &args.command {
+            crate::cli::RemoteCommand::Link(inner) => task(&inner.task),
+            crate::cli::RemoteCommand::Detach(inner)
+            | crate::cli::RemoteCommand::Reattach(inner)
+                if inner.apply =>
+            {
+                task(&inner.target)
+            }
+            crate::cli::RemoteCommand::Sync(inner) if inner.apply => match &inner.task {
+                Some(id) => task(id),
+                None => {
+                    return Err(unsupported("orbit remote sync --apply (every Issue)"));
+                }
+            },
+            _ => return Err(unsupported("orbit remote")),
+        },
         _ => return Err(unsupported(name(command))),
     })
 }
@@ -424,15 +440,9 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 let board = crate::board_host::unlocked_for_network(dir.as_deref())?;
                 // Host merges replay as Board events too; fire hooks for
                 // whatever the sync brings in.
-                let head_before = crate::hooks::enabled(&board)
-                    .then(|| crate::git::rev_parse(&board.root, "HEAD").ok().flatten())
-                    .flatten();
+                let head_before = hook_head_before(&board);
                 let mut output = board::cmd_sync(&board, sync_args)?;
-                if let Some(before) = head_before {
-                    output
-                        .warnings
-                        .extend(crate::hooks::fire_since(&board, &before));
-                }
+                fire_hooks(&board, head_before, &mut output);
                 output.warnings.extend(board.warnings.iter().cloned());
                 Ok(output)
             }
@@ -550,6 +560,25 @@ enum AutoPush {
     On,
 }
 
+/// Snapshot the Board HEAD before a write when `[[hooks]]` are enabled, so
+/// only the events this write commits get replayed. `None` means no hooks.
+fn hook_head_before(board: &Board) -> Option<String> {
+    crate::hooks::enabled(board)
+        .then(|| crate::git::rev_parse(&board.root, "HEAD").ok().flatten())
+        .flatten()
+}
+
+/// Fire the hooks for every commit since `before`. Detached and
+/// best-effort: spawn failures become warnings, hook exit status is ignored,
+/// and nothing here waits on a hook.
+fn fire_hooks(board: &Board, before: Option<String>, output: &mut crate::output::CommandOutput) {
+    if let Some(before) = before {
+        output
+            .warnings
+            .extend(crate::hooks::fire_since(board, &before));
+    }
+}
+
 fn with_board_access<F>(
     dir: Option<&Path>,
     mode: crate::board::AccessMode,
@@ -568,6 +597,10 @@ where
     }
     let access = crate::board::BoardAccess::open(dir, mode)?;
     let board = access.board();
+    // Opt-in module semantics ([scheduler], [[hooks]]) validate here, in
+    // the application layer — the kernel stores their config.toml schema
+    // but never interprets it (ADR 0022).
+    crate::modules::validate(&board.config)?;
     if write && let Some(key) = concurrency.idempotency_key.as_deref() {
         // A replay wins over --if-version: the recorded first result is the
         // answer the caller already saw for this key.
@@ -588,9 +621,7 @@ where
     .then(|| crate::remote::auto_push::snapshot(board));
     // Board event hooks (`[[hooks]]`) replay the commits this write produces;
     // capture the head before so only new events fire.
-    let head_before = (write && crate::hooks::enabled(board))
-        .then(|| crate::git::rev_parse(&board.root, "HEAD").ok().flatten())
-        .flatten();
+    let head_before = write.then(|| hook_head_before(board)).flatten();
     let mut output = f(board)?;
     if write && let Some(key) = concurrency.idempotency_key.as_deref() {
         // The mutation already committed; a record failure warns rather than
@@ -601,13 +632,7 @@ where
                 .push(format!("IDEMPOTENCY_NOT_STORED: {}", error.message));
         }
     }
-    if let Some(before) = head_before {
-        // Detached and best-effort: hook spawn failures become warnings,
-        // hook exit status is ignored, and nothing here waits on a hook.
-        output
-            .warnings
-            .extend(crate::hooks::fire_since(board, &before));
-    }
+    fire_hooks(board, head_before, &mut output);
     if let Some(before) = snapshot {
         if board.commit_failed() {
             output.warnings.push(
@@ -671,32 +696,7 @@ fn task_output(
 
 /// Normalizes a Priority name against the Board's `board.priorities` list and
 /// returns the configured spelling. Names are matched case-insensitively.
-pub(crate) fn validate_priority(board: &Board, priority: &str) -> Result<String> {
-    let name = priority.trim().to_lowercase();
-    match board
-        .config
-        .board
-        .priorities
-        .iter()
-        .find(|candidate| candidate.as_str() == name)
-    {
-        Some(configured) => Ok(configured.clone()),
-        None => Err(OrbitError::invalid_argument(format!(
-            "unknown priority `{priority}`; expected one of: {}",
-            board.config.board.priorities.join(", ")
-        ))),
-    }
-}
-
-pub(crate) fn normalize_labels(labels: &[String]) -> Result<Vec<String>> {
-    let mut normalized = Vec::with_capacity(labels.len());
-    for label in labels {
-        normalized.push(task::normalize_label(label)?);
-    }
-    normalized.sort();
-    normalized.dedup();
-    Ok(normalized)
-}
+pub(crate) use crate::task::normalize_labels;
 
 fn normalize_repository_filter(repository: Option<&str>) -> Result<Option<String>> {
     repository
@@ -724,46 +724,6 @@ fn matches_repository(task: &Task, repository: Option<&str>) -> bool {
             .as_deref()
             .is_some_and(|name| name.eq_ignore_ascii_case(repository))
     })
-}
-
-pub(crate) fn normalize_waiting(waiting_on: Option<String>) -> Result<Option<String>> {
-    match waiting_on {
-        None => Ok(None),
-        Some(value) => {
-            let value = value.trim().to_string();
-            if value.is_empty() {
-                return Err(OrbitError::invalid_argument(
-                    "--waiting-on must not be empty",
-                ));
-            }
-            Ok(Some(value))
-        }
-    }
-}
-
-pub(crate) fn parse_component_option(
-    board: &Board,
-    component: Option<String>,
-) -> Result<Option<String>> {
-    match component {
-        None => Ok(None),
-        Some(value) => Ok(Some(parse_component_value(board, &value)?)),
-    }
-}
-
-/// Normalizes one Component filter value and validates it against the
-/// Board's `board.components` list; `task::normalize_component` treats an
-/// empty list as unrestricted.
-fn parse_component_value(board: &Board, value: &str) -> Result<String> {
-    task::normalize_component(value, &board.config.board.components)
-}
-
-/// Normalizes repeatable Component filter flags the same way as `--component`.
-fn normalize_components(board: &Board, components: &[String]) -> Result<Vec<String>> {
-    components
-        .iter()
-        .map(|component| parse_component_value(board, component))
-        .collect()
 }
 
 pub(crate) fn resolve_body(

@@ -531,7 +531,7 @@ impl Policy {
         let to_status = Some(task.front.status.as_str());
         for rule in self.matching(transition_name, task, to_status) {
             if !rule.add_labels.is_empty() {
-                let labels = crate::commands::normalize_labels(&rule.add_labels)
+                let labels = crate::task::normalize_labels(&rule.add_labels)
                     .unwrap_or_else(|_| rule.add_labels.clone());
                 task.add_labels(&labels, now);
             }
@@ -603,7 +603,7 @@ pub fn violation_error(id: &str, transition: &str, violations: Vec<Violation>) -
         ),
     )
     .with_details(json!({
-        "task": id,
+        "issue": id,
         "transition": transition,
         "violations": violations.iter().map(|violation| json!({
             "rule": violation.rule,
@@ -707,7 +707,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: Some("rodrigo".to_string()),
-                stray_lease_times: None,
                 created_at: now(),
                 updated_at: now(),
                 source_key: None,

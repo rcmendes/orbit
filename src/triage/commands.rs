@@ -151,7 +151,7 @@ fn cmd_apply(board: &Board, args: TriageApplyArgs) -> Result<crate::output::Comm
             "triage apply requires explicit approval; pass --approve after reviewing the proposal",
         )
         .with_details(json!({
-            "task": args.task,
+            "issue": args.task,
             "proposal_file": args.proposal_file.display().to_string(),
         })));
     }
@@ -448,7 +448,7 @@ fn load_proposal(board: &Board, path: &Path) -> Result<TriageProposal> {
 
 fn proposal_context(task: &str, path: &Path) -> serde_json::Value {
     json!({
-        "task": task,
+        "issue": task,
         "proposal_file": path.display().to_string(),
     })
 }

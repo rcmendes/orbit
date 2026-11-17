@@ -16,7 +16,7 @@ use crate::board_host;
 use crate::comment::{self, Comment};
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
-use crate::task::{self, Identity, Lease, StrayLeaseTimes, Task, TaskFrontmatter};
+use crate::task::{self, Identity, Lease, Task, TaskFrontmatter};
 use crate::workflow::Workflow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +142,7 @@ pub fn sync(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
 fn sync_once(board: &Board, resolution_args: &[String]) -> Result<SyncReport> {
     // Load fresh: `orbit board host` may have changed the config mid-command.
     let config = Config::load(&board.root)?;
+    crate::modules::validate(&config)?;
     let spec = config.board.host.clone().ok_or_else(|| {
         OrbitError::new(
             code::BOARD_HOST_NOT_CONFIGURED,
@@ -480,7 +481,6 @@ fn merge_links(
 struct AssignmentSide {
     assignee: Option<Identity>,
     lease: Option<Lease>,
-    stray: Option<StrayLeaseTimes>,
 }
 
 impl AssignmentSide {
@@ -488,12 +488,11 @@ impl AssignmentSide {
         Self {
             assignee: front.and_then(|front| front.assignee.clone()),
             lease: front.and_then(|front| front.lease.clone()),
-            stray: front.and_then(|front| front.stray_lease_times.clone()),
         }
     }
 
     fn eq(&self, other: &Self) -> bool {
-        self.assignee == other.assignee && self.lease == other.lease && self.stray == other.stray
+        self.assignee == other.assignee && self.lease == other.lease
     }
 }
 
@@ -506,13 +505,10 @@ fn later_time(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<Date
     }
 }
 
-fn later_stray(
-    a: &Option<StrayLeaseTimes>,
-    b: &Option<StrayLeaseTimes>,
-) -> Option<StrayLeaseTimes> {
+fn later_lease(a: &Option<Lease>, b: &Option<Lease>) -> Option<Lease> {
     match (a, b) {
         (Some(a), Some(b)) => {
-            let key = |s: &StrayLeaseTimes| (s.claimed_at, s.lease_until);
+            let key = |l: &Lease| (l.claimed_at, l.lease_until);
             Some(if key(a) >= key(b) {
                 a.clone()
             } else {
@@ -618,10 +614,16 @@ fn merge_assignment(
     outcome: &mut MergeOutcome,
 ) -> AssignmentSide {
     if workflow.is_terminal(status) {
+        // Stray lease times (a lease with no assignee on either side)
+        // survive; a real claim does not.
+        let lease = if local.assignee.is_none() && remote.assignee.is_none() {
+            later_lease(&local.lease, &remote.lease)
+        } else {
+            None
+        };
         return AssignmentSide {
             assignee: None,
-            lease: None,
-            stray: later_stray(&local.stray, &remote.stray),
+            lease,
         };
     }
     // The same assignee on both sides keeps the freshest lease.
@@ -640,14 +642,12 @@ fn merge_assignment(
         return AssignmentSide {
             assignee: local.assignee.clone(),
             lease,
-            stray: None,
         };
     }
     if local.assignee.is_none() && remote.assignee.is_none() {
         return AssignmentSide {
             assignee: None,
-            lease: None,
-            stray: later_stray(&local.stray, &remote.stray),
+            lease: later_lease(&local.lease, &remote.lease),
         };
     }
     // Ordinary three-way: only one side touched the assignment.
@@ -667,7 +667,6 @@ fn merge_assignment(
             AssignmentSide {
                 assignee: winner.assignee.clone(),
                 lease: winner.lease.clone(),
-                stray: None,
             }
         }
         (Some(_), None) => {
@@ -680,8 +679,7 @@ fn merge_assignment(
         }
         (None, None) => AssignmentSide {
             assignee: None,
-            lease: None,
-            stray: later_stray(&local.stray, &remote.stray),
+            lease: later_lease(&local.lease, &remote.lease),
         },
     }
 }
@@ -944,7 +942,6 @@ fn merge_task(
             assignee: assignment.assignee,
             lease: assignment.lease,
             reporter,
-            stray_lease_times: assignment.stray,
             source_key,
             properties,
             created_at,

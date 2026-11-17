@@ -327,7 +327,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: None,
-                stray_lease_times: None,
                 created_at: "2025-01-01T00:00:00Z".parse().unwrap(),
                 updated_at: "2025-01-01T00:00:00Z".parse().unwrap(),
                 source_key: None,

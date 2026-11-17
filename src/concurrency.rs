@@ -70,7 +70,7 @@ pub fn version_conflict(id: &str, expected: DateTime<Utc>, actual: DateTime<Utc>
     )
     .retryable()
     .with_details(json!({
-        "task": id,
+        "issue": id,
         "expected_version": expected.to_rfc3339(),
         "actual_version": actual.to_rfc3339(),
     }))

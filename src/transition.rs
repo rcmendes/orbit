@@ -63,7 +63,7 @@ impl InvalidReason {
                         format!("; defined transitions: {}", defined.join(", "))
                     }
                 ),
-                json!({ "task": id, "transition": name, "defined": defined }),
+                json!({ "issue": id, "transition": name, "defined": defined }),
             ),
             Self::NotAllowed {
                 name,
@@ -79,7 +79,7 @@ impl InvalidReason {
                     }
                 ),
                 json!({
-                    "task": id,
+                    "issue": id,
                     "transition": name,
                     "status": status,
                     "valid_transitions": valid,
@@ -87,38 +87,38 @@ impl InvalidReason {
             ),
             Self::HeartbeatNotActive(status) => (
                 format!("{id} is `{status}`; only active-category statuses can be heartbeated"),
-                json!({ "task": id, "status": status }),
+                json!({ "issue": id, "status": status }),
             ),
-            Self::HeartbeatNoClaim => (format!("{id} has no claim"), json!({ "task": id })),
+            Self::HeartbeatNoClaim => (format!("{id} has no claim"), json!({ "issue": id })),
             Self::CheckpointClosed(status) => (
                 format!(
                     "{id} is `{status}`; checkpoints only apply to open (non-terminal) statuses"
                 ),
-                json!({ "task": id, "status": status }),
+                json!({ "issue": id, "status": status }),
             ),
             Self::CheckpointNoClaim => (
                 format!("{id} has no claim; claim it before recording a checkpoint"),
-                json!({ "task": id }),
+                json!({ "issue": id }),
             ),
             Self::ClaimClosed(status) => (
                 format!("{id} is `{status}`; it cannot be claimed"),
-                json!({ "task": id, "status": status }),
+                json!({ "issue": id, "status": status }),
             ),
             Self::CompleteCanceled(status) => (
                 format!("{id} is `{status}`; reopen it before completing it"),
-                json!({ "task": id, "status": status }),
+                json!({ "issue": id, "status": status }),
             ),
             Self::CancelDone(status) => (
                 format!("{id} is `{status}`; reopen it before cancelling it"),
-                json!({ "task": id, "status": status }),
+                json!({ "issue": id, "status": status }),
             ),
             Self::ReopenActive(status) => (
                 format!("{id} is `{status}`; only closed (done/canceled) statuses can be reopened"),
-                json!({ "task": id, "status": status }),
+                json!({ "issue": id, "status": status }),
             ),
             Self::ReopenDoneDependents(dependents) => (
                 format!("{id} has done dependents: {}", dependents.join(", ")),
-                json!({ "task": id, "done_dependents": dependents }),
+                json!({ "issue": id, "done_dependents": dependents }),
             ),
         };
         OrbitError::new(code::INVALID_TRANSITION, message).with_details(details)
@@ -305,7 +305,6 @@ impl Task {
     fn clear_assignment(&mut self) {
         self.front.assignee = None;
         self.front.lease = None;
-        self.front.stray_lease_times = None;
     }
 
     /// Applies a workflow transition: sets the target status, records the
@@ -582,7 +581,6 @@ impl Task {
             });
         }
         self.front.status = target;
-        self.front.stray_lease_times = None;
         self.front.assignee = Some(Identity {
             name: agent.to_string(),
             kind,
@@ -643,7 +641,6 @@ impl Task {
             }
         }
         self.front.status = target;
-        self.front.stray_lease_times = None;
         self.front.assignee = Some(Identity {
             name: name.to_string(),
             kind,
@@ -771,7 +768,7 @@ impl From<TransitionError> for OrbitError {
                 code::NOT_CLAIM_HOLDER,
                 format!("{id} is claimed by {holder}"),
             )
-            .with_details(json!({ "task": id, "holder": holder })),
+            .with_details(json!({ "issue": id, "holder": holder })),
             AlreadyClaimed {
                 id,
                 holder,
@@ -780,7 +777,7 @@ impl From<TransitionError> for OrbitError {
                 code::ALREADY_CLAIMED,
                 format!("{id} is claimed by {holder}"),
             )
-            .with_details(json!({ "task": id, "holder": holder, "lease_until": lease_until })),
+            .with_details(json!({ "issue": id, "holder": holder, "lease_until": lease_until })),
             ClaimStale {
                 id,
                 holder,
@@ -789,27 +786,27 @@ impl From<TransitionError> for OrbitError {
                 code::CLAIM_STALE,
                 format!("{id} has a stale claim by {holder}; use `orbit claim {id} --steal`"),
             )
-            .with_details(json!({ "task": id, "holder": holder, "lease_until": lease_until })),
+            .with_details(json!({ "issue": id, "holder": holder, "lease_until": lease_until })),
             DependencyBlocked { id, blocking } => OrbitError::new(
                 code::DEPENDENCY_BLOCKED,
                 format!("{id} has unfinished dependencies"),
             )
-            .with_details(json!({ "task": id, "blocking": blocking })),
+            .with_details(json!({ "issue": id, "blocking": blocking })),
             SubTasksOpen { id, subtasks } => OrbitError::new(
                 code::SUBTASKS_OPEN,
                 format!("{id} has open SubTasks: {}", subtasks.join(", ")),
             )
-            .with_details(json!({ "task": id, "subtasks": subtasks })),
+            .with_details(json!({ "issue": id, "sub_issues": subtasks })),
             WaitingExternal { id, waiting_on } => OrbitError::new(
                 code::WAITING_EXTERNAL,
                 format!("{id} is waiting on an external blocker"),
             )
-            .with_details(json!({ "task": id, "waiting_on": waiting_on })),
+            .with_details(json!({ "issue": id, "external_blockers": waiting_on })),
             LabelBlocked { id, labels } => OrbitError::new(
                 code::LABEL_BLOCKED,
                 format!("{id} has hold labels: {}", labels.join(", ")),
             )
-            .with_details(json!({ "task": id, "labels": labels })),
+            .with_details(json!({ "issue": id, "labels": labels })),
         }
     }
 }
@@ -883,7 +880,6 @@ mod tests {
                 assignee,
                 lease,
                 reporter: None,
-                stray_lease_times: None,
                 created_at: now(),
                 updated_at: now() - Duration::hours(1),
                 source_key: None,

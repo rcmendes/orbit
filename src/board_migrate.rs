@@ -82,7 +82,7 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
         "to": layout_target(&layout, &board),
         "layout": if needs_layout { "convert" } else { "content" },
         "needs_layout": needs_layout,
-        "tasks": stats.tasks_scanned,
+        "issues_scanned": stats.tasks_scanned,
         "github_links": stats.github_links,
         "repository_labels": stats.repository_labels,
         "remote_projects": stats.remote_projects,
@@ -92,7 +92,7 @@ pub fn cmd_migrate(args: &MigrateArgs, dir: Option<&Path>) -> Result<CommandOutp
         "commit": Value::Null,
     });
     let human = format!(
-        "orbit migrate {} the Board at {}\n  layout: {}\n  tasks: {} scanned, {} github link(s), {} repository label(s)\n",
+        "orbit migrate {} the Board at {}\n  layout: {}\n  issues: {} scanned, {} github link(s), {} repository label(s)\n",
         if args.apply {
             "applied to"
         } else {
@@ -296,6 +296,7 @@ fn repo_board_target(root: &Path) -> Result<Option<PathBuf>> {
 fn plan_content(board: &Board) -> Result<ContentStats> {
     let mut stats = ContentStats::default();
     let config = Config::load(&board.root)?;
+    crate::modules::validate(&config)?;
     if config.board.storage.is_some() {
         stats.config_changes.push("board.storage".to_string());
     }
@@ -701,6 +702,7 @@ fn git_out(cwd: &Path, args: &[&str]) -> Result<String> {
 fn migrate_content(root: &Path) -> Result<ContentStats> {
     let mut stats = ContentStats::default();
     let mut config = Config::load(root)?;
+    crate::modules::validate(&config)?;
     let mut config_changed = false;
     if config.board.storage.take().is_some() {
         config_changed = true;
@@ -802,6 +804,7 @@ fn migrate_content(root: &Path) -> Result<ContentStats> {
     }
     if config_changed {
         config.validate()?;
+        crate::modules::validate(&config)?;
         let toml = config.to_toml()?;
         crate::atomic::write_atomic(&root.join("config.toml"), toml.as_bytes(), true)?;
     }

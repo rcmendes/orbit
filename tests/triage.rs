@@ -357,7 +357,7 @@ fn triage_review_rejects_non_canonical_labels() {
     );
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "TRIAGE_INVALID_PROPOSAL");
-    assert_eq!(value["error"]["details"]["task"], id);
+    assert_eq!(value["error"]["details"]["issue"], id);
     assert_eq!(
         value["error"]["details"]["proposal_file"],
         proposal.to_str().unwrap()
@@ -432,7 +432,7 @@ fn triage_apply_requires_explicit_approval() {
     );
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "TRIAGE_APPROVAL_REQUIRED");
-    assert_eq!(value["error"]["details"]["task"], id);
+    assert_eq!(value["error"]["details"]["issue"], id);
     assert_eq!(
         value["error"]["details"]["proposal_file"],
         proposal.to_str().unwrap()

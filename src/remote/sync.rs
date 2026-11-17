@@ -410,7 +410,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: None,
-                stray_lease_times: None,
                 created_at: now,
                 updated_at: now,
                 component: Some("cli".into()),

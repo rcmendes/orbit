@@ -37,6 +37,7 @@ pub struct SyncRequest<'a> {
 /// A per-Task apply failure. The Task's baseline is not advanced, so retrying is safe.
 #[derive(Clone, Debug, Serialize)]
 pub struct SyncFailure {
+    #[serde(rename = "issue")]
     pub task: String,
     pub tracker: String,
     pub project: String,
@@ -306,7 +307,7 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
         })
         .map(|(task, link, plan)| {
             json!({
-                "task": task.id,
+                "issue": task.id,
                 "tracker": link.tracker,
                 "project": link.project,
                 "id": link.id,
@@ -321,12 +322,12 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
             "sync has unresolved field conflicts; resolve each field before applying",
         )
         .with_details(json!({
-            "task": first["task"],
+            "issue": first["issue"],
             "tracker": first["tracker"],
             "project": first["project"],
             "id": first["id"],
             "conflicts": first["conflicts"],
-            "tasks": unresolved,
+            "issues": unresolved,
         })));
     }
 

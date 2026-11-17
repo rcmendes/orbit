@@ -370,7 +370,6 @@ mod tests {
                 assignee: None,
                 lease: None,
                 reporter: Some("alice".to_string()),
-                stray_lease_times: None,
                 created_at: now(),
                 updated_at: now(),
                 source_key: None,

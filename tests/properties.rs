@@ -33,7 +33,6 @@ fn task(id: String, status: &str, dependencies: Vec<String>) -> Task {
             assignee: None,
             lease: None,
             reporter: None,
-            stray_lease_times: None,
             created_at: now,
             updated_at: now,
             source_key: None,

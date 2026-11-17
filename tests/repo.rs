@@ -308,7 +308,7 @@ fn repository_filter_matches_the_repository_field() {
 }
 
 fn task_ids(listed: &serde_json::Value) -> Vec<String> {
-    listed["data"]["tasks"]
+    listed["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()

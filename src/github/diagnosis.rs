@@ -15,7 +15,7 @@ use crate::error::{OrbitError, Result, code};
 use crate::github::client::{GitHubClient, parse_auth_scopes, parse_auth_username};
 use crate::github::config::GitHubConfig;
 use crate::github::status::IN_PROGRESS_LABEL;
-use crate::graph::Issue;
+use crate::graph::LoadIssue;
 
 /// Which repositories the diagnosis probes and how strictly the connected
 /// project set is resolved.
@@ -497,7 +497,7 @@ impl StatusIssue {
             "message": self.message,
         });
         if let Some(task) = &self.task {
-            issue["task"] = json!(task);
+            issue["issue"] = json!(task);
         }
         if let Some(repository) = &self.repository {
             issue["repository"] = json!(repository);
@@ -579,7 +579,7 @@ impl Diagnosis {
     /// The `issues` `orbit doctor` reports, in doctor order. `doctor`
     /// returns early on missing authentication, so an unauthenticated
     /// diagnosis projects to the single auth finding.
-    pub fn doctor_issues(&self) -> Vec<Issue> {
+    pub fn doctor_issues(&self) -> Vec<LoadIssue> {
         if !self.auth.authenticated {
             return self
                 .findings
@@ -617,7 +617,7 @@ fn doctor_rank(finding: &Finding) -> u8 {
     }
 }
 
-fn doctor_issue(finding: &Finding, diagnosis: &Diagnosis) -> Issue {
+fn doctor_issue(finding: &Finding, diagnosis: &Diagnosis) -> LoadIssue {
     let repository = finding.repository.as_deref().unwrap_or_default();
     let (code, message) = match &finding.kind {
         FindingKind::AuthRequired => (
@@ -685,7 +685,7 @@ fn doctor_issue(finding: &Finding, diagnosis: &Diagnosis) -> Issue {
             "GitHub is not configured for this Board".to_string(),
         ),
     };
-    Issue::new(code, None, message)
+    LoadIssue::new(code, None, message)
 }
 
 /// Everything the `remote status` `next_action`/`next_command` cascade

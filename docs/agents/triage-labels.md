@@ -21,13 +21,13 @@ assignee kind, a resolution, or an Issue type — instead of a label.
 
 ## Orbit semantics
 
-Only the `Ready` status lists in `orbit ready`, and only while the Task is
+Only the `Ready` status lists in `orbit ready`, and only while the Issue is
 unassigned, unblocked, and free of hold labels. `Triage` and `Needs Info`
-Tasks are never Ready, so they cannot be claimed. A `ready-for-human` Task
+Issues are never Ready, so they cannot be claimed. A `ready-for-human` Issue
 is assigned to a person with `orbit assign <ID> --to <name>` — the assignee
 kind is `human` — which takes it out of the agent queue.
 
-`wontfix` closes the Task through the workflow's `wontfix` transition,
+`wontfix` closes the Issue through the workflow's `wontfix` transition,
 which records resolution `Won't Do`; `orbit reopen <ID>` returns it to the
 initial status (`Triage`).
 

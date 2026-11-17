@@ -26,7 +26,7 @@ contract.
 | Option | Meaning |
 | --- | --- |
 | `--json` | Print exactly one JSON object on stdout, including errors. |
-| `--if-version <VERSION>` | Run a Task mutation only when the Task's `updated_at` still matches VERSION (the value `orbit show` reports); a stale version fails with retryable `VERSION_CONFLICT`. `orbit batch` takes a per-operation `if_version` instead. |
+| `--if-version <VERSION>` | Run an Issue mutation only when the Issue's `updated_at` still matches VERSION (the value `orbit show` reports); a stale version fails with retryable `VERSION_CONFLICT`. `orbit batch` takes a per-operation `if_version` instead. |
 | `--idempotency-key <KEY>` | Make a write retry-safe: repeating the call with the same key returns the first recorded result (`meta.idempotent_replay: true`) instead of running again. |
 | `--dir <PATH>` | Use a Board anchor or a specific Board directory for this command. |
 | `ORBIT_DIR` | Environment equivalent of `--dir`. |
@@ -35,7 +35,7 @@ contract.
 Exit codes are `0` for success, `1` for a domain failure (for example
 `DEPENDENCY_BLOCKED` or a failing `doctor`), and `2` for a usage error.
 
-Task commands resolve the Board in this order: `--dir`/`ORBIT_DIR`, repository
+Issue commands resolve the Board in this order: `--dir`/`ORBIT_DIR`, repository
 link pointer, nearest `.orbit` walking up across Git boundaries (restarted
 from a worktree's main checkout), the retired in-Git store for migration
 diagnostics, then nothing. An explicit override can name a Board anchor or a
@@ -52,7 +52,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Convert a pre-ADR-0019 Board | `orbit migrate` |
 | Convert a Board to the Issue model | `orbit migrate model` |
 | File a new ticket | `orbit add` |
-| Break work into blockers | `orbit add --depends-on`, `orbit depend`, `orbit undepend`, `orbit link` |
+| Break work into blockers | `orbit depend`, `orbit undepend`, `orbit link` |
 | Triage incoming work | `orbit label add/remove/list` |
 | Find work for an agent | `orbit ready` |
 | Take a specific ticket | `orbit claim` |
@@ -63,7 +63,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Undo a close or remove a mistake | `orbit reopen`, `orbit delete` |
 | Run a Board-defined workflow transition | `orbit transition` |
 | Add context to a ticket | `orbit comment add`, `orbit update` |
-| Attach a tool's own data to a Task | `orbit property set/remove` |
+| Attach a tool's own data to an Issue | `orbit property set/remove` |
 | Apply many changes at once, all or none | `orbit batch` |
 | Read the board | `orbit list`, `orbit search`, `orbit digest`, `orbit show`, `orbit tree`, `orbit prime` |
 | Follow what changed on the Board | `orbit changes`, `orbit history` |
@@ -73,7 +73,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Recover or maintain the board | `orbit doctor`, `orbit sync`, `orbit index` |
 | Host, synchronize, or relocate the Board | `orbit board host`, `orbit board sync`, `orbit board move` |
 | Link GitHub Issues (optional) | `orbit remote connect` — see [github-sync.md](./github-sync.md) |
-| Triage Tasks | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
+| Triage Issues | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
 
 ## Set up a Board
 
@@ -106,7 +106,7 @@ orbit init --print               # preview every file that would change
 orbit init --portable-mcp        # MCP command `orbit`; editor PATH must find it
 orbit init ~/src/acme            # anchor Board at ~/src/acme/.orbit/board
 (cd ~ && orbit init)            # ordinary Board at ~/.orbit/board
-orbit init --slug teramigo       # Task IDs become teramigo-…
+orbit init --slug teramigo       # Issue IDs become teramigo-…
 orbit init --visible             # visible Board folder ./issues instead of ./.orbit/board
 orbit init --visible=tracker     # visible Board folder ./tracker
 orbit init --host=../board-host  # also set the Board host (repo path or git URL)
@@ -118,7 +118,7 @@ orbit init --host=../board-host  # also set the Board host (repo path or git URL
 | --- | --- | --- |
 | *none* | Start a repository-local Board in Git or an anchor Board outside Git. | `orbit init` |
 | `DIR` | Choose a Board anchor, an existing repository root (initialize at its `./.orbit/board`), or an explicit Board directory — visible outside Git, or a visible folder inside a repository. Anchor Board files live at `<DIR>/.orbit/board`. | `orbit init ~/src/acme` |
-| `--slug SLUG` | Choose the Task-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
+| `--slug SLUG` | Choose the Issue-ID prefix instead of deriving it from `DIR`. Explicit input is strict; a populated Board returns `SLUG_LOCKED`. | `orbit init --slug acme` |
 | `--agents LIST` | Wire agents non-interactively: `none`, `all`, `auto`, or a client list. | `orbit init --agents all` |
 | `--print` | Preview the Board, exclusion entries, and generated agent files without writing or prompting. | `orbit init DIR --print` |
 | `--visible[=NAME]` | Use a visible Board folder instead of the hidden `.orbit/board` layout. Bare `--visible` names it `issues`; `=NAME` picks the name. Applies when the target resolves to a repository or anchor root — an explicit directory is already visible. | `orbit init --visible=tracker` |
@@ -132,7 +132,7 @@ orbit init --host=../board-host  # also set the Board host (repo path or git URL
 - **Home Board:** run `orbit init` in `~` for an ordinary Board there. It is discovered normally, never created implicitly, and remains exempt from conflicting-Board checks. There is no `--global` flag.
 - **Joining an existing Board:** use `orbit repo add DIR` from the repository that should share the Board; `init` is for creating or reusing the target `DIR`, not for joining another Board.
 - **Sharing a Board across machines:** pass `--host` (or run `orbit board host` later) so the Board's `orbit` branch lives on one host repository; `orbit board sync` merges and pushes, and `board.host_sync = "auto"` syncs at `orbit prime` and after commits.
-- **Migrating a pre-ADR-0019 Board:** use `orbit migrate`; `init` refuses legacy layouts with `BOARD_NOT_MIGRATED`. `orbit init` on an anchor that still contains child Boards previews and merges them in place, preserving Task IDs and keeping the children as backups under `.orbit/backups/`.
+- **Migrating a pre-ADR-0019 Board:** use `orbit migrate`; `init` refuses legacy layouts with `BOARD_NOT_MIGRATED`. `orbit init` on an anchor that still contains child Boards previews and merges them in place, preserving Issue IDs and keeping the children as backups under `.orbit/backups/`.
 
 **Supporting options**
 
@@ -147,7 +147,7 @@ orbit init --host=../board-host  # also set the Board host (repo path or git URL
 Every run ends with the same three-section report:
 
 1. **Board** — whether it was created or reused, its path, branch, storage mode
-   (`repository`: every Board is a standalone repository), Task-ID prefix, and
+   (`repository`: every Board is a standalone repository), Issue-ID prefix, and
    the `.git/info/exclude` entries for the Orbit folder and any visible Board
    folder.
 2. **Coding agents** — the harnesses wired, the MCP command written and whether
@@ -169,7 +169,7 @@ shell setup; the portable command only works when the editor's `PATH` resolves
 `orbit`. Use `--portable-mcp` to choose it without a prompt. Once a selected
 harness has an MCP config, later runs do not ask.
 
-Task IDs use the Board's slug as their prefix. An anchor Board uses its
+Issue IDs use the Board's slug as their prefix. An anchor Board uses its
 anchor-folder name (`~/src/acme` → `acme-`); a repository Board uses its
 repository name; a Board anchored at `~/.orbit` uses `orb` with a warning. Pass `--slug` to choose it
 explicitly. Re-running `init` preserves the stored prefix; an empty Board can
@@ -179,8 +179,8 @@ change it, while a populated Board returns `SLUG_LOCKED` and points at
 Every Issue also gets a sequential **project key** — `PREFIX-N`, such as
 `ORB-12` — allocated under the Board lock at creation and tracked in
 `keys.toml`. The key is the handle humans and agents quote: `orbit show
-ORB-12` (any case) resolves it everywhere a Task ID is accepted, while the
-immutable Task ID stays the file name and the `id` in JSON. When Board sync
+ORB-12` (any case) resolves it everywhere an Issue ID is accepted, while the
+immutable Issue ID stays the file name and the `id` in JSON. When Board sync
 re-keys an Issue after a cross-clone collision, the old key moves to
 `key_aliases` and keeps resolving. See [SPEC.md](./SPEC.md#project-key).
 The JSON and human output carry `prefix`, `storage`, and the `exclude` entries;
@@ -232,15 +232,15 @@ The Board is at `~/src/acme/.orbit/board`; the rebuildable member inventory is
 cached at `~/src/acme/.orbit/cache/member-repositories.json`. `orbit init`
 does not clone repositories. When the anchor already contains child Boards —
 repositories that anchored their own `.orbit` before the parent Board
-existed — init previews the merge, preserves every Task ID, records each
-imported Task's Repository, moves differing child ID prefixes to
+existed — init previews the merge, preserves every Issue ID, records each
+imported Issue's Repository, moves differing child ID prefixes to
 `id.accepted_prefixes`, and keeps the child Boards on disk under
 `<anchor>/.orbit/backups/`. Before importing, init reads and checks every child's
-Tasks, Comments, and merged prefix configuration. A Task collision returns
+Issues, Comments, and merged prefix configuration. An Issue collision returns
 `CONFIG_ERROR` before any imports are published or child Boards are relocated;
-a newly created anchor Board may remain. Retrying accepts an unchanged Task
+a newly created anchor Board may remain. Retrying accepts an unchanged Issue
 already imported with its Repository attribution and preserves existing Comments.
-An edited Task still conflicts. Publication is atomic per file, so an I/O failure
+An edited Issue still conflicts. Publication is atomic per file, so an I/O failure
 or interruption can leave partial imports; fix the cause and rerun init.
 An existing child Board or an unrecognized `.orbit` layout is reported instead of being shadowed or discarded. If a Board
 already exists at the anchor, `orbit init <anchor>` reuses it.
@@ -256,7 +256,7 @@ orbit repo refresh [--json]               # rebuild the member inventory
 
 `orbit repo add PATH` writes the target repository's Orbit link pointer so
 Board discovery resolves this Board from inside it, records explicit
-membership, fills new Tasks' `repository` field from the current Repository, and
+membership, fills new Issues' `repository` field from the current Repository, and
 refreshes managed agent configuration. `orbit repo remove NAME` drops
 explicit membership and clears the link pointer when it points back to this
 Board, then refreshes agent configuration again. Repositories discovered
@@ -264,18 +264,18 @@ below the anchor cannot be removed — their membership comes from the folder
 layout. `orbit repo refresh` rescans the anchor, rebuilds
 `member-repositories.json`, and reports which Repositories joined or left.
 
-### `orbit slug` — inspect or migrate the Task-ID identity
+### `orbit slug` — inspect or migrate the Issue-ID identity
 
 `slug show` reports the bare slug, the literal `id.prefix`, and the number of
-Tasks, SubTasks, and comment files. It is read-only. `slug migrate <SLUG>`
-rewrites every Task and SubTask ID from the current prefix to `<SLUG>-`.
+Issues, sub-issues, and comment files. It is read-only. `slug migrate <SLUG>`
+rewrites every Issue and sub-issue ID from the current prefix to `<SLUG>-`.
 
 **Good fit:** an early Board was created under a repository or anchor name
 that no longer fits. Migration is the explicit escape hatch from the one-prefix
 rule; `init --slug` remains the creation and empty-Board path.
 
 ```bash
-orbit slug show                        # orb, orb-, 42 tasks, 17 SubTasks
+orbit slug show                        # orb, orb-, 42 issues, 17 sub-issues
 orbit slug migrate atlas --dry-run     # print the plan; write nothing
 orbit slug migrate atlas               # rewrite, validate, and commit once
 orbit slug migrate atlas --force       # proceed despite live claims
@@ -286,24 +286,24 @@ The random suffix is preserved: `orb-a7b2c9` becomes `atlas-a7b2c9`, and
 `parent` and internal `links` targets, renames comment files, updates the Orbit-generated
 `# Comments: <id>` header, and changes `id.prefix`. It validates the result in a
 temporary Git worktree, commits once as
-`orbit: migrate task prefix from orb- to atlas-`, then fast-forwards the Board.
+`orbit: migrate issue prefix from orb- to atlas-`, then fast-forwards the Board.
 Pending heartbeat writes are committed first, so the migration commit is the
 single rollback point.
 
 `--dry-run` reports counts, the reference count, and any live claims, but never
 writes. The JSON plan also includes every `from`/`to` mapping and any collisions.
-Applying with live claims requires `--force`; the affected task IDs and holders
+Applying with live claims requires `--force`; the affected Issue IDs and holders
 are listed so they can re-read the Board. An unhealthy Board returns
 `MIGRATION_BLOCKED` (run `orbit doctor` first), and a target that would collapse
 two IDs returns `PREFIX_COLLISION`. On an empty Board migration is equivalent to
 setting the prefix.
 
-Task bodies, comment text, checkpoint text, Git history, pull requests, and external links are
+Issue bodies, comment text, checkpoint text, Git history, pull requests, and external links are
 **not** rewritten. A body that mentions `orb-a7b2c9` keeps that text; old links
 and cached agent IDs stop resolving. `--json` reports `current`, `target`,
-`changed`, `tasks`, `subtasks`, `comment_files`, `references`, `mappings`,
+`changed`, `issues`, `sub_issues`, `comment_files`, `references`, `mappings`,
 `claims`, `collisions`, `dry_run`, `applied`, and `commit`. `slug show` reports
-`slug`, `prefix`, `tasks`, `subtasks`, and `comment_files`.
+`slug`, `prefix`, `issues`, `sub_issues`, and `comment_files`.
 
 ### `orbit setup` — adjust one harness or apply a profile
 
@@ -406,7 +406,7 @@ orbit mcp                          # normally launched by the editor
 
 ### `orbit add` — file a ticket
 
-Creates a task in the workflow's initial status (`ready` in the shipped templates) and prints its ID and project key, which you need for dependents,
+Creates an Issue in the workflow's initial status (`ready` in the shipped templates) and prints its ID and project key, which you need for dependents,
 labels, and comments.
 
 **Good fit:** a bug report, a feature, a follow-up from a review, or a ticket
@@ -418,10 +418,14 @@ criteria in the body; use labels for triage state.
 orbit add "Login rejects valid tokens" -p high --label bug --body-file ticket.md
 
 # Work that must wait for a blocker
-orbit add "Publish the release" -p high --depends-on orb-a7b2c9
+orbit add "Publish the release" -p high
+orbit depend orb-b3d4e5 orb-a7b2c9    # the new ticket waits for orb-a7b2c9
 
 # A ticket waiting on something outside the Board
-orbit add "Upgrade the parser" --waiting-on "upstream 2.4" --body-file -
+orbit add "Upgrade the parser" --body-file - <<'MD'
+Depends on upstream 2.4.
+MD
+orbit link add orb-c5e6f7 --type waiting-on --external "external:upstream-2.4"
 
 # A top-level epic or spec
 orbit add "Spec: SSO login" --type epic --body-file spec.md
@@ -429,29 +433,30 @@ orbit add "Spec: SSO login" --type epic --body-file spec.md
 # Publish several tickets, blockers first; each add prints the new ID
 orbit add "Design the schema" -p highest --label ready-for-agent
 # created orb-f14c02  highest  Design the schema
-orbit add "Ship the API" -p high --depends-on orb-f14c02 --label ready-for-agent
+orbit add "Ship the API" -p high --label ready-for-agent
+orbit depend orb-a7b2c9 orb-f14c02
 # created orb-a7b2c9  high  Ship the API
 
 # Make a scripted add safe to retry: a second add with the same Source Key
-# returns the first Task (meta.matched: true) instead of creating another
+# returns the first Issue (meta.matched: true) instead of creating another
 orbit add "Step 3" --source-key planner:plan-7:step-3
 
 # Name the reporter explicitly; it defaults to ORBIT_AGENT, then USER
 orbit add "Filed by ops" --reporter alice
 
-# Break a feature into a SubTask (run inside the api member Repository, or set
+# Break a feature into a sub-issue (run inside the api member Repository, or set
 # it afterwards with `orbit update <id> --repository api`)
 orbit add "API: add the endpoint" --parent orb-a7b2c9
-# created orb-x7k2pq  medium  API: add the endpoint  (subtask of orb-a7b2c9)
+# created orb-x7k2pq  medium  API: add the endpoint  (sub-issue of orb-a7b2c9)
 
-`--reporter` records who created the Task. It defaults to `ORBIT_AGENT`, then
+`--reporter` records who created the Issue. It defaults to `ORBIT_AGENT`, then
 `USER`, and is never changed afterwards.
 
-`--parent` creates a SubTask under an existing Parent Task. The `parent` field
+`--parent` creates a sub-issue under an existing Parent Issue. The `parent` field
 stores the edge; IDs are flat and never encode the parent. The Board's
 `board.hierarchy` decides which types may parent which (default `epic` >
 `story`/`task`/`bug` > `sub-task`), and a child can still have real
-dependencies. The Parent Task becomes Ready only when every descendant is
+dependencies. The Parent Issue becomes Ready only when every descendant is
 done or cancelled.
 
 `--type` sets the Issue type from the Board's `board.types` vocabulary
@@ -461,13 +466,13 @@ picks the default). The type decides where in the hierarchy the Issue may sit.
 
 `-p`/`--priority` takes a Priority name from the Board's `board.priorities`
 list — `highest`, `high`, `medium`, `low` by default, ordered most important
-first. Tasks store the name and sort by its position, so a Board can rename or
+first. Issues store the name and sort by its position, so a Board can rename or
 reorder priorities in `config.toml`; the default comes from
 `board.default_priority`.
 
-A spec or epic is a top-level Task with `type: epic`; its tickets are SubTasks.
+A spec or epic is a top-level Issue with `type: epic`; its tickets are sub-issues.
 This is also the compatibility mapping for Beads and Matt Pocock's skills:
-**Issue** = Task, **Sub-issue** = SubTask, **Epic** = top-level Task with
+**Issue** = Issue, **Sub-issue** = sub-issue, **Epic** = top-level Issue with
 `type: epic`. Put the spec in the parent body, publish tickets with `--parent`,
 and use `orbit ready --parent <id>` as the frontier. The hierarchy depth is
 whatever `board.hierarchy` configures; the default reaches `epic` > working
@@ -475,14 +480,14 @@ types > `sub-task`. To nest deeper, extend `board.types` and
 `board.hierarchy` in `config.toml`.
 Never
 use `done --force` or `cancel --force` on a spec parent with open tickets: it
-cancels them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md) and
+cancels them. See [ADR 0009](./adr/0009-keep-issue-vocabulary.md) and
 [ADR 0010](./adr/0010-structural-type-field.md).
 
 `--component` sets an optional Component slug (`cli`, `payments`, `mobile-api`,
 ...). Each Board may restrict values through `board.components` in `config.toml`;
 when the list is empty any short lowercase slug is accepted. `--repository`
 sets the owning member Repository (filled automatically inside one) and
-`--external-id` records the Task's identity in an external system, unique per
+`--external-id` records the Issue's identity in an external system, unique per
 Board. Filter with `orbit list --component cli` or
 `orbit ready --exclude-component docs`; `--repository NAME` filters on the
 `repository` field.
@@ -509,20 +514,20 @@ orbit update orb-a7b2c9 --clear-component --clear-verification
 
 ### `orbit link` — typed relations and external references
 
-A Link is a typed relation stored on a task: a `type` (`blocks`,
+A Link is a typed relation stored on an Issue: a `type` (`blocks`,
 `relates-to`, `duplicates`, `discovered-from`, or a custom slug), a `target`
-(an Orbit Task ID or an external `SYSTEM:ID` reference such as
+(an Orbit Issue ID or an external `SYSTEM:ID` reference such as
 `jira:PROJ-123`), an optional `blocking` override, and arbitrary
 `--attribute KEY=VALUE` pairs. `blocks` links block readiness by default;
 every other type is non-blocking unless `--blocking` is passed, and
 `--no-blocking` overrides `blocks`. Only blocking links drive readiness and
 are checked for cycles, so non-blocking links can form cycles freely.
 
-**Good fit:** recording that a task duplicates or was discovered from
-another, relating tasks without blocking, or parking work on an external
+**Good fit:** recording that an issue duplicates or was discovered from
+another, relating issues without blocking, or parking work on an external
 tracker (`--external jira:PROJ-123 --url …`) that blocks readiness until the
 link is removed. `orbit depend`/`undepend` remain shorthand for a blocking
-`blocks` link between two tasks.
+`blocks` link between two issues.
 
 ```bash
 orbit link add orb-a7b2c9 --type relates-to --to orb-f14c02
@@ -536,9 +541,9 @@ orbit link remove orb-a7b2c9 --type relates-to --to orb-f14c02
 
 ### `orbit depend` and `orbit undepend` — connect work
 
-`depend <id> <dep-id>` adds a blocking `blocks` link: the first task waits
+`depend <id> <dep-id>` adds a blocking `blocks` link: the first Issue waits
 until the second is done or cancelled. Cycles through blocking links,
-self-links, linking a terminal task, and parent/child edges in either
+self-links, linking a terminal issue, and parent/child edges in either
 direction are rejected. `undepend` removes the blocking link and is
 idempotent; non-blocking links are untouched — use `orbit link remove` for
 those.
@@ -552,12 +557,12 @@ orbit depend orb-a7b2c9 orb-f14c02   # orb-a7b2c9 waits for orb-f14c02
 orbit undepend orb-a7b2c9 orb-f14c02
 ```
 
-Prefer `orbit add --depends-on` when the edge is known at creation time.
+Add the edge with `depend` (or `link add --type blocks`) once both Issues exist.
 
 ### `orbit label` — triage state and category
 
 Labels are free-form lowercase slugs. `needs-triage`, `needs-info`, and
-`ready-for-human` are hold labels: while present, the task is not ready and
+`ready-for-human` are hold labels: while present, the Issue is not ready and
 cannot be claimed. Adding and removing labels is idempotent.
 
 **Good fit:** moving a ticket through triage, marking it ready for an agent, or
@@ -571,10 +576,10 @@ orbit label list                       # labels in use, with counts
 orbit list --label needs-triage        # everything awaiting triage
 ```
 
-### `orbit comment` — keep a per-task thread
+### `orbit comment` — keep a per-Issue thread
 
 Comments are append-only, with an author and timestamp, and are allowed on closed
-tasks. Corrections are new comments; nothing is edited or deleted.
+issues. Corrections are new comments; nothing is edited or deleted.
 
 **Good fit:** triage notes, handoff context, links to logs, or a record of why a
 decision was made. Put durable requirements in the body instead.
@@ -587,7 +592,7 @@ orbit comment list orb-a7b2c9
 
 ### `orbit property` — attach tool-owned data
 
-A Property is a JSON object that one tool keeps on a Task under its own name,
+A Property is a JSON object that one tool keeps on an Issue under its own name,
 the owner — the property's namespace (a lowercase slug such as `ci`). Orbit
 stores and shows it but never reads it: Properties do not affect readiness,
 assignments, or status, and they are never synchronized with a Remote Tracker.
@@ -615,23 +620,23 @@ Operations are `add`, `update`, `label`, `depend`, `undepend`, `link`,
 `unlink`, `claim`, `assign`, `heartbeat`, `release`, `done`, `cancel`, `reopen`,
 `transition`, `comment`, and `property`,
 each with its command's fields (see [SPEC.md](./SPEC.md#batch)). A reference is a
-Task ID, a project key or alias, or `key:` plus a Source Key, so later operations can point at Tasks the
+Issue ID, a project key or alias, or `key:` plus a Source Key, so later operations can point at Issues the
 same Batch creates.
 
-**Good fit:** filing a whole plan (an epic, its SubTasks, and their
-dependencies) in one commit; reserving a held task for one agent by removing the
+**Good fit:** filing a whole plan (an epic, its sub-issues, and their
+dependencies) in one commit; reserving a held issue for one agent by removing the
 hold and claiming in one step; any script that must not leave half its changes
 behind. Re-running the same Batch after a crash finishes it, except that
 `comment` operations append again and an operation a later one invalidated
-(such as `claim` before `done` of the same Task) fails; see SPEC.md.
+(such as `claim` before `done` of the same Issue) fails; see SPEC.md.
 
 ```bash
 cat > plan.json <<'JSON'
 {"operations": [
   {"op": "add", "key": "planner:plan-7:epic", "title": "Plan 7", "type": "epic"},
   {"op": "add", "key": "planner:plan-7:step-1", "title": "Step 1", "parent": "key:planner:plan-7:epic"},
-  {"op": "add", "key": "planner:plan-7:step-2", "title": "Step 2", "parent": "key:planner:plan-7:epic",
-   "depends_on": ["key:planner:plan-7:step-1"]}
+  {"op": "add", "key": "planner:plan-7:step-2", "title": "Step 2", "parent": "key:planner:plan-7:epic"},
+  {"op": "depend", "id": "key:planner:plan-7:step-2", "on": "key:planner:plan-7:step-1"}
 ]}
 JSON
 orbit batch --file plan.json --dry-run
@@ -642,22 +647,22 @@ orbit batch --file plan.json --json | jq '.data.keys'
 
 ### `orbit list` — inspect the board
 
-Lists tasks with combinable filters. Done and cancelled tasks are hidden by
+Lists issues with combinable filters. Done and cancelled issues are hidden by
 default; pass `--include-closed`, or name a terminal status with `--status`, to
 include them. Inside a member Repository or one of its worktrees the list is
-scoped to that Repository's Tasks plus Board-wide Tasks (tasks with no `repository`);
+scoped to that Repository's Issues plus Board-wide Issues (issues with no `repository`);
 `--all` widens it to the whole Board, and at the Board's root there is no
 scoping. Human output is an aligned table whose `ID` column shows the project
-key (`ORB-12`; the Task ID for Tasks that predate keys), with `STATUS`, `P`, `TYPE`,
+key (`ORB-12`; the Issue ID for Issues that predate keys), with `STATUS`, `P`, `TYPE`,
 `TITLE`, `LABELS`, and `CLAIMED BY` columns; titles longer than 60 characters
 are shortened with an ellipsis. When the Board has remote material — a
-configured Remote Project or any Task carrying a Remote link — an `ISSUE`
-column appears between `TYPE` and `TITLE`; it is `-` for a Local Task, `#N`
-for a Linked Task, and `~#N` for detached provenance, and a local-only Board
-omits the column entirely. Root Tasks are always ordered by
-priority, then creation time and ID; each Parent Task is followed by its
-SubTasks, also ordered by priority. `--group` draws that hierarchy as one
-outlined table: a banner for each Parent Task, its SubTasks underneath, and a
+configured Remote Project or any Issue carrying a Remote link — an `ISSUE`
+column appears between `TYPE` and `TITLE`; it is `-` for a Local Issue, `#N`
+for a Linked Issue, and `~#N` for detached provenance, and a local-only Board
+omits the column entirely. Root Issues are always ordered by
+priority, then creation time and ID; each Parent Issue is followed by its
+sub-issues, also ordered by priority. `--group` draws that hierarchy as one
+outlined table: a banner for each Parent Issue, its sub-issues underneath, and a
 final `No parent` section. Use `--json` when a script or agent consumes the
 result.
 
@@ -666,17 +671,17 @@ in-progress work, or the full history.
 
 ```bash
 orbit list
-orbit list --linked                               # only Tasks linked to a Remote Issue
-orbit list --local                                # only Tasks without an active link
+orbit list --linked                               # only Issues linked to a Remote Issue
+orbit list --local                                # only Issues without an active link
 orbit list --label needs-triage
 orbit list --label sso --label ready-for-agent       # every label must match
 orbit list --repository api                          # repository field api
-orbit list --status in_progress --claimed-by claude
+orbit list --status in_progress --assignee claude
 orbit list --status done            # closed work, without --include-closed
 orbit list --unlabeled
-orbit list --parent orb-a7b2c9      # only this feature's SubTasks
+orbit list --parent orb-a7b2c9      # only this feature's sub-issues
 orbit list --type epic              # only epics and specs
-orbit list --group                  # parents and SubTasks in one outlined table
+orbit list --group                  # parents and sub-issues in one outlined table
 orbit list --exclude-type epic      # hide spec/epic containers
 orbit list --include-closed --json
 orbit list --all --json             # every Repository, from inside a member
@@ -700,23 +705,23 @@ The table is intentionally not a machine interface. Column widths grow with the
 data, labels are joined with commas, an assignee appears in the last column,
 and long titles are truncated. Parse `--json` instead.
 
-`--linked` keeps only Tasks with an active Remote Issue link; `--local` keeps
-only Tasks without one, including detached provenance. They are mutually
+`--linked` keeps only Issues with an active Remote Issue link; `--local` keeps
+only Issues without one, including detached provenance. They are mutually
 exclusive. The `ISSUE` column and both flags appear in human output and
 `--help` only when the Board has remote material; on a local-only Board they
 are hidden but still accepted. `--type` is repeatable and matches any listed work shape; `--exclude-type` hides
 any listed shape. `--label` is repeatable and every label must match;
-`--exclude-label` is repeatable and hides a task carrying any of the named labels.
-`--repository NAME` matches the Task's `repository` field case-insensitively;
+`--exclude-label` is repeatable and hides an Issue carrying any of the named labels.
+`--repository NAME` matches the Issue's `repository` field case-insensitively;
 `--component` and `--exclude-component` filter on the `component` field.
 Explicit `--label` filters remain additional requirements. This applies to
 `list`, `ready` (including `--claim`), and `prime`. Prime reports the Repository
 filter separately as `repository` in JSON and `repository:` in human output; its
 `labels` contains only explicit label filters. Parent groups follow the
-parent's priority; SubTasks inside a group follow their own priority. Tasks with
-no parent appear in the final `No parent` section. JSON always carries `kind`,
-`type`, `parent`, `subtasks`, and `open_subtasks` with the full title. A Parent
-Task with open SubTasks is not Ready, so `list` may show it even though `ready`
+parent's priority; sub-issues inside a group follow their own priority. Issues with
+no parent appear in the final `No parent` section. JSON always carries `type`,
+`parent`, `sub_issues`, and `open_sub_issues` with the full title. A Parent
+Issue with open sub-issues is not Ready, so `list` may show it even though `ready`
 does not.
 
 `--limit N` caps the page and `--cursor CURSOR` resumes from a previous page's
@@ -728,11 +733,11 @@ expected array, arrays match by containment, and unknown field names fail with
 dotted paths reach into objects — and unknown names fail the same way.
 
 For work that can start now, use `orbit ready` instead: `list` shows all open
-work, including blocked tasks.
+work, including blocked issues.
 
 ### `orbit search` — qualifier search
 
-Searches tasks by free text plus `key:value` qualifiers. Every term must
+Searches issues by free text plus `key:value` qualifiers. Every term must
 match: free-text terms hit the title, labels, and body; `status:`,
 `assignee:`, `label:`, `type:`, `priority:`, `component:`, and `repository:`
 qualifiers filter on the matching summary field. Scalar qualifiers are
@@ -756,7 +761,7 @@ Prints a compact digest of one Issue: status, status category, readiness,
 assignee, reporter, labels, open blockers, checkpoint, and comment count. When
 the Issue has descendants the digest adds a `rollup` over the subtree —
 `total`, `done`, `cancelled`, `blocked`, `open`, `by_status`, plus a
-direct-children `subtasks` summary — so an epic or spec reports progress and
+direct-children `sub_issues` summary — so an epic or spec reports progress and
 blocked counts at a glance. Leaf Issues report no rollup.
 
 **Good fit:** a quick health read on one ticket or a rollup over an epic
@@ -769,23 +774,23 @@ orbit digest orb-a7b2c9 --json
 
 ### `orbit ready` — the agent queue
 
-Shows tasks sitting in the workflow's ready status, unassigned, not waiting on an
-external blocker, carrying no hold label, and with every dependency and SubTask
-in a closed status category. A Parent Task is not Ready while any SubTask is
+Shows issues sitting in the workflow's ready status, unassigned, not waiting on an
+external blocker, carrying no hold label, and with every dependency and sub-issue
+in a closed status category. A Parent Issue is not Ready while any sub-issue is
 open. Results are ordered by priority, then creation
 time.
 
-With `--claim`, the first task is claimed atomically in the same command and
+With `--claim`, the first Issue is claimed atomically in the same command and
 moves to `in_progress` with a lease. When nothing is ready, the command succeeds
 with `data: null` and `meta.reason: "NO_READY_TASKS"`. `--parent` scopes the
-queue to one feature's SubTasks.
+queue to one feature's sub-issues.
 
 Inside a member Repository or one of its worktrees the queue is scoped to that
-Repository's Tasks plus Board-wide Tasks; `--all` widens it to the whole Board,
-and `--claim` only ever takes a Task inside the scope.
+Repository's Issues plus Board-wide Issues; `--all` widens it to the whole Board,
+and `--claim` only ever takes an Issue inside the scope.
 
 **Good fit:** an agent asks what to do next, a supervisor polls for idle work, or
-a worker wants to take exactly one task without racing another agent.
+a worker wants to take exactly one issue without racing another agent.
 
 ```bash
 orbit ready --limit 5
@@ -799,7 +804,7 @@ orbit ready --json              # NO_READY_TASKS means wait and retry
 `--parent`, `--repository`, `--component`, `--exclude-component`, repeatable
 `--label`, `--type`, and `--exclude-label` combine with AND. `--type` matches any listed shape; `--exclude-type` hides any
 listed shape. `--exclude-label` remains for legacy label-only boards. A released
-task can still carry the previous assignee's checkpoint; `--json` includes it so
+Issue can still carry the previous assignee's checkpoint; `--json` includes it so
 the next claim starts with the handoff context.
 
 #### Scheduler strategies (opt-in)
@@ -825,15 +830,15 @@ devin = ["rust", "docs"]
 - `touches` avoids file-touch overlap. An Issue declares the paths it expects
   to modify with `orbit property set <id> touches --value '{"paths": ["src/auth"]}'`.
   On `--claim`, a candidate is refused when its paths overlap — equal, or one
-  a `/`-separated prefix of the other — the paths of a non-terminal Task
+  a `/`-separated prefix of the other — the paths of a non-terminal Issue
   assigned to a different assignee, so two agents never receive overlapping
   touches. On a plain `ready` listing the safe candidates simply sort first.
-- `capability` prefers Tasks whose `capabilities` Property requirements
+- `capability` prefers Issues whose `capabilities` Property requirements
   (`orbit property set <id> capabilities --value '{"requires": ["rust"]}'`)
   are a subset of the claiming agent's `[scheduler.capabilities]` entry. It is
-  a preference, not a refusal; Tasks requiring nothing match everyone.
+  a preference, not a refusal; Issues requiring nothing match everyone.
 - `wip` refuses `--claim` when the agent already holds `scheduler.wip_limit`
-  non-terminal assigned Tasks; the result is `data: null` with
+  non-terminal assigned Issues; the result is `data: null` with
   `meta.reason: "WIP_LIMIT"`. Listing is unaffected.
 
 An unknown strategy name fails with `INVALID_ARGUMENT`; a `[scheduler]` section
@@ -842,18 +847,18 @@ limit) fails Board load with `CONFIG_ERROR`.
 
 ### `orbit show` — load one ticket
 
-Prints the full task: body, labels, dependencies, kind, type, parent, SubTasks,
+Prints the full Issue: body, labels, links, type, parent, sub-issues,
 dependents, assignment state, checkpoint, and comments. A `github:`/`remote:` line
-reports the Task's Remote Issue link only when the Board has remote material
-or the Task itself carries one; a connected Board shows `github: -` for an
-unlinked Task. `--json` is the form an agent
-should load before starting work. A terminal task keeps its latest checkpoint as
+reports the Issue's Remote Issue link only when the Board has remote material
+or the Issue itself carries one; a connected Board shows `github: -` for an
+unlinked Issue. `--json` is the form an agent
+should load before starting work. A terminal issue keeps its latest checkpoint as
 archived history, marked by `checkpoint_archived: true`. `--fields FIELDS`
 projects a comma-separated field list — dotted paths reach into objects — onto
 the detail object before it prints; unknown names fail with
 `INVALID_ARGUMENT`.
 
-**Good fit:** before implementing a ticket, when checking why a task is blocked,
+**Good fit:** before implementing a ticket, when checking why an issue is blocked,
 or when reading a handoff checkpoint or comment.
 
 ```bash
@@ -864,11 +869,11 @@ orbit show orb-a7b2c9 --fields id,key,status,labels --json
 
 ### `orbit tree` — inspect one epic or spec
 
-Shows one Task, its SubTasks at every level, and their blocking edges. Unlike
+Shows one Issue, its sub-issues at every level, and their blocking edges. Unlike
 `list --group` (the whole Board) and `list --parent` (children only), `tree`
 always includes the root and its family, with resolved/total progress on the
-root. The root may be any Task with SubTasks, including a SubTask that has its
-own; a SubTask without SubTasks returns `INVALID_ARGUMENT`.
+root. The root may be any Issue with sub-issues, including a sub-issue that has its
+own; a sub-issue without sub-issues returns `INVALID_ARGUMENT`.
 
 **Good fit:** inspecting a spec, epic, or feature before publishing tickets,
 checking the frontier, or seeing why one ticket is blocked.
@@ -878,13 +883,13 @@ orbit tree orb-a7b2c9
 orbit tree orb-a7b2c9 --json
 ```
 
-`--json` returns `data.root`, `data.tasks` with the root first and descendants
+`--json` returns `data.root`, `data.issues` with the root first and descendants
 depth-first, and `data.count`.
 
 ### `orbit prime` — starting context for a session
 
-Prints the agent workflow instructions, board counts, top ready tasks, Parent
-Tasks whose SubTasks are all resolved (close candidates), and stale claims. The
+Prints the agent workflow instructions, board counts, top ready Issues, Parent
+Issues whose sub-issues are all resolved (close candidates), and stale claims. The
 Claude and Devin SessionStart hooks run `orbit prime --hook-json` automatically.
 
 **Good fit:** the first command of an agent session, a status prompt, or a quick
@@ -896,22 +901,22 @@ orbit prime --by claude --repository api # scope counts and the queue to one rep
 orbit prime --json
 ```
 
-`--repository` and repeatable `--label` scope the counts, ready tasks, close
+`--repository` and repeatable `--label` scope the counts, ready Issues, close
 candidates, and stale claims to a repository or label set. A close candidate is
-a non-terminal Parent Task with at least one SubTask and no open SubTasks; Orbit
-never closes it automatically. Task summaries in `--json` include a checkpoint
+a non-terminal Parent Issue with at least one sub-issue and no open sub-issues; Orbit
+never closes it automatically. Issue summaries in `--json` include a checkpoint
 when one is recorded, so a stale claim carries its handoff context.
 `--max-tokens N` caps the rendered context at roughly N tokens (~4 characters
-each): task listings are trimmed first, and when the fixed instructions alone
+each): issue listings are trimmed first, and when the fixed instructions alone
 exceed the budget the human output is truncated and the JSON `budget` object
 reports `truncated: true`. `--hook-json` honors the same budget.
 
 ### `orbit export` — snapshot the board
 
-Emits a deterministic JSON snapshot of every Task and SubTask, including terminal
+Emits a deterministic JSON snapshot of every Issue and sub-issue, including terminal
 work, with type, labels, dependency and parent edges, parent progress fields,
 checkpoints, derived readiness, and comments.
-The snapshot is ordered by task ID and contains no timestamps or machine-local
+The snapshot is ordered by issue ID and contains no timestamps or machine-local
 paths.
 
 **Good fit:** feeding a knowledge base, archiving a board, or diffing two
@@ -919,12 +924,12 @@ snapshots. The collector should pin `schema_version`.
 
 ```bash
 orbit export --json > board.json
-orbit export --json | jq '.data.tasks[] | select(.kind == "subtask")'
+orbit export --json | jq '.data.issues[] | select(.type == "sub-issue")'
 orbit export --json | jq '.data.board'
 ```
 
 The snapshot is the standard envelope with `data.schema_version`, `data.board`,
-and `data.tasks`; each task has the same shape as `show --json`, plus comments.
+and `data.issues`; each Issue has the same shape as `show --json`, plus comments.
 
 ### `orbit changes` and `orbit history` — the change feed
 
@@ -938,7 +943,7 @@ that is not an ancestor of the head is rejected rather than skipping or
 repeating events. `--type` filters by kind (repeatable) and `--limit` keeps
 the newest events.
 
-`orbit history <id>` shows one Issue's timeline, matched by Task ID or project
+`orbit history <id>` shows one Issue's timeline, matched by Issue ID or project
 key; it keeps working after the Issue is deleted because the timeline comes
 from Git, not the live Board.
 
@@ -958,35 +963,35 @@ are exposed as the read-only, idempotent MCP tools `changes` and `history`.
 
 ## Claim and finish work
 
-### `orbit claim` — take a specific task
+### `orbit claim` — take a specific Issue
 
-Claims one task by ID instead of taking the top of the ready queue. The task must
+Claims one issue by ID instead of taking the top of the ready queue. The issue must
 be active and unassigned (a stale lease needs `--steal`), not waiting on an
 external blocker or an unfinished dependency, free of hold labels, and, if it is
-a Parent Task, have no open SubTasks. A claim sets the assignee — a human or an
+a Parent Issue, have no open sub-issues. A claim sets the assignee — a human or an
 agent, recorded with `--kind` (`agent` by default) — and a fresh lease together.
 The claim result includes any checkpoint left by the previous assignee. A claim
 by the current assignee renews its own lease, live or stale, so repeating a
 claim is safe.
 
 **Good fit:** an agent takes work it will heartbeat and finish, a human assigns a
-ticket to an agent, or another agent's lease expired and the task must be
+ticket to an agent, or another agent's lease expired and the issue must be
 recovered.
 
 ```bash
 orbit claim orb-a7b2c9 --by claude
 orbit claim orb-a7b2c9 --by claude --kind human   # a person claims with a lease
 orbit claim orb-a7b2c9 --by claude --steal   # take over a live or stale lease
-orbit claim orb-a7b2c9 --by claude --worktree # claim and create the task worktree
+orbit claim orb-a7b2c9 --by claude --worktree # claim and create the issue worktree
 ```
 
 `--steal` overrides the assignee's lease, not the readiness rules: hold labels and
 unfinished dependencies still block the claim.
 
-`--worktree` claims and creates the Task's worktree in one step:
-`.worktrees/<id>` on branch `ticket/<id>` inside the Task's Repository (its
+`--worktree` claims and creates the Issue's worktree in one step:
+`.worktrees/<id>` on branch `ticket/<id>` inside the Issue's Repository (its
 `repository` field), falling back to the member Repository containing the current
-directory when the Task names none. A new branch starts from the Repository's
+directory when the Issue names none. A new branch starts from the Repository's
 local default branch (the local branch named by `origin/HEAD`, else `main`,
 `master`, or the currently checked-out branch); no fetch is performed. An
 existing `ticket/<id>` branch is checked out without resetting its commits.
@@ -1007,15 +1012,15 @@ or explicitly release the claim if you no longer intend to work on it.
 
 ### `orbit assign` — set an assignee without a lease
 
-Sets who is responsible for a task without taking a lease — how humans take
+Sets who is responsible for an issue without taking a lease — how humans take
 work. The assignee's `--kind` is `human` by default (`agent` allowed). A
 different existing assignee is only replaced with `--force`, which also drops
 the old lease; assigning the same identity again just updates its kind. A
 lease-less assignee cannot `heartbeat` (there is no lease to extend) but can
-still `checkpoint`, and the task stays out of the ready queue until released.
+still `checkpoint`, and the Issue stays out of the ready queue until released.
 
 **Good fit:** routing work to a person, recording ownership ahead of a claim,
-or handing a task to a human reviewer.
+or handing an issue to a human reviewer.
 
 ```bash
 orbit assign orb-a7b2c9 --to alice
@@ -1041,7 +1046,7 @@ Records or replaces the assignee's latest checkpoint: current progress, the
 next useful action, and any blocker. The first write requires `--progress`; later
 writes can update only the fields that changed, and `--clear-next` or
 `--clear-blocker` removes one. The caller must be the assignee. A stale lease still
-counts until another agent takes the task over, so the outgoing assignee can hand
+counts until another agent takes the issue over, so the outgoing assignee can hand
 off after a long run.
 
 The checkpoint is visible in `show` (human and JSON), the JSON of `ready`,
@@ -1049,10 +1054,10 @@ The checkpoint is visible in `show` (human and JSON), the JSON of `ready`,
 `release`, `claim --steal`, and `reopen`; it never changes readiness, claim
 eligibility, or dependencies. Each write attributes the record to the current
 assignee, even when a partial update keeps the previous progress text. On a done
-or cancelled task the latest checkpoint is retained in the task file as archived
+or cancelled issue the latest checkpoint is retained in the issue file as archived
 history, but new checkpoints are refused there.
 
-**Good fit:** pausing work, handing a task to another agent, or leaving enough
+**Good fit:** pausing work, handing an issue to another agent, or leaving enough
 context that a stale claim can be recovered without reading logs.
 
 ```bash
@@ -1064,19 +1069,19 @@ orbit checkpoint orb-a7b2c9 --by claude \
 # Update one field; omitted fields keep their previous value
 orbit checkpoint orb-a7b2c9 --by claude --clear-blocker
 
-# Leave a handoff, then requeue the task
+# Leave a handoff, then requeue the issue
 orbit checkpoint orb-a7b2c9 --by claude --progress "Half done" --next "Finish the tests"
 orbit release orb-a7b2c9 --by claude
 ```
 
 ### `orbit release` — hand work back
 
-Clears the assignee and lease and returns the task to the workflow's release target (the ready status in the shipped templates). The assignee can release; `--force`
-releases someone else's assignment. Terminal tasks cannot be released. The latest
+Clears the assignee and lease and returns the Issue to the workflow's release target (the ready status in the shipped templates). The assignee can release; `--force`
+releases someone else's assignment. Terminal issues cannot be released. The latest
 checkpoint is kept for the next assignee.
 
 **Good fit:** work is deliberately handed back, a human takes over, or a claim was
-taken by mistake and the queue should see the task again.
+taken by mistake and the queue should see the issue again.
 
 ```bash
 orbit release orb-a7b2c9 --by claude
@@ -1085,9 +1090,9 @@ orbit release orb-a7b2c9 --force
 
 ### `orbit done` — close completed work
 
-Moves the task to `done`. Unfinished dependencies always block completion. A
-Parent Task with open SubTasks is refused; `--force` cancels every open
-descendant SubTask and then closes the parent, and also overrides a competing
+Moves the Issue to `done`. Unfinished dependencies always block completion. A
+Parent Issue with open sub-issues is refused; `--force` cancels every open
+descendant sub-issue and then closes the parent, and also overrides a competing
 live claim. `--comment`
 records the completion note in the same transaction as the status change.
 
@@ -1102,10 +1107,10 @@ orbit done orb-a7b2c9 --force --comment "Deferred the remaining pieces"
 
 ### `orbit cancel` — abandon work
 
-Cancels a task without completing it. Cancelled tasks count as resolved, so
+Cancels an issue without completing it. Cancelled issues count as resolved, so
 dependents can become ready. A live lease from another agent blocks cancellation
-unless `--force` is passed. A Parent Task with open SubTasks is refused; `--force`
-cancels every open descendant SubTask too.
+unless `--force` is passed. A Parent Issue with open sub-issues is refused; `--force`
+cancels every open descendant sub-issue too.
 
 **Good fit:** the work is no longer needed, is a duplicate, or is a wontfix. Add
 `--comment` to record the reason.
@@ -1117,9 +1122,9 @@ orbit cancel orb-a7b2c9 --force
 
 ### `orbit reopen` — undo a close
 
-Returns a done or cancelled task to the workflow's reopen target (the ready status in the shipped templates) and clears its resolution. Reopening a SubTask reopens every
+Returns a done or cancelled issue to the workflow's reopen target (the ready status in the shipped templates) and clears its resolution. Reopening a sub-issue reopens every
 done ancestor too, nearest first, so the feature is not left done with reopened
-work; the walk stops at an active ancestor. A SubTask under a cancelled ancestor
+work; the walk stops at an active ancestor. A sub-issue under a cancelled ancestor
 is refused, naming that ancestor, until it is reopened. It
 also refuses when a dependent is already done, because that would leave completed
 work with an unfinished dependency; `--force` allows it and `doctor` reports the
@@ -1140,7 +1145,7 @@ lists under `allowed_transitions`. The shipped `standard` template adds
 `promote` (backlog `todo` to `ready`) and `defer` (`ready` to `todo`) on top of
 the lifecycle edges; custom `[workflow]` definitions can add statuses such as
 `In Review` and transitions such as `submit`. A transition into a done or
-cancelled status records its resolution on the task; a transition back to an
+cancelled status records its resolution on the issue; a transition back to an
 open status clears it. An unknown name or an edge that does not start from the
 current status fails with `INVALID_TRANSITION` naming the valid transitions.
 
@@ -1155,10 +1160,10 @@ orbit show orb-a7b2c9 --json   # allowed_transitions lists the valid edges
 
 ### `orbit delete` — remove a mistake
 
-Permanently deletes a task and its comment thread. It refuses when dependents
-exist, when the task has SubTasks, or when another agent holds a live lease;
+Permanently deletes an issue and its comment thread. It refuses when dependents
+exist, when the issue has sub-issues, or when another agent holds a live lease;
 `--force` also removes the ID from each dependent's dependency list and deletes
-the whole SubTask subtree.
+the whole sub-issue subtree.
 
 **Good fit:** duplicates or tickets created in the wrong Board. Prefer `cancel`
 when the work should remain in history.
@@ -1180,10 +1185,10 @@ and worktree-backed Boards (`board.storage = "worktree"`). The result is the
 canonical `.orbit/board` hidden Board — or a visible Board folder anchored by
 the `.orbit/board` pointer file — with `.orbit/cache` beside it.
 
-The same run rewrites task frontmatter `github:` links to `remote:`, moves
+The same run rewrites Issue frontmatter `github:` links to `remote:`, moves
 `repo:*` labels into the `repository` field, converts `[github]` configuration
 into remote project entries, drops `board.storage`, and seeds `board.components`
-from the Component values Tasks already use. Board commands refuse legacy layouts with
+from the Component values Issues already use. Board commands refuse legacy layouts with
 `BOARD_NOT_MIGRATED` until this runs; `orbit doctor` reports the same finding
 with `LEGACY_LAYOUT`.
 
@@ -1205,7 +1210,7 @@ orbit --dir <board> migrate --apply   # migrate a specific Board directory
 ```
 
 Re-running after `--apply` is a no-op, so an interrupted conversion can be
-retried safely. Task IDs, bodies, comments, assignments, and Git history are
+retried safely. Issue IDs, bodies, comments, assignments, and Git history are
 preserved; the report lists every content change and the resulting commit.
 
 ### `orbit migrate model` — convert a Board to the Issue model
@@ -1230,11 +1235,11 @@ The conversion is deterministic and idempotent:
   `repo:*` labels move to `component`/`repository`; `annotations` merges into
   `properties`. Values that cannot move safely stay in place and are reported
   as warnings.
-- Parented Tasks typed as the Board's default type are re-typed to the
+- Parented Issues typed as the Board's default type are re-typed to the
   hierarchy's leaf type (`sub-task` by default); Issue types the files use
   but the Board does not configure are added to `board.types`/`board.hierarchy`.
-- Every Task without a `key` receives the next sequential project key and
-  `keys.toml` records the allocator state. Task IDs, bodies, comments,
+- Every Issue without a `key` receives the next sequential project key and
+  `keys.toml` records the allocator state. Issue IDs, bodies, comments,
   checkpoints, unknown frontmatter fields, and existing keys/aliases are
   preserved.
 
@@ -1254,11 +1259,11 @@ orbit --dir <board> migrate model --apply   # migrate a specific Board directory
 
 ### `orbit doctor` — health check
 
-Reports the discovery trace, legacy layout, half-moved Board (`AMBIGUOUS_BOARD`), orphan worktree (`ORPHAN_WORKTREE`), storage mismatch (`STORAGE_MISMATCH`), agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`), and applied profiles whose requirements this binary does not meet (`PROFILE_UNMET`). After `orbit migrate`, run `doctor` from the Board anchor or a member repository to verify that the Board resolves and its migrated graph is healthy. Running without a Board is not itself a failure. When a Board resolves, it also checks malformed tasks, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, a wrong checked-out branch, and a Claude hook that cannot find the running Orbit binary on `PATH`. Exits `1` when it finds an issue.
+Reports the discovery trace, legacy layout, half-moved Board (`AMBIGUOUS_BOARD`), orphan worktree (`ORPHAN_WORKTREE`), storage mismatch (`STORAGE_MISMATCH`), agent configs with an absolute Board path (`ABSOLUTE_BOARD_PATH`), and applied profiles whose requirements this binary does not meet (`PROFILE_UNMET`). After `orbit migrate`, run `doctor` from the Board anchor or a member repository to verify that the Board resolves and its migrated graph is healthy. Running without a Board is not itself a failure. When a Board resolves, it also checks malformed issues, dangling dependencies, missing or nested parents, parent/ID mismatches, cycles, orphan or corrupt comments, stale temp files, uncommitted changes, a wrong checked-out branch, and a Claude hook that cannot find the running Orbit binary on `PATH`. Exits `1` when it finds an issue.
 
-From a Board anchor or any member repository, the report identifies the resolved Board, missing or malformed layout, undiscovered/unreachable/stale member repositories, interrupted migration state, duplicate GitHub identities, orphaned links, field-level sync conflicts, and missing or conflicting managed agent setup. Plain non-Git member directories such as `docs/` or `notes/` are informational warnings and do not make the Board unhealthy; a directory that used to be a repository is reported as a stale repository instead. Each finding carries a severity, affected repository/Task/Issue, cause, and a safe next action.
+From a Board anchor or any member repository, the report identifies the resolved Board, missing or malformed layout, undiscovered/unreachable/stale member repositories, interrupted migration state, duplicate GitHub identities, orphaned links, field-level sync conflicts, and missing or conflicting managed agent setup. Plain non-Git member directories such as `docs/` or `notes/` are informational warnings and do not make the Board unhealthy; a directory that used to be a repository is reported as a stale repository instead. Each finding carries a severity, affected repository/Issue/Issue, cause, and a safe next action.
 
-`--fix` removes stale temp files and re-attaches an orphan `orbit` worktree whose `DIR` was deleted. It never resolves semantic conflicts, merges or deletes Tasks, detaches repositories, closes Issues, or overwrites user-authored agent files. Doctor is read-only unless `--fix` is requested; legacy Board layouts are converted with `orbit migrate`, not by doctor.
+`--fix` removes stale temp files and re-attaches an orphan `orbit` worktree whose `DIR` was deleted. It never resolves semantic conflicts, merges or deletes Issues, detaches repositories, closes Issues, or overwrites user-authored agent files. Doctor is read-only unless `--fix` is requested; legacy Board layouts are converted with `orbit migrate`, not by doctor.
 
 **Good fit:** after a crash, a merge, a board branch switch, a suspicious `NOT_FOUND`/`CORRUPT_TASK` error, or before adopting the new layout; also as a CI check.
 
@@ -1293,14 +1298,14 @@ other read scans on large Boards. Enable it in `config.toml`:
 enabled = true
 ```
 
-The index only ever caches what the Task files parse to; files and Git
+The index only ever caches what the Issue files parse to; files and Git
 history remain the source of truth and a missing or stale index is rebuilt
 automatically. The module exists because the large-Board scan benchmark
-(`docs/benchmarks.md`) measured `list`/`ready` past one second at 10k Tasks.
+(`docs/benchmarks.md`) measured `list`/`ready` past one second at 10k Issues.
 
 ```bash
 orbit index status            # enabled? entries? fresh vs stale?
-orbit index rebuild           # force a full rebuild from the Task files
+orbit index rebuild           # force a full rebuild from the Issue files
 ```
 
 #### `[[hooks]]` — local commands fired on Board events
@@ -1361,13 +1366,13 @@ before every merge (`BOARD_HOST_CONFLICT`). A host spec cannot start with `-`.
 `orbit board host` shows the current host with no argument, sets it with a
 repository path or URL, and clears it with `--none` — clearing never deletes
 the remote `orbit` branch. `orbit board sync` commits pending changes,
-fetches the host, merges Orbit-aware, and pushes: different Tasks merge,
-different fields of the same Task merge, Comments union, the earlier Claim
-wins and the loser is told on the Task, a Task merged to `done` or
+fetches the host, merges Orbit-aware, and pushes: different Issues merge,
+different fields of the same Issue merge, Comments union, the earlier Claim
+wins and the loser is told on the Issue, an Issue merged to `done` or
 `cancelled` keeps no Claim, and history is merged — never
 rebased or force-pushed. A same-field conflict stops the sync with
 `BOARD_SYNC_CONFLICT`; rerun with repeatable `--resolve FIELD=local|host`
-to pick a side (`config` resolves `config.toml`, `<task-id>` a whole Task
+to pick a side (`config` resolves `config.toml`, `<task-id>` a whole Issue
 file, `<task-id>.comments` a comment sidecar).
 
 Set `board.host_sync = "auto"` in the Board's `config.toml` to also sync at
@@ -1383,7 +1388,7 @@ an HTTP transfer that stalls for 30 seconds is aborted (set
 race to the host, sync retries once with a fresh fetch.
 
 **Good fit:** keeping one Board's history on a shared repository so several
-machines or clones work from the same Tasks.
+machines or clones work from the same Issues.
 
 ```bash
 orbit board host                     # show the current host
@@ -1422,7 +1427,7 @@ explicitly. Sync requires the `gh` CLI and a configured Remote Project in
 `config.toml`; full mode uses organization Issue Fields, while basic mode limits
 Triage to labels. `orbit remote status` is a read-only diagnostic that reports
 authentication and scopes, linked repositories, Issue Field configuration when
-applicable, linked Task count, pending changes, conflicts, unsupported
+applicable, linked Issue count, pending changes, conflicts, unsupported
 relationships, and a recommended next action. `orbit doctor` checks GitHub
 configuration when the provider is enabled. GitHub Projects are a downstream
 view over Issues: Orbit does not synchronize ProjectV2 status or custom fields;
@@ -1439,7 +1444,7 @@ warns when no single repository can receive newly created Issues. It is
 push-only: `orbit add` creates an Issue when exactly one repository is
 available, title/body/label/status/`component`/`verification` changes are pushed, and
 `orbit:in-progress` tracks assignments. It never pulls, never overwrites a remote
-conflict, and never creates an Issue for an existing Local Task. `done` closes
+conflict, and never creates an Issue for an existing Local Issue. `done` closes
 with `state_reason: completed`; `cancelled` with `not_planned`. Priority, type,
 comments, assignments, checkpoints, and relationships do not trigger a push. Use
 `orbit --no-sync <command>` or `ORBIT_NO_AUTO_SYNC=1` for a local-only mutation;
@@ -1464,7 +1469,7 @@ orbit remote sync orb-a7b2c9              # dry-run plan
 orbit remote sync orb-a7b2c9 --apply      # apply pull/push plan
 orbit remote auto-push on                 # publish mapped changes after mutations
 orbit remote auto-push off                # return to explicit sync only
-orbit --no-sync add "Local-only task"     # skip auto-push for one command
+orbit --no-sync add "Local-only issue"     # skip auto-push for one command
 ```
 
 `orbit remote connect --fields` only resolves existing fields and stores their ids. Creating
@@ -1474,15 +1479,15 @@ permissions, and remediation.
 
 ### `orbit triage` — agent review and apply
 
-Works on Local and Linked Tasks. For a Linked Task, only the Remote Project's
+Works on Local and Linked Issues. For a Linked Issue, only the Remote Project's
 Mapped fields can be proposed, since those are the only fields a later sync
 publishes. Review displays field-by-field changes and, when a
 proposal file is used with stdin and stdout connected to terminals, prompts for
 explicit approval or cancellation. Non-TTY and `--json` reviews only preview; they
 never prompt or apply. `--proposal-file -` reads a proposal from stdin. Applying
 changes Orbit; with Remote Tracker auto-push enabled, the changed mapped fields
-are pushed immediately. Otherwise, publish approved Linked Task
-changes with an explicit Remote Tracker sync (`orbit remote sync`). Local Tasks report `sync_required: false`. See
+are pushed immediately. Otherwise, publish approved Linked Issue
+changes with an explicit Remote Tracker sync (`orbit remote sync`). Local Issues report `sync_required: false`. See
 [agents/triage-workflow.md](./agents/triage-workflow.md).
 
 Apply preserves metadata on disk if the automatic Git commit fails and reports
@@ -1512,10 +1517,10 @@ orbit label remove orb-a7b2c9 needs-triage
 orbit comment add orb-a7b2c9 --by rodrigo --body "Confirmed; add a regression test."
 ```
 
-### An agent takes one task and finishes it
+### An agent takes one issue and finishes it
 
 ```bash
-orbit ready --claim --by claude --json      # receives one task plus lease
+orbit ready --claim --by claude --json      # receives one issue plus lease
 orbit show orb-a7b2c9 --json                # load body and comments
 # ... implement ...
 orbit heartbeat orb-a7b2c9 --by claude      # during a long verification run
@@ -1532,11 +1537,11 @@ orbit ready --claim --by agent-a
 orbit ready --claim --by agent-b
 ```
 
-Each claim is atomic; when several tasks are ready, both workers get one. If two
-workers target the same task, the loser gets `ALREADY_CLAIMED` with the holder and
+Each claim is atomic; when several issues are ready, both workers get one. If two
+workers target the same Issue, the loser gets `ALREADY_CLAIMED` with the holder and
 lease.
 
-### An agent crashes mid-task
+### An agent crashes mid-issue
 
 ```bash
 orbit prime --json                     # lists stale claims
@@ -1544,29 +1549,31 @@ orbit claim orb-a7b2c9 --by agent-b --steal
 orbit heartbeat orb-a7b2c9 --by agent-b
 ```
 
-Use `release --force` instead when the task should go back to the queue unassigned.
+Use `release --force` instead when the Issue should go back to the queue unassigned.
 
 ### A release train with ordered work
 
 ```bash
 orbit add "Design the schema" -p highest --label ready-for-agent
 # created orb-f14c02  highest  Design the schema
-orbit add "Ship the API" -p high --depends-on orb-f14c02 --label ready-for-agent
+orbit add "Ship the API" -p high --label ready-for-agent
+orbit depend orb-a7b2c9 orb-f14c02
 # created orb-a7b2c9  high  Ship the API
-orbit add "Publish the SDK" -p high --depends-on orb-a7b2c9 --label ready-for-agent
+orbit add "Publish the SDK" -p high --label ready-for-agent
+orbit depend orb-9c8d7e orb-a7b2c9
 ```
 
-`orbit ready` returns only the first task. Completing it makes the next one ready
+`orbit ready` returns only the first Issue. Completing it makes the next one ready
 in the same order.
 
-### A feature split into SubTasks
+### A feature split into sub-issues
 
 ```bash
 # the feature
 orbit add "SSO login across api, web, infra" --body-file feature.md
 # created orb-a7b2c9  medium  SSO login across api, web, infra
 
-# one SubTask per repository — run each add inside its member Repository so
+# one sub-issue per repository — run each add inside its member Repository so
 # `repository` fills in, or set it afterwards with `orbit update <id> --repository NAME`
 orbit add "api: OIDC callback" --parent orb-a7b2c9
 orbit add "web: login redirect" --parent orb-a7b2c9
@@ -1580,15 +1587,15 @@ orbit claim orb-a7b2c9.b3c4d5 --by api-agent
 orbit done orb-a7b2c9 --by coordinator --comment "SSO shipped"
 ```
 
-Each SubTask is claimed and completed independently. The Parent Task only becomes
+Each sub-issue is claimed and completed independently. The Parent Issue only becomes
 Ready when the last one is done or cancelled. `orbit done --force` on the parent
-cancels the remaining SubTasks instead of leaving them open.
+cancels the remaining sub-issues instead of leaving them open.
 
-### A Board with its own Task-ID prefix
+### A Board with its own Issue-ID prefix
 
 ```bash
 orbit init --slug teramigo
-orbit add "First task" --json
+orbit add "First issue" --json
 # teramigo-32fdfd
 ```
 
@@ -1625,9 +1632,9 @@ regardless of the current directory.
 orbit export --json > board.json
 ```
 
-The snapshot includes every task, including done and cancelled work, with labels,
+The snapshot includes every issue, including done and cancelled work, with labels,
 dependency and parent edges, comments, and derived readiness. It is ordered by
-task ID and contains no timestamp, so the same board state produces the same
+issue ID and contains no timestamp, so the same board state produces the same
 data. Pin `schema_version` in the collector.
 
 ### Move work from triage to an agent
@@ -1651,14 +1658,14 @@ orbit migrate           # convert a legacy Board to the standalone layout
 orbit sync              # commit anything left uncommitted
 ```
 
-`doctor` never rewrites tasks or comments, so it is always safe to run.
+`doctor` never rewrites issues or comments, so it is always safe to run.
 
 ## Common outcomes and errors
 
 | Error | What to do |
 | --- | --- |
 | `NO_READY_TASKS` | Not an error: nothing is startable. Wait, triage, or remove a hold label. |
-| `VERSION_CONFLICT` | The Task changed since the `--if-version` you passed. Re-read it with `orbit show <id>` and retry with the current `updated_at`; the error is retryable and carries `details.actual_version`. |
+| `VERSION_CONFLICT` | The Issue changed since the `--if-version` you passed. Re-read it with `orbit show <id>` and retry with the current `updated_at`; the error is retryable and carries `details.actual_version`. |
 | `INVALID_IDEMPOTENCY_KEY` | `--idempotency-key` must be 1–200 printable ASCII characters without spaces. |
 | `ALREADY_CLAIMED` | Another agent holds a live lease. Pick other work, or `--steal` to take it over. |
 | `CLAIM_STALE` | The holder's lease expired. Recover with `orbit claim <id> --steal`. |
@@ -1666,17 +1673,17 @@ orbit sync              # commit anything left uncommitted
 | `WAITING_EXTERNAL` | Resolve the blocker, then `orbit update <id> --clear-waiting`. |
 | `LABEL_BLOCKED` | Remove the hold label (`needs-triage`, `needs-info`, `ready-for-human`). |
 | `NOT_CLAIM_HOLDER` | Use the assignee's `--by`, or `--force` where the command allows it. |
-| `SUBTASKS_OPEN` | Finish or cancel the IDs in `error.details.subtasks`, or pass `--force` to `done` or `cancel`. |
-| `SUBTASKS_EXIST` | The Parent Task still has SubTasks. Use `delete --force` to remove the whole subtree, or delete the SubTasks first. |
+| `SUBTASKS_OPEN` | Finish or cancel the IDs in `error.details.sub_issues`, or pass `--force` to `done` or `cancel`. |
+| `SUBTASKS_EXIST` | The Parent Issue still has sub-issues. Use `delete --force` to remove the whole subtree, or delete the sub-issues first. |
 | `PARENT_CYCLE` | The `parent` chain loops back on itself. Break the cycle by reparenting or clearing `parent`. |
 | `INVALID_SLUG` | `--slug` and `slug migrate` take a bare 1–20 character lowercase word with alphanumeric ends and no `--`; use the normalized suggestion in the error. |
-| `SLUG_LOCKED` | The Board has tasks. Run `orbit slug migrate <slug>` to rewrite every ID, or keep the current prefix. |
+| `SLUG_LOCKED` | The Board has issues. Run `orbit slug migrate <slug>` to rewrite every ID, or keep the current prefix. |
 | `MIGRATION_BLOCKED` | Migration refused because of live claims, an unhealthy Board, a dirty Board, or a concurrent Board move. Read `error.details.reason`; run `orbit doctor`, then retry with `--force` only for live claims. |
 | `PREFIX_COLLISION` | Two old IDs would become the same new ID. No files were changed; choose another slug. |
-| `PREFIX_MISMATCH` | `id.prefix` and the task filenames disagree. Restore the configured prefix first; migration refuses an inconsistent Board. |
-| `DANGLING_PARENT` | Run `doctor`; the parent ID is missing. Recreate the parent or fix the SubTask's frontmatter. |
+| `PREFIX_MISMATCH` | `id.prefix` and the Issue filenames disagree. Restore the configured prefix first; migration refuses an inconsistent Board. |
+| `DANGLING_PARENT` | Run `doctor`; the parent ID is missing. Recreate the parent or fix the sub-issue's frontmatter. |
 | `INVALID_TYPE` | The Issue type is not in `board.types`, or the `parent` edge violates `board.hierarchy` (the child's type must sit strictly below the parent's). |
-| `MISSING_REQUIRED_FIELD` | The Issue type's `required` list in `board.types` names fields the Task lacks. |
+| `MISSING_REQUIRED_FIELD` | The Issue type's `required` list in `board.types` names fields the Issue lacks. |
 | `POLICY_VIOLATION` | A `[[policy.rules]]` rule in `config.toml` (or contributed by an applied profile) failed. `error.details.violations` lists each failed check; fix the fields/properties it names or adjust the rule. |
 | `ALREADY_INITIALIZED` | A Board already resolves for this working tree. Use it, run `orbit repo remove` to drop an explicit membership, move or migrate an ancestor/main/legacy Board, or pass a `DIR` outside every working tree. |
 | `BOARD_NOT_FOUND` | Run `orbit init`, pass `--dir`/`ORBIT_DIR`, or `orbit repo add` an existing Board. |
@@ -1776,7 +1783,6 @@ orbit sync              # commit anything left uncommitted
 | `orbit triage review` | `triage_review` | read-only, idempotent |
 | `orbit triage apply` | `triage_apply` | write |
 
-<!-- END GENERATED COMMANDS -->
 <!-- END GENERATED COMMANDS -->
 
 

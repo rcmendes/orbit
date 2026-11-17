@@ -1,11 +1,11 @@
 # Project guidance for agents
 
 Shared, durable conventions for work on this repository. These apply to every
-agent session unless a Task explicitly narrows or extends them.
+agent session unless an Issue explicitly narrows or extends them.
 
 ## Components (`component`)
 
-Each Task may carry one optional `component` value: a short lowercase slug
+Each Issue may carry one optional `component` value: a short lowercase slug
 (letters, digits, `-`) classifying which part of the product the change
 primarily lands in. Components are per-Board vocabulary, configured in
 `config.toml`:
@@ -23,7 +23,7 @@ For this repository the suggested values are:
 
 | Component | Typical scope |
 | --- | --- |
-| `board` | Board resolution, task storage, graph, locks, git adapter |
+| `board` | Board resolution, issue storage, graph, locks, git adapter |
 | `cli` | JSON CLI, command handlers, help text |
 | `mcp` | MCP stdio server and tool bridge |
 | `setup` | `orbit init`, `orbit setup`, harness generation |
@@ -37,21 +37,21 @@ The same values appear in JSON (`component`) and in MCP `create`, `update`,
 
 ## Verification guidance
 
-**Project defaults** (run unless a Task says otherwise):
+**Project defaults** (run unless an Issue says otherwise):
 
 1. `cargo test` — full test suite must pass before closing work.
 2. `cargo fmt --check` and `cargo clippy -- -D warnings` when Rust sources change.
 3. After behavior or workflow changes, update the relevant docs (`README.md`,
    `AGENTS.md`, `docs/`) in the same change series.
 
-**Task-level `verification`** is optional YAML frontmatter set with
+**Issue-level `verification`** is optional YAML frontmatter set with
 `orbit add --verification "..."` or `orbit update --verification "..."`. It holds
-concise checks or commands specific to that Task (for example
+concise checks or commands specific to that Issue (for example
 `cargo test --test mcp`). It complements narrative acceptance criteria in the
-Task body; it does not replace them.
+Issue body; it does not replace them.
 
-When both apply, run the project defaults **and** the Task's `verification`
-steps. A Task may override a default only by stating so explicitly in its
+When both apply, run the project defaults **and** the Issue's `verification`
+steps. An Issue may override a default only by stating so explicitly in its
 `verification` text.
 
 ## What not to store here

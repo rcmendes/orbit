@@ -311,6 +311,10 @@ pub static TOOLS: &[Tool] = &[
         &[
             cbool("claim", "Claim the first ready task."),
             cstr("by", "Agent identity for the claim."),
+            cstr(
+                "strategy",
+                "Comma-separated ready-queue strategies applied in order: default, critical-path, touches, capability, wip. Overrides `scheduler.strategy` in config.toml.",
+            ),
             cint("limit", "Maximum tasks to list."),
             cstr("parent", "Only Ready SubTasks of this Parent Task."),
             cstr(

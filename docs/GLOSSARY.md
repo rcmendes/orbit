@@ -172,6 +172,10 @@ _Avoid_: Status update, progress log, assignment note
 A condition of a Task whose assignee's Lease has expired but the assignment has not been released. A Stale Task is not Ready; it can be released or stolen, and the previous assignee can still record a Checkpoint until takeover.
 _Avoid_: Expired claim, abandoned
 
+**Scheduler strategy**:
+An opt-in rule that reorders or constrains the `orbit ready` queue, selected per call with `--strategy` or for the Board with `scheduler.strategy`: `default` keeps priority/age order, `critical-path` claims work that unblocks the longest dependency chain, `touches` refuses a claim whose declared `touches` Property paths overlap another assignee's, `capability` prefers Tasks matching the agent's `[scheduler.capabilities]`, and `wip` caps how many Tasks one agent may hold.
+_Avoid_: Priority, triage order
+
 **Agent**:
 A process that reads and mutates Tasks on behalf of a developer.
 _Avoid_: Worker, bot, client
@@ -344,7 +348,7 @@ _Avoid_: Blocked (a derived waiting condition), priority change
 A named feature an Orbit binary provides — `workflow`, `issue-types`,
 `hierarchy`, `priorities`, `links`, `components`, `properties`, `external-id`,
 `assignee`, `reporter`, `lease`, `keys`, `idempotency`, `batch`, `policy`,
-`remote`, `workspace`, `mcp`, `setup`, `profiles`, `doctor` — reported by
+`remote`, `workspace`, `mcp`, `setup`, `profiles`, `doctor`, `scheduler` — reported by
 `orbit capabilities` and negotiated by Profiles through `requires`/`optional`.
 _Avoid_: Feature flag, module (modules are Board-enabled subsystems)
 

@@ -802,6 +802,44 @@ listed shape. `--exclude-label` remains for legacy label-only boards. A released
 task can still carry the previous assignee's checkpoint; `--json` includes it so
 the next claim starts with the handoff context.
 
+#### Scheduler strategies (opt-in)
+
+The default queue order — priority, then creation time, then ID — is unchanged.
+A Board opts into a different order or extra claim rules with `--strategy`, a
+comma-separated list applied in order, or persistently with `scheduler.strategy`
+in `config.toml` (the flag wins for one invocation):
+
+```toml
+[scheduler]
+strategy = "critical-path,touches"
+wip_limit = 3
+
+[scheduler.capabilities]
+devin = ["rust", "docs"]
+```
+
+- `default` keeps the kernel order.
+- `critical-path` sorts candidates by the longest chain of non-terminal
+  dependencies that transitively wait on them, so work that unblocks the most
+  downstream effort is claimed first.
+- `touches` avoids file-touch overlap. An Issue declares the paths it expects
+  to modify with `orbit property set <id> touches --value '{"paths": ["src/auth"]}'`.
+  On `--claim`, a candidate is refused when its paths overlap — equal, or one
+  a `/`-separated prefix of the other — the paths of a non-terminal Task
+  assigned to a different assignee, so two agents never receive overlapping
+  touches. On a plain `ready` listing the safe candidates simply sort first.
+- `capability` prefers Tasks whose `capabilities` Property requirements
+  (`orbit property set <id> capabilities --value '{"requires": ["rust"]}'`)
+  are a subset of the claiming agent's `[scheduler.capabilities]` entry. It is
+  a preference, not a refusal; Tasks requiring nothing match everyone.
+- `wip` refuses `--claim` when the agent already holds `scheduler.wip_limit`
+  non-terminal assigned Tasks; the result is `data: null` with
+  `meta.reason: "WIP_LIMIT"`. Listing is unaffected.
+
+An unknown strategy name fails with `INVALID_ARGUMENT`; a `[scheduler]` section
+that fails validation (unknown strategy, `wip` without `wip_limit`, a zero
+limit) fails Board load with `CONFIG_ERROR`.
+
 ### `orbit show` — load one ticket
 
 Prints the full task: body, labels, dependencies, kind, type, parent, SubTasks,
@@ -1251,7 +1289,7 @@ binary speaks, the `contract` semver the Board declares in `config.toml`,
 whether they are compatible, the `capabilities` this binary provides (the
 vocabulary Profiles negotiate `requires`/`optional` against), the optional
 modules the Board has enabled (`remote` with its projects and `auto_push`,
-`workspace` scoping), the Board's applied `profiles`, and the Board's workflow
+`workspace` scoping, `scheduler` with its strategy and `wip_limit`), the Board's applied `profiles`, and the Board's workflow
 — template or custom, initial status, statuses with categories, and named
 transitions.
 

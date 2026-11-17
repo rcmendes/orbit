@@ -298,6 +298,10 @@ fn dispatch_tool(
                 args.push("--by".to_string());
                 args.push(by);
             }
+            if let Some(strategy) = optional_str(arguments, "strategy") {
+                args.push("--strategy".to_string());
+                args.push(strategy);
+            }
             if let Some(limit) = optional_u64(arguments, "limit") {
                 args.push("--limit".to_string());
                 args.push(limit.to_string());

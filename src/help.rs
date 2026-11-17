@@ -449,7 +449,15 @@ Board.
 
 Inside a member Repository or one of its worktrees the queue is scoped to that
 Repository's Tasks plus Board-wide Tasks; --all widens it to the whole Board,
-and --claim only ever takes a Task inside the scope.";
+and --claim only ever takes a Task inside the scope.
+
+--strategy selects opt-in scheduler strategies (comma-separated, applied in
+order): default keeps this order; critical-path claims work that unblocks the
+longest dependency chain first; touches refuses a --claim whose `touches`
+Property paths overlap another assignee's; capability prefers Tasks whose
+required capabilities the agent has under [scheduler.capabilities]; wip
+refuses --claim past scheduler.wip_limit held Tasks. scheduler.strategy in
+config.toml sets the Board default; --strategy overrides it for one call.";
 
 pub const READY_EXAMPLES: &str = "\
 Examples:

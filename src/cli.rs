@@ -660,6 +660,12 @@ pub struct ReadyArgs {
     /// Agent identity for --claim.
     #[arg(long, value_name = "NAME", requires = "claim")]
     pub by: Option<String>,
+
+    /// Ready-queue strategies, comma-separated and applied in order:
+    /// default, critical-path, touches, capability, wip. Overrides
+    /// `scheduler.strategy` in config.toml for this invocation.
+    #[arg(long, value_name = "NAMES")]
+    pub strategy: Option<String>,
 }
 
 #[derive(Debug, Args)]

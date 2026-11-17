@@ -231,9 +231,29 @@ pub(super) fn cmd_ready(
         scope: scope.as_deref(),
         repository: repository_filter.as_deref(),
     };
+    let strategies = crate::scheduler::resolve(args.strategy.as_deref(), &board.config.scheduler)?;
     if args.claim {
         let agent = resolve_agent(args.by)?;
         let ready = ready_for_filters(graph.ready_tasks(), filters);
+        let outcome = crate::scheduler::apply(
+            &graph,
+            ready,
+            &strategies,
+            Some(&agent),
+            true,
+            &board.config.scheduler,
+        )?;
+        if outcome.refusal == Some(crate::scheduler::Refusal::WipLimit) {
+            let limit = board.config.scheduler.wip_limit.unwrap_or(0);
+            return Ok(crate::output::CommandOutput::new(
+                Value::Null,
+                format!(
+                    "{agent} already holds {limit} task(s); the scheduler WIP limit is reached"
+                ),
+            )
+            .with_meta(json!({ "reason": "WIP_LIMIT" })));
+        }
+        let ready = outcome.tasks;
         if ready.is_empty() {
             return Ok(
                 crate::output::CommandOutput::new(Value::Null, "no ready tasks")
@@ -277,7 +297,16 @@ pub(super) fn cmd_ready(
         return Ok(output);
     }
 
-    let mut ready = ready_for_filters(graph.ready_tasks(), filters);
+    let ready = ready_for_filters(graph.ready_tasks(), filters);
+    let mut ready = crate::scheduler::apply(
+        &graph,
+        ready,
+        &strategies,
+        None,
+        false,
+        &board.config.scheduler,
+    )?
+    .tasks;
     if let Some(limit) = args.limit {
         ready.truncate(limit);
     }

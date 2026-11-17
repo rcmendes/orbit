@@ -33,6 +33,7 @@ pub mod registry;
 pub mod remote;
 pub mod repository;
 pub mod review;
+pub mod scheduler;
 pub mod search;
 pub mod setup;
 pub mod slug;

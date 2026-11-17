@@ -468,6 +468,8 @@ If nothing can start, `ready --claim` is still a success:
 
 Polling loops should wait and retry rather than treating that as an error. When another agent holds the task, the loser gets `ALREADY_CLAIMED` with the holder and lease. When a lease expires, the task becomes **stale**, not Ready; recover it with `orbit claim <id> --steal` or return it to the queue with `orbit release <id> --force`.
 
+The queue order is priority, then age — opt-in scheduler strategies (`critical-path`, `touches` overlap avoidance, `capability`, `wip`) reorder or constrain it via `orbit ready --strategy` or `[scheduler]` in `config.toml`; see `docs/commands.md`.
+
 A checkpoint is the structured handoff for that recovery. Only the claim holder can write one; it records progress, the next action, and any blocker. Releasing or stealing the task keeps the checkpoint, so the next claimant sees it in `orbit show`, the JSON for `orbit ready`, MCP `get`, or the claim result. On a done or cancelled task the latest checkpoint stays in the file as archived history (`checkpoint_archived: true`) but is not part of the active queue.
 
 ### The readiness gate

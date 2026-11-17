@@ -46,6 +46,7 @@ pub const SUPPORTED: &[&str] = &[
     "setup",
     "profiles",
     "doctor",
+    "scheduler",
 ];
 
 /// Whether this binary provides the named capability.
@@ -145,6 +146,16 @@ fn modules(config: &Config) -> Value {
         }
         if !config.workspace.detached.is_empty() {
             entry["detached"] = json!(config.workspace.detached);
+        }
+        modules.push(entry);
+    }
+    if !config.scheduler.is_empty() {
+        let mut entry = json!({ "name": "scheduler" });
+        if let Some(strategy) = &config.scheduler.strategy {
+            entry["strategy"] = json!(strategy);
+        }
+        if let Some(limit) = config.scheduler.wip_limit {
+            entry["wip_limit"] = json!(limit);
         }
         modules.push(entry);
     }

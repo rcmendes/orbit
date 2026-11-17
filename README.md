@@ -253,6 +253,15 @@ orb-a7b2c9  ready  P1  epic  Spec: SSO login across api, web, infra  [ready-for-
   orb-a7b2c9.z21c2w  ready  P0  infra: register OIDC client  [ready-for-agent]
 ```
 
+For search, `orbit search` mixes free text with `key:value` qualifiers — `status:`, `assignee:`, `label:`, `type:`, `priority:`, `component:`, `repository:` — and returns a `snippet` per hit:
+
+```text
+$ orbit search "status:ready label:backend login"
+orb-a7b2c9.hxdmqt  ready  P1  task  api: OIDC callback  ... login flow ...
+```
+
+`orbit list` and `orbit search` paginate with a stable cursor — feed `data.next_cursor` back as `--cursor` and page through without repeats or skips while the Board changes. Both also accept `--filter` (a JSON object of summary-field predicates) and `--fields` (a comma-separated projection, dotted paths allowed); `show --fields` projects the detail object the same way. `orbit digest <id>` is the compact per-Issue read; on an epic or parent it adds a `rollup` with `done`/`cancelled`/`blocked`/`open` counts over the subtree.
+
 Verify Board health, its branch, and uncommitted changes. If a Claude SessionStart hook is configured, `doctor` also warns when `orbit` is not the binary on `PATH`. From a Board anchor or member Repository it also names the resolved Board, checks Repository discovery and cached Issue freshness, and reports migration remnants, sync conflicts, and agent setup drift with a safe next action:
 
 ```bash
@@ -829,7 +838,7 @@ Exit codes are `0` for success, `1` for a domain failure, and `2` for a usage er
 
 ### MCP
 
-`orbit mcp` speaks JSON-RPC 2.0 over stdio. Every public command except the environment meta commands (`init`, `setup`, `mcp`, `schema`) is reachable through a tool: the task tools `ready` · `list` · `get` · `create` · `update` · `claim` · `assign` · `release` · `heartbeat` · `checkpoint` · `finish` · `transition` · `link` · `delete` · `label` · `comment` · `property` · `batch`, plus path-named tools such as `tree`, `prime`, `doctor`, `sync`, `repo_*`, `slug_*`, `migrate*`, `board_*`, `remote_*`, and `triage_*`. The full tool list, argument schemas, and safety annotations are generated from the command registry — run `orbit schema` to inspect it.
+`orbit mcp` speaks JSON-RPC 2.0 over stdio. Every public command except the environment meta commands (`init`, `setup`, `mcp`, `schema`) is reachable through a tool: the task tools `ready` · `list` · `get` · `create` · `update` · `claim` · `assign` · `release` · `heartbeat` · `checkpoint` · `finish` · `transition` · `link` · `delete` · `label` · `comment` · `property` · `batch`, plus path-named tools such as `tree`, `search`, `digest`, `prime`, `doctor`, `sync`, `repo_*`, `slug_*`, `migrate*`, `board_*`, `remote_*`, and `triage_*`. The full tool list, argument schemas, and safety annotations are generated from the command registry — run `orbit schema` to inspect it.
 
 ```bash
 orbit mcp
@@ -920,7 +929,7 @@ CI runs `orbit setup opencode --no-mcp --check` on every push and pull request, 
 orbit prime --hook-json --by claude   # or --by devin
 ```
 
-`prime` prints the agent workflow, board counts, top ready tasks, close candidates, and stale claims — about 1k tokens of starting context. `--hook-json` wraps the same text in the SessionStart envelope both harnesses read.
+`prime` prints the agent workflow, board counts, top ready tasks, close candidates, and stale claims — about 1k tokens of starting context. `--hook-json` wraps the same text in the SessionStart envelope both harnesses read. `--max-tokens N` caps the rendered context at roughly N tokens (~4 characters each), trimming listings first; the JSON output reports `budget.truncated` when the fixed instructions alone exceed the budget.
 
 Because generated MCP commands are machine-specific, keep those config files untracked when possible. If one is committed, regenerate it after installing Orbit elsewhere, or use `--portable-mcp` so the committed command stays `orbit`.
 
@@ -930,7 +939,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | --- | --- |
 | **Set up** | `init` · `repo` · `setup` |
 | **Author** | `add` · `update` · `depend` · `undepend` · `link` · `label` · `comment` · `delete` |
-| **Inspect** | `list` · `ready` · `show` · `tree` · `prime` · `export` · `changes` · `history` · `remote status` |
+| **Inspect** | `list` · `search` · `digest` · `ready` · `show` · `tree` · `prime` · `export` · `changes` · `history` · `remote status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
 | **Maintain** | `doctor` · `sync` · `board` · `migrate` · `remote` · `slug` · `mcp` |
 

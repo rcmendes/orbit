@@ -65,7 +65,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Add context to a ticket | `orbit comment add`, `orbit update` |
 | Attach a tool's own data to a Task | `orbit property set/remove` |
 | Apply many changes at once, all or none | `orbit batch` |
-| Read the board | `orbit list`, `orbit show`, `orbit tree`, `orbit prime` |
+| Read the board | `orbit list`, `orbit search`, `orbit digest`, `orbit show`, `orbit tree`, `orbit prime` |
 | Follow what changed on the Board | `orbit changes`, `orbit history` |
 | Inspect the command surface | `orbit schema` |
 | Collect or archive the board | `orbit export` |
@@ -719,8 +719,53 @@ no parent appear in the final `No parent` section. JSON always carries `kind`,
 Task with open SubTasks is not Ready, so `list` may show it even though `ready`
 does not.
 
+`--limit N` caps the page and `--cursor CURSOR` resumes from a previous page's
+`data.next_cursor`; ordering is fixed per query, so inserts or updates between
+pages do not shift later results. `--filter JSON` applies an object of
+summary-field predicates (AND): scalars match by equality or membership in an
+expected array, arrays match by containment, and unknown field names fail with
+`INVALID_ARGUMENT`. `--fields FIELDS` projects a comma-separated field list —
+dotted paths reach into objects — and unknown names fail the same way.
+
 For work that can start now, use `orbit ready` instead: `list` shows all open
 work, including blocked tasks.
+
+### `orbit search` — qualifier search
+
+Searches tasks by free text plus `key:value` qualifiers. Every term must
+match: free-text terms hit the title, labels, and body; `status:`,
+`assignee:`, `label:`, `type:`, `priority:`, `component:`, and `repository:`
+qualifiers filter on the matching summary field. Scalar qualifiers are
+repeatable with any-of semantics and every `label:` must be present. Each
+result carries a `snippet` quoting the match. The same scoping, `--include-closed`, `--filter`, `--fields`,
+`--limit`, and `--cursor` rules as `list` apply; inside a member Repository the
+search is scoped like `list` unless `--all` widens it to the whole Board.
+
+**Good fit:** finding work by content or by a combination of metadata that the
+`list` flags do not express, and paging through hits without repeats.
+
+```bash
+orbit search "status:ready label:backend login"
+orbit search "assignee:claude type:bug" --json
+orbit search "oidc" --limit 10 --cursor "$NEXT_CURSOR" --json
+```
+
+### `orbit digest` — compact issue digest
+
+Prints a compact digest of one Issue: status, status category, readiness,
+assignee, reporter, labels, open blockers, checkpoint, and comment count. When
+the Issue has descendants the digest adds a `rollup` over the subtree —
+`total`, `done`, `cancelled`, `blocked`, `open`, `by_status`, plus a
+direct-children `subtasks` summary — so an epic or spec reports progress and
+blocked counts at a glance. Leaf Issues report no rollup.
+
+**Good fit:** a quick health read on one ticket or a rollup over an epic
+without loading every child.
+
+```bash
+orbit digest orb-a7b2c9
+orbit digest orb-a7b2c9 --json
+```
 
 ### `orbit ready` — the agent queue
 
@@ -765,7 +810,10 @@ reports the Task's Remote Issue link only when the Board has remote material
 or the Task itself carries one; a connected Board shows `github: -` for an
 unlinked Task. `--json` is the form an agent
 should load before starting work. A terminal task keeps its latest checkpoint as
-archived history, marked by `checkpoint_archived: true`.
+archived history, marked by `checkpoint_archived: true`. `--fields FIELDS`
+projects a comma-separated field list — dotted paths reach into objects — onto
+the detail object before it prints; unknown names fail with
+`INVALID_ARGUMENT`.
 
 **Good fit:** before implementing a ticket, when checking why a task is blocked,
 or when reading a handoff checkpoint or comment.
@@ -773,6 +821,7 @@ or when reading a handoff checkpoint or comment.
 ```bash
 orbit show orb-a7b2c9
 orbit show orb-a7b2c9 --json
+orbit show orb-a7b2c9 --fields id,key,status,labels --json
 ```
 
 ### `orbit tree` — inspect one epic or spec
@@ -814,6 +863,10 @@ candidates, and stale claims to a repository or label set. A close candidate is
 a non-terminal Parent Task with at least one SubTask and no open SubTasks; Orbit
 never closes it automatically. Task summaries in `--json` include a checkpoint
 when one is recorded, so a stale claim carries its handoff context.
+`--max-tokens N` caps the rendered context at roughly N tokens (~4 characters
+each): task listings are trimmed first, and when the fixed instructions alone
+exceed the budget the human output is truncated and the JSON `budget` object
+reports `truncated: true`. `--hook-json` honors the same budget.
 
 ### `orbit export` — snapshot the board
 
@@ -1614,6 +1667,8 @@ orbit sync              # commit anything left uncommitted
 | `orbit link list` | `link` | write |
 | `orbit delete` | `delete` | write, destructive |
 | `orbit prime` | `prime` | read-only, idempotent |
+| `orbit search` | `search` | read-only, idempotent |
+| `orbit digest` | `digest` | read-only, idempotent |
 | `orbit export` | `export` | read-only, idempotent |
 | `orbit changes` | `changes` | read-only, idempotent |
 | `orbit history` | `history` | read-only, idempotent |

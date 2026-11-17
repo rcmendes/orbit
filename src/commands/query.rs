@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
+
 use chrono::Utc;
 use serde_json::{Value, json};
 
-use crate::cli::{ListArgs, PrimeArgs, ReadyArgs, ShowArgs, TreeArgs};
+use crate::cli::{DigestArgs, ListArgs, PrimeArgs, ReadyArgs, SearchArgs, ShowArgs, TreeArgs};
 use crate::git::CommitOutcome;
 use crate::graph::LoadMode;
 use crate::setup::COMPLETION_LINE;
@@ -29,6 +31,16 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
         .as_deref()
         .map(|priority| validate_priority(board, priority))
         .transpose()?;
+    let json_filter = args
+        .filter
+        .as_deref()
+        .map(crate::search::parse_filter)
+        .transpose()?;
+    let fields = args
+        .fields
+        .as_deref()
+        .map(crate::search::parse_fields)
+        .transpose()?;
     let label_filters = normalize_labels(&args.label)?;
     let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
     let excluded_labels = normalize_labels(&args.exclude_label)?;
@@ -44,7 +56,7 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
         )));
     }
 
-    let mut tasks: Vec<&Task> = graph
+    let tasks: Vec<&Task> = graph
         .tasks
         .values()
         .filter(|task| {
@@ -120,26 +132,74 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
         })
         .collect();
 
-    tasks.sort_by(|left, right| list_sort_key(&graph, left).cmp(&list_sort_key(&graph, right)));
+    // `--filter`/`--fields` names are validated against the summary schema
+    // before matching, so a typo fails even when nothing would match.
+    let schema_keys = graph
+        .tasks
+        .values()
+        .next()
+        .map(|any_task| crate::search::filter_field_names(&graph::task_summary(&graph, any_task)))
+        .unwrap_or_default();
+    if let Some(filter) = &json_filter {
+        crate::search::validate_filter_fields(filter, &schema_keys)?;
+    }
+    if let Some(fields) = &fields {
+        validate_field_roots(fields, &schema_keys)?;
+    }
+
+    // Decorate-sort-undecorate: the page order is the SortKey order, which
+    // is also what `--cursor` resumes.
+    let mut keyed: Vec<(SortKey, &Task)> = tasks
+        .iter()
+        .map(|task| (sort_key(&graph, task, 0), *task))
+        .collect();
+    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut filtered: Vec<(SortKey, &Task, Value)> = Vec::with_capacity(keyed.len());
+    for (key, task) in keyed {
+        let summary = graph::task_summary(&graph, task);
+        if json_filter
+            .as_ref()
+            .is_some_and(|filter| !crate::search::matches_filter(&summary, filter))
+        {
+            continue;
+        }
+        filtered.push((key, task, summary));
+    }
+
+    let (page, next_cursor, total) = paginate(filtered, args.cursor.as_deref(), args.limit)?;
+    let count = page.len();
+
+    let mut summaries: Vec<Value> = page.iter().map(|(_, _, summary)| summary.clone()).collect();
+    if let Some(fields) = &fields {
+        let mut array = Value::Array(summaries);
+        crate::search::project_fields(&mut array, fields);
+        summaries = match array {
+            Value::Array(items) => items,
+            _ => unreachable!(),
+        };
+    }
 
     let remote = crate::remote::details_visible(board, &graph);
-    let summaries: Vec<Value> = tasks
-        .iter()
-        .map(|task| graph::task_summary(&graph, task))
-        .collect();
-    let count = summaries.len();
-    let human = if tasks.is_empty() {
+    let page_tasks: Vec<&Task> = page.iter().map(|(_, task, _)| *task).collect();
+    let human = if page_tasks.is_empty() {
         "no tasks".to_string()
     } else if args.group {
-        format_grouped_table(&group_tasks(&graph, &tasks)?, remote)
+        format_grouped_table(&group_tasks(&graph, &page_tasks)?, remote)
     } else {
-        format_table(&tasks, remote)
+        format_table(&page_tasks, remote)
     };
 
-    Ok(
-        crate::output::CommandOutput::new(json!({ "tasks": summaries, "count": count }), human)
-            .with_meta(json!({ "count": count })),
+    Ok(crate::output::CommandOutput::new(
+        json!({
+            "tasks": summaries,
+            "count": count,
+            "total": total,
+            "next_cursor": next_cursor,
+        }),
+        human,
     )
+    .with_meta(json!({ "count": count })))
 }
 
 pub(super) fn cmd_ready(
@@ -243,13 +303,80 @@ pub(super) fn cmd_ready(
     )
 }
 
+/// One row of a paginated query result: the stable sort key, the Task,
+/// and its projected summary JSON.
+type PagedRow<'a> = (SortKey, &'a Task, Value);
+
+/// Applies the keyset cursor and page size to an already-sorted result set.
+/// Returns the page, the `next_cursor` token (when more items remain), and
+/// the total number of matches before the cursor.
+fn paginate<'a>(
+    mut items: Vec<PagedRow<'a>>,
+    cursor: Option<&str>,
+    limit: Option<usize>,
+) -> Result<(Vec<PagedRow<'a>>, Option<String>, usize)> {
+    if let Some(limit) = limit
+        && limit == 0
+    {
+        return Err(OrbitError::invalid_argument("--limit must be at least 1"));
+    }
+    let total = items.len();
+    if let Some(token) = cursor {
+        let payload = crate::search::decode_cursor(token)?;
+        let after = key_from_json(&payload)?;
+        items.retain(|(key, ..)| key > &after);
+    }
+    let mut next_cursor = None;
+    if let Some(limit) = limit
+        && items.len() > limit
+    {
+        items.truncate(limit);
+        if let Some((key, ..)) = items.last() {
+            next_cursor = Some(crate::search::encode_cursor(&key_to_json(key)));
+        }
+    }
+    Ok((items, next_cursor, total))
+}
+
+/// Validates every `--fields` root against the Issue summary schema.
+fn validate_field_roots(fields: &[Vec<String>], known: &[String]) -> Result<()> {
+    for root in crate::search::field_root_names(fields) {
+        if !known.iter().any(|name| name == &root) {
+            let mut names = known.to_vec();
+            names.sort();
+            return Err(OrbitError::invalid_argument(format!(
+                "unknown --fields entry `{root}`; valid fields: {}",
+                names.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Parsed `--filter`/`--fields` pair shared by `list` and `search`.
+type QueryOptions = (Option<Value>, Option<Vec<Vec<String>>>);
+
+/// `--filter` + `--fields` shared by `list` and `search`: parses both
+/// options up front so a bad value fails before any Board scan.
+fn query_options(filter: Option<&str>, fields: Option<&str>) -> Result<QueryOptions> {
+    let filter = filter.map(crate::search::parse_filter).transpose()?;
+    let fields = fields.map(crate::search::parse_fields).transpose()?;
+    Ok((filter, fields))
+}
+
 pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let task = graph.get(&args.id)?;
     let comments = board.read_comments(&task.id)?;
     let remote = crate::remote::details_visible(board, &graph);
+    let mut data = graph::task_detail_with_comments(&graph, task, &comments);
+    if let Some(fields) = args.fields.as_deref() {
+        let fields = crate::search::parse_fields(fields)?;
+        crate::search::validate_field_names(&fields, &[&data])?;
+        crate::search::project_fields(&mut data, &fields);
+    }
     Ok(crate::output::CommandOutput::new(
-        graph::task_detail_with_comments(&graph, task, &comments),
+        data,
         format_detail(&graph, task, &comments, remote),
     ))
 }
@@ -307,6 +434,273 @@ pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::C
     .with_meta(json!({ "count": count })))
 }
 
+/// `orbit search <query>`: free text plus `key:value` qualifiers, ranked
+/// title → metadata → body, each hit carrying a `snippet`.
+pub(super) fn cmd_search(board: &Board, args: SearchArgs) -> Result<crate::output::CommandOutput> {
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let query = crate::search::parse_query(&args.query)?;
+    let (json_filter, fields) = query_options(args.filter.as_deref(), args.fields.as_deref())?;
+    let scope = repository_scope(board, args.all)?;
+
+    // `snippet` is a valid --fields/--filter root on search results.
+    let mut schema_keys = graph
+        .tasks
+        .values()
+        .next()
+        .map(|any_task| crate::search::filter_field_names(&graph::task_summary(&graph, any_task)))
+        .unwrap_or_default();
+    schema_keys.push("snippet".to_string());
+    if let Some(filter) = &json_filter {
+        crate::search::validate_filter_fields(filter, &schema_keys)?;
+    }
+    if let Some(fields) = &fields {
+        validate_field_roots(fields, &schema_keys)?;
+    }
+
+    let mut keyed: Vec<(SortKey, &Task)> = graph
+        .tasks
+        .values()
+        .filter(|task| {
+            if !args.include_closed && graph.workflow.is_terminal(&task.front.status) {
+                return false;
+            }
+            if let Some(scope) = scope.as_deref()
+                && task
+                    .front
+                    .repository
+                    .as_deref()
+                    .is_some_and(|repo| repo != scope)
+            {
+                return false;
+            }
+            crate::search::matches(task, &query)
+        })
+        .map(|task| {
+            (
+                sort_key(&graph, task, crate::search::rank(task, &query)),
+                task,
+            )
+        })
+        .collect();
+    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut filtered: Vec<(SortKey, &Task, Value)> = Vec::with_capacity(keyed.len());
+    for (key, task) in keyed {
+        let mut summary = graph::task_summary(&graph, task);
+        summary["snippet"] = json!(crate::search::snippet(task, &query));
+        if json_filter
+            .as_ref()
+            .is_some_and(|filter| !crate::search::matches_filter(&summary, filter))
+        {
+            continue;
+        }
+        filtered.push((key, task, summary));
+    }
+
+    let (page, next_cursor, total) = paginate(filtered, args.cursor.as_deref(), args.limit)?;
+    let count = page.len();
+
+    let mut summaries: Vec<Value> = page.iter().map(|(_, _, summary)| summary.clone()).collect();
+    if let Some(fields) = &fields {
+        let mut array = Value::Array(summaries);
+        crate::search::project_fields(&mut array, fields);
+        summaries = match array {
+            Value::Array(items) => items,
+            _ => unreachable!(),
+        };
+    }
+
+    let human = if summaries.is_empty() {
+        "no matching issues".to_string()
+    } else {
+        summaries
+            .iter()
+            .map(|summary| {
+                let snippet = summary["snippet"].as_str().unwrap_or("");
+                format!(
+                    "{}  {}  {}",
+                    summary["id"].as_str().unwrap_or("?"),
+                    summary["title"].as_str().unwrap_or(""),
+                    snippet
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    Ok(crate::output::CommandOutput::new(
+        json!({
+            "results": summaries,
+            "count": count,
+            "total": total,
+            "next_cursor": next_cursor,
+        }),
+        human,
+    )
+    .with_meta(json!({ "count": count })))
+}
+
+/// `orbit digest <id>`: one Issue's compact state, plus a subtree rollup
+/// (`done`/`cancelled`/`blocked`/`open` counts) when it has SubTasks.
+pub(super) fn cmd_digest(board: &Board, args: DigestArgs) -> Result<crate::output::CommandOutput> {
+    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let task = graph.get(&args.id)?;
+    let comments = board.read_comments(&task.id)?;
+    let descendants = graph.descendants(&task.id);
+
+    let blocked_by: Vec<String> = graph.blocked_by(task);
+    let blocking: Vec<String> = graph
+        .blocking_dependents(&task.id)
+        .iter()
+        .map(|dependent| graph.display_id(&dependent.id))
+        .collect();
+    let children: Vec<&Task> = graph.children(&task.id);
+    let child_entries: Vec<Value> = children
+        .iter()
+        .map(|child| {
+            json!({
+                "id": child.id,
+                "key": child.front.key,
+                "title": child.front.title,
+                "status": child.front.status,
+                "blocked": !graph.blocking_ids(child).is_empty(),
+            })
+        })
+        .collect();
+
+    let mut data = json!({
+        "id": task.id,
+        "key": task.front.key,
+        "title": task.front.title,
+        "type": task.front.task_type,
+        "status": task.front.status,
+        "status_category": graph
+            .workflow
+            .category_of(&task.front.status)
+            .map(crate::workflow::StatusCategory::as_str),
+        "resolution": task.front.resolution,
+        "priority": task.front.priority,
+        "ready": graph.is_ready(task),
+        "assignee": task.assignee_name(),
+        "assignee_kind": task.front.assignee.as_ref().map(|a| a.kind.as_str()),
+        "lease_until": task.lease_until().map(|until| until.to_rfc3339()),
+        "reporter": task.front.reporter,
+        "labels": task.front.labels,
+        "component": task.front.component,
+        "repository": task.front.repository,
+        "external_id": task.front.external_id,
+        "parent": task.front.parent.as_deref().map(|parent| graph.display_id(parent)),
+        "depth": graph.depth(&task.id),
+        "blocked_by": blocked_by,
+        "blocking": blocking,
+        "children": child_entries,
+        "comment_count": comments.len(),
+        "created_at": task.front.created_at.to_rfc3339(),
+        "updated_at": task.front.updated_at.to_rfc3339(),
+    });
+
+    if !descendants.is_empty() {
+        let mut by_status: BTreeMap<String, usize> = BTreeMap::new();
+        let mut done = 0usize;
+        let mut cancelled = 0usize;
+        let mut blocked = 0usize;
+        let mut open = 0usize;
+        for id in &descendants {
+            let Some(descendant) = graph.tasks.get(id) else {
+                continue;
+            };
+            *by_status
+                .entry(descendant.front.status.clone())
+                .or_default() += 1;
+            match graph.workflow.category_of(&descendant.front.status) {
+                Some(crate::workflow::StatusCategory::Done) => done += 1,
+                Some(crate::workflow::StatusCategory::Canceled) => cancelled += 1,
+                _ => open += 1,
+            }
+            if !graph.blocking_ids(descendant).is_empty() {
+                blocked += 1;
+            }
+        }
+        data["rollup"] = json!({
+            "scope": "descendants",
+            "total": descendants.len(),
+            "done": done,
+            "cancelled": cancelled,
+            "blocked": blocked,
+            "open": open,
+            "by_status": by_status,
+        });
+        let direct_total = children.len();
+        let direct_open = children
+            .iter()
+            .filter(|child| !graph.workflow.is_terminal(&child.front.status))
+            .count();
+        data["subtasks"] = json!({
+            "total": direct_total,
+            "open": direct_open,
+            "done": direct_total - direct_open,
+        });
+    }
+
+    if let Some(checkpoint) = &task.front.checkpoint {
+        data["checkpoint"] = json!({
+            "by": checkpoint.by,
+            "at": checkpoint.at.to_rfc3339(),
+            "progress": checkpoint.progress,
+            "next": checkpoint.next,
+            "blocker": checkpoint.blocker,
+        });
+    }
+
+    let mut human = format!(
+        "{}  {}\nstatus: {} ({})  priority: {}  ready: {}\n",
+        task.display_id(),
+        task.front.title,
+        task.front.status,
+        data["status_category"].as_str().unwrap_or("?"),
+        task.front.priority,
+        graph.is_ready(task),
+    );
+    if let Some(assignee) = task.assignee_name() {
+        human.push_str(&format!("assignee: {assignee}"));
+        if let Some(kind) = task.front.assignee.as_ref().map(|a| a.kind.as_str()) {
+            human.push_str(&format!(" ({kind})"));
+        }
+        if let Some(until) = task.lease_until() {
+            human.push_str(&format!(", lease until {}", until.to_rfc3339()));
+        }
+        human.push('\n');
+    }
+    if let Some(parent) = &task.front.parent {
+        human.push_str(&format!("parent: {}\n", graph.display_id(parent)));
+    }
+    if !blocked_by.is_empty() {
+        human.push_str(&format!("blocked_by: {}\n", blocked_by.join(", ")));
+    }
+    if !children.is_empty() {
+        human.push_str(&format!("children: {}\n", child_entries.len()));
+    }
+    if let Some(rollup) = data.get("rollup") {
+        human.push_str(&format!(
+            "rollup: {} descendants — {} done, {} cancelled, {} blocked, {} open\n",
+            rollup["total"], rollup["done"], rollup["cancelled"], rollup["blocked"], rollup["open"]
+        ));
+    }
+    if let Some(checkpoint) = &task.front.checkpoint {
+        human.push_str(&format!("checkpoint: {}\n", checkpoint.progress));
+    }
+    human.push_str(&format!(
+        "updated: {}  comments: {}\n",
+        task.front.updated_at.to_rfc3339(),
+        comments.len()
+    ));
+
+    Ok(crate::output::CommandOutput::new(
+        data,
+        human.trim_end().to_string(),
+    ))
+}
+
 pub(super) fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
     let label_filters = normalize_labels(&args.label)?;
@@ -347,27 +741,137 @@ Use the CLI; never edit task files directly.\n\
         .filter(|task| matches(task))
         .take(10)
         .collect();
-    let ready: Vec<Value> = ready_tasks
+
+    // `--max-tokens` trims the task listings — stale claims first, then
+    // close candidates, then ready — until the rendered context fits the
+    // budget; the fixed instructions always stay.
+    let (mut ready_len, mut close_len, mut stale_len) = (
+        ready_tasks.len(),
+        close_candidate_tasks.len(),
+        stale_tasks.len(),
+    );
+    let mut truncated = false;
+    let mut human = prime_human(
+        &graph,
+        &agent,
+        &instructions,
+        &label_filters,
+        repository_filter.as_deref(),
+        &counts,
+        &ready_tasks,
+        &close_candidate_tasks,
+        &stale_tasks,
+    );
+    if let Some(max_tokens) = args.max_tokens {
+        if max_tokens == 0 {
+            return Err(OrbitError::invalid_argument(
+                "--max-tokens must be at least 1",
+            ));
+        }
+        while estimate_tokens(&human) > max_tokens && (ready_len + close_len + stale_len) > 0 {
+            if stale_len > 0 {
+                stale_len -= 1;
+            } else if close_len > 0 {
+                close_len -= 1;
+            } else {
+                ready_len -= 1;
+            }
+            human = prime_human(
+                &graph,
+                &agent,
+                &instructions,
+                &label_filters,
+                repository_filter.as_deref(),
+                &counts,
+                &ready_tasks[..ready_len],
+                &close_candidate_tasks[..close_len],
+                &stale_tasks[..stale_len],
+            );
+        }
+        if estimate_tokens(&human) > max_tokens {
+            // The fixed instructions alone exceed the budget: hard-truncate
+            // the human rendering and report it honestly.
+            human = human.chars().take(max_tokens.saturating_mul(4)).collect();
+            truncated = true;
+        }
+    }
+
+    let ready: Vec<Value> = ready_tasks[..ready_len]
         .iter()
         .map(|task| graph::task_summary(&graph, task))
         .collect();
-    let close_candidates: Vec<Value> = close_candidate_tasks
+    let close_candidates: Vec<Value> = close_candidate_tasks[..close_len]
         .iter()
         .map(|task| graph::task_summary(&graph, task))
         .collect();
-    let stale: Vec<Value> = stale_tasks
+    let stale: Vec<Value> = stale_tasks[..stale_len]
         .iter()
         .map(|task| graph::task_summary(&graph, task))
         .collect();
 
+    let mut data = json!({
+        "agent": agent,
+        "instructions": instructions,
+        "labels": label_filters,
+        "repository": repository_filter,
+        "counts": counts,
+        "ready": ready,
+        "close_candidates": close_candidates,
+        "stale": stale,
+    });
+    if let Some(max_tokens) = args.max_tokens {
+        data["budget"] = json!({
+            "max_tokens": max_tokens,
+            "estimated_tokens": estimate_tokens(&human),
+            "truncated": truncated,
+        });
+    }
+
+    let mut output = crate::output::CommandOutput::new(data, human);
+
+    if args.hook_json {
+        let hook = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": output.human,
+            }
+        });
+        output.raw_output = Some(serde_json::to_string(&hook).map_err(|error| {
+            OrbitError::config(format!("serialize prime hook output: {error}"))
+        })?);
+    }
+
+    Ok(output)
+}
+
+/// Rough token estimate for budget checks: ~4 characters per token.
+fn estimate_tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(4)
+}
+
+/// The human rendering of `orbit prime`: instructions, agent, scope, counts,
+/// then the ready / close-candidate / stale-claim listings. Extracted so
+/// `--max-tokens` can re-render with shorter listings.
+#[allow(clippy::too_many_arguments)]
+fn prime_human(
+    graph: &Graph,
+    agent: &str,
+    instructions: &str,
+    label_filters: &[String],
+    repository_filter: Option<&str>,
+    counts: &crate::graph::Counts,
+    ready_tasks: &[Task],
+    close_tasks: &[&Task],
+    stale_tasks: &[&Task],
+) -> String {
     let mut human = String::new();
-    human.push_str(&instructions);
+    human.push_str(instructions);
     human.push_str("\n\n");
     human.push_str(&format!("agent: {agent}\n"));
     if !label_filters.is_empty() {
         human.push_str(&format!("scope: {}\n", label_filters.join(", ")));
     }
-    if let Some(repository) = &repository_filter {
+    if let Some(repository) = repository_filter {
         human.push_str(&format!("repository: {repository}\n"));
     }
     human.push_str(&format!(
@@ -383,18 +887,18 @@ Use the CLI; never edit task files directly.\n\
     if ready_tasks.is_empty() {
         human.push_str("  (none)\n");
     } else {
-        for task in &ready_tasks {
-            human.push_str(&format!("  {}\n", format_summary(task, &graph)));
+        for task in ready_tasks {
+            human.push_str(&format!("  {}\n", format_summary(task, graph)));
         }
     }
     human.push_str("close candidates:\n");
-    if close_candidate_tasks.is_empty() {
+    if close_tasks.is_empty() {
         human.push_str("  (none)\n");
     } else {
-        for task in &close_candidate_tasks {
+        for &task in close_tasks {
             human.push_str(&format!(
                 "  {}  (ready to close)\n",
-                format_summary(task, &graph)
+                format_summary(task, graph)
             ));
         }
     }
@@ -402,39 +906,13 @@ Use the CLI; never edit task files directly.\n\
     if stale_tasks.is_empty() {
         human.push_str("  (none)\n");
     } else {
-        for (task, summary) in stale_tasks.iter().zip(&stale) {
-            human.push_str(&format!("  {}\n", format_summary(task, &graph)));
-            push_summary_checkpoint(&mut human, summary);
+        for &task in stale_tasks {
+            human.push_str(&format!("  {}\n", format_summary(task, graph)));
+            let summary = graph::task_summary(graph, task);
+            push_summary_checkpoint(&mut human, &summary);
         }
     }
-
-    let mut output = crate::output::CommandOutput::new(
-        json!({
-            "agent": agent,
-            "instructions": instructions,
-            "labels": label_filters,
-            "repository": repository_filter,
-            "counts": counts,
-            "ready": ready,
-            "close_candidates": close_candidates,
-            "stale": stale,
-        }),
-        human,
-    );
-
-    if args.hook_json {
-        let hook = json!({
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": output.human,
-            }
-        });
-        output.raw_output = Some(serde_json::to_string(&hook).map_err(|error| {
-            OrbitError::config(format!("serialize prime hook output: {error}"))
-        })?);
-    }
-
-    Ok(output)
+    human
 }
 
 pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {

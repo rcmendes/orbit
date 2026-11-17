@@ -474,6 +474,26 @@ fn dispatch_tool(
             if bool_arg(arguments, "include_closed") {
                 args.push("--include-closed".to_string());
             }
+            if let Some(filter) = arguments.get("filter").filter(|v| !v.is_null()) {
+                let text = match filter {
+                    Value::String(text) => text.clone(),
+                    other => serde_json::to_string(other).unwrap_or_default(),
+                };
+                args.push("--filter".to_string());
+                args.push(text);
+            }
+            if let Some(fields) = optional_str(arguments, "fields") {
+                args.push("--fields".to_string());
+                args.push(fields);
+            }
+            if let Some(limit) = optional_u64(arguments, "limit") {
+                args.push("--limit".to_string());
+                args.push(limit.to_string());
+            }
+            if let Some(cursor) = optional_str(arguments, "cursor") {
+                args.push("--cursor".to_string());
+                args.push(cursor);
+            }
         }
         "get" => {
             let Some(id) = required_str(arguments, "id") else {
@@ -481,6 +501,10 @@ fn dispatch_tool(
             };
             args.push("show".to_string());
             args.push(id);
+            if let Some(fields) = optional_str(arguments, "fields") {
+                args.push("--fields".to_string());
+                args.push(fields);
+            }
         }
         "create" => {
             let Some(title) = required_str(arguments, "title") else {
@@ -1184,7 +1208,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 59);
+        assert_eq!(tools.len(), 61);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
@@ -1215,6 +1239,8 @@ mod tests {
             "tree",
             "reopen",
             "prime",
+            "search",
+            "digest",
             "export",
             "changes",
             "history",

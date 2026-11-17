@@ -122,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 59);
+    assert_eq!(names.len(), 61);
     for expected in [
         "ready",
         "list",
@@ -149,6 +149,8 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "tree",
         "reopen",
         "prime",
+        "search",
+        "digest",
         "export",
         "doctor",
         "sync",

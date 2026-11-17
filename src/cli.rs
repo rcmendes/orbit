@@ -196,6 +196,22 @@ pub enum Command {
     #[command(long_about = help::EXPORT_LONG, after_long_help = help::EXPORT_EXAMPLES)]
     Export,
 
+    /// Search tasks by free text and `key:value` qualifiers.
+    ///
+    /// The query mixes free-text terms with qualifiers — `status:`,
+    /// `assignee:`, `label:`, `type:`, `priority:`, `component:`, and
+    /// `repository:` — for example `orbit search "status:ready
+    /// label:backend login"`. Every term must match; scalar qualifiers are
+    /// repeatable with any-of semantics and every `label:` must be present.
+    /// Each result carries a `snippet` quoting the match.
+    #[command(long_about = help::SEARCH_LONG, after_long_help = help::SEARCH_EXAMPLES)]
+    Search(SearchArgs),
+
+    /// Show a compact digest of one Issue, with an epic rollup when it has
+    /// SubTasks: done/cancelled/blocked/open counts over the subtree.
+    #[command(long_about = help::DIGEST_LONG, after_long_help = help::DIGEST_EXAMPLES)]
+    Digest(DigestArgs),
+
     /// List named change events derived from Board Git history.
     ///
     /// Events come oldest first; the response's `cursor` is the Board head
@@ -572,6 +588,25 @@ pub struct ListArgs {
     /// Include done and cancelled tasks.
     #[arg(long)]
     pub include_closed: bool,
+
+    /// JSON object filter applied to each Issue's summary fields; every key
+    /// must match (AND). Scalars match by equality or membership in an
+    /// expected array; arrays match by containment.
+    #[arg(long, value_name = "JSON")]
+    pub filter: Option<String>,
+
+    /// Comma-separated fields to keep on each returned Issue, for example
+    /// `id,title,status`. Dotted paths reach into objects.
+    #[arg(long, value_name = "FIELDS")]
+    pub fields: Option<String>,
+
+    /// Page size. The response's `next_cursor` resumes where the page ended.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+
+    /// Cursor from a previous page's `next_cursor`; only later Issues return.
+    #[arg(long, value_name = "CURSOR")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -629,6 +664,50 @@ pub struct ReadyArgs {
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// Comma-separated fields to keep on the returned Issue, for example
+    /// `id,key,status`. Dotted paths reach into objects.
+    #[arg(long, value_name = "FIELDS")]
+    pub fields: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SearchArgs {
+    /// Free-text terms plus `key:value` qualifiers (`status:`, `assignee:`,
+    /// `label:`, `type:`, `priority:`, `component:`, `repository:`).
+    pub query: String,
+
+    /// Include done and cancelled tasks.
+    #[arg(long)]
+    pub include_closed: bool,
+
+    /// JSON object filter applied to each Issue's summary fields.
+    #[arg(long, value_name = "JSON")]
+    pub filter: Option<String>,
+
+    /// Comma-separated fields to keep on each result, for example
+    /// `id,title,status,snippet`.
+    #[arg(long, value_name = "FIELDS")]
+    pub fields: Option<String>,
+
+    /// Page size. The response's `next_cursor` resumes where the page ended.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+
+    /// Cursor from a previous page's `next_cursor`; only later results return.
+    #[arg(long, value_name = "CURSOR")]
+    pub cursor: Option<String>,
+
+    /// Include tasks from every Repository. Inside a member Repository the
+    /// search is scoped to that Repository plus Board-wide Tasks by default.
+    #[arg(long)]
+    pub all: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DigestArgs {
     /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 }
@@ -1275,6 +1354,13 @@ pub struct PrimeArgs {
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
+
+    /// Cap the printed context at roughly this many tokens (~4 characters
+    /// each). Task listings are trimmed first; when the fixed instructions
+    /// alone exceed the budget the human output is truncated and the JSON
+    /// `budget` object reports `truncated: true`.
+    #[arg(long, value_name = "N")]
+    pub max_tokens: Option<usize>,
 }
 
 #[derive(Debug, Args)]

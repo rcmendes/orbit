@@ -2640,9 +2640,9 @@ fn is_orbit_hook(handler: &Value) -> bool {
 /// documented when the Board can actually show it.
 fn list_guidance(remote_details: bool) -> &'static str {
     if remote_details {
-        "- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines."
+        "- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready`, `orbit search`, `orbit digest`, and `orbit tree` print compact summary lines; `list`/`search` page with `--limit`/`--cursor`."
     } else {
-        "- `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines."
+        "- `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready`, `orbit search`, `orbit digest`, and `orbit tree` print compact summary lines; `list`/`search` page with `--limit`/`--cursor`."
     }
 }
 

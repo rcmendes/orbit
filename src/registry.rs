@@ -410,6 +410,19 @@ pub static TOOLS: &[Tool] = &[
                 "local",
                 "Only Tasks without an active Remote Issue link; includes detached provenance.",
             ),
+            cobj(
+                "filter",
+                "JSON object filter on the Issue's summary fields; every key must match.",
+            ),
+            cstr(
+                "fields",
+                "Comma-separated fields to keep on each returned Issue.",
+            ),
+            cint(
+                "limit",
+                "Page size; `next_cursor` in the result resumes the page.",
+            ),
+            cstr("cursor", "Cursor from a previous page's `next_cursor`."),
         ],
         true,
         true,
@@ -421,7 +434,13 @@ pub static TOOLS: &[Tool] = &[
         "get",
         "Read one task, including its Markdown body and dependents.",
         &["show"],
-        &[creq("id", ID_DESC)],
+        &[
+            creq("id", ID_DESC),
+            cstr(
+                "fields",
+                "Comma-separated fields to keep on the returned Issue.",
+            ),
+        ],
         true,
         true,
         false,
@@ -457,6 +476,14 @@ pub static TOOLS: &[Tool] = &[
                 "labels",
                 "Only Ready tasks carrying every label.",
                 "--label",
+            ),
+            arg(
+                "max_tokens",
+                "Cap the printed context at roughly this many tokens; task listings are trimmed to fit.",
+                JsonType::Int,
+                &[],
+                Some(CliTarget::Long("--max-tokens")),
+                false,
             ),
             switch(
                 "hook_json",
@@ -526,6 +553,69 @@ pub static TOOLS: &[Tool] = &[
                 false,
             ),
         ],
+        false,
+        true,
+        false,
+        true,
+        false,
+    ),
+    tool(
+        "search",
+        "Search Issues by free text and key:value qualifiers (status:, assignee:, label:, type:, priority:, component:, repository:); every result carries a snippet.",
+        &["search"],
+        &[
+            pos(
+                "query",
+                "Free-text terms plus `key:value` qualifiers, for example `status:ready label:backend login`.",
+            ),
+            switch(
+                "include_closed",
+                "Include done and cancelled Issues.",
+                "--include-closed",
+            ),
+            arg(
+                "filter",
+                "JSON object filter on the Issue's summary fields; every key must match.",
+                JsonType::Obj,
+                &[],
+                Some(CliTarget::Long("--filter")),
+                false,
+            ),
+            long(
+                "fields",
+                "Comma-separated fields to keep on each result.",
+                "--fields",
+            ),
+            arg(
+                "limit",
+                "Page size; `next_cursor` in the result resumes the page.",
+                JsonType::Int,
+                &[],
+                Some(CliTarget::Long("--limit")),
+                false,
+            ),
+            long(
+                "cursor",
+                "Cursor from a previous page's `next_cursor`.",
+                "--cursor",
+            ),
+            switch(
+                "all",
+                "Search every Repository; default scopes to the current Repository plus Board-wide Tasks.",
+                "--all",
+            ),
+        ],
+        false,
+        true,
+        false,
+        true,
+        false,
+    ),
+    tool(
+        "digest",
+        "Read one Issue's compact digest — state, people, blockers, children — with an epic rollup (done/cancelled/blocked/open counts) when it has SubTasks.",
+        &["digest"],
+        &[pos("id", ID_DESC)],
         false,
         true,
         false,
@@ -1742,6 +1832,16 @@ pub static COMMANDS: &[CommandEntry] = &[
     cmd(&["link", "list"], "List typed links.", "link"),
     cmd(&["delete"], "Delete a task.", "delete"),
     cmd(&["prime"], "Print session context.", "prime"),
+    cmd(
+        &["search"],
+        "Search Issues by text and qualifiers.",
+        "search",
+    ),
+    cmd(
+        &["digest"],
+        "Show one Issue's digest and epic rollup.",
+        "digest",
+    ),
     cmd(&["export"], "Export a JSON snapshot.", "export"),
     cmd(
         &["changes"],
@@ -1968,7 +2068,10 @@ fn stringify(value: &Value) -> Option<String> {
         Value::String(text) => Some(text.clone()),
         Value::Number(number) => Some(number.to_string()),
         Value::Bool(flag) => Some(flag.to_string()),
-        _ => None,
+        // Structured arguments (for example a `--filter` JSON object) travel
+        // to the CLI as their compact JSON text.
+        Value::Object(_) | Value::Array(_) => serde_json::to_string(value).ok(),
+        Value::Null => None,
     }
 }
 

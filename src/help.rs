@@ -350,7 +350,14 @@ is repeatable and every label must match; --exclude-label is repeatable and
 hides a task carrying any of the named labels. --repository NAME filters on
 the `repository` field; --component and --exclude-component filter on the
 `component` field. For work an agent can start, use `orbit ready` instead of
-filtering this list.";
+filtering this list.
+
+--filter takes a JSON object matched against each Issue's summary fields —
+'{\"status\": \"ready\", \"labels\": [\"backend\"]}' — where every key must
+match. --fields keeps only the named fields (comma-separated, dotted paths
+allowed) on each returned Issue. --limit pages the result and the response's
+next_cursor resumes the same ordering; a cursor stays valid while the Board
+changes because it encodes the sort position, not a row number.";
 
 const LIST_EXAMPLES_HEAD: &str = "Examples:
   # What is open right now?
@@ -468,7 +475,8 @@ pub const SHOW_LONG: &str = "\
 Prints the full task: frontmatter fields including type, Markdown body, labels,
 dependencies, dependents, and every comment. `orbit show <id> --json` is the
 machine-readable form and is how an agent should load a ticket before working on
-it.";
+it. --fields keeps only the named fields (comma-separated, dotted paths
+allowed) on the returned object.";
 
 pub const SHOW_EXAMPLES: &str = "\
 Examples:
@@ -1073,7 +1081,9 @@ session starts with; the Claude and Devin SessionStart hooks call
 --repository NAME and repeatable --label scope the counts, ready tasks, close
 candidates, and stale claims to a repository or label set. --hook-json prints
 the SessionStart hook envelope instead of the normal output and cannot be combined
-with --json.";
+with --json. --max-tokens caps the printed context at roughly that many tokens
+(~4 characters each): task listings are trimmed to fit and the JSON `budget`
+object reports the estimate and whether anything was dropped.";
 
 pub const PRIME_EXAMPLES: &str = "\
 Examples:
@@ -1103,6 +1113,58 @@ Examples:
 
   # Inspect the schema version and task count
   orbit export --json | jq '.data | {schema_version, tasks: (.tasks | length)}'";
+
+pub const SEARCH_LONG: &str = "\
+Searches the Board's Issues by free text and `key:value` qualifiers. Free-text
+terms match the title, body, ID, project key, labels, status, type, assignee,
+component, and repository case-insensitively; every term must match. A token
+counts as a qualifier only when its prefix is known: status:, assignee:,
+label:, type:, priority:, component:, and repository: (repo: works too).
+Scalar qualifiers are repeatable with any-of semantics — status:ready
+status:in_progress matches either — while every label: must be present.
+Unknown `word:` prefixes stay free text, so phrases with colons still search.
+
+Results come back best-first: title matches rank above metadata matches
+(ID, key, labels, status) which rank above body-only matches, and ties keep
+the `list` ordering. Every result carries a `snippet` quoting the match —
+a window around the first hit, or the title when the query had no text.
+--limit pages the results and `next_cursor` resumes the same ordering;
+--filter applies the same JSON object filter as `list --filter`, and --fields
+projects the returned objects.";
+
+pub const SEARCH_EXAMPLES: &str = "\
+Examples:
+  # Free-text search across titles and bodies
+  orbit search \"login redirect\" --json
+
+  # Qualifiers combine with text; every label must match
+  orbit search \"status:ready label:backend auth\" --json
+
+  # Who is holding in-progress work right now?
+  orbit search \"status:in_progress assignee:claude\" --json
+
+  # Page through a broad query
+  orbit search bug --limit 20 --json";
+
+pub const DIGEST_LONG: &str = "\
+Prints a compact digest of one Issue: identity, status and category,
+priority, assignee and lease, reporter, labels, component, repository,
+parent, blockers, children, checkpoint, and timestamps — without the full
+body or comment thread (`orbit show` has those).
+
+When the Issue has SubTasks the digest adds a rollup over the whole subtree:
+total, done, cancelled, blocked, and open counts plus a per-status breakdown,
+so an epic answers \"how is it going\" in one call. `blocked` counts Issues
+still held by an open blocking link; `done` counts the done status category.
+Direct children are listed with their own blocked flag.";
+
+pub const DIGEST_EXAMPLES: &str = "\
+Examples:
+  # One-screen state of a ticket before picking it up
+  orbit digest orb-a7b2c9
+
+  # Epic rollup as JSON for a status report
+  orbit digest ORB-4 --json";
 
 pub const CHANGES_LONG: &str = "\
 Lists the named change events derived from the Board's Git history, oldest

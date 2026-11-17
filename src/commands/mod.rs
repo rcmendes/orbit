@@ -33,7 +33,10 @@ use lifecycle::{
     cmd_reopen, cmd_transition,
 };
 use property::cmd_property;
-use query::{cmd_export, cmd_list, cmd_prime, cmd_ready, cmd_show, cmd_sync, cmd_tree};
+use query::{
+    cmd_digest, cmd_export, cmd_list, cmd_prime, cmd_ready, cmd_search, cmd_show, cmd_sync,
+    cmd_tree,
+};
 use relations::{cmd_comment, cmd_depend, cmd_label, cmd_link, cmd_undepend};
 use repo::run as cmd_repo;
 use review::{cmd_answer, cmd_ask, cmd_review, cmd_submit};
@@ -99,6 +102,8 @@ fn version_target(command: &Command) -> Result<VersionTarget> {
             Command::Show(_) => "orbit show",
             Command::Tree(_) => "orbit tree",
             Command::Prime(_) => "orbit prime",
+            Command::Search(_) => "orbit search",
+            Command::Digest(_) => "orbit digest",
             Command::Export => "orbit export",
             Command::Changes(_) => "orbit changes",
             Command::History(_) => "orbit history",
@@ -347,6 +352,12 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             cmd_delete(board, args)
         }),
         Command::Prime(args) => prime_with_host_sync(dir.as_deref(), args, &concurrency),
+        Command::Search(args) => with_board(dir.as_deref(), false, &concurrency, |board| {
+            cmd_search(board, args)
+        }),
+        Command::Digest(args) => with_board(dir.as_deref(), false, &concurrency, |board| {
+            cmd_digest(board, args)
+        }),
         Command::Export => with_board(dir.as_deref(), false, &concurrency, cmd_export),
         Command::Changes(args) => with_board(dir.as_deref(), false, &concurrency, |board| {
             feed::cmd_changes(board, args)

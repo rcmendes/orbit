@@ -5,25 +5,85 @@ use crate::comment::Comment;
 
 use super::*;
 
-pub(super) fn list_sort_key<'a>(
-    graph: &'a Graph,
-    task: &'a Task,
-) -> (usize, i64, &'a str, bool, usize, i64, &'a str) {
+/// The owned sort key, ordered for keyset pagination:
+/// `rank` leads (0 for `list`, the search relevance rank for `search`), then
+/// the Parent Task's priority/creation/ID, the subtask flag, and the Task's
+/// own priority/creation/ID. `Ord` is the page order; a `--cursor` stores
+/// one of these so the next page resumes strictly after it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct SortKey {
+    pub rank: i64,
+    pub root_priority: usize,
+    pub root_created_ms: i64,
+    pub root_id: String,
+    pub is_subtask: bool,
+    pub priority: usize,
+    pub created_ms: i64,
+    pub id: String,
+}
+
+pub(super) fn sort_key(graph: &Graph, task: &Task, rank: i64) -> SortKey {
     let root = task
         .front
         .parent
         .as_deref()
         .and_then(|parent_id| graph.get(parent_id).ok())
         .unwrap_or(task);
-    (
-        graph.priority_ordinal(&root.front.priority),
-        root.front.created_at.timestamp_millis(),
-        root.id.as_str(),
-        task.front.parent.is_some(),
-        graph.priority_ordinal(&task.front.priority),
-        task.front.created_at.timestamp_millis(),
-        task.id.as_str(),
-    )
+    SortKey {
+        rank,
+        root_priority: graph.priority_ordinal(&root.front.priority),
+        root_created_ms: root.front.created_at.timestamp_millis(),
+        root_id: root.id.clone(),
+        is_subtask: task.front.parent.is_some(),
+        priority: graph.priority_ordinal(&task.front.priority),
+        created_ms: task.front.created_at.timestamp_millis(),
+        id: task.id.clone(),
+    }
+}
+
+/// The cursor payload: `[rank, root_priority, root_created_ms, root_id,
+/// is_subtask, priority, created_ms, id]`.
+pub(super) fn key_to_json(key: &SortKey) -> Value {
+    serde_json::json!([
+        key.rank,
+        key.root_priority,
+        key.root_created_ms,
+        key.root_id,
+        key.is_subtask,
+        key.priority,
+        key.created_ms,
+        key.id,
+    ])
+}
+
+pub(super) fn key_from_json(value: &Value) -> Result<SortKey> {
+    let invalid = || {
+        OrbitError::invalid_argument(
+            "invalid cursor; pass the `next_cursor` value a previous page returned",
+        )
+    };
+    let items = value.as_array().ok_or_else(invalid)?;
+    if items.len() != 8 {
+        return Err(invalid());
+    }
+    let number = |index: usize| items[index].as_i64().ok_or_else(invalid);
+    let text = |index: usize| {
+        items[index]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(invalid)
+    };
+    let flag = |index: usize| items[index].as_bool().ok_or_else(invalid);
+    Ok(SortKey {
+        rank: number(0)?,
+        root_priority: number(1)?.max(0) as usize,
+        root_created_ms: number(2)?,
+        root_id: text(3)?,
+        is_subtask: flag(4)?,
+        priority: number(5)?.max(0) as usize,
+        created_ms: number(6)?,
+        id: text(7)?,
+    })
 }
 
 pub(super) struct ListGroup<'a> {

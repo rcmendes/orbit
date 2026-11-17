@@ -20,7 +20,7 @@ fn check_parent_filter(graph: &Graph, parent: &str) -> Result<()> {
 }
 
 pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
     if let Some(parent) = args.parent.as_deref() {
         check_parent_filter(&graph, parent)?;
     }
@@ -207,7 +207,13 @@ pub(super) fn cmd_ready(
     mut args: ReadyArgs,
     if_version: Option<&str>,
 ) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    // `ready --claim` mutates: it keeps the authoritative load. A plain
+    // `ready` listing is a read and may use the derived index.
+    let (graph, _) = if args.claim {
+        Graph::load(board, LoadMode::Strict)?
+    } else {
+        Graph::load_indexed(board, LoadMode::Strict)?
+    };
     if let Some(parent) = args.parent.as_deref() {
         check_parent_filter(&graph, parent)?;
     }
@@ -394,7 +400,7 @@ fn query_options(filter: Option<&str>, fields: Option<&str>) -> Result<QueryOpti
 }
 
 pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
     let task = graph.get(&args.id)?;
     let comments = board.read_comments(&task.id)?;
     let remote = crate::remote::details_visible(board, &graph);
@@ -411,7 +417,7 @@ pub(super) fn cmd_show(board: &Board, args: ShowArgs) -> Result<crate::output::C
 }
 
 pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
     let root = graph.get(&args.id)?;
     if root.front.parent.is_some() && graph.children(&root.id).is_empty() {
         return Err(OrbitError::invalid_argument(format!(
@@ -466,7 +472,7 @@ pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::C
 /// `orbit search <query>`: free text plus `key:value` qualifiers, ranked
 /// title → metadata → body, each hit carrying a `snippet`.
 pub(super) fn cmd_search(board: &Board, args: SearchArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
     let query = crate::search::parse_query(&args.query)?;
     let (json_filter, fields) = query_options(args.filter.as_deref(), args.fields.as_deref())?;
     let scope = repository_scope(board, args.all)?;
@@ -572,7 +578,7 @@ pub(super) fn cmd_search(board: &Board, args: SearchArgs) -> Result<crate::outpu
 /// `orbit digest <id>`: one Issue's compact state, plus a subtree rollup
 /// (`done`/`cancelled`/`blocked`/`open` counts) when it has SubTasks.
 pub(super) fn cmd_digest(board: &Board, args: DigestArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
     let task = graph.get(&args.id)?;
     let comments = board.read_comments(&task.id)?;
     let descendants = graph.descendants(&task.id);
@@ -731,7 +737,7 @@ pub(super) fn cmd_digest(board: &Board, args: DigestArgs) -> Result<crate::outpu
 }
 
 pub(super) fn cmd_prime(board: &Board, args: PrimeArgs) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
     let label_filters = normalize_labels(&args.label)?;
     let repository_filter = normalize_repository_filter(args.repository.as_deref())?;
     let matches = |task: &Task| {
@@ -945,7 +951,7 @@ fn prime_human(
 }
 
 pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {
-    let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (graph, _) = Graph::load_indexed(board, LoadMode::Strict)?;
     let mut ids: Vec<&String> = graph.tasks.keys().collect();
     ids.sort();
 

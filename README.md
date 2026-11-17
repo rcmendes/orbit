@@ -874,6 +874,8 @@ orbit history orb-a7b2c9 --json                       # one Issue's timeline
 
 `changes` returns a `cursor` (the Board head commit) to feed back as `--since` on the next poll; `history` accepts a Task ID or project key and keeps resolving after the Issue is deleted. Both are read-only MCP tools too.
 
+Two opt-in modules build on this (ADR 0022): `[[hooks]]` rules in `config.toml` fire local shell commands on Board events — spawned detached after a write commits, best-effort, they can never block or fail a write — and `[index] enabled = true` keeps a rebuildable parse cache under `cache/index.json` that speeds `list`/`ready`/`search` on large Boards (`orbit index status|rebuild`; the scan benchmark that gates the module is in `docs/benchmarks.md`).
+
 ## Agent setup
 
 `orbit init` creates a Board at `./.orbit/board` inside a Git repository or at `<anchor>/.orbit/board` outside one. It asks once, in a terminal, whether to wire the harnesses it detects; without a terminal it writes no agent files and prints the next step. On the first MCP setup it also asks whether generated configs should use an absolute path (the default) or the portable `orbit` command, which requires Orbit on the editor's `PATH`. Instruction files use managed markers and MCP configs are merged at the key level, so re-running is safe and `--remove` deletes only what Orbit added.
@@ -943,7 +945,7 @@ Because generated MCP commands are machine-specific, keep those config files unt
 | **Author** | `add` · `update` · `depend` · `undepend` · `link` · `label` · `comment` · `delete` |
 | **Inspect** | `list` · `search` · `digest` · `ready` · `show` · `tree` · `prime` · `export` · `changes` · `history` · `remote status` |
 | **Execute** | `claim` · `heartbeat` · `checkpoint` · `release` · `done` · `cancel` · `reopen` |
-| **Maintain** | `doctor` · `sync` · `board` · `migrate` · `remote` · `slug` · `mcp` |
+| **Maintain** | `doctor` · `sync` · `index` · `board` · `migrate` · `remote` · `slug` · `mcp` |
 
 Every command explains its own semantics:
 

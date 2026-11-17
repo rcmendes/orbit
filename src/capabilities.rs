@@ -22,8 +22,8 @@ use crate::workflow::Workflow;
 /// refuses a profile whose `requires` are not all listed here, and
 /// `orbit doctor` reports an applied profile whose requirements are unmet.
 /// Kernel features are always present; opt-in modules (`remote`,
-/// `workspace`) are capabilities the binary supports but a Board enables
-/// through its own configuration.
+/// `workspace`, `hooks`, `index`, `scheduler`) are capabilities the binary
+/// supports but a Board enables through its own configuration.
 pub const SUPPORTED: &[&str] = &[
     "workflow",
     "policy",
@@ -47,6 +47,8 @@ pub const SUPPORTED: &[&str] = &[
     "profiles",
     "doctor",
     "scheduler",
+    "hooks",
+    "index",
 ];
 
 /// Whether this binary provides the named capability.
@@ -158,6 +160,12 @@ fn modules(config: &Config) -> Value {
             entry["wip_limit"] = json!(limit);
         }
         modules.push(entry);
+    }
+    if !config.hooks.is_empty() {
+        modules.push(json!({ "name": "hooks", "rules": config.hooks.len() }));
+    }
+    if config.index.enabled {
+        modules.push(json!({ "name": "index" }));
     }
     Value::Array(modules)
 }

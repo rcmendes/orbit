@@ -18,8 +18,8 @@ use std::path::Path;
 
 use crate::board::Board;
 use crate::cli::{
-    Cli, Command, CommentCommand, LabelCommand, LinkCommand, PropertyCommand, RepoCommand,
-    SlugCommand,
+    Cli, Command, CommentCommand, IndexCommand, LabelCommand, LinkCommand, PropertyCommand,
+    RepoCommand, SlugCommand,
 };
 use crate::error::{OrbitError, Result, code};
 use crate::graph::{self, Graph};
@@ -111,6 +111,7 @@ fn version_target(command: &Command) -> Result<VersionTarget> {
             Command::Mcp => "orbit mcp",
             Command::Doctor(_) => "orbit doctor",
             Command::Sync => "orbit sync",
+            Command::Index(_) => "orbit index",
             Command::Capabilities => "orbit capabilities",
             Command::Schema(_) => "orbit schema",
             Command::Board(_) => "orbit board",
@@ -379,6 +380,14 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
             crate::doctor::run(dir.as_deref(), args)
         }
         Command::Sync => with_board(dir.as_deref(), true, &concurrency, cmd_sync),
+        Command::Index(args) => {
+            // Rebuild snapshots under the exclusive lock so the index never
+            // captures a torn view of the Task files.
+            let exclusive = matches!(args.command, IndexCommand::Rebuild);
+            with_board(dir.as_deref(), exclusive, &concurrency, |board| {
+                crate::index::cmd_index(board, args.command)
+            })
+        }
         Command::Capabilities => {
             concurrency.reject_idempotency("orbit capabilities")?;
             crate::capabilities::run(dir.as_deref())
@@ -413,7 +422,17 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 // The command performs the sync itself; do not auto-sync again.
                 crate::board_host::suppress();
                 let board = crate::board_host::unlocked_for_network(dir.as_deref())?;
+                // Host merges replay as Board events too; fire hooks for
+                // whatever the sync brings in.
+                let head_before = crate::hooks::enabled(&board)
+                    .then(|| crate::git::rev_parse(&board.root, "HEAD").ok().flatten())
+                    .flatten();
                 let mut output = board::cmd_sync(&board, sync_args)?;
+                if let Some(before) = head_before {
+                    output
+                        .warnings
+                        .extend(crate::hooks::fire_since(&board, &before));
+                }
                 output.warnings.extend(board.warnings.iter().cloned());
                 Ok(output)
             }
@@ -567,6 +586,11 @@ where
         && crate::remote::auto_push::enabled(board)
         && !crate::remote::auto_push::suppressed())
     .then(|| crate::remote::auto_push::snapshot(board));
+    // Board event hooks (`[[hooks]]`) replay the commits this write produces;
+    // capture the head before so only new events fire.
+    let head_before = (write && crate::hooks::enabled(board))
+        .then(|| crate::git::rev_parse(&board.root, "HEAD").ok().flatten())
+        .flatten();
     let mut output = f(board)?;
     if write && let Some(key) = concurrency.idempotency_key.as_deref() {
         // The mutation already committed; a record failure warns rather than
@@ -576,6 +600,13 @@ where
                 .warnings
                 .push(format!("IDEMPOTENCY_NOT_STORED: {}", error.message));
         }
+    }
+    if let Some(before) = head_before {
+        // Detached and best-effort: hook spawn failures become warnings,
+        // hook exit status is ignored, and nothing here waits on a hook.
+        output
+            .warnings
+            .extend(crate::hooks::fire_since(board, &before));
     }
     if let Some(before) = snapshot {
         if board.commit_failed() {

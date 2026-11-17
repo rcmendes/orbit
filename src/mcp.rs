@@ -1212,7 +1212,7 @@ mod tests {
     #[test]
     fn tool_list_contains_task_tools() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 61);
+        assert_eq!(tools.len(), 63);
         let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))

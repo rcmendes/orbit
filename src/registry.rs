@@ -1181,6 +1181,28 @@ pub static TOOLS: &[Tool] = &[
         true,
         false,
     ),
+    tool(
+        "index_status",
+        "Report the derived read index state: whether `[index]` is enabled, entry count, and freshness against the Task files.",
+        &["index", "status"],
+        &[],
+        false,
+        true,
+        false,
+        true,
+        false,
+    ),
+    tool(
+        "index_rebuild",
+        "Rebuild the derived read index from the Task files. The index is a rebuildable cache under the Board cache dir, never a source of truth.",
+        &["index", "rebuild"],
+        &[],
+        false,
+        false,
+        false,
+        true,
+        false,
+    ),
     // --- Repositories ------------------------------------------------------------
     tool(
         "repo_add",
@@ -1865,6 +1887,16 @@ pub static COMMANDS: &[CommandEntry] = &[
     ),
     cmd(&["doctor"], "Check Board integrity.", "doctor"),
     cmd(&["sync"], "Commit pending lease-only changes.", "sync"),
+    cmd(
+        &["index", "status"],
+        "Report the derived read index state.",
+        "index_status",
+    ),
+    cmd(
+        &["index", "rebuild"],
+        "Rebuild the derived read index from Task files.",
+        "index_rebuild",
+    ),
     cmd(
         &["capabilities"],
         "Report the contract handshake.",

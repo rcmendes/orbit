@@ -70,7 +70,7 @@ Git and at `./.orbit/board` inside a repository. See
 | Inspect the command surface | `orbit schema` |
 | Collect or archive the board | `orbit export` |
 | Wire an editor or agent | `orbit setup`, `orbit mcp` |
-| Recover or maintain the board | `orbit doctor`, `orbit sync` |
+| Recover or maintain the board | `orbit doctor`, `orbit sync`, `orbit index` |
 | Host, synchronize, or relocate the Board | `orbit board host`, `orbit board sync`, `orbit board move` |
 | Link GitHub Issues (optional) | `orbit remote connect` — see [github-sync.md](./github-sync.md) |
 | Triage Tasks | `orbit triage` — see [agents/triage-workflow.md](./agents/triage-workflow.md) |
@@ -1282,6 +1282,42 @@ changes.
 orbit sync
 ```
 
+### `orbit index` — the derived read index
+
+Inspects or rebuilds the opt-in `[index]` module: a rebuildable cache at
+`<orbit>/cache/index.json` that speeds up `list`, `ready`, `search`, and the
+other read scans on large Boards. Enable it in `config.toml`:
+
+```toml
+[index]
+enabled = true
+```
+
+The index only ever caches what the Task files parse to; files and Git
+history remain the source of truth and a missing or stale index is rebuilt
+automatically. The module exists because the large-Board scan benchmark
+(`docs/benchmarks.md`) measured `list`/`ready` past one second at 10k Tasks.
+
+```bash
+orbit index status            # enabled? entries? fresh vs stale?
+orbit index rebuild           # force a full rebuild from the Task files
+```
+
+#### `[[hooks]]` — local commands fired on Board events
+
+Board `config.toml` may also carry `[[hooks]]` rules binding feed event
+kinds to shell commands. After a write commits, the events its commits
+produced are replayed and every matching rule runs detached via `/bin/sh -c`
+with `ORBIT_EVENT_JSON` and friends in the environment — hooks are
+best-effort and can never block or fail a write. See `docs/SPEC.md` §6 for
+the full contract.
+
+```toml
+[[hooks]]
+events = ["issue.transitioned", "issue.created"]
+command = "echo $ORBIT_EVENT_TYPE $ORBIT_EVENT_KEY >> /tmp/orbit.log"
+```
+
 ### `orbit capabilities` — the contract handshake
 
 Prints what this Board and this `orbit` binary share: the contract version the
@@ -1714,6 +1750,8 @@ orbit sync              # commit anything left uncommitted
 | `orbit mcp` | — | — (is the MCP server itself) |
 | `orbit doctor` | `doctor` | write, idempotent |
 | `orbit sync` | `sync` | write, idempotent |
+| `orbit index status` | `index_status` | read-only, idempotent |
+| `orbit index rebuild` | `index_rebuild` | write, idempotent |
 | `orbit capabilities` | `capabilities` | read-only, idempotent |
 | `orbit schema` | — | — (publishes this registry; not a Board operation) |
 | `orbit board host` | `board_host` | write |
@@ -1738,6 +1776,7 @@ orbit sync              # commit anything left uncommitted
 | `orbit triage review` | `triage_review` | read-only, idempotent |
 | `orbit triage apply` | `triage_apply` | write |
 
+<!-- END GENERATED COMMANDS -->
 <!-- END GENERATED COMMANDS -->
 
 

@@ -165,6 +165,17 @@ pub struct Config {
         skip_serializing_if = "crate::scheduler::SchedulerConfig::is_empty"
     )]
     pub scheduler: crate::scheduler::SchedulerConfig,
+    /// Local command hooks (`[[hooks]]`): each rule binds feed event kinds to
+    /// a shell command spawned detached after a write commits. Best-effort —
+    /// hooks never block or fail a write (ADR 0022 opt-in module).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<crate::hooks::HookRule>,
+    /// The opt-in derived read index (`[index]`): caches Task parses under
+    /// the Board cache dir to accelerate `list`/`ready`/`search` reads on
+    /// large Boards. Rebuildable from the Task files; never a source of
+    /// truth (ADR 0022 opt-in module).
+    #[serde(default, skip_serializing_if = "crate::index::IndexConfig::is_default")]
+    pub index: crate::index::IndexConfig,
     /// Profiles applied to this Board (`orbit setup <plugin>`), recorded so
     /// `orbit doctor` and `orbit capabilities` can re-negotiate their
     /// requirements without re-reading the profile files.
@@ -190,6 +201,8 @@ impl Default for Config {
             workflow: crate::workflow::WorkflowConfig::default(),
             policy: crate::policy::PolicyConfig::default(),
             scheduler: crate::scheduler::SchedulerConfig::default(),
+            hooks: Vec::new(),
+            index: crate::index::IndexConfig::default(),
             profiles: Vec::new(),
             contract: crate::contract::default_version(),
         }
@@ -298,6 +311,7 @@ impl Config {
         crate::workflow::Workflow::from_config(self)?;
         crate::policy::Policy::from_config(self)?;
         self.scheduler.validate()?;
+        crate::hooks::validate(&self.hooks)?;
         let mut profile_names = std::collections::BTreeSet::new();
         for profile in &self.profiles {
             if !task::is_valid_label(&profile.name) {

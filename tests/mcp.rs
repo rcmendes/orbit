@@ -122,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 61);
+    assert_eq!(names.len(), 63);
     for expected in [
         "ready",
         "list",

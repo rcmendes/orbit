@@ -240,6 +240,10 @@ pub enum Command {
     #[command(long_about = help::SYNC_LONG, after_long_help = help::SYNC_EXAMPLES)]
     Sync,
 
+    /// Inspect or rebuild the derived read index (opt-in `[index]` module).
+    #[command(long_about = help::INDEX_LONG, after_long_help = help::INDEX_EXAMPLES)]
+    Index(IndexArgs),
+
     /// Report the Board's contract handshake: contract version, modules, and
     /// workflow. Answers even on a Board whose contract is newer than this
     /// binary's, so consumers can negotiate before other commands refuse.
@@ -1341,6 +1345,23 @@ pub struct DoctorArgs {
     /// Remove stale temp files and re-attach an orphaned orbit worktree.
     #[arg(long)]
     pub fix: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct IndexArgs {
+    #[command(subcommand)]
+    pub command: IndexCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IndexCommand {
+    /// Report the derived index state: present, entry count, freshness
+    /// against the Task files, and the Board head it was built at.
+    #[command(after_long_help = help::INDEX_STATUS_EXAMPLES)]
+    Status,
+    /// Rebuild the index from the Task files, stamped at the Board head.
+    #[command(after_long_help = help::INDEX_REBUILD_EXAMPLES)]
+    Rebuild,
 }
 
 #[derive(Debug, Args)]

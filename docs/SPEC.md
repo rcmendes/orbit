@@ -344,6 +344,17 @@ prefix = "orb-"
 #
 # [scheduler.capabilities]
 # devin = ["rust", "docs"]
+
+# Optional: derived read index for large Boards — see §6 Event hooks and
+# the derived index.
+# [index]
+# enabled = true
+
+# Optional: local command hooks fired on Board events — see §6 Event hooks
+# and the derived index.
+# [[hooks]]
+# events = ["issue.transitioned", "issue.created"]
+# command = "echo $ORBIT_EVENT_TYPE $ORBIT_EVENT_KEY >> /tmp/orbit.log"
 ```
 
 `[workflow]` selects the Board's lifecycle. `template` names a shipped workflow — `minimal`, `standard` (the default), or `agentic`. Setting `statuses`, `transitions`, or `initial` instead defines a custom workflow; validation requires unique status and transition names, valid categories (`todo`, `active`, `done`, `canceled`), exactly one status flagged `ready`, an `initial` status that exists, transitions that reference defined statuses, resolutions only on transitions into closed categories, and none on transitions into open statuses. See §3.1 for the shipped templates. The three templates ship inside Orbit; a Profile's `[workflow]` section selects one of them or defines a custom workflow the same way.
@@ -697,6 +708,7 @@ orbit migrate [--apply|--dry-run]
 orbit migrate model [--apply|--dry-run]
 orbit doctor [--fix]
 orbit sync
+orbit index <status|rebuild>
 orbit board <host|sync>
 orbit remote <status|connect|disconnect|list|issues|import|link|create|detach|reattach|sync|auto-push>
 orbit triage <context|review|apply>
@@ -762,6 +774,50 @@ filters by event kind (repeatable) and `--limit N` keeps the newest N events.
 matched by Task ID or project key (case-insensitive), which still resolves
 after the Issue is deleted because the timeline comes from Git, not the live
 Board. Both are read-only, idempotent MCP tools (`changes`, `history`).
+
+### Event hooks and the derived index
+
+Two opt-in modules (ADR 0022) sit on top of the feed and the query scans.
+Neither changes the sources of truth — Task files and Git history — and a
+Board that configures neither behaves exactly as before.
+
+**`[[hooks]]` — local command hooks on Board events.** Each `[[hooks]]` rule
+binds event kinds (`issue.created`, `issue.transitioned`, `issue.assigned`,
+`issue.checkpointed`, `issue.commented`, `issue.comments_deleted`,
+`issue.updated`, `issue.deleted`, `board.changed`, or `*` for all) to a shell
+command. After a write command commits — and after `orbit board sync` merges
+host events — the commits it produced are replayed through the same
+derivation the Change feed uses and every matching rule fires once per
+event. The command runs detached via `/bin/sh -c` with the event in its
+environment: `ORBIT_EVENT_JSON` (the full event object), `ORBIT_EVENT_ID`,
+`ORBIT_EVENT_TYPE`, `ORBIT_EVENT_ISSUE`, `ORBIT_EVENT_KEY`,
+`ORBIT_EVENT_ACTOR`, `ORBIT_EVENT_VERB`, `ORBIT_EVENT_COMMIT`,
+`ORBIT_EVENT_AT`, and `ORBIT_BOARD_ROOT` (also the hook's working directory).
+Hook stdout and stderr append to `cache/hooks.log` beside the Board.
+
+Hooks are best-effort: they are spawned after the write commits, the caller
+never waits on them, their exit status is ignored, and a spawn failure lands
+in `meta.warnings` as `HOOK_SPAWN_FAILED` — a hook can never block, fail, or
+change the result of a write. Configuration is validated at Board load: an
+empty `events` list, an unknown event kind, or an empty `command` fails with
+`CONFIG_ERROR`.
+
+**`[index]` — the derived read index.** `index.enabled = true` turns on a
+rebuildable cache at `<orbit>/cache/index.json` holding each Task's parsed
+frontmatter and body stamped with the file's length and modification time.
+The read commands — `list`, `ready` (without `--claim`), `search`, `show`,
+`tree`, `prime`, `digest`, `export` — load through `Graph::load_indexed`,
+which serves entries whose fingerprint still matches the file and re-parses
+the rest exactly as the plain scan does, then refreshes the index.
+Mutations, `ready --claim`, `doctor`, and the batch planner always use the
+authoritative scan. A missing, corrupt, or version-mismatched index degrades
+to the plain scan and is rebuilt; `orbit index rebuild` forces a rebuild
+under the exclusive lock, and `orbit index status` reports `enabled`,
+`present`, `entries`, `fresh`, `stale`, `untracked`, `head`, and `built_at`.
+Both are MCP tools (`index_status`, `index_rebuild`). The module exists
+because the ADR 0022 gate measured the plain scan too slow on large Boards
+— `orbit list`/`ready` exceed one second at 10k Tasks; see
+[benchmarks.md](./benchmarks.md) for the numbers.
 
 ### Automatic push
 
@@ -934,7 +990,7 @@ Every error carries the RFC 9457-style problem fields alongside the legacy ones:
 
 `config.toml` carries `contract = "<semver>"`: the contract version the Board was written for. Every Orbit binary speaks one contract (`orbit_tracker::contract::VERSION`, currently `1.0.0`). `Config::validate` — the choke point every Board open passes through — refuses a Board whose contract is newer than the binary's with `CONTRACT_VERSION_UNSUPPORTED`; an older or equal contract is accepted, and a missing field reads as the current contract.
 
-`orbit capabilities [--json]` is the handshake (ADR 0022). It reads `config.toml` leniently — without validation — so it still answers on a Board every other command refuses. `data` reports `orbit_version`, the binary's `contract`, `capabilities` (the named features this binary provides — the vocabulary Profiles negotiate `requires`/`optional` against), `board.contract` and `board.compatible`, the enabled optional `modules` (`remote` with its projects/trackers and `auto_push`, `workspace` with its include/exclude/detached lists, `scheduler` with its strategy and `wip_limit` when `[scheduler]` is configured; the legacy `[github]` section reports as the `remote` module's `github_adapter`), the Board's applied `profiles` (the `[[profiles]]` record names), and `workflow`: `source` (`template` or `custom`), `template` when templated, `initial`, every `statuses` entry (`name`, `category`, `ready`), and every `transitions` entry (`name`, `from`, `to`, `resolution`). `workflow` is `null` when the Board's `[workflow]` section does not resolve on this binary. The MCP tool `capabilities` exposes the same command.
+`orbit capabilities [--json]` is the handshake (ADR 0022). It reads `config.toml` leniently — without validation — so it still answers on a Board every other command refuses. `data` reports `orbit_version`, the binary's `contract`, `capabilities` (the named features this binary provides — the vocabulary Profiles negotiate `requires`/`optional` against), `board.contract` and `board.compatible`, the enabled optional `modules` (`remote` with its projects/trackers and `auto_push`, `workspace` with its include/exclude/detached lists, `scheduler` with its strategy and `wip_limit` when `[scheduler]` is configured, `hooks` with its rule count when `[[hooks]]` is configured, `index` when `[index] enabled = true`; the legacy `[github]` section reports as the `remote` module's `github_adapter`), the Board's applied `profiles` (the `[[profiles]]` record names), and `workflow`: `source` (`template` or `custom`), `template` when templated, `initial`, every `statuses` entry (`name`, `category`, `ready`), and every `transitions` entry (`name`, `from`, `to`, `resolution`). `workflow` is `null` when the Board's `[workflow]` section does not resolve on this binary. The MCP tool `capabilities` exposes the same command.
 
 ### Batch
 

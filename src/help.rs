@@ -1358,6 +1358,35 @@ Examples:
   orbit sync
   orbit sync --json";
 
+pub const INDEX_LONG: &str = "\
+Inspect or rebuild the derived read index — the opt-in `[index]` module
+(ADR 0022). With `index.enabled = true` in config.toml, read commands
+(`list`, `ready`, `search`, `show`, `tree`, `prime`, `digest`, `export`)
+reuse cached Task parses under `<orbit>/cache/index.json`, re-parsing only
+the files whose metadata changed since they were indexed.
+
+The index is a cache, never a source of truth: Task files and Git history
+always win. `orbit index status` reports its state; `orbit index rebuild`
+forces a full rebuild from the Task files.";
+
+pub const INDEX_EXAMPLES: &str = "\
+Examples:
+  # Opt the Board in, then check what the index holds
+  orbit index status --json
+
+  # Force a rebuild from the Task files
+  orbit index rebuild";
+
+pub const INDEX_STATUS_EXAMPLES: &str = "\
+Examples:
+  orbit index status
+  orbit index status --json";
+
+pub const INDEX_REBUILD_EXAMPLES: &str = "\
+Examples:
+  orbit index rebuild
+  orbit index rebuild --json";
+
 pub const REMOTE_LONG: &str = "\
 Connects an Orbit Board to Remote Trackers. A Remote Tracker is an external
 issue tracker behind Orbit's provider-neutral port; the built-in adapter is

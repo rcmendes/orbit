@@ -187,72 +187,142 @@ impl Graph {
         let mut tasks = HashMap::new();
         let mut issues = Vec::new();
         let ids = board.task_ids()?;
-        let prefix_mismatch = detect_prefix_mismatch(&ids, &board.config.id);
-        let accept_observed_prefix = if let Some(mismatch) = prefix_mismatch {
-            let message = format!(
-                "board prefix is `{}` but {} task files use `{}`; restore `id.prefix` before running other commands",
-                mismatch.configured, mismatch.tasks, mismatch.observed
+        let accept_observed_prefix = Self::check_prefix(board, &ids, mode, &mut issues)?;
+        for id in ids {
+            Self::load_one(
+                board,
+                &id,
+                accept_observed_prefix,
+                mode,
+                &mut tasks,
+                &mut issues,
+            )?;
+        }
+        Self::assemble(board, tasks, issues, mode)
+    }
+
+    /// [`load`] through the opt-in derived index (`[index] enabled`): Tasks
+    /// whose index entry still matches their file's fingerprint are served
+    /// from the cache; every other file is read and parsed exactly as
+    /// [`load`], and the index is refreshed afterwards. Task files remain
+    /// the only source of truth — a missing, stale, or corrupt index simply
+    /// costs a re-parse (ADR 0022). Read commands use this; mutation paths
+    /// keep the authoritative [`load`].
+    pub fn load_indexed(board: &Board, mode: LoadMode) -> Result<(Self, Vec<Issue>)> {
+        if !board.config.index.enabled {
+            return Self::load(board, mode);
+        }
+        let mut issues = Vec::new();
+        let ids = board.task_ids()?;
+        let accept_observed_prefix = Self::check_prefix(board, &ids, mode, &mut issues)?;
+        let mut plan = crate::index::plan(board, &ids);
+        let mut tasks = std::mem::take(&mut plan.tasks);
+        for id in std::mem::take(&mut plan.rescan) {
+            Self::load_one(
+                board,
+                &id,
+                accept_observed_prefix,
+                mode,
+                &mut tasks,
+                &mut issues,
+            )?;
+        }
+        let loaded = Self::assemble(board, tasks, issues, mode)?;
+        crate::index::store(board, &loaded.0.tasks, &plan);
+        Ok(loaded)
+    }
+
+    /// The prefix check shared by [`load`] and [`load_indexed`]: on a
+    /// mismatch, Strict fails with PREFIX_MISMATCH and Lenient reports one
+    /// issue and accepts the observed prefix so the files below do not each
+    /// report CORRUPT_TASK.
+    fn check_prefix(
+        board: &Board,
+        ids: &[String],
+        mode: LoadMode,
+        issues: &mut Vec<Issue>,
+    ) -> Result<bool> {
+        let Some(mismatch) = detect_prefix_mismatch(ids, &board.config.id) else {
+            return Ok(false);
+        };
+        let message = format!(
+            "board prefix is `{}` but {} task files use `{}`; restore `id.prefix` before running other commands",
+            mismatch.configured, mismatch.tasks, mismatch.observed
+        );
+        if mode == LoadMode::Strict {
+            return Err(
+                OrbitError::new(code::PREFIX_MISMATCH, message).with_details(serde_json::json!({
+                    "configured": mismatch.configured,
+                    "observed": mismatch.observed,
+                    "tasks": mismatch.tasks,
+                })),
+            );
+        }
+        issues.push(Issue::new(code::PREFIX_MISMATCH, None, message));
+        Ok(true)
+    }
+
+    /// Reads and parses one Task file into `tasks`, honoring `mode`: Strict
+    /// returns the first failure, Lenient collects it as an [`Issue`].
+    fn load_one(
+        board: &Board,
+        id: &str,
+        accept_observed_prefix: bool,
+        mode: LoadMode,
+        tasks: &mut HashMap<String, Task>,
+        issues: &mut Vec<Issue>,
+    ) -> Result<()> {
+        // With one PREFIX_MISMATCH reported, the files are known to use the
+        // observed prefix, so accept their IDs instead of one CORRUPT_TASK
+        // per file. Structural validation still runs below.
+        if !accept_observed_prefix && !board.config.id.is_valid_task_id(id) {
+            let issue = Issue::new(
+                code::CORRUPT_TASK,
+                Some(id),
+                format!("filename {id}.md is not a valid task id"),
             );
             if mode == LoadMode::Strict {
-                return Err(
-                    OrbitError::new(code::PREFIX_MISMATCH, message).with_details(
-                        serde_json::json!({
-                            "configured": mismatch.configured,
-                            "observed": mismatch.observed,
-                            "tasks": mismatch.tasks,
-                        }),
-                    ),
-                );
+                return Err(OrbitError::corrupt_task(issue.message));
             }
-            issues.push(Issue::new(code::PREFIX_MISMATCH, None, message));
-            true
-        } else {
-            false
-        };
-
-        for id in ids {
-            // With one PREFIX_MISMATCH reported, the files are known to use the
-            // observed prefix, so accept their IDs instead of one CORRUPT_TASK
-            // per file. Structural validation still runs below.
-            if !accept_observed_prefix && !board.config.id.is_valid_task_id(&id) {
-                let issue = Issue::new(
-                    code::CORRUPT_TASK,
-                    Some(&id),
-                    format!("filename {id}.md is not a valid task id"),
-                );
-                if mode == LoadMode::Strict {
-                    return Err(OrbitError::corrupt_task(issue.message));
-                }
-                issues.push(issue);
-                continue;
-            }
-
-            let path = board.task_path(&id);
-            let content = match std::fs::read_to_string(&path) {
-                Ok(content) => content,
-                Err(error) => {
-                    let error = OrbitError::io(format!("read {}", path.display()), error);
-                    if mode == LoadMode::Strict {
-                        return Err(error);
-                    }
-                    issues.push(Issue::new(error.code, Some(&id), error.message));
-                    continue;
-                }
-            };
-
-            match task::parse_task(id.clone(), &content) {
-                Ok(parsed) => {
-                    tasks.insert(id, parsed);
-                }
-                Err(error) => {
-                    if mode == LoadMode::Strict {
-                        return Err(error);
-                    }
-                    issues.push(Issue::new(error.code, Some(&id), error.message));
-                }
-            }
+            issues.push(issue);
+            return Ok(());
         }
 
+        let path = board.task_path(id);
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                let error = OrbitError::io(format!("read {}", path.display()), error);
+                if mode == LoadMode::Strict {
+                    return Err(error);
+                }
+                issues.push(Issue::new(error.code, Some(id), error.message));
+                return Ok(());
+            }
+        };
+
+        match task::parse_task(id.to_string(), &content) {
+            Ok(parsed) => {
+                tasks.insert(id.to_string(), parsed);
+            }
+            Err(error) => {
+                if mode == LoadMode::Strict {
+                    return Err(error);
+                }
+                issues.push(Issue::new(error.code, Some(id), error.message));
+            }
+        }
+        Ok(())
+    }
+
+    /// Builds the Graph from parsed Tasks and runs structural validation —
+    /// the shared tail of [`load`] and [`load_indexed`].
+    fn assemble(
+        board: &Board,
+        tasks: HashMap<String, Task>,
+        mut issues: Vec<Issue>,
+        mode: LoadMode,
+    ) -> Result<(Self, Vec<Issue>)> {
         let workflow = board.workflow()?;
         let (keys, aliases) = Self::build_key_indices(&tasks);
         let graph = Self {

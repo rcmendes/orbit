@@ -49,6 +49,8 @@ fn hook_log(repo: &TestRepo, name: &str) -> PathBuf {
     repo.path().join(format!("hook-{name}.log"))
 }
 
+// Hook commands are POSIX shell and the log path sits in a TOML string.
+#[cfg(unix)]
 #[test]
 fn hook_fires_on_matching_event_with_event_env() {
     let repo = TestRepo::new();
@@ -72,6 +74,8 @@ fn hook_fires_on_matching_event_with_event_env() {
     assert!(contents.contains("hooker"), "{contents}");
 }
 
+// Hook commands are POSIX shell and the log path sits in a TOML string.
+#[cfg(unix)]
 #[test]
 fn hook_receives_full_event_json() {
     let repo = TestRepo::new();
@@ -99,6 +103,8 @@ fn hook_receives_full_event_json() {
     assert_eq!(event["actor"], "hook-tester");
 }
 
+// Hook commands are POSIX shell and the log path sits in a TOML string.
+#[cfg(unix)]
 #[test]
 fn hook_only_fires_for_configured_events() {
     let repo = TestRepo::new();
@@ -187,6 +193,8 @@ fn hook_config_is_validated() {
     assert!(message.contains("command"), "{message}");
 }
 
+// Hook commands are POSIX shell and the log path sits in a TOML string.
+#[cfg(unix)]
 #[test]
 fn hooks_do_not_run_unless_the_machine_trusts_them() {
     let repo = TestRepo::new();

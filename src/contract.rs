@@ -6,8 +6,10 @@
 //! older binary never silently misreads a newer Board. `orbit capabilities`
 //! reports both versions so a consumer can negotiate before choosing commands.
 //!
-//! Boards written before the field existed parse to [`VERSION`]: every Board
-//! in the wild predates the versioned contract, so absence means "current".
+//! A `config.toml` without the field reads as the current contract when it
+//! parses; when it does not parse (a pre-model config), `Config::load` fails with
+//! `MODEL_NOT_MIGRATED` pointing at `orbit migrate model`. A Board on an older
+//! major is refused the same way.
 
 use crate::error::{OrbitError, Result, code};
 
@@ -67,6 +69,14 @@ pub fn binary_semver() -> Semver {
 pub fn check_compatible(board_contract: &str) -> Result<()> {
     let board = Semver::parse(board_contract)?;
     let binary = binary_semver();
+    if board.major < binary.major {
+        return Err(OrbitError::new(
+            code::MODEL_NOT_MIGRATED,
+            format!(
+                "Board contract {board_contract} is older than this orbit's major ({VERSION}); run `orbit migrate model`"
+            ),
+        ));
+    }
     if board > binary {
         return Err(OrbitError::new(
             code::CONTRACT_VERSION_UNSUPPORTED,
@@ -107,7 +117,10 @@ mod tests {
         let error = check_compatible("99.0.0").unwrap_err();
         assert_eq!(error.code, code::CONTRACT_VERSION_UNSUPPORTED);
         assert!(check_compatible(VERSION).is_ok());
-        assert!(check_compatible("0.9.0").is_ok());
+        assert_eq!(
+            check_compatible("0.9.0").unwrap_err().code,
+            code::MODEL_NOT_MIGRATED
+        );
         assert!(check_compatible("not-semver").is_err());
     }
 }

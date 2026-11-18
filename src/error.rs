@@ -21,6 +21,7 @@ pub mod code {
     pub const SLUG_LOCKED: &str = "SLUG_LOCKED";
     pub const MIGRATION_BLOCKED: &str = "MIGRATION_BLOCKED";
     pub const BOARD_NOT_MIGRATED: &str = "BOARD_NOT_MIGRATED";
+    pub const MODEL_NOT_MIGRATED: &str = "MODEL_NOT_MIGRATED";
     pub const PREFIX_COLLISION: &str = "PREFIX_COLLISION";
     pub const PREFIX_MISMATCH: &str = "PREFIX_MISMATCH";
     pub const INVALID_TYPE: &str = "INVALID_TYPE";
@@ -86,6 +87,7 @@ pub mod code {
     pub const PROFILE_UNMET: &str = "PROFILE_UNMET";
     pub const VERSION_CONFLICT: &str = "VERSION_CONFLICT";
     pub const INVALID_IDEMPOTENCY_KEY: &str = "INVALID_IDEMPOTENCY_KEY";
+    pub const IDEMPOTENCY_KEY_REUSED: &str = "IDEMPOTENCY_KEY_REUSED";
     pub const POLICY_VIOLATION: &str = "POLICY_VIOLATION";
     pub const ASK_OPEN: &str = "ASK_OPEN";
 }

@@ -41,6 +41,8 @@ fn make_legacy_config(board: &Path) {
     );
     if let Some(table) = config.as_table_mut() {
         table.remove("workflow");
+        // Pre-model Boards predate the versioned contract field.
+        table.remove("contract");
     }
     std::fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
 }
@@ -300,4 +302,41 @@ fn copy_dir(source: &Path, target: &Path) {
             std::fs::copy(&from, &to).unwrap();
         }
     }
+}
+
+#[test]
+fn legacy_board_error_names_the_migration() {
+    let (repo, _board) = legacy_board();
+    let (_, value) = repo.err_json(&["list", "--json"]);
+    assert_eq!(value["error"]["code"], "MODEL_NOT_MIGRATED", "{value}");
+    assert!(
+        value["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("migrate model"),
+        "{value}"
+    );
+    // The migration itself still opens the legacy Board.
+    repo.ok_json(&["migrate", "model", "--json"]);
+}
+
+#[test]
+fn keys_follow_creation_order_not_id_spelling() {
+    let (repo, board) = legacy_board();
+    write_task(
+        &board,
+        "orb-aaa111",
+        "---\ntitle: Later\nstatus: todo\npriority: 1\ntype: task\ncreated_at: 2026-02-01T00:00:00Z\nupdated_at: 2026-02-01T00:00:00Z\n---\n\nB\n",
+    );
+    write_task(
+        &board,
+        "orb-zzz999",
+        "---\ntitle: Earlier\nstatus: todo\npriority: 1\ntype: task\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nB\n",
+    );
+    commit_all(&repo, &board, "tasks");
+    repo.ok_json(&["migrate", "model", "--apply", "--json"]);
+    let earlier = std::fs::read_to_string(board.join("tasks/orb-zzz999.md")).unwrap();
+    let later = std::fs::read_to_string(board.join("tasks/orb-aaa111.md")).unwrap();
+    assert!(earlier.contains("-1\n"), "{earlier}");
+    assert!(later.contains("-2\n"), "{later}");
 }

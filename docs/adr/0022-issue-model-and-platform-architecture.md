@@ -97,7 +97,9 @@ strategies — critical path, touches-overlap avoidance, capability claim, WIP
 limits — are modules a Board or caller selects. Command hooks and a derived
 search index are built only if a benchmark on a large Board shows the plain scan
 is too slow; the index is rebuildable from files and git and hooks never block
-a write.
+a write. Because `config.toml` is synced with the Board, a hook command is
+untrusted input on any machine that did not author it: hooks run only where
+`ORBIT_TRUST_HOOKS=1` is set, and otherwise a write warns `HOOKS_UNTRUSTED`.
 
 **Profiles.** A declarative profile (TOML) translates a plugin's vocabulary onto
 Orbit: `requires`/`optional` capabilities, vocabulary mapping, a workflow

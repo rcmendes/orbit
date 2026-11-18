@@ -455,7 +455,7 @@ pub fn link(graph: &mut Graph, id: &str, mut link: task::Link, now: DateTime<Utc
         }
     }
     if link.is_blocking() && link.target_task() == Some(id) {
-        return Err(cycle_error(&[id.to_string(), id.to_string()]));
+        return Err(cycle_error(graph, &[id.to_string(), id.to_string()]));
     }
     if graph
         .get(id)?
@@ -470,7 +470,7 @@ pub fn link(graph: &mut Graph, id: &str, mut link: task::Link, now: DateTime<Utc
         && let Some(target) = link.target_task()
         && let Some(cycle) = graph.would_create_cycle(id, target)
     {
-        return Err(cycle_error(&cycle));
+        return Err(cycle_error(graph, &cycle));
     }
     graph.get_mut(id)?.add_link(link, now);
     Ok(true)
@@ -566,12 +566,13 @@ pub fn undepend(graph: &mut Graph, id: &str, on: &str, now: DateTime<Utc>) -> Re
     Ok(changed)
 }
 
-pub(crate) fn cycle_error(path: &[String]) -> OrbitError {
+pub(crate) fn cycle_error(graph: &Graph, path: &[String]) -> OrbitError {
+    let shown: Vec<String> = path.iter().map(|id| graph.display_id(id)).collect();
     OrbitError::new(
         code::CYCLE_DETECTED,
-        format!("dependency cycle: {}", path.join(" -> ")),
+        format!("dependency cycle: {}", shown.join(" -> ")),
     )
-    .with_details(serde_json::json!({ "cycle": path }))
+    .with_details(serde_json::json!({ "cycle": path, "cycle_keys": shown }))
 }
 
 fn lease(board: &Board) -> chrono::Duration {

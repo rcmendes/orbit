@@ -144,6 +144,18 @@ pub(crate) fn default_hint(error_code: &str) -> String {
         code::VERSION_CONFLICT => {
             "Re-read the Task (`orbit show <id>`) and retry with its current `updated_at` as --if-version.".to_string()
         }
+        code::MODEL_NOT_MIGRATED => {
+            "Run `orbit migrate model` to preview, then `orbit migrate model --apply`.".to_string()
+        }
+        code::IDEMPOTENCY_KEY_REUSED => {
+            "Use a fresh --idempotency-key for a different request, or repeat the original request unchanged.".to_string()
+        }
+        code::CYCLE_DETECTED => {
+            "Remove or reverse one of the blocking links in the cycle (`orbit link list <id>`).".to_string()
+        }
+        code::EPHEMERAL_BIN => {
+            "Install orbit to a stable path (not a temp or build directory) and run it from there.".to_string()
+        }
         code::DEPENDENCY_BLOCKED | code::SUBTASKS_OPEN | code::LABEL_BLOCKED => {
             "Resolve the blocking Issues listed in details first.".to_string()
         }

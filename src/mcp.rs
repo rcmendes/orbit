@@ -272,6 +272,13 @@ fn dispatch_tool(
         }
     }
 
+    // IDs and keys never start with `-`; refuse them rather than let the CLI parse a flag.
+    if let Some(id) = arguments.get("id").and_then(Value::as_str)
+        && id.starts_with('-')
+    {
+        return tool_invalid("`id` must not start with `-`");
+    }
+
     let mut args: Vec<String> = Vec::new();
     // A Batch travels as a temporary file because tool calls spawn the CLI without stdin.
     let mut batch_file: Option<std::path::PathBuf> = None;
@@ -502,7 +509,6 @@ fn dispatch_tool(
                 return tool_invalid("missing or invalid `title`");
             };
             args.push("add".to_string());
-            args.push(title);
             if let Some(parent) = optional_str(arguments, "parent") {
                 args.push("--parent".to_string());
                 args.push(parent);
@@ -544,6 +550,8 @@ fn dispatch_tool(
                 args.push("--body".to_string());
                 args.push(body);
             }
+            args.push("--".to_string());
+            args.push(title);
         }
         "update" => {
             let Some(id) = required_str(arguments, "id") else {
@@ -954,12 +962,10 @@ fn dispatch_tool(
     // the mutation tools' schemas; forward them for custom and registry-driven
     // tools alike. The CLI itself rejects them where they do not apply.
     if let Some(version) = optional_str(arguments, "if_version") {
-        args.push("--if-version".to_string());
-        args.push(version);
+        push_flag(&mut args, "--if-version", version);
     }
     if let Some(key) = optional_str(arguments, "idempotency_key") {
-        args.push("--idempotency-key".to_string());
-        args.push(key);
+        push_flag(&mut args, "--idempotency-key", key);
     }
 
     let outcome = run_orbit(executable, dir, &args, true);
@@ -1071,10 +1077,16 @@ fn run_orbit(
     if let Some(dir) = dir {
         command.arg("--dir").arg(dir);
     }
-    command.args(args);
+    // `--json` must precede any `--` or it would be read as a positional.
+    let split = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    command.args(&args[..split]);
     if json {
         command.arg("--json");
     }
+    command.args(&args[split..]);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1090,6 +1102,15 @@ fn run_orbit(
         success: output.status.success(),
         code: output.status.code(),
     })
+}
+
+/// Appends `flag value`, ahead of any `--` so trailing positionals stay positional.
+fn push_flag(args: &mut Vec<String>, flag: &str, value: String) {
+    let at = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    args.splice(at..at, [flag.to_string(), value]);
 }
 
 fn required_str(arguments: &Value, key: &str) -> Option<String> {

@@ -781,10 +781,41 @@ fn mutation_tools_expose_and_forward_concurrency_arguments() {
     let replay = client.call(
         5,
         "update",
-        json!({ "id": id, "title": "Other", "idempotency_key": "mcp-k1" }),
+        json!({ "id": id, "title": "Renamed", "idempotency_key": "mcp-k1" }),
     );
     let replayed = tool_envelope(&replay);
     assert_eq!(replayed["ok"], true, "{replayed}");
     assert_eq!(replayed["data"]["title"], "Renamed", "{replayed}");
     assert_eq!(replayed["meta"]["idempotent_replay"], true, "{replayed}");
+
+    // The same key with a different request is refused, not replayed.
+    let reused = client.call(
+        6,
+        "update",
+        json!({ "id": id, "title": "Other", "idempotency_key": "mcp-k1" }),
+    );
+    let reused = tool_envelope(&reused);
+    assert_eq!(
+        reused["error"]["code"], "IDEMPOTENCY_KEY_REUSED",
+        "{reused}"
+    );
+}
+
+#[test]
+fn positional_values_that_look_like_flags_stay_data() {
+    let repo = TestRepo::new();
+    repo.init();
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let created = tool_envelope(&client.call(
+        10,
+        "create",
+        json!({ "title": "--dir=/tmp/elsewhere", "idempotency_key": "dash-1" }),
+    ));
+    assert_eq!(created["ok"], true, "{created}");
+    assert_eq!(created["data"]["title"], "--dir=/tmp/elsewhere");
+
+    let bad_id = tool_envelope(&client.call(11, "get", json!({ "id": "--dir=/tmp" })));
+    assert_eq!(bad_id["ok"], false, "{bad_id}");
 }

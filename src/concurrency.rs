@@ -12,13 +12,12 @@
 //! recorded result instead of running again. Only successful outputs are
 //! recorded; a failed call leaves the key free for a real retry.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::board::{Board, board_cache_dir};
 use crate::error::{OrbitError, Result, code};
@@ -110,6 +109,11 @@ struct IdempotencyRecord {
     /// Record format version; bump when the shape changes.
     version: u32,
     key: String,
+    /// SHA-256 of the request that produced `result`; a reused key with a
+    /// different request is rejected instead of replayed. Empty on records
+    /// written before the fingerprint existed (those replay unchecked).
+    #[serde(default)]
+    fingerprint: String,
     created_at: DateTime<Utc>,
     result: StoredResult,
 }
@@ -122,9 +126,31 @@ fn records_dir(board: &Board) -> PathBuf {
 
 /// The record path for `key`: a hash keeps arbitrary keys filesystem-safe.
 fn record_path(board: &Board, key: &str) -> PathBuf {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    records_dir(board).join(format!("{:016x}.json", hasher.finish()))
+    records_dir(board).join(format!("{}.json", hex(&Sha256::digest(key.as_bytes()))))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Fingerprint of the invoking command line minus the idempotency flag, so the
+/// same key can only ever replay the same request (CLI and MCP both reach
+/// orbit through argv).
+fn request_fingerprint() -> String {
+    let mut hasher = Sha256::new();
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--idempotency-key" {
+            args.next();
+            continue;
+        }
+        if arg.starts_with("--idempotency-key=") {
+            continue;
+        }
+        hasher.update((arg.len() as u64).to_le_bytes());
+        hasher.update(arg.as_bytes());
+    }
+    hex(&hasher.finalize())
 }
 
 fn read_record(path: &std::path::Path) -> Result<Option<IdempotencyRecord>> {
@@ -155,6 +181,12 @@ pub fn lookup(board: &Board, key: &str) -> Result<Option<CommandOutput>> {
         // simply records over the stale file.
         return Ok(None);
     }
+    if !record.fingerprint.is_empty() && record.fingerprint != request_fingerprint() {
+        return Err(OrbitError::new(
+            code::IDEMPOTENCY_KEY_REUSED,
+            format!("idempotency key `{key}` was already used for a different request"),
+        ));
+    }
     let stored = record.result;
     let mut output = CommandOutput::new(stored.data, stored.human);
     output.meta = stored.meta;
@@ -177,6 +209,7 @@ pub fn store(board: &Board, key: &str, output: &CommandOutput) -> Result<()> {
     let record = IdempotencyRecord {
         version: RECORD_VERSION,
         key: key.to_string(),
+        fingerprint: request_fingerprint(),
         created_at: Utc::now(),
         result: StoredResult {
             data: output.data.clone(),

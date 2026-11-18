@@ -479,6 +479,10 @@ pub fn find(name: &str, dir: Option<&Path>) -> Result<Option<ResolvedProfile>> {
         }
     }
 
+    // A bare name never carries a path separator (paths are handled above).
+    if name.contains(['/', '\\']) || name.starts_with('.') {
+        return Ok(None);
+    }
     for (directory, source) in search_dirs(dir) {
         let candidate = directory.join(format!("{name}.toml"));
         if candidate.is_file() {

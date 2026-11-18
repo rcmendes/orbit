@@ -133,14 +133,23 @@ pub fn cmd_model(args: &ModelMigrateArgs, dir: Option<&Path>) -> Result<CommandO
         ));
     }
 
+    // Hold the Board lock before reading any issue so a concurrent writer cannot land
+    // between the scan and the apply and be overwritten by stale renderings.
+    let _lock = if args.apply {
+        Some(crate::lock::BoardLock::acquire(
+            &root.join(".lock"),
+            plan_lock_timeout(&root)?,
+            true,
+        )?)
+    } else {
+        None
+    };
     let plan = build_plan(&root)?;
 
     if args.apply && plan.needed && !plan.stats.new_issues.is_empty() {
         return Err(blocked_by_issues(&plan.stats.new_issues));
     }
     if args.apply && plan.needed {
-        let _lock =
-            crate::lock::BoardLock::acquire(&root.join(".lock"), plan_lock_timeout(&root)?, true)?;
         let applied = apply(&plan)?;
         let mut data = plan_data(&plan, true);
         data["commit"] = applied
@@ -152,6 +161,8 @@ pub fn cmd_model(args: &ModelMigrateArgs, dir: Option<&Path>) -> Result<CommandO
             human.push_str(&format!("  committed as {commit}\n"));
         }
         human.push_str("  run `orbit doctor` to verify the migrated Board\n");
+        human
+            .push_str("  to roll back, reset the Board repository to the commit before this one\n");
         let mut output = CommandOutput::new(data, human);
         output.warnings = plan.stats.warnings.clone();
         output.warnings.extend(applied.warnings);
@@ -445,6 +456,8 @@ fn build_plan(root: &Path) -> Result<Plan> {
 
     // Field transforms first (status, priority, extra keys, labels, keys) —
     // none depend on other Tasks.
+    // Allocate keys in creation order so ORB-N follows chronology, not id spelling.
+    tasks.sort_by(|a, b| (a.task.front.created_at, &a.id).cmp(&(b.task.front.created_at, &b.id)));
     for entry in &mut tasks {
         migrate_fields(&mut ctx, &mut entry.task);
     }
@@ -515,10 +528,16 @@ fn build_plan(root: &Path) -> Result<Plan> {
     let baseline_issues = baseline_graph.validate();
     let baseline_keys = issue_keys(&baseline_issues);
     ctx.stats.baseline_issues = baseline_issues;
-    ctx.stats.new_issues = planned_issues
+    let (carried, introduced): (Vec<_>, Vec<_>) = planned_issues
         .into_iter()
-        .filter(|issue| !baseline_keys.contains(&issue_key(issue)))
-        .collect();
+        .partition(|issue| baseline_keys.contains(&issue_key(issue)));
+    for issue in &carried {
+        ctx.stats.warnings.push(format!(
+            "pre-existing Board problem kept (run `orbit doctor`): {} {}",
+            issue.code, issue.message
+        ));
+    }
+    ctx.stats.new_issues = introduced;
 
     Ok(Plan {
         root: root.to_path_buf(),
@@ -631,8 +650,7 @@ fn migrate_fields(ctx: &mut Ctx, task: &mut Task) {
                 .insert("repo".to_string(), serde_yaml_ng::Value::String(repository));
         }
     }
-    if front.extra.contains_key("annotations") {
-        let annotations = front.extra.remove("annotations").unwrap();
+    if let Some(annotations) = front.extra.remove("annotations") {
         match annotations_to_properties(&annotations) {
             Ok(incoming) => {
                 // Pre-check every owner so a conflict moves nothing.

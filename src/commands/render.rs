@@ -451,7 +451,12 @@ pub(super) fn format_detail(
                 crate::task::LinkTarget::Task(id) => graph.display_id(id),
                 other => other.label(),
             };
-            let mut line = format!("link {} {}", link.kind, target_label);
+            let mut line = format!(
+                "link {} {} ({})",
+                link.inward_name(),
+                target_label,
+                link.kind
+            );
             if link.is_blocking() {
                 line.push_str(" (blocking)");
             }

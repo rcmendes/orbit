@@ -1666,6 +1666,8 @@ orbit sync              # commit anything left uncommitted
 | --- | --- |
 | `NO_READY_TASKS` | Not an error: nothing is startable. Wait, triage, or remove a hold label. |
 | `VERSION_CONFLICT` | The Issue changed since the `--if-version` you passed. Re-read it with `orbit show <id>` and retry with the current `updated_at`; the error is retryable and carries `details.actual_version`. |
+| `IDEMPOTENCY_KEY_REUSED` | The `--idempotency-key` was already used for a different request; use a fresh key. |
+| `MODEL_NOT_MIGRATED` | The Board's `config.toml` has no `contract` (or an older major); run `orbit migrate model`. |
 | `INVALID_IDEMPOTENCY_KEY` | `--idempotency-key` must be 1–200 printable ASCII characters without spaces. |
 | `ALREADY_CLAIMED` | Another agent holds a live lease. Pick other work, or `--steal` to take it over. |
 | `CLAIM_STALE` | The holder's lease expired. Recover with `orbit claim <id> --steal`. |

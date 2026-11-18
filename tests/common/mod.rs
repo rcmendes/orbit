@@ -431,6 +431,7 @@ impl TestRepo {
         command.env("PATH", &self.path);
         command.env_remove("ORBIT_DIR");
         command.env_remove("ORBIT_AGENT");
+        command.env("ORBIT_TRUST_HOOKS", "1");
         command
     }
 }

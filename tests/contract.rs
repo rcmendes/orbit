@@ -470,7 +470,7 @@ fn older_binary_refuses_a_newer_board_but_capabilities_answers() {
 }
 
 #[test]
-fn an_older_board_contract_is_accepted() {
+fn an_older_major_board_contract_points_at_the_migration() {
     let repo = TestRepo::new();
     repo.init();
     let config_path = repo.board_path().join("config.toml");
@@ -483,8 +483,35 @@ fn an_older_board_contract_is_accepted() {
         ),
     )
     .unwrap();
-    repo.ok_json(&["list", "--json"]);
+    let (_, error) = repo.err_json(&["list", "--json"]);
+    assert_eq!(error["error"]["code"], "MODEL_NOT_MIGRATED", "{error}");
     let value = repo.ok_json(&["capabilities", "--json"]);
     assert_eq!(value["data"]["board"]["contract"], "0.5.0");
-    assert_eq!(value["data"]["board"]["compatible"], true);
+    assert_eq!(value["data"]["board"]["compatible"], false);
+}
+
+/// The command registry is the frozen contract surface. Any change to it must
+/// ship with a `contract::VERSION` bump: update `EXPECTED` (version and hash)
+/// in the same diff, deliberately.
+#[test]
+fn registry_surface_is_pinned_to_the_contract_version() {
+    use sha2::{Digest, Sha256};
+    // (contract version, SHA-256 of `orbit schema` minus `orbit_version`)
+    const EXPECTED: (&str, &str) = (
+        "1.0.0",
+        "c60d4292011adefe50b2e5387f94683a4a240822b9eba22ede1c3b9a507d1cf8",
+    );
+
+    let repo = TestRepo::new();
+    repo.init();
+    let version = orbit_tracker::contract::VERSION;
+    let mut schema = repo.ok_json(&["schema", "--json"])["data"].clone();
+    schema.as_object_mut().unwrap().remove("orbit_version");
+    let digest = Sha256::digest(serde_json::to_string(&schema).unwrap().as_bytes());
+    let hash: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(
+        (version, hash.as_str()),
+        EXPECTED,
+        "the command registry or contract version changed: bump contract::VERSION for a surface change, then update EXPECTED"
+    );
 }

@@ -5,6 +5,10 @@
 //! are replayed and every matching rule fires: the command is spawned
 //! detached through `sh -c` with the event in `ORBIT_EVENT_*` variables.
 //!
+//! Trust: `config.toml` is synced with the Board, so hook commands run only on
+//! machines that opt in with `ORBIT_TRUST_HOOKS=1`; otherwise a write warns
+//! `HOOKS_UNTRUSTED` and runs nothing (ADR 0022).
+//!
 //! Hooks are strictly best-effort. They run detached so they never block a
 //! write, their exit status is ignored, and a spawn failure degrades to a
 //! command warning rather than an error. Hook stdout and stderr append to
@@ -80,6 +84,13 @@ pub fn validate(rules: &[HookRule]) -> Result<()> {
     Ok(())
 }
 
+/// Per-machine opt-in for running Board-defined hook commands.
+pub const TRUST_ENV: &str = "ORBIT_TRUST_HOOKS";
+
+fn trusted() -> bool {
+    std::env::var(TRUST_ENV).is_ok_and(|value| value == "1")
+}
+
 /// Whether the Board has any hook rules configured.
 pub fn enabled(board: &Board) -> bool {
     !board.config.hooks.is_empty()
@@ -91,6 +102,14 @@ pub fn enabled(board: &Board) -> bool {
 pub fn fire_since(board: &Board, since: &str) -> Vec<String> {
     if !enabled(board) {
         return Vec::new();
+    }
+    // `config.toml` travels with the Board (pushed and pulled), so a hook rule is
+    // untrusted input on any machine that did not write it: run nothing until the
+    // local user opts in.
+    if !trusted() {
+        return vec![format!(
+            "HOOKS_UNTRUSTED: this Board defines [[hooks]] but {TRUST_ENV}=1 is not set on this machine; no hook ran"
+        )];
     }
     let events = match feed::collect(board, Some(since)) {
         Ok(feed) => feed.events,
@@ -150,12 +169,20 @@ fn spawn(board: &Board, rule: &HookRule, event: &BoardEvent) -> std::result::Res
             command.stdout(Stdio::null()).stderr(Stdio::null());
         }
     }
-    command.spawn().map(|_| ()).map_err(|error| {
-        format!(
-            "HOOK_SPAWN_FAILED: `{}` could not start: {error}",
-            rule.command
-        )
-    })
+    command
+        .spawn()
+        .map(|mut child| {
+            // Reap the child so a long-lived `orbit mcp` does not accumulate zombies.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        })
+        .map_err(|error| {
+            format!(
+                "HOOK_SPAWN_FAILED: `{}` could not start: {error}",
+                rule.command
+            )
+        })
 }
 
 /// `/bin/sh -c <command>` on Unix (the absolute path survives a stripped

@@ -2123,6 +2123,8 @@ pub fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<Strin
     }
 
     let mut argv: Vec<String> = tool.argv.iter().map(|token| token.to_string()).collect();
+    // Positionals go after `--` so a value like `--dir=/x` or `-1 fix` is data, never a flag.
+    let mut positionals: Vec<String> = Vec::new();
     for arg in tool.args {
         let value = object.get(arg.name).filter(|value| !value.is_null());
         let Some(cli) = arg.cli else {
@@ -2140,14 +2142,14 @@ pub fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<Strin
                         let Some(text) = stringify(item) else {
                             return Err(format!("`{}` must be a string", arg.name));
                         };
-                        argv.push(text);
+                        positionals.push(text);
                     }
                 }
                 Some(value) => {
                     let Some(text) = stringify(value) else {
                         return Err(format!("`{}` must be a string", arg.name));
                     };
-                    argv.push(text);
+                    positionals.push(text);
                 }
             },
             CliTarget::Long(flag) => match value {
@@ -2187,6 +2189,10 @@ pub fn tool_argv(name: &str, arguments: &Value) -> std::result::Result<Vec<Strin
                 Some(_) => return Err(format!("`{}` must be an array of strings", arg.name)),
             },
         }
+    }
+    if !positionals.is_empty() {
+        argv.push("--".to_string());
+        argv.extend(positionals);
     }
     Ok(argv)
 }
@@ -2453,7 +2459,7 @@ mod tests {
     #[test]
     fn tool_argv_builds_expected_commands() {
         let cases: &[(&str, Value, &[&str])] = &[
-            ("tree", json!({"id": "orb-1"}), &["tree", "orb-1"]),
+            ("tree", json!({"id": "orb-1"}), &["tree", "--", "orb-1"]),
             (
                 "prime",
                 json!({"by": "devin", "labels": ["a", "b"], "hook_json": true}),
@@ -2471,7 +2477,7 @@ mod tests {
             (
                 "slug_migrate",
                 json!({"slug": "atlas", "dry_run": true}),
-                &["slug", "migrate", "atlas", "--dry-run"],
+                &["slug", "migrate", "--dry-run", "--", "atlas"],
             ),
             (
                 "remote_issues",
@@ -2486,9 +2492,10 @@ mod tests {
                 &[
                     "remote",
                     "import",
+                    "--apply",
+                    "--",
                     "github:o/r#1",
                     "github:o/r#2",
-                    "--apply",
                 ],
             ),
             (
@@ -2499,7 +2506,7 @@ mod tests {
             (
                 "remote_auto_push",
                 json!({"state": "off"}),
-                &["remote", "auto-push", "off"],
+                &["remote", "auto-push", "--", "off"],
             ),
             (
                 "migrate_model",

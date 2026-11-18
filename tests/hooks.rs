@@ -186,3 +186,26 @@ fn hook_config_is_validated() {
     let message = value["error"]["message"].as_str().unwrap();
     assert!(message.contains("command"), "{message}");
 }
+
+#[test]
+fn hooks_do_not_run_unless_the_machine_trusts_them() {
+    let repo = TestRepo::new();
+    repo.init();
+    let task = repo.add("Untrusted hook", &[]);
+    let log = hook_log(&repo, "untrusted");
+    configure_hooks(
+        &repo,
+        &format!(
+            "\n[[hooks]]\nevents = [\"*\"]\ncommand = \"echo fired >> '{}'\"\n",
+            log.display()
+        ),
+    );
+
+    let mut command = repo.orbit_command(&["claim", &task, "--by", "hooker", "--json"]);
+    command.env_remove("ORBIT_TRUST_HOOKS");
+    let output = command.output().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("HOOKS_UNTRUSTED"));
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(!log.exists(), "an untrusted hook must not run");
+}

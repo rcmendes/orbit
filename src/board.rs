@@ -291,6 +291,22 @@ impl Default for Config {
     }
 }
 
+/// `true` when `config.toml` text has no `contract` field — a Board written
+/// before the Issue model contract.
+pub fn lacks_contract(content: &str) -> bool {
+    toml::from_str::<toml::Value>(content).is_ok_and(|raw| raw.get("contract").is_none())
+}
+
+pub fn model_not_migrated(root: &Path) -> OrbitError {
+    OrbitError::new(
+        code::MODEL_NOT_MIGRATED,
+        format!(
+            "the Board at {} predates the Issue model contract; run `orbit migrate model` to preview and `orbit migrate model --apply` to convert it",
+            root.display()
+        ),
+    )
+}
+
 impl Config {
     pub fn load(root: &Path) -> Result<Self> {
         let path = root.join("config.toml");
@@ -304,8 +320,14 @@ impl Config {
             }
         };
 
-        let config: Config = toml::from_str(&content)
-            .map_err(|error| OrbitError::config(format!("invalid {}: {error}", path.display())))?;
+        let config: Config = toml::from_str(&content).map_err(|error| {
+            // A pre-model config fails on fields the model changed; name the
+            // migration instead of the raw parse error.
+            if lacks_contract(&content) {
+                return model_not_migrated(root);
+            }
+            OrbitError::config(format!("invalid {}: {error}", path.display()))
+        })?;
         config.validate()?;
         Ok(config)
     }

@@ -266,17 +266,23 @@ fn idempotency_key_replays_the_first_result() {
     let first = repo.ok_json(&["add", "Once", "--idempotency-key", "k-1", "--json"]);
     let id = first["data"]["id"].as_str().unwrap().to_string();
 
-    // A retry with a different payload still returns the recorded result.
-    let again = repo.ok_json(&[
+    // The identical retry replays the recorded result.
+    let again = repo.ok_json(&["add", "Once", "--idempotency-key", "k-1", "--json"]);
+    assert_eq!(again["data"]["id"], id);
+    assert_eq!(again["meta"]["idempotent_replay"], true, "{again}");
+
+    // Reusing the key for a different request is refused, never silently replayed.
+    let (_, reused) = repo.err_json(&[
         "add",
         "Different title",
         "--idempotency-key",
         "k-1",
         "--json",
     ]);
-    assert_eq!(again["data"]["id"], id);
-    assert_eq!(again["data"]["title"], "Once");
-    assert_eq!(again["meta"]["idempotent_replay"], true, "{again}");
+    assert_eq!(
+        reused["error"]["code"], "IDEMPOTENCY_KEY_REUSED",
+        "{reused}"
+    );
 
     let list = repo.ok_json(&["list", "--json"]);
     assert_eq!(list["data"]["count"], 1);
@@ -316,7 +322,7 @@ fn idempotency_key_survives_restarts_and_is_not_consumed_by_failures() {
         "update",
         &id,
         "--title",
-        "Would differ",
+        "Renamed",
         "--idempotency-key",
         "k-2",
         "--json",

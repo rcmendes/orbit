@@ -476,7 +476,8 @@ fn build_plan(root: &Path) -> Result<Plan> {
     let mut files_changed = 0;
     for entry in &mut tasks {
         let rendered = task::render_task(&entry.task)?;
-        if rendered != entry.original {
+        // A Windows checkout may hold CRLF; git normalizes it, so it is not a change.
+        if rendered.replace("\r\n", "\n") != entry.original.replace("\r\n", "\n") {
             files_changed += 1;
         }
         entry.rendered = Some(rendered);
@@ -496,7 +497,9 @@ fn build_plan(root: &Path) -> Result<Plan> {
 
     let config_toml = config.to_toml()?;
     let original_config = std::fs::read_to_string(root.join("config.toml")).unwrap_or_default();
-    let needed = files_changed > 0 || keys_toml.is_some() || config_toml != original_config;
+    let needed = files_changed > 0
+        || keys_toml.is_some()
+        || config_toml.replace("\r\n", "\n") != original_config.replace("\r\n", "\n");
 
     // Validate the planned result in memory and keep only the issues the
     // migration *introduces*; pre-existing Board problems stay for

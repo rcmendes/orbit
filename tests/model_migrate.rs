@@ -337,8 +337,14 @@ fn keys_follow_creation_order_not_id_spelling() {
     repo.ok_json(&["migrate", "model", "--apply", "--json"]);
     let earlier = std::fs::read_to_string(board.join("tasks/orb-zzz999.md")).unwrap();
     let later = std::fs::read_to_string(board.join("tasks/orb-aaa111.md")).unwrap();
-    assert!(earlier.contains("-1\n"), "{earlier}");
-    assert!(later.contains("-2\n"), "{later}");
+    assert!(
+        earlier.lines().any(|line| line.trim_end().ends_with("-1")),
+        "{earlier}"
+    );
+    assert!(
+        later.lines().any(|line| line.trim_end().ends_with("-2")),
+        "{later}"
+    );
 }
 
 #[test]

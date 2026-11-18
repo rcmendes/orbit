@@ -369,7 +369,7 @@ fn a_legacy_config_without_storage_is_gated_until_migrate() {
     std::fs::create_dir_all(board.join("comments")).unwrap();
     std::fs::write(
         board.join("config.toml"),
-        "[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"orb-\"\n",
+        "contract = \"1.0.0\"\n[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"orb-\"\n",
     )
     .unwrap();
 

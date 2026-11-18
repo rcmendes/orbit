@@ -6,10 +6,10 @@
 //! older binary never silently misreads a newer Board. `orbit capabilities`
 //! reports both versions so a consumer can negotiate before choosing commands.
 //!
-//! A `config.toml` without the field reads as the current contract when it
-//! parses; when it does not parse (a pre-model config), `Config::load` fails with
-//! `MODEL_NOT_MIGRATED` pointing at `orbit migrate model`. A Board on an older
-//! major is refused the same way.
+//! A `config.toml` without the field is a legacy Board: opening it fails with
+//! `MODEL_NOT_MIGRATED` pointing at `orbit migrate model`, and so does a Board on
+//! an older major. The serde default below only applies to the migration, which
+//! writes the field.
 
 use crate::error::{OrbitError, Result, code};
 

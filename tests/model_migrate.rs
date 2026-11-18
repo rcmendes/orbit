@@ -340,3 +340,45 @@ fn keys_follow_creation_order_not_id_spelling() {
     assert!(earlier.contains("-1\n"), "{earlier}");
     assert!(later.contains("-2\n"), "{later}");
 }
+
+#[test]
+fn apply_includes_a_write_that_lands_while_it_waits_for_the_lock() {
+    let (repo, board) = legacy_board();
+    write_task(
+        &board,
+        "orb-aaa111",
+        "---\ntitle: Racy\nstatus: todo\npriority: 1\ntype: task\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBefore\n",
+    );
+    commit_all(&repo, &board, "task");
+
+    // Hold the Board lock like a concurrent writer, start the migration, and
+    // land a write while the migration is blocked on the lock.
+    let lock = orbit_tracker::lock::BoardLock::acquire(&board.join(".lock"), 5_000, true).unwrap();
+    let mut command = repo.orbit_command(&["migrate", "model", "--apply", "--json"]);
+    let child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1_000));
+    write_task(
+        &board,
+        "orb-aaa111",
+        "---\ntitle: Racy\nstatus: todo\npriority: 1\ntype: task\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nAfter\n",
+    );
+    commit_all(&repo, &board, "concurrent write");
+    drop(lock);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let migrated = std::fs::read_to_string(board.join("tasks/orb-aaa111.md")).unwrap();
+    assert!(
+        migrated.contains("After"),
+        "the concurrent write was lost: {migrated}"
+    );
+}

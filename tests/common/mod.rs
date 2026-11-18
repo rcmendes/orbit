@@ -95,7 +95,9 @@ impl TestRepo {
         std::fs::write(path.join("comments").join(".gitkeep"), b"").unwrap();
         std::fs::write(
             path.join("config.toml"),
-            format!("[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"{prefix}\"\n"),
+            format!(
+                "contract = \"1.0.0\"\n[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"{prefix}\"\n"
+            ),
         )
         .unwrap();
     }

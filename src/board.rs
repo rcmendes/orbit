@@ -812,6 +812,14 @@ impl BoardAccess {
                 ),
             ));
         }
+        // A config without `contract` is a legacy Board even when it parses. The
+        // layout gate above runs first; `Inspect` stays open so doctor can report.
+        if !matches!(mode, AccessMode::Inspect)
+            && std::fs::read_to_string(board.root.join("config.toml"))
+                .is_ok_and(|content| lacks_contract(&content))
+        {
+            return Err(model_not_migrated(&board.root));
+        }
         let lock = if matches!(mode, AccessMode::Write) {
             board.lock_exclusive()?
         } else {

@@ -941,7 +941,8 @@ first. Each event carries its kind, the Issue it touched, the actor, a trace id
 head commit: pass it back as `--since` to fetch only newer events. A cursor
 that is not an ancestor of the head is rejected rather than skipping or
 repeating events. `--type` filters by kind (repeatable) and `--limit` keeps
-the newest events.
+the oldest events (whole commits) and moves `cursor` to the last one returned, so
+paging forward never skips events; `truncated` reports a cut.
 
 `orbit history <id>` shows one Issue's timeline, matched by Issue ID or project
 key; it keeps working after the Issue is deleted because the timeline comes

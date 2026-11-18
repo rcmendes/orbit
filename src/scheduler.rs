@@ -274,26 +274,50 @@ fn string_entries(property: Option<&Value>, key: &str) -> BTreeSet<String> {
         Value::Array(items) => items
             .iter()
             .filter_map(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
             .map(normalize_path)
-            .filter(|path| !path.is_empty())
             .collect(),
         Value::String(single) => {
             let path = normalize_path(single);
-            (!path.is_empty()).then_some(path).into_iter().collect()
+            (!single.trim().is_empty())
+                .then_some(path)
+                .into_iter()
+                .collect()
         }
         _ => BTreeSet::new(),
     }
 }
 
+/// Lexically normalizes a declared path: drops `.`/empty segments and resolves
+/// `..`, so `./src/` and `src` compare equal. The repository root (`.`, `/`,
+/// or a path that climbs out) normalizes to `.`, which overlaps everything.
 fn normalize_path(path: &str) -> String {
-    path.trim().trim_end_matches('/').to_string()
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in path.trim().split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return ".".to_string();
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
 }
 
 /// Whether two declared paths can touch the same file: equal, or one a
 /// `/`-separated prefix of the other (`src` overlaps `src/a.rs`, not
 /// `src2`).
 fn paths_overlap(left: &str, right: &str) -> bool {
-    left == right
+    left == "."
+        || right == "."
+        || left == right
         || left
             .strip_prefix(right)
             .is_some_and(|rest| rest.starts_with('/'))
@@ -310,9 +334,20 @@ fn held_touches(graph: &Graph) -> BTreeMap<String, BTreeSet<String>> {
         if graph.workflow.is_terminal(&task.front.status) {
             continue;
         }
-        let Some(holder) = task.assignee_name() else {
+        // Work parked in review holds no assignee but is still in flight: its
+        // author keeps the paths until it closes.
+        let in_flight_author = (graph.workflow.category_of(&task.front.status)
+            == Some(crate::workflow::StatusCategory::Active))
+        .then(|| crate::review::author_name(task))
+        .flatten();
+        let Some(holder) = task
+            .assignee_name()
+            .map(str::to_string)
+            .or(in_flight_author)
+        else {
             continue;
         };
+        let holder = holder.as_str();
         let paths = touch_paths(task);
         if paths.is_empty() {
             continue;

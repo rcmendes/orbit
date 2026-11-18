@@ -14,15 +14,15 @@ use super::*;
 
 /// `--parent` names a Task that must exist; any Task may be a parent
 /// filter, at any depth of the Board hierarchy.
-fn check_parent_filter(graph: &Graph, parent: &str) -> Result<()> {
-    graph.get(parent)?;
-    Ok(())
+fn check_parent_filter(graph: &Graph, parent: &str) -> Result<String> {
+    // Resolve keys and aliases: Tasks store the parent by internal id.
+    Ok(graph.get(parent)?.id.clone())
 }
 
 pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::output::CommandOutput> {
     let (graph, _) = crate::index::load(board, LoadMode::Strict)?;
     if let Some(parent) = args.parent.as_deref() {
-        check_parent_filter(&graph, parent)?;
+        args.parent = Some(check_parent_filter(&graph, parent)?);
     }
     args.task_type = normalize_type_filters(&args.task_type);
     args.exclude_type = normalize_type_filters(&args.exclude_type);
@@ -137,17 +137,17 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
 
     // `--filter`/`--fields` names are validated against the summary schema
     // before matching, so a typo fails even when nothing would match.
-    let schema_keys = graph
-        .tasks
-        .values()
-        .next()
-        .map(|any_task| crate::search::filter_field_names(&graph::task_summary(&graph, any_task)))
-        .unwrap_or_default();
-    if let Some(filter) = &json_filter {
-        crate::search::validate_filter_fields(filter, &schema_keys)?;
-    }
-    if let Some(fields) = &fields {
-        validate_field_roots(fields, &schema_keys)?;
+    // An empty Board has no Task to read the summary schema from; there is
+    // nothing to filter or project, so skip validation rather than reject
+    // every valid field name.
+    if let Some(any_task) = graph.tasks.values().next() {
+        let schema_keys = crate::search::filter_field_names(&graph::task_summary(&graph, any_task));
+        if let Some(filter) = &json_filter {
+            crate::search::validate_filter_fields(filter, &schema_keys)?;
+        }
+        if let Some(fields) = &fields {
+            validate_field_roots(fields, &schema_keys)?;
+        }
     }
 
     // Decorate-sort-undecorate: the page order is the SortKey order, which
@@ -158,22 +158,43 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
         .collect();
     keyed.sort_by(|left, right| left.0.cmp(&right.0));
 
+    // Summaries are costly (descendants, readiness): build them for every Task
+    // only when `--filter` needs them, otherwise for the page alone.
     let mut filtered: Vec<(SortKey, &Task, Value)> = Vec::with_capacity(keyed.len());
     for (key, task) in keyed {
-        let summary = graph::task_summary(&graph, task);
-        if json_filter
-            .as_ref()
-            .is_some_and(|filter| !crate::search::matches_filter(&summary, filter))
-        {
-            continue;
-        }
+        let summary = match &json_filter {
+            Some(filter) => {
+                let summary = graph::task_summary(&graph, task);
+                if !crate::search::matches_filter(&summary, filter) {
+                    continue;
+                }
+                summary
+            }
+            None => Value::Null,
+        };
         filtered.push((key, task, summary));
     }
 
-    let (page, next_cursor, total) = paginate(filtered, args.cursor.as_deref(), args.limit)?;
+    let scope = {
+        let mut scoped = args.clone();
+        scoped.cursor = None;
+        scoped.limit = None;
+        format!("list|{scoped:?}")
+    };
+    let (page, next_cursor, total) =
+        paginate(filtered, args.cursor.as_deref(), args.limit, &scope)?;
     let count = page.len();
 
-    let mut summaries: Vec<Value> = page.iter().map(|(_, _, summary)| summary.clone()).collect();
+    let mut summaries: Vec<Value> = page
+        .iter()
+        .map(|(_, task, summary)| {
+            if summary.is_null() {
+                graph::task_summary(&graph, task)
+            } else {
+                summary.clone()
+            }
+        })
+        .collect();
     if let Some(fields) = &fields {
         let mut array = Value::Array(summaries);
         crate::search::project_fields(&mut array, fields);
@@ -210,6 +231,9 @@ pub(super) fn cmd_ready(
     mut args: ReadyArgs,
     if_version: Option<&str>,
 ) -> Result<crate::output::CommandOutput> {
+    if args.limit == Some(0) {
+        return Err(OrbitError::invalid_argument("--limit must be at least 1"));
+    }
     // `ready --claim` mutates: it keeps the authoritative load. A plain
     // `ready` listing is a read and may use the derived index.
     let (graph, _) = if args.claim {
@@ -218,7 +242,7 @@ pub(super) fn cmd_ready(
         crate::index::load(board, LoadMode::Strict)?
     };
     if let Some(parent) = args.parent.as_deref() {
-        check_parent_filter(&graph, parent)?;
+        args.parent = Some(check_parent_filter(&graph, parent)?);
     }
     args.task_type = normalize_type_filters(&args.task_type);
     args.exclude_type = normalize_type_filters(&args.exclude_type);
@@ -273,32 +297,57 @@ pub(super) fn cmd_ready(
             );
         }
 
-        let id = ready[0].id.clone();
         // `--if-version` guards the Task `ready` picked: the caller read its
         // `updated_at` from `orbit show`/`list` and the pick must be
         // unchanged since. Checked inside the same exclusive scope.
         if let Some(expected) = if_version {
             let expected_at = crate::concurrency::parse_version(expected)?;
-            let task = graph.get(&id)?;
+            let task = graph.get(&ready[0].id)?;
             if task.front.updated_at != expected_at {
                 return Err(crate::concurrency::version_conflict(
-                    &id,
+                    &ready[0].id,
                     expected_at,
                     task.front.updated_at,
                 ));
             }
         }
-        let result = crate::mutation::execute_in(
-            board,
-            graph,
-            &id,
-            crate::mutation::Lifecycle::Claim {
-                agent: &agent,
-                kind: IdentityKind::Agent,
-                steal: false,
-            },
-            Utc::now(),
-        )?;
+        // A Task a claim policy refuses must not dead-end the queue: try the next
+        // candidate and surface the first refusal only when none can be claimed.
+        let mut first_refusal = None;
+        let mut claimed = None;
+        let mut first_graph = Some(graph);
+        for candidate in &ready {
+            let id = candidate.id.clone();
+            // `execute_in` consumes the graph; a refused attempt restores nothing
+            // on disk, so later candidates reload the authoritative state.
+            let attempt_graph = match first_graph.take() {
+                Some(graph) => graph,
+                None => Graph::load(board, LoadMode::Strict)?.0,
+            };
+            match crate::mutation::execute_in(
+                board,
+                attempt_graph,
+                &id,
+                crate::mutation::Lifecycle::Claim {
+                    agent: &agent,
+                    kind: IdentityKind::Agent,
+                    steal: false,
+                },
+                Utc::now(),
+            ) {
+                Ok(result) => {
+                    claimed = Some((id, result));
+                    break;
+                }
+                Err(error) if error.code == code::POLICY_VIOLATION && if_version.is_none() => {
+                    first_refusal.get_or_insert(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let Some((id, result)) = claimed else {
+            return Err(first_refusal.expect("ready is non-empty"));
+        };
         let lease = result
             .task
             .lease_until()
@@ -355,7 +404,15 @@ fn paginate<'a>(
     mut items: Vec<PagedRow<'a>>,
     cursor: Option<&str>,
     limit: Option<usize>,
+    scope: &str,
 ) -> Result<(Vec<PagedRow<'a>>, Option<String>, usize)> {
+    use sha2::{Digest, Sha256};
+    // A cursor is only valid for the query that produced it.
+    let scope: String = Sha256::digest(scope.as_bytes())
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     if let Some(limit) = limit
         && limit == 0
     {
@@ -364,7 +421,12 @@ fn paginate<'a>(
     let total = items.len();
     if let Some(token) = cursor {
         let payload = crate::search::decode_cursor(token)?;
-        let after = key_from_json(&payload)?;
+        if payload.get("s").and_then(Value::as_str) != Some(scope.as_str()) {
+            return Err(OrbitError::invalid_argument(
+                "this cursor belongs to a different query; pass the `next_cursor` of the same command and filters",
+            ));
+        }
+        let after = key_from_json(payload.get("k").unwrap_or(&Value::Null))?;
         items.retain(|(key, ..)| key > &after);
     }
     let mut next_cursor = None;
@@ -373,7 +435,9 @@ fn paginate<'a>(
     {
         items.truncate(limit);
         if let Some((key, ..)) = items.last() {
-            next_cursor = Some(crate::search::encode_cursor(&key_to_json(key)));
+            next_cursor = Some(crate::search::encode_cursor(
+                &json!({ "k": key_to_json(key), "s": scope }),
+            ));
         }
     }
     Ok((items, next_cursor, total))
@@ -484,18 +548,16 @@ pub(super) fn cmd_search(board: &Board, args: SearchArgs) -> Result<crate::outpu
     let scope = repository_scope(board, args.all)?;
 
     // `snippet` is a valid --fields/--filter root on search results.
-    let mut schema_keys = graph
-        .tasks
-        .values()
-        .next()
-        .map(|any_task| crate::search::filter_field_names(&graph::task_summary(&graph, any_task)))
-        .unwrap_or_default();
-    schema_keys.push("snippet".to_string());
-    if let Some(filter) = &json_filter {
-        crate::search::validate_filter_fields(filter, &schema_keys)?;
-    }
-    if let Some(fields) = &fields {
-        validate_field_roots(fields, &schema_keys)?;
+    if let Some(any_task) = graph.tasks.values().next() {
+        let mut schema_keys =
+            crate::search::filter_field_names(&graph::task_summary(&graph, any_task));
+        schema_keys.push("snippet".to_string());
+        if let Some(filter) = &json_filter {
+            crate::search::validate_filter_fields(filter, &schema_keys)?;
+        }
+        if let Some(fields) = &fields {
+            validate_field_roots(fields, &schema_keys)?;
+        }
     }
 
     let mut keyed: Vec<(SortKey, &Task)> = graph
@@ -526,22 +588,46 @@ pub(super) fn cmd_search(board: &Board, args: SearchArgs) -> Result<crate::outpu
     keyed.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut filtered: Vec<(SortKey, &Task, Value)> = Vec::with_capacity(keyed.len());
-    for (key, task) in keyed {
+    let search_summary = |task: &Task| {
         let mut summary = graph::task_summary(&graph, task);
         summary["snippet"] = json!(crate::search::snippet(task, &query));
-        if json_filter
-            .as_ref()
-            .is_some_and(|filter| !crate::search::matches_filter(&summary, filter))
-        {
-            continue;
-        }
+        summary
+    };
+    for (key, task) in keyed {
+        // Summaries are costly; build them up front only for `--filter`.
+        let summary = match &json_filter {
+            Some(filter) => {
+                let summary = search_summary(task);
+                if !crate::search::matches_filter(&summary, filter) {
+                    continue;
+                }
+                summary
+            }
+            None => Value::Null,
+        };
         filtered.push((key, task, summary));
     }
 
-    let (page, next_cursor, total) = paginate(filtered, args.cursor.as_deref(), args.limit)?;
+    let scope = {
+        let mut scoped = args.clone();
+        scoped.cursor = None;
+        scoped.limit = None;
+        format!("search|{scoped:?}")
+    };
+    let (page, next_cursor, total) =
+        paginate(filtered, args.cursor.as_deref(), args.limit, &scope)?;
     let count = page.len();
 
-    let mut summaries: Vec<Value> = page.iter().map(|(_, _, summary)| summary.clone()).collect();
+    let mut summaries: Vec<Value> = page
+        .iter()
+        .map(|(_, task, summary)| {
+            if summary.is_null() {
+                search_summary(task)
+            } else {
+                summary.clone()
+            }
+        })
+        .collect();
     if let Some(fields) = &fields {
         let mut array = Value::Array(summaries);
         crate::search::project_fields(&mut array, fields);
@@ -792,6 +878,32 @@ Use the CLI; never edit task files directly.\n\
         stale_tasks.len(),
     );
     let mut truncated = false;
+    // The JSON payload (what MCP returns) carries full summaries, so the budget
+    // must hold for it too, not only for the human rendering.
+    let all_ready: Vec<Value> = ready_tasks
+        .iter()
+        .map(|task| graph::task_summary(&graph, task))
+        .collect();
+    let all_close: Vec<Value> = close_candidate_tasks
+        .iter()
+        .map(|task| graph::task_summary(&graph, task))
+        .collect();
+    let all_stale: Vec<Value> = stale_tasks
+        .iter()
+        .map(|task| graph::task_summary(&graph, task))
+        .collect();
+    let json_tokens = |ready: usize, close: usize, stale: usize| {
+        estimate_tokens(
+            &json!({
+                "instructions": instructions,
+                "counts": counts,
+                "ready": &all_ready[..ready],
+                "close_candidates": &all_close[..close],
+                "stale": &all_stale[..stale],
+            })
+            .to_string(),
+        )
+    };
     let mut human = prime_human(
         &graph,
         &agent,
@@ -809,7 +921,9 @@ Use the CLI; never edit task files directly.\n\
                 "--max-tokens must be at least 1",
             ));
         }
-        while estimate_tokens(&human) > max_tokens && (ready_len + close_len + stale_len) > 0 {
+        while estimate_tokens(&human).max(json_tokens(ready_len, close_len, stale_len)) > max_tokens
+            && (ready_len + close_len + stale_len) > 0
+        {
             if stale_len > 0 {
                 stale_len -= 1;
             } else if close_len > 0 {
@@ -829,7 +943,7 @@ Use the CLI; never edit task files directly.\n\
                 &stale_tasks[..stale_len],
             );
         }
-        if estimate_tokens(&human) > max_tokens {
+        if estimate_tokens(&human).max(json_tokens(ready_len, close_len, stale_len)) > max_tokens {
             // The fixed instructions alone exceed the budget: hard-truncate
             // the human rendering and report it honestly.
             human = human.chars().take(max_tokens.saturating_mul(4)).collect();
@@ -837,18 +951,9 @@ Use the CLI; never edit task files directly.\n\
         }
     }
 
-    let ready: Vec<Value> = ready_tasks[..ready_len]
-        .iter()
-        .map(|task| graph::task_summary(&graph, task))
-        .collect();
-    let close_candidates: Vec<Value> = close_candidate_tasks[..close_len]
-        .iter()
-        .map(|task| graph::task_summary(&graph, task))
-        .collect();
-    let stale: Vec<Value> = stale_tasks[..stale_len]
-        .iter()
-        .map(|task| graph::task_summary(&graph, task))
-        .collect();
+    let ready = all_ready[..ready_len].to_vec();
+    let close_candidates = all_close[..close_len].to_vec();
+    let stale = all_stale[..stale_len].to_vec();
 
     let mut data = json!({
         "agent": agent,
@@ -863,7 +968,8 @@ Use the CLI; never edit task files directly.\n\
     if let Some(max_tokens) = args.max_tokens {
         data["budget"] = json!({
             "max_tokens": max_tokens,
-            "estimated_tokens": estimate_tokens(&human),
+            "estimated_tokens": estimate_tokens(&human)
+                .max(json_tokens(ready_len, close_len, stale_len)),
             "truncated": truncated,
         });
     }

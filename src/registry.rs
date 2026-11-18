@@ -528,7 +528,7 @@ pub static TOOLS: &[Tool] = &[
             ),
             arg(
                 "limit",
-                "Maximum events to return; keeps the newest events when the feed is longer.",
+                "Maximum events to return; keeps the oldest events (whole commits) when the feed is longer, and the returned cursor resumes after them.",
                 JsonType::Int,
                 &[],
                 Some(CliTarget::Long("--limit")),

@@ -499,7 +499,7 @@ fn registry_surface_is_pinned_to_the_contract_version() {
     // (contract version, SHA-256 of `orbit schema` minus `orbit_version`)
     const EXPECTED: (&str, &str) = (
         "1.0.0",
-        "c60d4292011adefe50b2e5387f94683a4a240822b9eba22ede1c3b9a507d1cf8",
+        "0bcde9b3fda24c7755af4663845c84d5844d3c91e33f35232097ac31fa36afbb",
     );
 
     let repo = TestRepo::new();

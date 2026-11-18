@@ -355,7 +355,18 @@ impl Policy {
         let missing_properties: Vec<&String> = rule
             .require_properties
             .iter()
-            .filter(|owner| !task.front.properties.contains_key(*owner))
+            .filter(|owner| {
+                // Evidence only counts when `submit` recorded at least one item.
+                let value = task.front.properties.get(*owner);
+                if owner.as_str() == crate::review::EVIDENCE_OWNER {
+                    !value
+                        .and_then(|v| v.get("items"))
+                        .and_then(|items| items.as_array())
+                        .is_some_and(|items| !items.is_empty())
+                } else {
+                    value.is_none()
+                }
+            })
             .collect();
         if !missing_properties.is_empty() {
             let owners: Vec<&str> = missing_properties
@@ -419,11 +430,25 @@ impl Policy {
         rule: &PolicyRule,
         graph: &Graph,
         task: &Task,
+        before: Option<&Task>,
         workflow: &Workflow,
     ) -> Vec<Violation> {
         let mut violations = Self::field_violations(rule, task);
 
-        if let Some(limit) = &rule.wip_limit {
+        // A WIP cap only gates a Task *entering* the limited scope; moving or
+        // closing an unrelated Task must not trip it.
+        let in_scope = |candidate: &Task| match (
+            rule.wip_limit.as_ref().and_then(|l| l.status.as_ref()),
+            rule.wip_limit.as_ref().and_then(|l| l.category),
+        ) {
+            (Some(status), _) => candidate.front.status == *status,
+            (None, Some(category)) => {
+                workflow.category_of(&candidate.front.status) == Some(category)
+            }
+            _ => false,
+        };
+        let entering = in_scope(task) && !before.is_some_and(in_scope);
+        if let Some(limit) = rule.wip_limit.as_ref().filter(|_| entering) {
             let (count, scope) = match (&limit.status, limit.category) {
                 (Some(status), None) => (
                     graph
@@ -474,9 +499,17 @@ impl Policy {
             }
         }
 
-        if !rule.distinct_from.is_empty()
-            && let Some(assignee) = &task.front.assignee
-        {
+        // The acting identity is the assignee after the transition (review sets it
+        // temporarily) or the claim holder before it: closing transitions clear
+        // the assignee, so the pre-transition holder is who is acting.
+        let actors: Vec<&str> = task
+            .front
+            .assignee
+            .iter()
+            .chain(before.and_then(|b| b.front.assignee.as_ref()))
+            .map(|assignee| assignee.name.as_str())
+            .collect();
+        if !rule.distinct_from.is_empty() && !actors.is_empty() {
             let forbidden: Vec<String> = rule
                 .distinct_from
                 .iter()
@@ -489,7 +522,11 @@ impl Policy {
                 })
                 .filter(|name| !name.is_empty())
                 .collect();
-            if forbidden.iter().any(|name| name == &assignee.name) {
+            if let Some(actor) = actors.iter().find(|actor| {
+                forbidden
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(actor))
+            }) {
                 violations.push(Violation {
                     rule: rule.name.clone(),
                     check: "distinct_from",
@@ -497,7 +534,7 @@ impl Policy {
                         "rule `{}` requires the assignee to differ from {}; `{}` is both",
                         rule.name,
                         forbidden.join(", "),
-                        assignee.name
+                        actor
                     ),
                     hint: "assign the transition to a different identity".to_string(),
                 });
@@ -514,13 +551,14 @@ impl Policy {
         &self,
         graph: &Graph,
         task: &Task,
+        before: Option<&Task>,
         transition_name: &str,
         to_status: Option<&str>,
     ) -> Vec<Violation> {
         let workflow = &graph.workflow;
         self.matching(transition_name, task, to_status)
             .into_iter()
-            .flat_map(|rule| self.validator_violations(rule, graph, task, workflow))
+            .flat_map(|rule| self.validator_violations(rule, graph, task, before, workflow))
             .collect()
     }
 
@@ -636,7 +674,9 @@ pub fn enforce(
         .get(&resolved)
         .cloned()
         .unwrap_or_else(|| before.clone());
-    let violations = graph.policy.check(graph, &task, transition_name, to_status);
+    let violations = graph
+        .policy
+        .check(graph, &task, Some(before), transition_name, to_status);
     if !violations.is_empty() {
         graph.tasks.insert(resolved.clone(), before.clone());
         return Err(violation_error(&resolved, transition_name, violations));
@@ -783,7 +823,7 @@ lint = true
 name = "gate"
 transition = "done"
 require_fields = ["verification"]
-require_properties = ["evidence"]
+require_properties = ["proof"]
 max_attempts = 2
 add_labels = ["reviewed"]
 set_properties = { verdict = { ok = true } }
@@ -796,7 +836,7 @@ set_properties = { verdict = { ok = true } }
         t.front.status = "done".to_string();
         let graph = Graph::from_tasks(vec![task("orb-bbbbbb", "in_progress")]);
         // Post-state check: missing verification + evidence fails.
-        let violations = policy.check(&graph, &t, "done", Some("done"));
+        let violations = policy.check(&graph, &t, None, "done", Some("done"));
         assert_eq!(violations.len(), 2);
         assert!(violations.iter().any(|v| v.check == "require_fields"));
         assert!(violations.iter().any(|v| v.check == "require_properties"));
@@ -804,8 +844,12 @@ set_properties = { verdict = { ok = true } }
         t.front.verification = Some("cargo test".to_string());
         t.front
             .properties
-            .insert("evidence".to_string(), json!({"command": "cargo test"}));
-        assert!(policy.check(&graph, &t, "done", Some("done")).is_empty());
+            .insert("proof".to_string(), json!({"command": "cargo test"}));
+        assert!(
+            policy
+                .check(&graph, &t, None, "done", Some("done"))
+                .is_empty()
+        );
 
         policy.apply_post_functions(&mut t, "done", now());
         assert!(t.front.labels.contains(&"reviewed".to_string()));
@@ -815,7 +859,7 @@ set_properties = { verdict = { ok = true } }
         policy.apply_post_functions(&mut t, "done", now());
         assert_eq!(attempt_count(&t, "gate"), 2);
         // Third application would violate max_attempts = 2.
-        let violations = policy.check(&graph, &t, "done", Some("done"));
+        let violations = policy.check(&graph, &t, None, "done", Some("done"));
         assert!(violations.iter().any(|v| v.check == "max_attempts"));
     }
 
@@ -833,7 +877,7 @@ requires = []
 name = "bug-evidence"
 transition = "*"
 types = ["bug"]
-require_properties = ["evidence"]
+require_properties = ["proof"]
 
 [[policy.rules]]
 name = "labeled"
@@ -848,7 +892,7 @@ require_fields = ["verification"]
 
         let mut bug = task("orb-1", "ready");
         bug.front.task_type = "bug".to_string();
-        let violations = policy.check(&graph, &bug, "promote", Some("ready"));
+        let violations = policy.check(&graph, &bug, None, "promote", Some("ready"));
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].rule, "bug-evidence");
 
@@ -857,7 +901,7 @@ require_fields = ["verification"]
         plain.front.verification = Some("cargo test".to_string());
         assert!(
             policy
-                .check(&graph, &plain, "promote", Some("ready"))
+                .check(&graph, &plain, None, "promote", Some("ready"))
                 .is_empty()
         );
 
@@ -891,13 +935,13 @@ wip_limit = { status = "in_progress", max = 1 }
         let busy = task("orb-bbbbbb", "in_progress");
         let mut claiming = task("orb-aaaaaa", "in_progress");
         let graph = Graph::from_tasks(vec![busy, claiming.clone()]);
-        let violations = policy.check(&graph, &claiming, "claim", Some("in_progress"));
+        let violations = policy.check(&graph, &claiming, None, "claim", Some("in_progress"));
         assert!(violations.iter().any(|v| v.check == "wip_limit"));
         // The Task itself is not counted against its own limit.
         let graph = Graph::from_tasks(vec![claiming.clone()]);
         assert!(
             policy
-                .check(&graph, &claiming, "claim", Some("in_progress"))
+                .check(&graph, &claiming, None, "claim", Some("in_progress"))
                 .is_empty()
         );
         claiming.front.status = "ready".to_string();
@@ -945,7 +989,7 @@ distinct_from = ["reporter"]
             name: "rodrigo".to_string(),
             kind: crate::task::IdentityKind::Human,
         });
-        let violations = policy.check(&graph, &t, "done", Some("done"));
+        let violations = policy.check(&graph, &t, None, "done", Some("done"));
         assert!(violations.iter().any(|v| v.check == "distinct_from"));
     }
 }

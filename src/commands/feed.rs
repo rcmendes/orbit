@@ -21,12 +21,24 @@ pub(super) fn cmd_changes(
         .into_iter()
         .filter(|event| kinds.is_empty() || kinds.contains(&event.kind.as_str()))
         .collect();
-    // `--limit` keeps the newest events; the cursor still reports the Board
-    // head, so the window stays honest about what was skipped.
+    // `--limit` keeps the OLDEST events, never splitting a commit, and moves the
+    // cursor to the last returned commit so resuming from it loses nothing.
+    let mut cursor = feed.cursor;
+    let mut truncated = false;
     if let Some(limit) = args.limit
         && events.len() > limit
     {
-        events.drain(..events.len() - limit);
+        let mut end = limit;
+        while end < events.len() && events[end].commit == events[end - 1].commit {
+            end += 1;
+        }
+        if end < events.len() {
+            truncated = true;
+            events.truncate(end);
+            if let Some(last) = events.last() {
+                cursor = last.commit.clone();
+            }
+        }
     }
     let count = events.len();
     let human = if events.is_empty() {
@@ -41,8 +53,9 @@ pub(super) fn cmd_changes(
     Ok(crate::output::CommandOutput::new(
         json!({
             "events": events,
-            "cursor": feed.cursor,
+            "cursor": cursor,
             "count": count,
+            "truncated": truncated,
         }),
         human,
     )

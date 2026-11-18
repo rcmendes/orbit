@@ -170,9 +170,16 @@ fn changes_filters_by_type_and_limit() {
     let limited = repo.ok_json(&["changes", "--limit", "1", "--json"]);
     let feed = events(&limited);
     assert_eq!(feed.len(), 1);
-    // The newest event wins: inside the comment commit the Task-file update
-    // sorts after the comments-sidecar event.
-    assert_eq!(feed[0]["type"], "issue.updated");
+    // The oldest events win, so paging forward from the cursor loses nothing.
+    assert_eq!(limited["data"]["truncated"], true);
+    let cursor = limited["data"]["cursor"].as_str().unwrap().to_string();
+    let rest = repo.ok_json(&["changes", "--since", &cursor, "--json"]);
+    let all = repo.ok_json(&["changes", "--json"]);
+    assert_eq!(
+        feed.len() + events(&rest).len(),
+        events(&all).len(),
+        "paged events must add up to the full feed"
+    );
 }
 
 #[test]

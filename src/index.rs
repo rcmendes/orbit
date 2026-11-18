@@ -73,8 +73,16 @@ struct IndexFile {
     /// `orbit index status`, never consulted for freshness.
     head: Option<String>,
     built_at: DateTime<Utc>,
+    /// The binary that wrote the index. A different build may parse
+    /// frontmatter differently, so its entries are never served.
+    #[serde(default)]
+    orbit_version: String,
     entries: BTreeMap<String, IndexEntry>,
 }
+
+/// Files modified within this window of the index write are re-read: a
+/// same-length edit inside one filesystem timestamp tick is otherwise invisible.
+const RACY_WINDOW_SECS: i64 = 2;
 
 /// The plan [`plan`] computes for one indexed load: cached parses, the ids
 /// that need an authoritative re-parse, and the pre-read fingerprints used
@@ -89,6 +97,9 @@ struct Plan {
     /// The fingerprint of every Task file captured before any read, so the
     /// stored index never claims a file fresher than the bytes parsed.
     prints: HashMap<String, Option<Fingerprint>>,
+    /// Whether the stored index differs from what this load will produce:
+    /// something was re-read, a file vanished, or no usable index existed.
+    dirty: bool,
 }
 
 /// The `ReadIndex` implementation the application layer hands to
@@ -144,23 +155,29 @@ pub fn index_path(board: &Board) -> PathBuf {
 fn read_index(board: &Board) -> Option<IndexFile> {
     let content = std::fs::read_to_string(index_path(board)).ok()?;
     let file: IndexFile = serde_json::from_str(&content).ok()?;
-    (file.version == INDEX_VERSION).then_some(file)
+    (file.version == INDEX_VERSION && file.orbit_version == env!("CARGO_PKG_VERSION"))
+        .then_some(file)
 }
 
 /// Plans an indexed load over `ids` (the current `Board::task_ids`): Tasks
 /// whose index entry still matches their file's fingerprint are served from
 /// the cache; new, changed, and vanished-stat files land in `rescan`.
 fn plan(board: &Board, ids: &[String]) -> Plan {
-    let mut entries = read_index(board)
-        .map(|file| file.entries)
-        .unwrap_or_default();
+    let file = read_index(board);
+    let had_index = file.is_some();
+    let built_at = file.as_ref().map(|file| file.built_at.timestamp());
+    let mut entries = file.map(|file| file.entries).unwrap_or_default();
     let mut tasks = HashMap::new();
     let mut rescan = Vec::new();
     let mut prints = HashMap::with_capacity(ids.len());
     for id in ids {
         let print = fingerprint(&board.task_path(id));
         match (print, entries.remove(id)) {
-            (Some(print), Some(entry)) if entry.print == print => {
+            (Some(print), Some(entry))
+                if entry.print == print
+                    && built_at
+                        .is_some_and(|built| print.mtime_secs + RACY_WINDOW_SECS < built) =>
+            {
                 tasks.insert(
                     id.clone(),
                     Task {
@@ -174,10 +191,12 @@ fn plan(board: &Board, ids: &[String]) -> Plan {
         }
         prints.insert(id.clone(), print);
     }
+    let dirty = !had_index || !rescan.is_empty() || !entries.is_empty();
     Plan {
         tasks,
         rescan,
         prints,
+        dirty,
     }
 }
 
@@ -186,6 +205,11 @@ fn plan(board: &Board, ids: &[String]) -> Plan {
 /// file that changed mid-load rescans next time rather than reading stale
 /// forever. Best-effort — a store failure costs a rescan, never data.
 fn store(board: &Board, tasks: &HashMap<String, Task>, plan: &Plan) {
+    // Re-serializing every body and fsyncing on each read would erase the index's
+    // benefit; a fully cached load leaves the file alone.
+    if !plan.dirty {
+        return;
+    }
     let _ = store_inner(board, tasks, plan);
 }
 
@@ -208,6 +232,7 @@ fn store_inner(board: &Board, tasks: &HashMap<String, Task>, plan: &Plan) -> Res
         version: INDEX_VERSION,
         head: crate::git::rev_parse(&board.root, "HEAD")?,
         built_at: Utc::now(),
+        orbit_version: env!("CARGO_PKG_VERSION").to_string(),
         entries,
     };
     let content = serde_json::to_vec(&file).map_err(|error| {
@@ -257,6 +282,7 @@ pub fn rebuild(board: &Board) -> Result<Rebuilt> {
         tasks: HashMap::new(),
         rescan: Vec::new(),
         prints,
+        dirty: true,
     };
     store_inner(board, &tasks, &plan)?;
     let head = crate::git::rev_parse(&board.root, "HEAD")?;

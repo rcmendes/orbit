@@ -205,7 +205,7 @@ pub fn append_evidence(
     evidence: &Evidence,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let mut value = task
+    let value = task
         .front
         .properties
         .get(EVIDENCE_OWNER)
@@ -237,7 +237,21 @@ pub fn append_evidence(
         item.insert("note".to_string(), json!(note));
     }
     items.push(Value::Object(item));
-    value.insert("items".to_string(), Value::Array(items));
+    // Keep the newest items within the Property size limit instead of wedging
+    // `submit` forever once the history outgrows it.
+    let mut value = value;
+    loop {
+        let mut candidate = value.clone();
+        candidate.insert("items".to_string(), Value::Array(items.clone()));
+        let fits =
+            crate::task::validate_property(EVIDENCE_OWNER, &Value::Object(candidate.clone()))
+                .is_ok();
+        if fits || items.len() <= 1 {
+            value = candidate;
+            break;
+        }
+        items.remove(0);
+    }
     let value = Value::Object(value);
     crate::task::validate_property(EVIDENCE_OWNER, &value)?;
     task.front
@@ -249,6 +263,11 @@ pub fn append_evidence(
 /// The open Ask (`orbit.ask` without `answered_at`), when one exists.
 pub fn open_ask(task: &Task) -> Option<Value> {
     let ask = orbit_map(task).get("ask")?.clone();
+    // A malformed (non-object) ask is not an open one; treating it as open would
+    // wedge the Issue because `answer` cannot resolve it.
+    if !ask.is_object() {
+        return None;
+    }
     ask.get("answered_at").is_none().then_some(ask)
 }
 
@@ -281,6 +300,14 @@ pub fn record_ask(
     ask.insert("by".to_string(), json!(by));
     ask.insert("at".to_string(), json!(now.to_rfc3339()));
     ask.insert("return_to".to_string(), json!(return_to));
+    // The hold clears the claim; remember the holder so `answer` can hand the
+    // Issue back instead of orphaning it.
+    if let Some(assignee) = &task.front.assignee {
+        ask.insert("assignee".to_string(), json!(assignee));
+        if let Some(lease) = &task.front.lease {
+            ask.insert("lease".to_string(), json!(lease));
+        }
+    }
     orbit.insert("ask".to_string(), Value::Object(ask));
     write_orbit(task, orbit);
     Ok(())
@@ -293,6 +320,16 @@ pub fn ask_return_to(task: &Task) -> Option<String> {
         .get("return_to")
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+/// The assignee (and lease) that held the Issue when the open Ask was raised.
+pub fn ask_assignee(task: &Task) -> Option<(crate::task::Identity, Option<crate::task::Lease>)> {
+    let ask = open_ask(task)?;
+    let assignee = serde_json::from_value(ask.get("assignee")?.clone()).ok()?;
+    let lease = ask
+        .get("lease")
+        .and_then(|lease| serde_json::from_value(lease.clone()).ok());
+    Some((assignee, lease))
 }
 
 /// Marks the open Ask answered, returning the question that was answered.

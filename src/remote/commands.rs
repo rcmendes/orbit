@@ -2368,11 +2368,10 @@ fn create_imported_task(
                 key
             }),
             key_aliases: Vec::new(),
-            resolution: issue.status.is_terminal().then(|| match issue.status {
-                Status::Done => "completed".to_string(),
-                _ => "cancelled".to_string(),
-            }),
-            task_type: "task".to_string(),
+            resolution: board
+                .workflow()?
+                .resolution_for(&issue.status.orbit_name(&board.workflow()?)),
+            task_type: board.config.board.default_type.clone(),
             priority: board.config.board.default_priority.clone(),
             labels,
             links: Vec::new(),
@@ -2887,14 +2886,11 @@ fn apply_issue_to_task(
     // The adapter already mapped the Remote Issue onto Orbit's Status; the
     // workflow resolves the canonical bucket to this Board's status name.
     task.front.status = issue.status.orbit_name(workflow);
-    task.front.resolution = if issue.status.is_terminal() {
-        Some(match issue.status {
-            Status::Done => "completed".to_string(),
-            _ => "cancelled".to_string(),
-        })
-    } else {
-        None
-    };
+    task.front.resolution = workflow.resolution_for(&task.front.status);
+    if issue.status.is_terminal() {
+        task.front.assignee = None;
+        task.front.lease = None;
+    }
     execution::set_baseline(task, issue, workflow);
     Ok(())
 }

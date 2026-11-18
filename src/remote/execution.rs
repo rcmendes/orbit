@@ -579,10 +579,12 @@ pub(crate) fn apply_plan(
     }
     if let Some(status) = plan.apply_status {
         task.front.status = status.orbit_name(&workflow);
-        task.front.resolution = status.is_terminal().then(|| match status {
-            Status::Done => "completed".to_string(),
-            _ => "cancelled".to_string(),
-        });
+        task.front.resolution = workflow.resolution_for(&task.front.status);
+        if status.is_terminal() {
+            // A closed Issue holds no claim, as with every Orbit transition.
+            task.front.assignee = None;
+            task.front.lease = None;
+        }
     }
     if let Some(labels) = &plan.apply_labels {
         task.front.labels = labels.clone();

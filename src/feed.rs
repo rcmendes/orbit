@@ -89,7 +89,10 @@ struct CommitInfo {
 impl CommitInfo {
     /// The `Orbit-Actor` trailer value, when the commit recorded one.
     fn trailer_actor(&self) -> Option<&str> {
-        self.body
+        // Git trailers live in the last paragraph of the message; a line in the
+        // free-text body must not be able to claim an actor.
+        let trailers = self.body.trim_end().rsplit("\n\n").next().unwrap_or("");
+        trailers
             .lines()
             .filter_map(|line| line.trim().strip_prefix(ACTOR_TRAILER))
             .filter_map(|rest| rest.strip_prefix(':'))
@@ -117,9 +120,9 @@ pub fn collect(board: &Board, since: Option<&str>) -> Result<Feed> {
                     ));
                 }
             }
-            format!("{cursor}..HEAD")
+            format!("{cursor}..{head}")
         }
-        None => "HEAD".to_string(),
+        None => head.clone(),
     };
 
     let commits = log_commits(root, &range)?;
@@ -202,6 +205,7 @@ fn changed_files(root: &Path, info: &CommitInfo) -> Result<Vec<Change>> {
     let args: Vec<String> = if let Some(parent) = info.parents.first() {
         vec![
             "diff".into(),
+            "--no-renames".into(),
             "--name-status".into(),
             "-z".into(),
             parent.clone(),

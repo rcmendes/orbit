@@ -77,7 +77,7 @@ fn evidence_property_satisfies_require_properties() {
 [[policy.rules]]
 name = "done-evidence"
 transition = "done"
-require_properties = ["evidence"]
+require_properties = ["proof"]
 "#,
     );
 
@@ -94,7 +94,7 @@ require_properties = ["evidence"]
         "property",
         "set",
         &id,
-        "evidence",
+        "proof",
         "--value",
         r#"{"command":"cargo test","exit_code":0}"#,
         "--json",
@@ -212,14 +212,14 @@ name = "bug-evidence"
 transition = "*"
 to = "ready"
 types = ["bug"]
-require_properties = ["evidence"]
+require_properties = ["proof"]
 
 [[policy.rules]]
 name = "labeled-evidence"
 transition = "*"
 to = "ready"
 labels = ["needs-evidence"]
-require_properties = ["evidence"]
+require_properties = ["proof"]
 
 [[policy.rules]]
 name = "acme-only"
@@ -264,7 +264,7 @@ require_fields = ["verification"]
         "property",
         "set",
         &bug,
-        "evidence",
+        "proof",
         "--value",
         r#"{"command":"cargo test"}"#,
         "--json",
@@ -397,4 +397,15 @@ require_fields = ["verification"]
     assert!(!ids.contains(&id.as_str()), "{ids:?}");
     let (_, error) = repo.err_json(&["claim", &id, "--by", "devin", "--json"]);
     assert_eq!(error["error"]["code"], "POLICY_VIOLATION");
+}
+
+#[test]
+fn reserved_property_owners_cannot_be_set_by_hand() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("guarded", &[]);
+    for owner in ["orbit", "evidence"] {
+        let (_, error) = repo.err_json(&["property", "set", &id, owner, "--value", "{}", "--json"]);
+        assert_eq!(error["error"]["code"], "INVALID_ARGUMENT", "{error}");
+    }
 }

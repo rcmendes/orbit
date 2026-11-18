@@ -222,6 +222,13 @@ pub fn property(
     value: Option<serde_json::Value>,
     now: DateTime<Utc>,
 ) -> Result<bool> {
+    // Policy counters, the review record, Asks, and submit evidence live in these
+    // owners; `submit`/`review`/`ask`/`answer` write them, never a free-form caller.
+    if owner == crate::review::ORBIT_OWNER || owner == crate::review::EVIDENCE_OWNER {
+        return Err(OrbitError::invalid_argument(format!(
+            "property owner `{owner}` is reserved for Orbit; use `orbit submit`/`review`/`ask`/`answer`"
+        )));
+    }
     if let Some(value) = &value {
         crate::task::validate_property(owner, value)?;
     }
@@ -1132,9 +1139,10 @@ pub fn review(
     let status = graph.get(&resolved)?.front.status.clone();
     if verdict == crate::review::Verdict::RequestChanges {
         let task = graph.get(&resolved)?;
-        let violations = graph
-            .policy
-            .check(graph, task, transition_name, Some(status.as_str()));
+        let violations =
+            graph
+                .policy
+                .check(graph, task, None, transition_name, Some(status.as_str()));
         if !violations.is_empty() {
             let only_attempts = violations.iter().all(|v| v.check == "max_attempts");
             let can_escalate = only_attempts
@@ -1357,6 +1365,7 @@ pub fn answer(
     let current = before.front.status.clone();
     let terminal = workflow.is_terminal(&current);
     let return_to = crate::review::ask_return_to(&before);
+    let ask_holder = crate::review::ask_assignee(&before);
 
     // Where the Issue lands: the recorded return status when it is still
     // open and different, the `answer` transition when defined, else the
@@ -1376,6 +1385,10 @@ pub fn answer(
         Move::Stay
     } else if let Some(target) = return_to.as_deref().and_then(restore_target) {
         Move::Restore(target)
+    } else if return_to.as_deref() == Some(current.as_str()) {
+        // The ask never moved the Issue (for example it was parked in `todo`):
+        // answering must not promote it.
+        Move::Stay
     } else if let Some(target) = return_to.as_deref() {
         // The recorded status is gone or closed: prefer the `answer`
         // transition, then the Ready/open status as last resort.
@@ -1409,6 +1422,13 @@ pub fn answer(
             Move::Restore(target) => {
                 task.front.status = target.clone();
                 task.front.resolution = None;
+                // Hand the Issue back to whoever held it when the ask was raised.
+                if task.front.assignee.is_none()
+                    && let Some((holder, lease)) = ask_holder
+                {
+                    task.front.assignee = Some(holder);
+                    task.front.lease = lease;
+                }
                 returned_to = Some(target);
                 transitioned = true;
             }

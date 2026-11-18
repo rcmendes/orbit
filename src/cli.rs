@@ -508,7 +508,7 @@ pub struct AddArgs {
     pub reporter: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ListArgs {
     /// Filter by workflow status name. Requesting a closed status includes
     /// closed work.
@@ -675,7 +675,7 @@ pub struct ShowArgs {
     pub fields: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct SearchArgs {
     /// Free-text terms plus `key:value` qualifiers (`status:`, `assignee:`,
     /// `label:`, `type:`, `priority:`, `component:`, `repository:`).
@@ -1382,8 +1382,8 @@ pub struct ChangesArgs {
     #[arg(long = "type", value_name = "KIND", action = clap::ArgAction::Append)]
     pub kinds: Vec<String>,
 
-    /// Maximum events to return. Keeps the newest events when the feed is
-    /// longer than the limit.
+    /// Maximum events to return. Keeps the oldest events (whole commits) when the
+    /// feed is longer than the limit; the returned `cursor` resumes after them.
     #[arg(long, value_name = "N")]
     pub limit: Option<usize>,
 }

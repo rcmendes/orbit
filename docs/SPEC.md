@@ -768,7 +768,7 @@ commit and `--since <cursor>` replays only commits reachable from `HEAD` but
 not from the cursor, so a consumer pages forward by feeding the cursor back. A
 cursor that is not an ancestor of `HEAD` — rewritten history — fails with
 `INVALID_ARGUMENT` rather than silently skipping or repeating events. `--type`
-filters by event kind (repeatable) and `--limit N` keeps the newest N events.
+filters by event kind (repeatable) and `--limit N` keeps the oldest N events (never splitting a commit) and returns a `cursor` that resumes after them, with `truncated: true`.
 `history <id>` returns `{"issue", "events", "count"}`: one Issue's timeline,
 matched by Issue ID or project key (case-insensitive), which still resolves
 after the Issue is deleted because the timeline comes from Git, not the live
@@ -924,7 +924,7 @@ Entries record what each release delivered. Some name commands that were later r
 - `slug migrate` validates the target like `--slug`. The current slug is a no-op with no commit. Applying with live claims requires `--force`; dry-run reports them without refusing. An unhealthy Board returns `MIGRATION_BLOCKED`; a target collision returns `PREFIX_COLLISION`. `--dry-run` writes nothing.
 - A hand-edited `id.prefix` that matches no task files returns one `PREFIX_MISMATCH` from strict loads and `doctor`. Migration refuses this state; restore the configured prefix first.
 - `export` is read-only, takes the shared lock, and emits a deterministic snapshot: issues sorted by ID, no timestamps or machine-local paths. `schema_version` is `5` (5 added the Issue `key` and `key_aliases` fields; 4 renamed Annotations to namespaced Properties and promoted `area`/`repo` to `component`/`repository` plus `external_id`); `data.board.prefix` is the literal Issue-ID prefix.
-- `changes` and `history` are read-only and derive the Change feed from Board Git history (see [Change feed](#change-feed)). `changes --since` takes the `cursor` a previous call returned and fails with `INVALID_ARGUMENT` on an unknown or non-ancestor cursor; `--type` filters event kinds and `--limit` keeps the newest events. `history <id>` accepts an Issue ID or project key and resolves deleted Issues too.
+- `changes` and `history` are read-only and derive the Change feed from Board Git history (see [Change feed](#change-feed)). `changes --since` takes the `cursor` a previous call returned and fails with `INVALID_ARGUMENT` on an unknown or non-ancestor cursor; `--type` filters event kinds and `--limit` keeps the oldest events and moves the cursor past only those. `history <id>` accepts an Issue ID or project key and resolves deleted Issues too.
 - `done` never bypasses unfinished dependencies. `--force` overrides a competing live claim and, on a Parent Issue, cancels open sub-issues before closing it.
 - A forced `reopen` can leave an already-done dependent with an unfinished dependency. That is a historical fact, not corruption: `doctor` reports it as a warning, and the next `done` of that dependent still enforces its dependencies.
 - `reopen` refuses when a done dependent exists unless `--force`. Reopening a sub-issue of a done parent reopens the parent too.

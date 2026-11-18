@@ -79,12 +79,36 @@ impl SearchQuery {
     }
 }
 
+/// Whitespace tokens, except that a double-quoted span stays one token so
+/// `"login page"` and `label:"needs info"` survive as phrases.
+fn split_tokens(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for ch in input.chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
 /// Splits a search argument into `key:value` qualifiers and free-text terms.
 /// A token counts as a qualifier only when its prefix is a known qualifier
 /// name, so `status:done` filters while `fix: login` stays text.
 pub fn parse_query(input: &str) -> Result<SearchQuery> {
     let mut query = SearchQuery::default();
-    for token in input.split_whitespace() {
+    for token in split_tokens(input) {
+        let token = token.as_str();
         let (key, value) = match token.split_once(':') {
             Some((key, value)) if !value.is_empty() => (key.to_lowercase(), value),
             _ => {
@@ -111,7 +135,14 @@ pub fn parse_query(input: &str) -> Result<SearchQuery> {
             "type" => query.types.push(value.to_string()),
             "priority" => query.priorities.push(value.to_string()),
             "component" => query.components.push(value.to_string()),
-            "repository" => query.repository = Some(value.to_string()),
+            "repository" => {
+                if query.repository.is_some() {
+                    return Err(OrbitError::invalid_argument(
+                        "`repository:` may appear only once in a search query",
+                    ));
+                }
+                query.repository = Some(value.to_string());
+            }
             _ => unreachable!("canonical qualifier"),
         }
     }
@@ -173,7 +204,7 @@ pub fn matches(task: &Task, query: &SearchQuery) -> bool {
         if !query
             .assignee
             .iter()
-            .any(|name| Some(name.as_str()) == assignee)
+            .any(|name| assignee.is_some_and(|held| held.eq_ignore_ascii_case(name)))
         {
             return false;
         }

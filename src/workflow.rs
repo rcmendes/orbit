@@ -526,6 +526,26 @@ impl Workflow {
         self.transitions.iter().find(|t| t.name == name)
     }
 
+    /// The resolution a Task takes on when it lands on closed `status`: the one
+    /// a transition into it records, else the category default. `None` for open
+    /// statuses.
+    pub fn resolution_for(&self, status: &str) -> Option<String> {
+        let category = self.category_of(status)?;
+        if !category.is_terminal() {
+            return None;
+        }
+        self.transitions
+            .iter()
+            .find(|t| t.to == status && t.resolution.is_some())
+            .and_then(|t| t.resolution.clone())
+            .or_else(|| {
+                Some(match category {
+                    StatusCategory::Done => "completed".to_string(),
+                    _ => "cancelled".to_string(),
+                })
+            })
+    }
+
     /// Transitions that may run from `status`, in definition order.
     pub fn transitions_from(&self, status: &str) -> Vec<&TransitionDef> {
         self.transitions

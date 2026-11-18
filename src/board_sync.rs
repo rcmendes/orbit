@@ -955,13 +955,7 @@ fn merge_task(
 
 /// Git adapter: materialize a revision before entering the merge engine.
 fn read_tree(root: &Path, revision: &str) -> Result<BTreeMap<String, String>> {
-    let mut tree = BTreeMap::new();
-    for path in git::tree_files(root, revision)? {
-        if let Some(content) = git::show_file(root, revision, &path)? {
-            tree.insert(path, content);
-        }
-    }
-    Ok(tree)
+    git::read_tree_blobs(root, revision)
 }
 
 /// Lenient `keys.toml` shape for merging: either field may be absent.

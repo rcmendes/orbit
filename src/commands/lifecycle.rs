@@ -2,7 +2,8 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::cli::{
-    CancelArgs, CheckpointArgs, ClaimArgs, DoneArgs, HeartbeatArgs, ReleaseArgs, ReopenArgs,
+    AssignArgs, CancelArgs, CheckpointArgs, ClaimArgs, DoneArgs, HeartbeatArgs, ReleaseArgs,
+    ReopenArgs, TransitionArgs,
 };
 use crate::comment;
 use crate::transition::{CheckpointUpdate, FieldUpdate};
@@ -21,6 +22,7 @@ pub(super) fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output:
         &args.id,
         crate::mutation::Lifecycle::Claim {
             agent: &agent,
+            kind: args.kind,
             steal: args.steal,
         },
         Utc::now(),
@@ -95,7 +97,7 @@ struct WorktreePlan {
 fn plan_worktree(board: &Board, id: &str) -> Result<WorktreePlan> {
     let (graph, _) = crate::graph::Graph::load(board, crate::graph::LoadMode::Strict)?;
     let task = graph.get(id)?;
-    let member = match task.front.repo.as_deref() {
+    let member = match task.front.repository.as_deref() {
         Some(name) => crate::repository::members(board)?
             .into_iter()
             .find(|member| member.name == name)
@@ -113,8 +115,11 @@ fn plan_worktree(board: &Board, id: &str) -> Result<WorktreePlan> {
             )
         })?,
     };
-    let path = member.path.join(".worktrees").join(id);
-    let branch = format!("ticket/{id}");
+    // Worktree paths and branch names key off the immutable Task ID, never
+    // a project key the user typed.
+    let task_id = task.id.clone();
+    let path = member.path.join(".worktrees").join(&task_id);
+    let branch = format!("ticket/{task_id}");
     let records = crate::git::worktree_records(&member.path)?;
     let target = crate::repository::canonical_lenient(&path);
     if let Some(record) = records.iter().find(|record| {
@@ -167,6 +172,30 @@ impl WorktreePlan {
         }
         Ok(true)
     }
+}
+
+/// `orbit assign`: set the assignee without a lease — how humans take work.
+pub(super) fn cmd_assign(board: &Board, args: AssignArgs) -> Result<crate::output::CommandOutput> {
+    let result = crate::mutation::execute(
+        board,
+        &args.id,
+        crate::mutation::Lifecycle::Assign {
+            name: &args.to,
+            kind: args.kind,
+            force: args.force,
+        },
+        Utc::now(),
+    )?;
+    if !result.changed {
+        return Ok(crate::output::CommandOutput::new(
+            json!({"id": args.id, "assignee": args.to, "changed": false}),
+            format!("{} was already assigned to {}", args.id, args.to),
+        ));
+    }
+    Ok(mutation_output(
+        result,
+        format!("assigned {} to {}", args.id, args.to),
+    ))
 }
 
 pub(super) fn cmd_release(
@@ -320,6 +349,33 @@ fn terminal_command(
 pub(super) fn cmd_reopen(board: &Board, args: ReopenArgs) -> Result<crate::output::CommandOutput> {
     let result = crate::mutation::reopen(board, &args.id, args.force, Utc::now())?;
     Ok(mutation_output(result, format!("reopened {}", args.id)))
+}
+
+pub(super) fn cmd_transition(
+    board: &Board,
+    args: TransitionArgs,
+) -> Result<crate::output::CommandOutput> {
+    let caller = optional_agent(args.by);
+    let result = crate::mutation::execute(
+        board,
+        &args.id,
+        crate::mutation::Lifecycle::Transition {
+            name: &args.name,
+            caller: caller.as_deref(),
+            force: args.force,
+        },
+        Utc::now(),
+    )?;
+    if !result.changed {
+        return Ok(crate::output::CommandOutput::new(
+            json!({"id": args.id, "transition": args.name, "changed": false}),
+            format!("{} was already at the `{}` target", args.id, args.name),
+        ));
+    }
+    Ok(mutation_output(
+        result,
+        format!("transitioned {} via `{}`", args.id, args.name),
+    ))
 }
 
 fn resolve_optional_comment(

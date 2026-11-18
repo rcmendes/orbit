@@ -95,7 +95,9 @@ impl TestRepo {
         std::fs::write(path.join("comments").join(".gitkeep"), b"").unwrap();
         std::fs::write(
             path.join("config.toml"),
-            format!("[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"{prefix}\"\n"),
+            format!(
+                "contract = \"1.0.0\"\n[board]\nbranch = \"orbit\"\n\n[id]\nprefix = \"{prefix}\"\n"
+            ),
         )
         .unwrap();
     }
@@ -349,6 +351,15 @@ impl TestRepo {
         std::fs::read_to_string(self.task_path(id)).unwrap()
     }
 
+    /// The Issue's project key (`ORB-12`) as `show --json` reports it; the
+    /// immutable internal ID remains `id`. Human output leads with the key.
+    pub fn key(&self, id: &str) -> String {
+        self.ok_json(&["show", id, "--json"])["data"]["key"]
+            .as_str()
+            .unwrap_or_else(|| panic!("show {id} returned no key"))
+            .to_string()
+    }
+
     pub fn read(&self, relative: &str) -> String {
         std::fs::read_to_string(self.path().join(relative)).unwrap()
     }
@@ -369,17 +380,25 @@ impl TestRepo {
         self.board_path().join("tasks").join(format!("{id}.md"))
     }
 
-    /// Sets `board.max_subtask_depth` in the Board config.
-    pub fn set_max_subtask_depth(&self, depth: u8) {
+    /// Replaces the Board's Issue model: optionally sets `board.default_type`
+    /// inside `[board]` and appends `[[board.types]]`/`[[board.hierarchy]]`
+    /// tables to `config.toml`.
+    pub fn set_issue_model(&self, default_type: Option<&str>, body: &str) {
         let path = self.board_path().join("config.toml");
         let config = std::fs::read_to_string(&path).unwrap();
-        let mut lines: Vec<String> = config.lines().map(str::to_string).collect();
-        let position = lines
-            .iter()
-            .position(|line| line.trim() == "[board]")
-            .expect("config.toml has a [board] section");
-        lines.insert(position + 1, format!("max_subtask_depth = {depth}"));
-        std::fs::write(path, lines.join("\n") + "\n").unwrap();
+        let mut out = config;
+        if let Some(default_type) = default_type {
+            let mut lines: Vec<String> = out.lines().map(str::to_string).collect();
+            let position = lines
+                .iter()
+                .position(|line| line.trim() == "[board]")
+                .expect("config.toml has a [board] section");
+            lines.insert(position + 1, format!("default_type = \"{default_type}\""));
+            out = lines.join("\n") + "\n";
+        }
+        out.push('\n');
+        out.push_str(body);
+        std::fs::write(path, out).unwrap();
     }
 
     /// Rewrite the lease to a time in the past so the claim is stale.
@@ -388,8 +407,9 @@ impl TestRepo {
         let updated = content
             .lines()
             .map(|line| {
-                if line.starts_with("lease_until:") {
-                    "lease_until: 2020-01-01T00:00:00Z".to_string()
+                let indent = &line[..line.len() - line.trim_start().len()];
+                if line.trim_start().starts_with("lease_until:") {
+                    format!("{indent}lease_until: 2020-01-01T00:00:00Z")
                 } else {
                     line.to_string()
                 }
@@ -413,6 +433,7 @@ impl TestRepo {
         command.env("PATH", &self.path);
         command.env_remove("ORBIT_DIR");
         command.env_remove("ORBIT_AGENT");
+        command.env("ORBIT_TRUST_HOOKS", "1");
         command
     }
 }

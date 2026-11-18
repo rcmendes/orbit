@@ -587,23 +587,35 @@ pub fn reset_hard(repo: &Path, commit: &str) -> Result<()> {
 }
 
 pub fn commit(cwd: &Path, message: &str) -> Result<CommitOutcome> {
+    commit_with_trailers(cwd, message, &[])
+}
+
+/// Commits every change in `cwd` like [`commit`], appending each trailer as a
+/// `Key: value` line in the commit's trailer block (for example
+/// `Orbit-Actor: devin`, which the change feed reads back as the event actor).
+pub fn commit_with_trailers(
+    cwd: &Path,
+    message: &str,
+    trailers: &[String],
+) -> Result<CommitOutcome> {
     if status_porcelain(cwd)?.trim().is_empty() {
         return Ok(CommitOutcome::NoChanges);
     }
 
     run_git(Some(cwd), &["add", "-A"], None)?;
-    let output = run_git_raw(
-        Some(cwd),
-        &[
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--no-gpg-sign",
-            "-m",
-            message,
-        ],
-        None,
-    )?;
+    let mut args: Vec<&str> = vec![
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--no-gpg-sign",
+        "-m",
+        message,
+    ];
+    for trailer in trailers {
+        args.push("-m");
+        args.push(trailer);
+    }
+    let output = run_git_raw(Some(cwd), &args, None)?;
 
     if output.status.success() {
         return Ok(CommitOutcome::Committed);
@@ -779,6 +791,87 @@ pub fn tree_files(repo: &Path, commit: &str) -> Result<Vec<String>> {
         .map(str::to_string)
         .filter(|line| !line.is_empty())
         .collect())
+}
+
+/// Every blob of `commit` as `path -> UTF-8 content`, read with one `ls-tree`
+/// and one `cat-file --batch` instead of two processes per file.
+pub fn read_tree_blobs(
+    repo: &Path,
+    commit: &str,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let listing = run_git(Some(repo), &["ls-tree", "-r", "-z", commit], None)?;
+    // Each record: `<mode> SP <type> SP <hash> TAB <path>`.
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for record in listing
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|r| !r.is_empty())
+    {
+        let text = String::from_utf8_lossy(record);
+        let Some((meta, path)) = text.split_once('\t') else {
+            continue;
+        };
+        let mut parts = meta.split(' ');
+        let (_mode, kind, hash) = (parts.next(), parts.next(), parts.next());
+        if let (Some("blob"), Some(hash)) = (kind, hash) {
+            entries.push((path.to_string(), hash.to_string()));
+        }
+    }
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["cat-file", "--batch"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| OrbitError::git(format!("could not run git: {error}")))?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let hashes: Vec<String> = entries
+        .iter()
+        .map(|(_, hash)| format!("{hash}\n"))
+        .collect();
+    // Feed hashes from a thread so a large reply never blocks on a full pipe.
+    let writer = std::thread::spawn(move || {
+        for line in hashes {
+            if stdin.write_all(line.as_bytes()).is_err() {
+                break;
+            }
+        }
+    });
+    let output = child
+        .wait_with_output()
+        .map_err(|error| OrbitError::io("wait for git", error))?;
+    let _ = writer.join();
+    if !output.status.success() {
+        return Err(git_failure(&["cat-file", "--batch"], &output));
+    }
+    // Reply per object: `<hash> SP <type> SP <size> LF <content> LF`.
+    let data = output.stdout;
+    let mut tree = std::collections::BTreeMap::new();
+    let mut at = 0;
+    for (path, _) in entries {
+        let Some(end) = data[at..].iter().position(|byte| *byte == b'\n') else {
+            return Err(OrbitError::git("truncated git cat-file reply"));
+        };
+        let header = String::from_utf8_lossy(&data[at..at + end]).to_string();
+        let size: usize = header
+            .rsplit(' ')
+            .next()
+            .and_then(|size| size.parse().ok())
+            .ok_or_else(|| OrbitError::git(format!("unexpected cat-file header `{header}`")))?;
+        let start = at + end + 1;
+        let stop = start + size;
+        if stop > data.len() {
+            return Err(OrbitError::git("truncated git cat-file reply"));
+        }
+        tree.insert(
+            path,
+            String::from_utf8_lossy(&data[start..stop]).to_string(),
+        );
+        at = stop + 1;
+    }
+    Ok(tree)
 }
 
 /// The UTF-8 content of `path` at `commit`, or `None` when absent.

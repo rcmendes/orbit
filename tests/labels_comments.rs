@@ -17,7 +17,7 @@ fn labels_and_holds_control_the_ready_queue() {
 
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], free);
+    assert_eq!(ready["data"]["issues"][0]["id"], free);
 
     let (_, error) = repo.err_json(&["claim", held.as_str(), "--by", "agent", "--json"]);
     assert_eq!(error["error"]["code"], "LABEL_BLOCKED");
@@ -37,11 +37,11 @@ fn labels_and_holds_control_the_ready_queue() {
 
     let filtered = repo.ok_json(&["list", "--label", "ready-for-agent", "--json"]);
     assert_eq!(filtered["data"]["count"], 1);
-    assert_eq!(filtered["data"]["tasks"][0]["id"], held);
+    assert_eq!(filtered["data"]["issues"][0]["id"], held);
 
     let unlabeled = repo.ok_json(&["list", "--unlabeled", "--json"]);
     assert_eq!(unlabeled["data"]["count"], 1);
-    assert_eq!(unlabeled["data"]["tasks"][0]["id"], free);
+    assert_eq!(unlabeled["data"]["issues"][0]["id"], free);
 
     let labels = repo.ok_json(&["label", "list", "--json"]);
     let labels = labels["data"]["labels"].as_array().unwrap();
@@ -176,7 +176,7 @@ fn exclude_label_hides_tasks_from_list_and_ready() {
     let ready = repo.ok_json(&["ready", "--exclude-label", "EPIC", "--json"]);
     assert_eq!(ready["data"]["count"], 2);
     assert!(
-        ready["data"]["tasks"]
+        ready["data"]["issues"]
             .as_array()
             .unwrap()
             .iter()
@@ -192,11 +192,11 @@ fn exclude_label_hides_tasks_from_list_and_ready() {
         "--json",
     ]);
     assert_eq!(listed["data"]["count"], 1);
-    assert_eq!(listed["data"]["tasks"][0]["id"], task);
+    assert_eq!(listed["data"]["issues"][0]["id"], task);
 
     let scoped = repo.ok_json(&["list", "--label", "ready-for-agent", "--json"]);
     assert_eq!(scoped["data"]["count"], 1);
-    assert_eq!(scoped["data"]["tasks"][0]["id"], task);
+    assert_eq!(scoped["data"]["issues"][0]["id"], task);
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn doctor_reports_corrupt_and_orphan_comments() {
     assert!(
         issues
             .iter()
-            .any(|issue| { issue["code"] == "CORRUPT_COMMENT" && issue["task"] == id.as_str() })
+            .any(|issue| { issue["code"] == "CORRUPT_COMMENT" && issue["issue"] == id.as_str() })
     );
     assert!(issues.iter().any(|issue| issue["code"] == "ORPHAN_COMMENT"));
 

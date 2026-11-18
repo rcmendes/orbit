@@ -3,40 +3,40 @@ mod common;
 use common::TestRepo;
 
 #[test]
-fn area_and_verification_round_trip_through_add_show_and_update() {
+fn component_and_verification_round_trip_through_add_show_and_update() {
     let repo = TestRepo::new();
     repo.init();
 
     let id = repo.add(
         "Wire MCP filters",
-        &["--area", "mcp", "--verification", "cargo test mcp"],
+        &["--component", "mcp", "--verification", "cargo test mcp"],
     );
     let content = repo.read_task(&id);
-    assert!(content.contains("area: mcp"), "{content}");
+    assert!(content.contains("component: mcp"), "{content}");
     assert!(
         content.contains("verification: cargo test mcp"),
         "{content}"
     );
 
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert_eq!(show["data"]["area"], "mcp");
+    assert_eq!(show["data"]["component"], "mcp");
     assert_eq!(show["data"]["verification"], "cargo test mcp");
 
     let updated = repo.ok_json(&[
         "update",
         id.as_str(),
-        "--area",
+        "--component",
         "cli",
         "--verification",
         "cargo test cli",
         "--json",
     ]);
-    assert_eq!(updated["data"]["area"], "cli");
+    assert_eq!(updated["data"]["component"], "cli");
     assert_eq!(updated["data"]["verification"], "cargo test cli");
 
-    repo.ok_json(&["update", id.as_str(), "--clear-area", "--json"]);
+    repo.ok_json(&["update", id.as_str(), "--clear-component", "--json"]);
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert!(show["data"]["area"].is_null());
+    assert!(show["data"]["component"].is_null());
     assert_eq!(show["data"]["verification"], "cargo test cli");
 
     repo.ok_json(&["update", id.as_str(), "--clear-verification", "--json"]);
@@ -45,88 +45,104 @@ fn area_and_verification_round_trip_through_add_show_and_update() {
 }
 
 #[test]
-fn invalid_area_is_rejected_on_add_update_and_filters() {
+fn invalid_component_is_rejected_on_add_update_and_filters() {
     let repo = TestRepo::new();
     repo.init();
 
-    // Area is a free-form slug: "Not An Area!" is not one.
-    let (status, value) = repo.json(&["add", "Bad area", "--area", "Not An Area!", "--json"]);
+    // Component is a free-form slug: "Not An Component!" is not one.
+    let (status, value) = repo.json(&[
+        "add",
+        "Bad component",
+        "--component",
+        "Not An Component!",
+        "--json",
+    ]);
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "INVALID_AREA");
+    assert_eq!(value["error"]["code"], "INVALID_COMPONENT");
 
     let id = repo.add("Task", &[]);
-    let (status, value) = repo.json(&["update", id.as_str(), "--area", "Bad Area", "--json"]);
+    let (status, value) = repo.json(&[
+        "update",
+        id.as_str(),
+        "--component",
+        "Bad Component",
+        "--json",
+    ]);
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "INVALID_AREA");
+    assert_eq!(value["error"]["code"], "INVALID_COMPONENT");
 
-    let (status, value) = repo.json(&["list", "--area", "Bad Area", "--json"]);
+    let (status, value) = repo.json(&["list", "--component", "Bad Component", "--json"]);
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "INVALID_AREA");
+    assert_eq!(value["error"]["code"], "INVALID_COMPONENT");
 }
 
 #[test]
-fn area_accepts_any_lowercase_slug_when_the_board_defines_no_areas() {
+fn component_accepts_any_lowercase_slug_when_the_board_defines_no_components() {
     let repo = TestRepo::new();
     repo.init();
 
-    let id = repo.add("Mobile work", &["--area", "mobile-api"]);
+    let id = repo.add("Mobile work", &["--component", "mobile-api"]);
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert_eq!(show["data"]["area"], "mobile-api");
+    assert_eq!(show["data"]["component"], "mobile-api");
 
-    let list = repo.ok_json(&["list", "--area", "mobile-api", "--json"]);
+    let list = repo.ok_json(&["list", "--component", "mobile-api", "--json"]);
     assert_eq!(list["data"]["count"], 1);
-    assert_eq!(list["data"]["tasks"][0]["id"], id.as_str());
+    assert_eq!(list["data"]["issues"][0]["id"], id.as_str());
 }
 
-/// Writes `areas = [...]` into the Board's `[board]` config table.
-fn configure_board_areas(repo: &TestRepo, areas: &str) {
+/// Writes `components = [...]` into the Board's `[board]` config table.
+fn configure_board_components(repo: &TestRepo, components: &str) {
     let path = repo.board_path().join("config.toml");
     let config = std::fs::read_to_string(&path).unwrap();
-    let config = config.replacen("[board]\n", &format!("[board]\nareas = {areas}\n"), 1);
+    let config = config.replacen(
+        "[board]\n",
+        &format!("[board]\ncomponents = {components}\n"),
+        1,
+    );
     std::fs::write(&path, config).unwrap();
 }
 
 #[test]
-fn board_areas_config_restricts_area_values() {
+fn board_components_config_restricts_component_values() {
     let repo = TestRepo::new();
     repo.init();
-    configure_board_areas(&repo, r#"["cli", "docs"]"#);
+    configure_board_components(&repo, r#"["cli", "docs"]"#);
 
-    // A configured Area works; casing normalizes to the lowercase slug.
-    let id = repo.add("Docs work", &["--area", "DOCS"]);
+    // A configured Component works; casing normalizes to the lowercase slug.
+    let id = repo.add("Docs work", &["--component", "DOCS"]);
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert_eq!(show["data"]["area"], "docs");
+    assert_eq!(show["data"]["component"], "docs");
 
     // A valid slug outside the Board's list is rejected.
-    let (status, value) = repo.json(&["add", "MCP work", "--area", "mcp", "--json"]);
+    let (status, value) = repo.json(&["add", "MCP work", "--component", "mcp", "--json"]);
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "INVALID_AREA");
+    assert_eq!(value["error"]["code"], "INVALID_COMPONENT");
 
-    let (status, value) = repo.json(&["update", id.as_str(), "--area", "mcp", "--json"]);
+    let (status, value) = repo.json(&["update", id.as_str(), "--component", "mcp", "--json"]);
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "INVALID_AREA");
+    assert_eq!(value["error"]["code"], "INVALID_COMPONENT");
 
     // Filters are validated against the same list.
-    let (status, value) = repo.json(&["list", "--area", "mcp", "--json"]);
+    let (status, value) = repo.json(&["list", "--component", "mcp", "--json"]);
     assert_eq!(status, 1);
-    assert_eq!(value["error"]["code"], "INVALID_AREA");
-    let listed = repo.ok_json(&["list", "--area", "docs", "--json"]);
+    assert_eq!(value["error"]["code"], "INVALID_COMPONENT");
+    let listed = repo.ok_json(&["list", "--component", "docs", "--json"]);
     assert_eq!(listed["data"]["count"], 1);
 }
 
 #[test]
-fn task_files_accept_free_form_area_slugs() {
+fn task_files_accept_free_form_component_slugs() {
     let repo = TestRepo::new();
     repo.init();
 
-    let id = repo.add("Custom area", &["--area", "payments"]);
+    let id = repo.add("Custom component", &["--component", "payments"]);
     let content = repo.read_task(&id);
-    assert!(content.contains("area: payments"), "{content}");
+    assert!(content.contains("component: payments"), "{content}");
     let show = repo.ok_json(&["show", id.as_str(), "--json"]);
-    assert_eq!(show["data"]["area"], "payments");
+    assert_eq!(show["data"]["component"], "payments");
 
     // A hand-edited value that is not a slug is corrupt, not silently kept.
-    let content = content.replace("area: payments", "area: Not A Slug!");
+    let content = content.replace("component: payments", "component: Not A Slug!");
     repo.write_task(&id, &content);
     let (status, value) = repo.json(&["list", "--json"]);
     assert_eq!(status, 1, "{value}");
@@ -144,17 +160,17 @@ fn empty_verification_is_rejected() {
 }
 
 #[test]
-fn area_filters_scope_list_and_ready() {
+fn component_filters_scope_list_and_ready() {
     let repo = TestRepo::new();
     repo.init();
 
-    let cli = repo.add("CLI work", &["--area", "cli"]);
-    let mcp = repo.add("MCP work", &["--area", "mcp"]);
+    let cli = repo.add("CLI work", &["--component", "cli"]);
+    let mcp = repo.add("MCP work", &["--component", "mcp"]);
     let unset = repo.add("Unclassified", &[]);
 
-    let list = repo.ok_json(&["list", "--area", "cli", "--area", "mcp", "--json"]);
+    let list = repo.ok_json(&["list", "--component", "cli", "--component", "mcp", "--json"]);
     assert_eq!(list["data"]["count"], 2);
-    let ids: Vec<&str> = list["data"]["tasks"]
+    let ids: Vec<&str> = list["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -164,8 +180,8 @@ fn area_filters_scope_list_and_ready() {
     assert!(ids.contains(&mcp.as_str()));
     assert!(!ids.contains(&unset.as_str()));
 
-    let list = repo.ok_json(&["list", "--exclude-area", "cli", "--json"]);
-    let ids: Vec<&str> = list["data"]["tasks"]
+    let list = repo.ok_json(&["list", "--exclude-component", "cli", "--json"]);
+    let ids: Vec<&str> = list["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
@@ -175,28 +191,28 @@ fn area_filters_scope_list_and_ready() {
     assert!(ids.contains(&mcp.as_str()));
     assert!(ids.contains(&unset.as_str()));
 
-    let ready = repo.ok_json(&["ready", "--area", "mcp", "--json"]);
+    let ready = repo.ok_json(&["ready", "--component", "mcp", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], mcp.as_str());
+    assert_eq!(ready["data"]["issues"][0]["id"], mcp.as_str());
 }
 
 #[test]
-fn export_includes_area_and_verification() {
+fn export_includes_component_and_verification() {
     let repo = TestRepo::new();
     repo.init();
 
     let id = repo.add(
         "Export me",
-        &["--area", "docs", "--verification", "cargo test export"],
+        &["--component", "docs", "--verification", "cargo test export"],
     );
     let export = repo.ok_json(&["export", "--json"]);
-    let task = export["data"]["tasks"]
+    let task = export["data"]["issues"]
         .as_array()
         .unwrap()
         .iter()
         .find(|entry| entry["id"] == id)
         .unwrap();
-    assert_eq!(task["area"], "docs");
+    assert_eq!(task["component"], "docs");
     assert_eq!(task["verification"], "cargo test export");
 }
 
@@ -210,5 +226,5 @@ fn project_guidance_file_is_checked_in() {
     );
     let text = std::fs::read_to_string(guidance).unwrap();
     assert!(text.contains("verification"));
-    assert!(text.contains("area"));
+    assert!(text.contains("component"));
 }

@@ -83,7 +83,7 @@ fn checkpoint_survives_release_and_takeover() {
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
     assert_eq!(
-        ready["data"]["tasks"][0]["checkpoint"]["progress"],
+        ready["data"]["issues"][0]["checkpoint"]["progress"],
         "Finished the schema"
     );
 
@@ -158,7 +158,8 @@ fn checkpoints_do_not_change_readiness() {
     let repo = TestRepo::new();
     repo.init();
     let first = repo.add("First", &[]);
-    let second = repo.add("Second", &["--depends-on", first.as_str()]);
+    let second = repo.add("Second", &[]);
+    repo.ok_json(&["depend", second.as_str(), first.as_str(), "--json"]);
 
     let before = repo.ok_json(&["list", "--json"]);
     assert_eq!(before["data"]["count"], 2);
@@ -179,11 +180,11 @@ fn checkpoints_do_not_change_readiness() {
     assert_eq!(second_task["data"]["blocking"][0], first.as_str());
 
     let released = repo.ok_json(&["release", &first, "--by", "alice", "--json"]);
-    assert_eq!(released["data"]["status"], "todo");
+    assert_eq!(released["data"]["status"], "ready");
 
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], first.as_str());
+    assert_eq!(ready["data"]["issues"][0]["id"], first.as_str());
 }
 
 #[test]
@@ -327,7 +328,7 @@ fn claim_by_current_holder_renews_the_lease() {
     let first_lease = first["data"]["lease_until"].as_str().unwrap().to_string();
     std::thread::sleep(std::time::Duration::from_millis(20));
     let again = repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
-    assert_eq!(again["data"]["claimed_by"], "a");
+    assert_eq!(again["data"]["assignee"], "a");
     assert!(
         again["data"]["lease_until"].as_str().unwrap() > first_lease.as_str(),
         "{again}"
@@ -344,7 +345,7 @@ fn claim_by_current_holder_takes_back_a_stale_claim() {
     repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
     repo.make_stale(&id);
     let again = repo.ok_json(&["claim", &id, "--by", "a", "--json"]);
-    assert_eq!(again["data"]["claimed_by"], "a");
+    assert_eq!(again["data"]["assignee"], "a");
     let (_, error) = repo.err_json(&["claim", &id, "--by", "b", "--json"]);
     assert_eq!(error["error"]["code"], "ALREADY_CLAIMED");
 }

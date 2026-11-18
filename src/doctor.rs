@@ -11,7 +11,7 @@ use crate::board::{
 use crate::cli::DoctorArgs;
 use crate::error::{OrbitError, Result, code};
 use crate::git;
-use crate::graph::{Graph, Issue, LoadMode};
+use crate::graph::{Graph, LoadIssue, LoadMode};
 
 pub fn run(dir: Option<&Path>, args: DoctorArgs) -> Result<crate::output::CommandOutput> {
     let mut fixed = Vec::new();
@@ -138,7 +138,7 @@ fn diagnose(
         ) {
             Ok(board) => Some(board),
             Err(error) => {
-                issues.push(Issue::new(error.code, None, error.message));
+                issues.push(LoadIssue::new(error.code, None, error.message));
                 None
             }
         },
@@ -168,6 +168,7 @@ fn diagnose(
     };
     if let Some(board) = &board {
         issues.extend(crate::remote::commands::doctor_issues(board));
+        issues.extend(profile_issues(board));
     }
 
     let healthy = issues.is_empty();
@@ -183,17 +184,17 @@ fn diagnose(
                 issue.severity.to_ascii_uppercase(),
                 issue.code,
                 issue
-                    .task
+                    .issue
                     .as_ref()
-                    .map(|task| format!("{task}: "))
+                    .map(|id| format!("{id}: "))
                     .unwrap_or_default(),
                 issue.message
             ));
             if let Some(repository) = &issue.repository {
                 human.push_str(&format!("  repository: {repository}\n"));
             }
-            if let Some(identity) = &issue.issue {
-                human.push_str(&format!("  issue: {identity}\n"));
+            if let Some(identity) = &issue.external {
+                human.push_str(&format!("  external: {identity}\n"));
             }
             if let Some(cause) = &issue.cause {
                 human.push_str(&format!("  cause: {cause}\n"));
@@ -203,7 +204,7 @@ fn diagnose(
             }
         }
     }
-    human.push_str(&format!("tasks: {task_count}\n"));
+    human.push_str(&format!("issues: {task_count}\n"));
     human.push_str(&render_discovery(&discovery));
     for warning in &warnings {
         human.push_str(&format!("warning: {warning}\n"));
@@ -215,7 +216,7 @@ fn diagnose(
     Ok(crate::output::CommandOutput::new(
         json!({
             "healthy": healthy,
-            "tasks": task_count,
+            "issue_count": task_count,
             "issues": issues,
             "warnings": warnings,
             "path_on_path": on_path,
@@ -261,7 +262,7 @@ fn render_discovery(discovery: &Discovery) -> String {
     human
 }
 
-fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<Issue>) {
+fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<LoadIssue>) {
     // One LEGACY_LAYOUT issue from the authoritative verdict; the discovery
     // finding, when present, explains which legacy shape produced it.
     if discovery.needs_migration {
@@ -278,10 +279,10 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
                     .unwrap_or_default()
             ),
         };
-        issues.push(Issue::new(LEGACY_LAYOUT, None, message));
+        issues.push(LoadIssue::new(LEGACY_LAYOUT, None, message));
     }
     if let Some((new, legacy)) = &discovery.ambiguous {
-        issues.push(Issue::new(
+        issues.push(LoadIssue::new(
             AMBIGUOUS_BOARD,
             None,
             format!(
@@ -294,7 +295,7 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
     if let Some(error) = &discovery.error
         && error.code != code::BOARD_NOT_FOUND
     {
-        issues.push(Issue::new(error.code, None, error.message.clone()));
+        issues.push(LoadIssue::new(error.code, None, error.message.clone()));
     }
 
     if let Some(board) = board
@@ -307,7 +308,7 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
             } else {
                 "run `orbit migrate` to convert the Board"
             };
-            issues.push(Issue::new(
+            issues.push(LoadIssue::new(
                 STORAGE_MISMATCH,
                 None,
                 format!(
@@ -324,7 +325,7 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
         if let Ok(records) = git::worktree_records(&context.repo_root) {
             for record in records {
                 if record.branch.as_deref() == Some("orbit") && !record.path.exists() {
-                    issues.push(Issue::new(
+                    issues.push(LoadIssue::new(
                         ORPHAN_WORKTREE,
                         None,
                         format!(
@@ -349,7 +350,7 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
             .flat_map(|root| absolute_board_configs(root))
         {
             if seen.insert(path.clone()) {
-                issues.push(Issue::new(
+                issues.push(LoadIssue::new(
                     ABSOLUTE_BOARD_PATH,
                     None,
                     format!(
@@ -360,6 +361,39 @@ fn layout_issues(discovery: &Discovery, board: Option<&Board>, issues: &mut Vec<
             }
         }
     }
+}
+
+/// Reports every applied `[[profiles]]` record whose requirements this
+/// binary does not meet — the same negotiation `orbit setup <plugin>`
+/// performs, re-checked so a binary downgrade or a hand-edited record
+/// surfaces here.
+fn profile_issues(board: &Board) -> Vec<LoadIssue> {
+    board
+        .config
+        .profiles
+        .iter()
+        .filter_map(|profile| {
+            let unmet = crate::profile::unmet_applied(profile);
+            if unmet.is_empty() {
+                return None;
+            }
+            Some(
+                LoadIssue::new(
+                    code::PROFILE_UNMET,
+                    None,
+                    format!(
+                        "profile `{}` requires {}",
+                        profile.name,
+                        unmet.describe().join(" and ")
+                    ),
+                )
+                .with_external(&profile.name)
+                .with_next_action(
+                    "upgrade Orbit, or apply a profile whose requirements this binary meets",
+                ),
+            )
+        })
+        .collect()
 }
 
 fn orbit_on_path() -> bool {
@@ -378,19 +412,15 @@ fn orbit_on_path() -> bool {
 
 fn diagnose_tasks(
     board: &Board,
-    issues: &mut Vec<Issue>,
+    issues: &mut Vec<LoadIssue>,
     warnings: &mut Vec<String>,
     fix: bool,
 ) -> Result<()> {
     let (graph, mut load_issues) = Graph::load(board, LoadMode::Lenient)?;
     issues.append(&mut load_issues);
 
-    let prefix_mismatch = issues
-        .iter()
-        .any(|issue| issue.code == code::PREFIX_MISMATCH);
-
     if let Err(error) = crate::health::comment_files(board, &graph, false, issues) {
-        issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message));
+        issues.push(LoadIssue::new(code::BOARD_CORRUPT, None, error.message));
     }
 
     let mut keys: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
@@ -400,7 +430,7 @@ fn diagnose_tasks(
         }
     }
     for (key, ids) in keys.into_iter().filter(|(_, ids)| ids.len() > 1) {
-        issues.push(Issue::new(
+        issues.push(LoadIssue::new(
             code::DUPLICATE_SOURCE_KEY,
             ids.first().copied(),
             format!(
@@ -411,32 +441,42 @@ fn diagnose_tasks(
     }
 
     for task in graph.tasks.values() {
-        for (owner, value) in &task.front.annotations {
-            if let Err(error) = crate::task::validate_annotation(owner, value) {
-                issues.push(Issue::new(error.code, Some(&task.id), error.message));
+        for (owner, value) in &task.front.properties {
+            if let Err(error) = crate::task::validate_property(owner, value) {
+                issues.push(LoadIssue::new(error.code, Some(&task.id), error.message));
             }
+        }
+        if let Some(external_id) = task.front.external_id.as_deref()
+            && let Err(error) = crate::task::validate_external_id(external_id)
+        {
+            issues.push(LoadIssue::new(error.code, Some(&task.id), error.message));
         }
     }
 
     for task in graph.stale_tasks() {
         warnings.push(format!(
-            "{}: stale claim by {}",
+            "{}: stale lease held by {}",
             task.id,
-            task.holder().unwrap_or("unknown")
+            task.assignee_name().unwrap_or("unknown")
         ));
     }
 
     for task in graph.tasks.values() {
         let no_times = task
             .front
-            .claim
+            .lease
             .as_ref()
-            .is_some_and(|claim| !claim.has_times());
-        if no_times || task.front.stray_claim_times.is_some() {
-            warnings.push(format!("{}: claim metadata is incomplete", task.id));
+            .is_some_and(|lease| !lease.has_times());
+        let stray_lease = task.front.assignee.is_none() && task.front.lease.is_some();
+        if no_times || stray_lease {
+            warnings.push(format!("{}: lease metadata is incomplete", task.id));
         }
 
-        if task.front.status == crate::task::Status::Done {
+        if graph
+            .workflow
+            .category_of(&task.front.status)
+            .is_some_and(|category| category.is_terminal())
+        {
             let unfinished = graph.blocking_ids(task);
             if !unfinished.is_empty() {
                 warnings.push(format!(
@@ -445,10 +485,10 @@ fn diagnose_tasks(
                     unfinished.join(", ")
                 ));
             }
-            let open_subtasks = graph.open_children(&task.id);
+            let open_subtasks = graph.open_descendants(&task.id);
             if !open_subtasks.is_empty() {
                 warnings.push(format!(
-                    "{} is done but has open SubTasks: {}",
+                    "{} is done but has open sub-issues: {}",
                     task.id,
                     open_subtasks.join(", ")
                 ));
@@ -456,18 +496,12 @@ fn diagnose_tasks(
         }
     }
 
-    // A prefix mismatch means the IDs use the observed prefix; comparing them
-    // with the configured prefix would flag every SubTask.
-    if !prefix_mismatch {
-        crate::health::parent_id_agreement(board, &graph, issues);
-    }
-
     match crate::git::status_porcelain(&board.root) {
         Ok(status) if !status.trim().is_empty() => {
             warnings.push("the board has uncommitted changes; run `orbit sync`".to_string());
         }
         Ok(_) => {}
-        Err(error) => issues.push(Issue::new(code::BOARD_CORRUPT, None, error.message)),
+        Err(error) => issues.push(LoadIssue::new(code::BOARD_CORRUPT, None, error.message)),
     }
 
     crate::health::branch_mismatch(board, issues);

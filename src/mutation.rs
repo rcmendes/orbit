@@ -49,9 +49,33 @@ pub fn persist_task(board: &Board, task: &Task, message: &str) -> Result<CommitO
     board.commit(message, false)
 }
 
+/// [`persist_task`] that records `actor` in an `Orbit-Actor` commit trailer
+/// for the change feed (`orbit changes`, `orbit history`).
+pub fn persist_task_as(
+    board: &Board,
+    task: &Task,
+    message: &str,
+    actor: Option<&str>,
+) -> Result<CommitOutcome> {
+    write_task(board, task)?;
+    board.commit_as(message, false, actor)
+}
+
 /// Writes a Task and commits it, returning the commit warning if any.
 pub fn save(board: &Board, task: &Task, message: &str) -> Result<Option<String>> {
     Ok(commit_warning(persist_task(board, task, message)?))
+}
+
+/// [`save`] that records `actor` in an `Orbit-Actor` commit trailer.
+pub fn save_as(
+    board: &Board,
+    task: &Task,
+    message: &str,
+    actor: Option<&str>,
+) -> Result<Option<String>> {
+    Ok(commit_warning(persist_task_as(
+        board, task, message, actor,
+    )?))
 }
 
 /// Writes a new Task file (never replacing an existing one) without committing.
@@ -63,6 +87,11 @@ pub fn create_task(board: &Board, task: &Task) -> Result<()> {
 /// Commits already-published files, returning the commit warning if any.
 pub fn commit(board: &Board, message: &str) -> Result<Option<String>> {
     Ok(commit_warning(board.commit(message, false)?))
+}
+
+/// [`commit`] that records `actor` in an `Orbit-Actor` commit trailer.
+pub fn commit_as(board: &Board, message: &str, actor: Option<&str>) -> Result<Option<String>> {
+    Ok(commit_warning(board.commit_as(message, false, actor)?))
 }
 
 /// Removes a Task file and its comment sidecar; absent files are fine.
@@ -118,6 +147,9 @@ pub fn finish(
         comment::validate_body(body)?;
     }
     let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    // Comment sidecars and file writes key off the immutable internal ID.
+    let id = graph.resolve(id)?;
+    let id = id.as_str();
     let outcome = crate::ops::finish(&mut graph, id, caller, force, kind, now)?;
     let open = outcome.cancelled_subtasks;
     for child in &open {
@@ -150,15 +182,18 @@ pub fn finish(
         }
     }
     if (changed || comments.is_some() || !open.is_empty())
-        && let Some(warning) =
-            commit_warning(board.commit(&format!("orbit: {} {id}", kind.verb()), false)?)
+        && let Some(warning) = commit_warning(board.commit_as(
+            &format!("orbit: {} {id}", kind.verb()),
+            false,
+            caller,
+        )?)
     {
         warnings.push(warning);
     }
     // Commit failures precede comment failures, matching the pre-module order.
     warnings.extend(comment_warning);
     if !open.is_empty() {
-        warnings.push(format!("cancelled open SubTasks: {}", open.join(", ")));
+        warnings.push(format!("cancelled open sub-issues: {}", open.join(", ")));
     }
     let task = graph.get(id)?.clone();
     Ok(MutationResult {
@@ -174,7 +209,14 @@ pub fn finish(
 pub enum Lifecycle<'a> {
     Claim {
         agent: &'a str,
+        kind: crate::task::IdentityKind,
         steal: bool,
+    },
+    /// Assigns the Task without a lease (`orbit assign`).
+    Assign {
+        name: &'a str,
+        kind: crate::task::IdentityKind,
+        force: bool,
     },
     Release {
         caller: Option<&'a str>,
@@ -186,6 +228,12 @@ pub enum Lifecycle<'a> {
     Checkpoint {
         agent: &'a str,
         update: crate::transition::CheckpointUpdate,
+    },
+    /// Runs a named workflow transition (`orbit transition <id> <name>`).
+    Transition {
+        name: &'a str,
+        caller: Option<&'a str>,
+        force: bool,
     },
 }
 
@@ -209,25 +257,46 @@ pub fn execute_in(
     operation: Lifecycle<'_>,
     now: DateTime<Utc>,
 ) -> Result<MutationResult> {
-    let (verb, changed, heartbeat) = match operation {
-        Lifecycle::Claim { agent, steal } => (
+    let (verb, changed, heartbeat, actor) = match operation {
+        Lifecycle::Claim { agent, kind, steal } => (
             "claim",
-            crate::ops::claim(&mut graph, board, id, agent, steal, now)?,
+            crate::ops::claim(&mut graph, board, id, agent, kind, steal, now)?,
             false,
+            Some(agent),
+        ),
+        Lifecycle::Assign { name, kind, force } => (
+            "assign",
+            crate::ops::assign(&mut graph, id, name, kind, force, now)?,
+            false,
+            Some(name),
         ),
         Lifecycle::Release { caller, force } => (
             "release",
             crate::ops::release(&mut graph, id, caller, force, now)?,
             false,
+            caller,
         ),
         Lifecycle::Heartbeat { agent } => (
             "heartbeat",
             crate::ops::heartbeat(&mut graph, board, id, agent, now)?,
             true,
+            Some(agent),
         ),
         Lifecycle::Checkpoint { agent, update } => {
-            graph.get_mut(id)?.record_checkpoint(agent, update, now)?;
-            ("checkpoint", true, false)
+            let workflow = graph.workflow.clone();
+            graph
+                .get_mut(id)?
+                .record_checkpoint(agent, update, now, &workflow)?;
+            ("checkpoint", true, false, Some(agent))
+        }
+        Lifecycle::Transition {
+            name,
+            caller,
+            force,
+        } => {
+            let changed = crate::ops::transition(&mut graph, id, name, caller, force, now)?
+                == crate::transition::Outcome::Changed;
+            (name, changed, false, caller)
         }
     };
     let task = graph.get(id)?.clone();
@@ -236,7 +305,7 @@ pub fn execute_in(
         write_task(board, &task)?;
         if !heartbeat
             && let Some(warning) =
-                commit_warning(board.commit(&format!("orbit: {verb} {id}"), false)?)
+                commit_warning(board.commit_as(&format!("orbit: {verb} {id}"), false, actor)?)
         {
             warnings.push(warning);
         }
@@ -248,6 +317,50 @@ pub fn execute_in(
         comments: None,
         warnings,
         comment_failed: false,
+    })
+}
+
+/// The result of a custom Board op (`orbit submit`, `review`, `ask`,
+/// `answer`): the op's own outcome value plus the usual write/commit
+/// plumbing.
+pub struct OpResult<T> {
+    pub graph: Graph,
+    pub task: Task,
+    pub outcome: T,
+    pub changed: bool,
+    pub warnings: Vec<String>,
+}
+
+/// Executes a Board op against a freshly loaded snapshot, then writes the
+/// Task and commits `orbit: <verb> <id>` when the op reports a change.
+/// Ops that need richer outcomes than [`Lifecycle`] — review verdicts,
+/// escalations, Ask answers — go through here so CLI and MCP share one
+/// persistence path.
+pub fn run_op<T>(
+    board: &Board,
+    id: &str,
+    verb: &str,
+    op: impl FnOnce(&mut Graph) -> Result<(T, bool)>,
+) -> Result<OpResult<T>> {
+    let (mut graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let (outcome, changed) = op(&mut graph)?;
+    let resolved = graph.resolve(id)?;
+    let task = graph.get(&resolved)?.clone();
+    let mut warnings = Vec::new();
+    if changed {
+        write_task(board, &task)?;
+        if let Some(warning) =
+            commit_warning(board.commit(&format!("orbit: {verb} {resolved}"), false)?)
+        {
+            warnings.push(warning);
+        }
+    }
+    Ok(OpResult {
+        graph,
+        task,
+        outcome,
+        changed,
+        warnings,
     })
 }
 

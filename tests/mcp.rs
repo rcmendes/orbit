@@ -122,7 +122,7 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names.len(), 16);
+    assert_eq!(names.len(), 63);
     for expected in [
         "ready",
         "list",
@@ -130,17 +130,78 @@ fn initialize_and_tools_list_match_the_mcp_contract() {
         "create",
         "update",
         "claim",
+        "assign",
         "release",
         "heartbeat",
         "checkpoint",
         "finish",
+        "transition",
+        "submit",
+        "review",
+        "ask",
+        "answer",
         "link",
         "delete",
         "label",
         "comment",
+        "property",
+        "batch",
+        "tree",
+        "reopen",
+        "prime",
+        "search",
+        "digest",
+        "export",
+        "doctor",
+        "sync",
+        "repo_add",
+        "repo_remove",
+        "repo_list",
+        "repo_refresh",
+        "slug_show",
+        "slug_migrate",
+        "migrate",
+        "migrate_model",
+        "board_host",
+        "board_sync",
+        "board_move",
+        "remote_status",
+        "remote_connect",
+        "remote_disconnect",
+        "remote_list",
+        "remote_issues",
+        "remote_issues_refresh",
+        "remote_issues_show",
+        "remote_import",
+        "remote_link",
+        "remote_create",
+        "remote_detach",
+        "remote_reattach",
+        "remote_sync",
+        "remote_auto_push",
+        "triage_context",
+        "triage_review",
+        "triage_apply",
+        "changes",
+        "history",
     ] {
         assert!(names.contains(&expected), "{expected}");
     }
+
+    // Registry-generated tools carry MCP safety annotations.
+    let tool_list = tools["result"]["tools"].as_array().unwrap();
+    let get_tool = tool_list.iter().find(|tool| tool["name"] == "get").unwrap();
+    assert_eq!(get_tool["annotations"]["readOnlyHint"], true);
+    let delete_tool = tool_list
+        .iter()
+        .find(|tool| tool["name"] == "delete")
+        .unwrap();
+    assert_eq!(delete_tool["annotations"]["destructiveHint"], true);
+    let remote_tool = tool_list
+        .iter()
+        .find(|tool| tool["name"] == "remote_status")
+        .unwrap();
+    assert_eq!(remote_tool["annotations"]["openWorldHint"], true);
 
     let list_tool = tools["result"]["tools"]
         .as_array()
@@ -170,7 +231,7 @@ fn create_claim_heartbeat_and_finish_round_trip() {
         "create",
         json!({
             "title": "MCP task",
-            "priority": 1,
+            "priority": "high",
             "body": "Made over MCP"
         }),
     );
@@ -181,12 +242,12 @@ fn create_claim_heartbeat_and_finish_round_trip() {
     let ready = client.call(11, "ready", json!({}));
     let ready = tool_envelope(&ready);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], id);
+    assert_eq!(ready["data"]["issues"][0]["id"], id);
 
     let claimed = client.call(12, "ready", json!({ "claim": true, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
     assert_eq!(claimed["data"]["status"], "in_progress");
-    assert_eq!(claimed["data"]["claimed_by"], "claude");
+    assert_eq!(claimed["data"]["assignee"], "claude");
 
     let heartbeat = client.call(13, "heartbeat", json!({ "id": id, "by": "claude" }));
     let heartbeat = tool_envelope(&heartbeat);
@@ -212,7 +273,7 @@ fn create_claim_heartbeat_and_finish_round_trip() {
     let list = client.call(16, "list", json!({ "include_closed": true }));
     let list = tool_envelope(&list);
     assert_eq!(list["data"]["count"], 1);
-    assert_eq!(list["data"]["tasks"][0]["status"], "done");
+    assert_eq!(list["data"]["issues"][0]["status"], "done");
 }
 
 #[test]
@@ -228,7 +289,7 @@ fn checkpoint_round_trips_over_mcp() {
 
     let claimed = client.call(21, "claim", json!({ "id": id, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
-    assert_eq!(claimed["data"]["claimed_by"], "claude");
+    assert_eq!(claimed["data"]["assignee"], "claude");
 
     let recorded = client.call(
         22,
@@ -287,18 +348,19 @@ fn subtasks_are_available_over_mcp() {
         json!({
             "title": "Part",
             "parent": parent_id.clone(),
-            "labels": ["repo:api", "ready-for-agent"]
+            "labels": ["bug", "ready-for-agent"]
         }),
     );
     let child = tool_envelope(&child);
     let child_id = child["data"]["id"].as_str().unwrap().to_string();
-    assert!(child_id.starts_with(&format!("{parent_id}.")));
+    // IDs are flat; the parent edge lives in `parent` (ADR 0022).
+    assert!(!child_id.contains('.'), "{child_id}");
     assert_eq!(child["data"]["parent"], parent_id.as_str());
 
     let ready = client.call(72, "ready", json!({ "parent": parent_id.clone() }));
     let ready = tool_envelope(&ready);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], child_id.as_str());
+    assert_eq!(ready["data"]["issues"][0]["id"], child_id.as_str());
 
     let list = client.call(
         73,
@@ -307,17 +369,20 @@ fn subtasks_are_available_over_mcp() {
     );
     let list = tool_envelope(&list);
     assert_eq!(list["data"]["count"], 1);
-    assert_eq!(list["data"]["tasks"][0]["id"], child_id.as_str());
+    assert_eq!(list["data"]["issues"][0]["id"], child_id.as_str());
 
-    let scoped = client.call(74, "list", json!({ "repo": "api", "all": true }));
+    let set_repository = client.call(77, "update", json!({ "id": child_id, "repository": "api" }));
+    assert_eq!(tool_envelope(&set_repository)["ok"], true);
+
+    let scoped = client.call(74, "list", json!({ "repository": "api", "all": true }));
     let scoped = tool_envelope(&scoped);
     assert_eq!(scoped["data"]["count"], 1);
-    assert_eq!(scoped["data"]["tasks"][0]["id"], child_id.as_str());
+    assert_eq!(scoped["data"]["issues"][0]["id"], child_id.as_str());
 
-    let ready_scoped = client.call(75, "ready", json!({ "labels": ["repo:api"] }));
+    let ready_scoped = client.call(75, "ready", json!({ "labels": ["bug"] }));
     let ready_scoped = tool_envelope(&ready_scoped);
     assert_eq!(ready_scoped["data"]["count"], 1);
-    assert_eq!(ready_scoped["data"]["tasks"][0]["id"], child_id.as_str());
+    assert_eq!(ready_scoped["data"]["issues"][0]["id"], child_id.as_str());
 
     let excluded = client.call(
         76,
@@ -348,16 +413,16 @@ fn type_is_available_over_mcp() {
     let listed = client.call(82, "list", json!({ "types": ["epic"] }));
     let listed = tool_envelope(&listed);
     assert_eq!(listed["data"]["count"], 1);
-    assert_eq!(listed["data"]["tasks"][0]["id"], epic_id.as_str());
+    assert_eq!(listed["data"]["issues"][0]["id"], epic_id.as_str());
 
     let ready = client.call(83, "ready", json!({ "exclude_types": ["epic"] }));
     let ready = tool_envelope(&ready);
     assert_eq!(ready["data"]["count"], 1);
-    assert_eq!(ready["data"]["tasks"][0]["id"], task_id.as_str());
+    assert_eq!(ready["data"]["issues"][0]["id"], task_id.as_str());
 
-    let updated = client.call(84, "update", json!({ "id": task_id, "type": "spike" }));
+    let updated = client.call(84, "update", json!({ "id": task_id, "type": "bug" }));
     let updated = tool_envelope(&updated);
-    assert_eq!(updated["data"]["type"], "spike");
+    assert_eq!(updated["data"]["type"], "bug");
 
     let nested = client.call(
         85,
@@ -389,7 +454,7 @@ fn link_and_delete_are_available_over_mcp() {
 
     let get = client.call(21, "get", json!({ "id": second }));
     let get = tool_envelope(&get);
-    assert_eq!(get["data"]["depends_on"][0], first);
+    assert_eq!(get["data"]["blocking"][0], first);
 
     let unlinked = client.call(
         22,
@@ -420,21 +485,21 @@ fn update_claim_and_release_are_available() {
     let updated = client.call(
         50,
         "update",
-        json!({ "id": id, "title": "Changed", "priority": 0 }),
+        json!({ "id": id, "title": "Changed", "priority": "highest" }),
     );
     let updated = tool_envelope(&updated);
     assert_eq!(updated["data"]["title"], "Changed");
-    assert_eq!(updated["data"]["priority"], 0);
+    assert_eq!(updated["data"]["priority"], "highest");
 
     let claimed = client.call(51, "claim", json!({ "id": id, "by": "claude" }));
     let claimed = tool_envelope(&claimed);
     assert_eq!(claimed["data"]["status"], "in_progress");
-    assert_eq!(claimed["data"]["claimed_by"], "claude");
+    assert_eq!(claimed["data"]["assignee"], "claude");
 
     let released = client.call(52, "release", json!({ "id": id, "by": "claude" }));
     let released = tool_envelope(&released);
-    assert_eq!(released["data"]["status"], "todo");
-    assert!(released["data"]["claimed_by"].is_null());
+    assert_eq!(released["data"]["status"], "ready");
+    assert!(released["data"]["assignee"].is_null());
 }
 
 #[test]
@@ -533,7 +598,7 @@ fn resources_expose_task_markdown() {
     let templates = client.request(30, "resources/templates/list", json!({}));
     assert_eq!(
         templates["result"]["resourceTemplates"][0]["uriTemplate"],
-        "orbit://tasks/{id}"
+        "orbit://issues/{id}"
     );
 
     let resources = client.request(31, "resources/list", json!({}));
@@ -541,10 +606,10 @@ fn resources_expose_task_markdown() {
     assert!(
         resources
             .iter()
-            .any(|resource| resource["uri"] == format!("orbit://tasks/{id}"))
+            .any(|resource| resource["uri"] == format!("orbit://issues/{id}"))
     );
 
-    let uri = format!("orbit://tasks/{id}");
+    let uri = format!("orbit://issues/{id}");
     let read = client.request(32, "resources/read", json!({ "uri": uri }));
     let text = read["result"]["contents"][0]["text"].as_str().unwrap();
     assert!(text.contains("Resource task"));
@@ -553,7 +618,7 @@ fn resources_expose_task_markdown() {
     let missing = client.request(
         33,
         "resources/read",
-        json!({ "uri": "orbit://tasks/orb-aaaaaa" }),
+        json!({ "uri": "orbit://issues/orb-aaaaaa" }),
     );
     assert_eq!(missing["error"]["code"], -32002);
 }
@@ -586,7 +651,7 @@ fn invalid_inputs_are_tool_errors_not_protocol_errors() {
 }
 
 #[test]
-fn annotate_tool_sets_and_removes_an_annotation() {
+fn property_tool_sets_and_removes_a_property() {
     let repo = TestRepo::new();
     repo.init();
     let id = repo.add("Task", &[]);
@@ -595,22 +660,22 @@ fn annotate_tool_sets_and_removes_an_annotation() {
 
     let set = client.call(
         3,
-        "annotate",
+        "property",
         json!({ "id": id, "owner": "ci", "value": { "passed": true } }),
     );
     assert_eq!(
-        tool_envelope(&set)["data"]["annotation"],
+        tool_envelope(&set)["data"]["property"],
         json!({"passed": true})
     );
 
     let removed = client.call(
         4,
-        "annotate",
+        "property",
         json!({ "id": id, "owner": "ci", "value": null }),
     );
     assert_eq!(tool_envelope(&removed)["data"]["changed"], true);
     let show = repo.ok_json(&["show", &id, "--json"]);
-    assert_eq!(show["data"]["annotations"], json!({}));
+    assert_eq!(show["data"]["properties"], json!({}));
 }
 
 #[test]
@@ -625,7 +690,8 @@ fn batch_tool_applies_operations_in_one_call() {
         "batch",
         json!({ "operations": [
             { "op": "add", "key": "planner:p:1", "title": "One" },
-            { "op": "add", "key": "planner:p:2", "title": "Two", "depends_on": ["key:planner:p:1"] }
+            { "op": "add", "key": "planner:p:2", "title": "Two" },
+            { "op": "depend", "id": "key:planner:p:2", "on": "key:planner:p:1" }
         ]}),
     );
     let envelope = tool_envelope(&response);
@@ -633,16 +699,16 @@ fn batch_tool_applies_operations_in_one_call() {
     let one = envelope["data"]["keys"]["planner:p:1"].as_str().unwrap();
     let two = envelope["data"]["keys"]["planner:p:2"].as_str().unwrap();
     let show = repo.ok_json(&["show", two, "--json"]);
-    assert_eq!(show["data"]["depends_on"], json!([one]));
+    assert_eq!(show["data"]["blocking"], json!([one]));
 }
 
 #[test]
-fn annotate_tool_requires_a_value_key() {
+fn property_tool_requires_a_value_key() {
     let repo = TestRepo::new();
     repo.init();
     let id = repo.add("Task", &[]);
     repo.ok_json(&[
-        "annotation",
+        "property",
         "set",
         &id,
         "ci",
@@ -652,8 +718,104 @@ fn annotate_tool_requires_a_value_key() {
     ]);
     let mut client = McpClient::start(&repo);
     initialize(&mut client);
-    let response = client.call(3, "annotate", json!({ "id": id, "owner": "ci" }));
+    let response = client.call(3, "property", json!({ "id": id, "owner": "ci" }));
     assert_eq!(tool_envelope(&response)["ok"], false);
     let show = repo.ok_json(&["show", &id, "--json"]);
-    assert_eq!(show["data"]["annotations"], json!({"ci": {"a": 1}}));
+    assert_eq!(show["data"]["properties"], json!({"ci": {"a": 1}}));
+}
+
+#[test]
+fn mutation_tools_expose_and_forward_concurrency_arguments() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Task", &[]);
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let tools = client.request(2, "tools/list", json!({}));
+    let tool_list = tools["result"]["tools"].as_array().unwrap();
+    for name in ["update", "claim", "create", "batch"] {
+        let tool = tool_list
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        let properties = tool["inputSchema"]["properties"].as_object().unwrap();
+        assert!(
+            properties.contains_key("idempotency_key"),
+            "{name} must expose idempotency_key"
+        );
+        if name != "create" && name != "batch" {
+            assert!(
+                properties.contains_key("if_version"),
+                "{name} must expose if_version"
+            );
+        }
+    }
+    // Read tools do not advertise write-only arguments.
+    let get = tool_list.iter().find(|tool| tool["name"] == "get").unwrap();
+    assert!(
+        !get["inputSchema"]["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("idempotency_key")
+    );
+
+    // A stale if_version surfaces as a retryable VERSION_CONFLICT envelope.
+    let conflict = client.call(
+        3,
+        "update",
+        json!({ "id": id, "title": "Nope", "if_version": "2000-01-01T00:00:00Z" }),
+    );
+    let envelope = tool_envelope(&conflict);
+    assert_eq!(envelope["ok"], false, "{envelope}");
+    assert_eq!(envelope["error"]["code"], "VERSION_CONFLICT", "{envelope}");
+    assert_eq!(envelope["error"]["retryable"], true, "{envelope}");
+
+    // idempotency_key replays the first recorded result.
+    let first = client.call(
+        4,
+        "update",
+        json!({ "id": id, "title": "Renamed", "idempotency_key": "mcp-k1" }),
+    );
+    assert_eq!(tool_envelope(&first)["ok"], true);
+    let replay = client.call(
+        5,
+        "update",
+        json!({ "id": id, "title": "Renamed", "idempotency_key": "mcp-k1" }),
+    );
+    let replayed = tool_envelope(&replay);
+    assert_eq!(replayed["ok"], true, "{replayed}");
+    assert_eq!(replayed["data"]["title"], "Renamed", "{replayed}");
+    assert_eq!(replayed["meta"]["idempotent_replay"], true, "{replayed}");
+
+    // The same key with a different request is refused, not replayed.
+    let reused = client.call(
+        6,
+        "update",
+        json!({ "id": id, "title": "Other", "idempotency_key": "mcp-k1" }),
+    );
+    let reused = tool_envelope(&reused);
+    assert_eq!(
+        reused["error"]["code"], "IDEMPOTENCY_KEY_REUSED",
+        "{reused}"
+    );
+}
+
+#[test]
+fn positional_values_that_look_like_flags_stay_data() {
+    let repo = TestRepo::new();
+    repo.init();
+    let mut client = McpClient::start(&repo);
+    initialize(&mut client);
+
+    let created = tool_envelope(&client.call(
+        10,
+        "create",
+        json!({ "title": "--dir=/tmp/elsewhere", "idempotency_key": "dash-1" }),
+    ));
+    assert_eq!(created["ok"], true, "{created}");
+    assert_eq!(created["data"]["title"], "--dir=/tmp/elsewhere");
+
+    let bad_id = tool_envelope(&client.call(11, "get", json!({ "id": "--dir=/tmp" })));
+    assert_eq!(bad_id["ok"], false, "{bad_id}");
 }

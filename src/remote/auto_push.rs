@@ -121,7 +121,7 @@ pub fn after_command<R: RemoteResolver + ?Sized>(
             }
             continue;
         }
-        warnings.extend(push_task(board, resolver, task));
+        warnings.extend(push_task(board, resolver, task, &graph.workflow));
     }
     warnings
 }
@@ -148,7 +148,7 @@ fn auto_create<R: RemoteResolver + ?Sized>(
     // A Repository may designate the Remote Project for its new Tasks.
     if let Some(project) = task
         .front
-        .repo
+        .repository
         .as_deref()
         .and_then(|repo| crate::repository::remote_project_for(board, repo))
     {
@@ -214,7 +214,12 @@ fn create_in<R: RemoteResolver + ?Sized>(
     warnings
 }
 
-fn push_task<R: RemoteResolver + ?Sized>(board: &Board, resolver: &R, task: &Task) -> Vec<String> {
+fn push_task<R: RemoteResolver + ?Sized>(
+    board: &Board,
+    resolver: &R,
+    task: &Task,
+    workflow: &crate::workflow::Workflow,
+) -> Vec<String> {
     let Some(link) = active_link(task) else {
         return Vec::new();
     };
@@ -244,6 +249,7 @@ fn push_task<R: RemoteResolver + ?Sized>(board: &Board, resolver: &R, task: &Tas
         OrbitSyncView { task, link: &link },
         &issue,
         SyncDirection::Both,
+        workflow,
     );
 
     let conflicts: Vec<String> = plan
@@ -327,7 +333,7 @@ pub fn close_issue<R: RemoteResolver + ?Sized>(
     resolver: &R,
     project: &crate::remote::RemoteProject,
     id: &str,
-    status: crate::task::Status,
+    status: crate::remote::Status,
 ) -> Result<crate::remote::model::RemoteIssue> {
     let adapter: Box<dyn RemoteAdapter> = resolver.adapter(&project.tracker)?;
     let current = adapter.fetch_issue(project, id)?;

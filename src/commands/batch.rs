@@ -11,7 +11,6 @@ use crate::cli::BatchArgs;
 use crate::comment;
 use crate::graph::LoadMode;
 use crate::ops::{NewTask, TaskUpdate};
-use crate::task::TaskType;
 use crate::transition::FieldUpdate;
 
 use super::*;
@@ -32,40 +31,46 @@ enum Operation {
         key: Option<String>,
         title: String,
         #[serde(rename = "type")]
-        task_type: Option<TaskType>,
+        task_type: Option<String>,
         parent: Option<String>,
         #[serde(default)]
         labels: Vec<String>,
-        #[serde(default)]
-        depends_on: Vec<String>,
         body: Option<String>,
-        priority: Option<u8>,
-        repo: Option<String>,
-        waiting_on: Option<String>,
-        area: Option<String>,
+        priority: Option<String>,
+        repository: Option<String>,
+        component: Option<String>,
         verification: Option<String>,
+        external_id: Option<String>,
+        reporter: Option<String>,
         #[serde(default)]
-        annotations: BTreeMap<String, Value>,
+        properties: BTreeMap<String, Value>,
+        /// Rejected: an `add` creates the Task, so there is no version yet.
+        if_version: Option<String>,
     },
     Update {
         id: String,
+        if_version: Option<String>,
         title: Option<String>,
         body: Option<String>,
-        priority: Option<u8>,
+        priority: Option<String>,
         #[serde(rename = "type")]
-        task_type: Option<TaskType>,
-        waiting_on: Option<String>,
+        task_type: Option<String>,
+        component: Option<String>,
         #[serde(default)]
-        clear_waiting: bool,
-        area: Option<String>,
-        #[serde(default)]
-        clear_area: bool,
+        clear_component: bool,
         verification: Option<String>,
         #[serde(default)]
         clear_verification: bool,
+        repository: Option<String>,
+        #[serde(default)]
+        clear_repository: bool,
+        external_id: Option<String>,
+        #[serde(default)]
+        clear_external_id: bool,
     },
     Label {
         id: String,
+        if_version: Option<String>,
         #[serde(default)]
         add: Vec<String>,
         #[serde(default)]
@@ -73,30 +78,66 @@ enum Operation {
     },
     Depend {
         id: String,
+        if_version: Option<String>,
         on: String,
     },
     Undepend {
         id: String,
+        if_version: Option<String>,
         on: String,
+    },
+    Link {
+        id: String,
+        if_version: Option<String>,
+        #[serde(rename = "type")]
+        kind: Option<String>,
+        to: Option<String>,
+        external: Option<String>,
+        url: Option<String>,
+        #[serde(default)]
+        blocking: Option<bool>,
+        #[serde(default)]
+        attributes: BTreeMap<String, serde_yaml_ng::Value>,
+    },
+    Unlink {
+        id: String,
+        if_version: Option<String>,
+        #[serde(rename = "type")]
+        kind: Option<String>,
+        to: Option<String>,
+        external: Option<String>,
     },
     Claim {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
+        kind: Option<crate::task::IdentityKind>,
         #[serde(default)]
         steal: bool,
     },
+    Assign {
+        id: String,
+        if_version: Option<String>,
+        to: String,
+        kind: Option<crate::task::IdentityKind>,
+        #[serde(default)]
+        force: bool,
+    },
     Heartbeat {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
     },
     Release {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         #[serde(default)]
         force: bool,
     },
     Done {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         comment: Option<String>,
         #[serde(default)]
@@ -104,6 +145,7 @@ enum Operation {
     },
     Cancel {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         comment: Option<String>,
         #[serde(default)]
@@ -111,16 +153,64 @@ enum Operation {
     },
     Reopen {
         id: String,
+        if_version: Option<String>,
         #[serde(default)]
         force: bool,
     },
+    Transition {
+        id: String,
+        if_version: Option<String>,
+        name: String,
+        by: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
+    Submit {
+        id: String,
+        if_version: Option<String>,
+        by: Option<String>,
+        kind: Option<crate::task::IdentityKind>,
+        #[serde(default)]
+        command: Vec<String>,
+        exit_code: Option<i64>,
+        commit: Option<String>,
+        #[serde(default)]
+        file: Vec<String>,
+        note: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
+    Review {
+        id: String,
+        if_version: Option<String>,
+        verdict: String,
+        reason: Option<String>,
+        by: Option<String>,
+        kind: Option<crate::task::IdentityKind>,
+        #[serde(default)]
+        force: bool,
+    },
+    Ask {
+        id: String,
+        if_version: Option<String>,
+        question: String,
+        by: Option<String>,
+    },
+    Answer {
+        id: String,
+        if_version: Option<String>,
+        answer: String,
+        by: Option<String>,
+    },
     Comment {
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         body: String,
     },
-    Annotate {
+    Property {
         id: String,
+        if_version: Option<String>,
         owner: String,
         value: Option<Value>,
     },
@@ -134,14 +224,22 @@ impl Operation {
             Operation::Label { .. } => "label",
             Operation::Depend { .. } => "depend",
             Operation::Undepend { .. } => "undepend",
+            Operation::Link { .. } => "link",
+            Operation::Unlink { .. } => "unlink",
             Operation::Claim { .. } => "claim",
+            Operation::Assign { .. } => "assign",
             Operation::Heartbeat { .. } => "heartbeat",
             Operation::Release { .. } => "release",
             Operation::Done { .. } => "done",
             Operation::Cancel { .. } => "cancel",
             Operation::Reopen { .. } => "reopen",
+            Operation::Transition { .. } => "transition",
+            Operation::Submit { .. } => "submit",
+            Operation::Review { .. } => "review",
+            Operation::Ask { .. } => "ask",
+            Operation::Answer { .. } => "answer",
             Operation::Comment { .. } => "comment",
-            Operation::Annotate { .. } => "annotate",
+            Operation::Property { .. } => "property",
         }
     }
 }
@@ -154,13 +252,38 @@ struct Applier<'a> {
     keys: BTreeMap<String, String>,
     comments: Vec<(String, String, String)>,
     default_by: Option<String>,
+    /// `updated_at` of every Task as the Batch found it; `if_version`
+    /// compares against this snapshot, not the in-memory state earlier
+    /// operations may already have touched.
+    versions: HashMap<String, chrono::DateTime<Utc>>,
 }
 
 impl Applier<'_> {
-    /// A Task ID from a reference, resolving `key:` against this Batch, then the Board.
+    /// `if_version` guards the Task's `updated_at` as of batch start. The
+    /// `id` is the resolved internal ID.
+    fn check_version(&self, id: &str, expected: Option<&str>) -> Result<()> {
+        let Some(expected) = expected else {
+            return Ok(());
+        };
+        let expected_at = crate::concurrency::parse_version(expected)?;
+        match self.versions.get(id) {
+            Some(actual) if *actual == expected_at => Ok(()),
+            Some(actual) => Err(crate::concurrency::version_conflict(
+                id,
+                expected_at,
+                *actual,
+            )),
+            None => Err(OrbitError::invalid_argument(format!(
+                "if_version cannot guard {id}: the Task did not exist when the batch started"
+            ))),
+        }
+    }
+
+    /// A Task ID from a reference, resolving `key:` against this Batch, then
+    /// the Board's Source Keys, project keys, and aliases.
     fn resolve(&self, reference: &str) -> Result<String> {
         let Some(key) = reference.strip_prefix(KEY_PREFIX) else {
-            return Ok(reference.to_string());
+            return self.graph.resolve(reference);
         };
         if let Some(id) = self.keys.get(key) {
             return Ok(id.clone());
@@ -195,22 +318,24 @@ impl Applier<'_> {
                 task_type,
                 parent,
                 labels,
-                depends_on,
                 body,
                 priority,
-                repo,
-                waiting_on,
-                area,
+                repository,
+                component,
                 verification,
-                annotations,
+                external_id,
+                reporter,
+                properties,
+                if_version,
             } => {
+                if if_version.is_some() {
+                    return Err(OrbitError::invalid_argument(
+                        "if_version does not apply to `add`; the Task does not exist yet",
+                    ));
+                }
                 let parent = parent.map(|p| self.resolve(&p)).transpose()?;
-                let depends_on = depends_on
-                    .iter()
-                    .map(|dep| self.resolve(dep))
-                    .collect::<Result<Vec<_>>>()?;
-                let repo = match repo {
-                    Some(repo) => Some(repo),
+                let repository = match repository {
+                    Some(repository) => Some(repository),
                     None => crate::repository::current_member_name(self.board)?,
                 };
                 let new = NewTask {
@@ -218,15 +343,15 @@ impl Applier<'_> {
                     priority,
                     task_type,
                     labels,
-                    depends_on,
                     parent,
-                    waiting_on,
-                    area,
+                    component,
                     verification,
-                    repo,
+                    repository,
+                    external_id,
+                    reporter: reporter.or_else(|| self.optional(None)),
                     body: body.unwrap_or_default(),
                     source_key: key.clone(),
-                    annotations,
+                    properties,
                 };
                 let outcome = crate::ops::add(&mut self.graph, self.board, new, now)?;
                 if let Some(key) = key {
@@ -243,14 +368,18 @@ impl Applier<'_> {
                 body,
                 priority,
                 task_type,
-                waiting_on,
-                clear_waiting,
-                area,
-                clear_area,
+                component,
+                clear_component,
                 verification,
                 clear_verification,
+                repository,
+                clear_repository,
+                external_id,
+                clear_external_id,
+                if_version,
             } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let field = |value: Option<String>, clear: bool| {
                     if clear {
                         FieldUpdate::Clear
@@ -263,83 +392,324 @@ impl Applier<'_> {
                     body,
                     priority,
                     task_type,
-                    waiting_on: field(waiting_on, clear_waiting),
-                    area: field(area, clear_area),
+                    component: field(component, clear_component),
                     verification: field(verification, clear_verification),
+                    repository: field(repository, clear_repository),
+                    external_id: field(external_id, clear_external_id),
                 };
                 let changed = crate::ops::update(&mut self.graph, self.board, &id, change, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Label { id, add, remove } => {
+            Operation::Label {
+                id,
+                if_version,
+                add,
+                remove,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let changed = crate::ops::label(&mut self.graph, &id, &add, &remove, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Depend { id, on } => {
+            Operation::Depend { id, if_version, on } => {
                 let (id, on) = (self.resolve(&id)?, self.resolve(&on)?);
+                self.check_version(&id, if_version.as_deref())?;
                 let changed = crate::ops::depend(&mut self.graph, &id, &on, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Undepend { id, on } => {
+            Operation::Undepend { id, if_version, on } => {
                 let (id, on) = (self.resolve(&id)?, self.resolve(&on)?);
+                self.check_version(&id, if_version.as_deref())?;
                 let changed = crate::ops::undepend(&mut self.graph, &id, &on, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Claim { id, by, steal } => {
+            Operation::Link {
+                id,
+                if_version,
+                kind,
+                to,
+                external,
+                url,
+                blocking,
+                attributes,
+            } => {
                 let id = self.resolve(&id)?;
-                let by = self.agent(by)?;
-                let changed = crate::ops::claim(&mut self.graph, self.board, &id, &by, steal, now)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let to = to.map(|target| self.resolve(&target)).transpose()?;
+                let kind = crate::task::normalize_link_kind(
+                    kind.as_deref().unwrap_or(crate::task::LINK_TYPE_RELATES_TO),
+                )?;
+                let mut target = crate::ops::link_target(to.as_deref(), external.as_deref())?;
+                if let (crate::task::LinkTarget::External(reference), Some(url)) =
+                    (&mut target, url)
+                {
+                    reference.url = Some(url);
+                }
+                let link = crate::task::Link {
+                    kind,
+                    target,
+                    blocking,
+                    attributes,
+                };
+                let changed = crate::ops::link(&mut self.graph, &id, link, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Heartbeat { id, by } => {
+            Operation::Unlink {
+                id,
+                if_version,
+                kind,
+                to,
+                external,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let to = to.map(|target| self.resolve(&target)).transpose()?;
+                let kind = kind
+                    .as_deref()
+                    .map(crate::task::normalize_link_kind)
+                    .transpose()?;
+                let target = crate::ops::link_target(to.as_deref(), external.as_deref())?;
+                let changed =
+                    crate::ops::unlink(&mut self.graph, &id, kind.as_deref(), &target, now)?;
+                Ok((id, changed, false))
+            }
+            Operation::Claim {
+                id,
+                if_version,
+                by,
+                kind,
+                steal,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let by = self.agent(by)?;
+                let changed = crate::ops::claim(
+                    &mut self.graph,
+                    self.board,
+                    &id,
+                    &by,
+                    kind.unwrap_or(crate::task::IdentityKind::Agent),
+                    steal,
+                    now,
+                )?;
+                Ok((id, changed, false))
+            }
+            Operation::Assign {
+                id,
+                if_version,
+                to,
+                kind,
+                force,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let changed = crate::ops::assign(
+                    &mut self.graph,
+                    &id,
+                    &to,
+                    kind.unwrap_or(crate::task::IdentityKind::Human),
+                    force,
+                    now,
+                )?;
+                Ok((id, changed, false))
+            }
+            Operation::Heartbeat { id, if_version, by } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let by = self.agent(by)?;
                 let changed = crate::ops::heartbeat(&mut self.graph, self.board, &id, &by, now)?;
                 Ok((id, changed, false))
             }
-            Operation::Release { id, by, force } => {
+            Operation::Release {
+                id,
+                if_version,
+                by,
+                force,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 let by = self.optional(by);
                 let changed = crate::ops::release(&mut self.graph, &id, by.as_deref(), force, now)?;
                 Ok((id, changed, false))
             }
             Operation::Done {
                 id,
-                by,
-                comment,
-                force,
-            } => self.finish(id, by, comment, force, crate::mutation::TerminalKind::Done),
-            Operation::Cancel {
-                id,
+                if_version,
                 by,
                 comment,
                 force,
             } => self.finish(
                 id,
+                if_version,
+                by,
+                comment,
+                force,
+                crate::mutation::TerminalKind::Done,
+            ),
+            Operation::Cancel {
+                id,
+                if_version,
+                by,
+                comment,
+                force,
+            } => self.finish(
+                id,
+                if_version,
                 by,
                 comment,
                 force,
                 crate::mutation::TerminalKind::Cancelled,
             ),
-            Operation::Reopen { id, force } => {
+            Operation::Reopen {
+                id,
+                if_version,
+                force,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 // An open Task is already where reopen leads; a re-run must not fail on it.
-                if !self.graph.get(&id)?.front.status.is_terminal() {
+                if !self
+                    .graph
+                    .workflow
+                    .is_terminal(&self.graph.get(&id)?.front.status)
+                {
                     return Ok((id, false, false));
                 }
                 crate::ops::reopen(&mut self.graph, &id, force, now)?;
                 Ok((id, true, false))
             }
-            Operation::Comment { id, by, body } => {
+            Operation::Transition {
+                id,
+                if_version,
+                name,
+                by,
+                force,
+            } => {
                 let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let caller = self.optional(by);
+                let outcome = crate::ops::transition(
+                    &mut self.graph,
+                    &id,
+                    &name,
+                    caller.as_deref(),
+                    force,
+                    now,
+                )?;
+                Ok((id, outcome == crate::transition::Outcome::Changed, false))
+            }
+            Operation::Submit {
+                id,
+                if_version,
+                by,
+                kind,
+                command,
+                exit_code,
+                commit,
+                file,
+                note,
+                force,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let by = self.agent(by)?;
+                let evidence = crate::review::Evidence {
+                    commands: command,
+                    exit_code,
+                    commit,
+                    files: file,
+                    note,
+                };
+                let changed = crate::ops::submit(
+                    &mut self.graph,
+                    &id,
+                    &by,
+                    kind.unwrap_or_default(),
+                    &evidence,
+                    force,
+                    now,
+                )?;
+                Ok((id, changed, false))
+            }
+            Operation::Review {
+                id,
+                if_version,
+                verdict,
+                reason,
+                by,
+                kind,
+                force,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let verdict = match verdict.as_str() {
+                    "approve" => crate::review::Verdict::Approve,
+                    "request-changes" | "request_changes" => crate::review::Verdict::RequestChanges,
+                    other => {
+                        return Err(OrbitError::invalid_argument(format!(
+                            "unknown review verdict `{other}`; expected approve or request-changes"
+                        )));
+                    }
+                };
+                let by = self.agent(by)?;
+                let outcome = crate::ops::review(
+                    &mut self.graph,
+                    &id,
+                    verdict,
+                    reason.as_deref(),
+                    &by,
+                    kind.unwrap_or_default(),
+                    force,
+                    now,
+                )?;
+                Ok((id, outcome.changed, false))
+            }
+            Operation::Ask {
+                id,
+                if_version,
+                question,
+                by,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let by = self.agent(by)?;
+                let outcome = crate::ops::ask(&mut self.graph, &id, &question, &by, now)?;
+                Ok((id, outcome.changed, false))
+            }
+            Operation::Answer {
+                id,
+                if_version,
+                answer,
+                by,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let by = self.agent(by)?;
+                let outcome = crate::ops::answer(&mut self.graph, &id, &answer, &by, now)?;
+                Ok((id, outcome.changed, false))
+            }
+            Operation::Comment {
+                id,
+                if_version,
+                by,
+                body,
+            } => {
+                let id = self.resolve(&id)?;
+                self.check_version(&id, if_version.as_deref())?;
                 self.graph.get(&id)?;
                 let author = self.agent(by)?;
                 self.queue_comment(&id, author, body)?;
                 Ok((id, true, false))
             }
-            Operation::Annotate { id, owner, value } => {
+            Operation::Property {
+                id,
+                if_version,
+                owner,
+                value,
+            } => {
                 let id = self.resolve(&id)?;
-                let changed = crate::ops::annotate(&mut self.graph, &id, &owner, value, now)?;
+                self.check_version(&id, if_version.as_deref())?;
+                let changed = crate::ops::property(&mut self.graph, &id, &owner, value, now)?;
                 Ok((id, changed, false))
             }
         }
@@ -348,12 +718,14 @@ impl Applier<'_> {
     fn finish(
         &mut self,
         id: String,
+        if_version: Option<String>,
         by: Option<String>,
         comment: Option<String>,
         force: bool,
         kind: crate::mutation::TerminalKind,
     ) -> Result<(String, bool, bool)> {
         let id = self.resolve(&id)?;
+        self.check_version(&id, if_version.as_deref())?;
         let caller = self.optional(by.clone());
         if let Some(body) = comment {
             let author = self.agent(by)?;
@@ -423,6 +795,11 @@ fn read_input(file: &str) -> Result<BatchInput> {
 pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output::CommandOutput> {
     let input = read_input(&args.file)?;
     let (graph, _) = Graph::load(board, LoadMode::Strict)?;
+    let versions: HashMap<String, chrono::DateTime<Utc>> = graph
+        .tasks
+        .iter()
+        .map(|(id, task)| (id.clone(), task.front.updated_at))
+        .collect();
     let before: HashMap<String, String> = graph
         .tasks
         .iter()
@@ -434,6 +811,9 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
             .iter()
             .all(|operation| matches!(operation, Operation::Heartbeat { .. }));
 
+    // The feed's actor for the whole Batch commit: the default `--by`
+    // identity (per-operation `by` still wins inside each operation).
+    let batch_actor = optional_agent(args.by.clone());
     let mut run = Applier {
         board,
         graph,
@@ -441,6 +821,7 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
         comments: Vec::new(),
         created: Vec::new(),
         default_by: args.by,
+        versions,
     };
     let mut results = Vec::with_capacity(input.operations.len());
     for (index, operation) in input.operations.into_iter().enumerate() {
@@ -472,11 +853,15 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
         for (id, author, body) in &run.comments {
             crate::mutation::append_comment(board, id, author, body, Utc::now())?;
         }
+        // Persist the key high-water mark with the Batch's Task files.
+        if !run.created.is_empty() {
+            crate::key::persist(board, &run.graph)?;
+        }
         // Commit even when nothing was written now: a re-run after a crash
         // before the commit must publish the files the first run left behind.
         if !heartbeat_only {
             let message = format!("orbit: batch {} operations", results.len());
-            match board.commit(&message, false)? {
+            match board.commit_as(&message, false, batch_actor.as_deref())? {
                 crate::git::CommitOutcome::Committed => committed = true,
                 outcome => warnings.extend(crate::mutation::commit_warning(outcome)),
             }
@@ -505,7 +890,7 @@ pub(super) fn cmd_batch(board: &Board, args: BatchArgs) -> Result<crate::output:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::{Status, Task, TaskFrontmatter};
+    use crate::task::{Task, TaskFrontmatter};
 
     fn task(id: &str) -> Task {
         let now = Utc::now();
@@ -513,23 +898,27 @@ mod tests {
             id: id.to_string(),
             front: TaskFrontmatter {
                 title: id.to_string(),
-                status: Status::Todo,
-                task_type: TaskType::Task,
-                priority: 2,
+                status: "todo".to_string(),
+                key: None,
+                key_aliases: Vec::new(),
+                resolution: None,
+                task_type: "task".to_string(),
+                priority: "medium".to_string(),
                 labels: Vec::new(),
-                depends_on: Vec::new(),
+                links: Vec::new(),
                 parent: None,
-                waiting_on: None,
                 checkpoint: None,
-                area: None,
+                component: None,
                 verification: None,
                 github: None,
                 remote: None,
-                repo: None,
-                claim: None,
-                stray_claim_times: None,
+                repository: None,
+                external_id: None,
+                assignee: None,
+                lease: None,
+                reporter: None,
                 source_key: None,
-                annotations: BTreeMap::new(),
+                properties: BTreeMap::new(),
                 created_at: now,
                 updated_at: now,
                 extra: BTreeMap::new(),

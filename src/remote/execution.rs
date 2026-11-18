@@ -16,8 +16,8 @@ use crate::mutation::persist_task;
 use crate::remote::RemoteProject;
 use crate::remote::link::{active_link, encode_baseline, link_mut, link_view, materialize};
 use crate::remote::model::{
-    RemoteIssue, RemoteIssueFields, RemoteIssueRef, RemoteIssueUpdate, SyncDirection, SyncPlan,
-    SyncResolution,
+    RemoteIssue, RemoteIssueFields, RemoteIssueRef, RemoteIssueUpdate, Status, SyncDirection,
+    SyncPlan, SyncResolution,
 };
 use crate::remote::port::{RemoteAdapter, RemoteResolver};
 use crate::remote::relationships::{self, RelationshipReport, RemoteRelationsView};
@@ -37,6 +37,7 @@ pub struct SyncRequest<'a> {
 /// A per-Task apply failure. The Task's baseline is not advanced, so retrying is safe.
 #[derive(Clone, Debug, Serialize)]
 pub struct SyncFailure {
+    #[serde(rename = "issue")]
     pub task: String,
     pub tracker: String,
     pub project: String,
@@ -237,6 +238,7 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
             },
             &issue,
             direction,
+            &graph.workflow,
         );
         resolved_fields.extend(resolve_sync_conflicts(
             adapter,
@@ -244,6 +246,7 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
             &task,
             &issue,
             &resolutions,
+            &graph.workflow,
         )?);
         let children: Vec<_> = graph
             .iter()
@@ -251,9 +254,8 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
             .filter_map(|candidate| active_link(candidate).map(|l| (candidate.clone(), l)))
             .collect();
         let dependencies: Vec<_> = task
-            .front
-            .depends_on
-            .iter()
+            .blocking_links()
+            .filter_map(|link| link.target_task())
             .filter_map(|dependency| graph.tasks.get(dependency))
             .filter_map(|dependency| active_link(dependency).map(|l| (dependency.clone(), l)))
             .collect();
@@ -305,7 +307,7 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
         })
         .map(|(task, link, plan)| {
             json!({
-                "task": task.id,
+                "issue": task.id,
                 "tracker": link.tracker,
                 "project": link.project,
                 "id": link.id,
@@ -320,12 +322,12 @@ pub fn synchronize<R: RemoteResolver + ?Sized>(
             "sync has unresolved field conflicts; resolve each field before applying",
         )
         .with_details(json!({
-            "task": first["task"],
+            "issue": first["issue"],
             "tracker": first["tracker"],
             "project": first["project"],
             "id": first["id"],
             "conflicts": first["conflicts"],
-            "tasks": unresolved,
+            "issues": unresolved,
         })));
     }
 
@@ -493,6 +495,7 @@ fn resolve_sync_conflicts(
     task: &Task,
     issue: &RemoteIssue,
     resolutions: &BTreeMap<String, SyncResolution>,
+    workflow: &crate::workflow::Workflow,
 ) -> Result<BTreeSet<String>> {
     let conflicted: BTreeSet<_> = plan
         .conflicts
@@ -512,7 +515,9 @@ fn resolve_sync_conflicts(
             ("title", SyncResolution::PreferRemote) => plan.apply_title = Some(issue.title.clone()),
             ("body", SyncResolution::PreferOrbit) => plan.push_body = Some(task.body.clone()),
             ("body", SyncResolution::PreferRemote) => plan.apply_body = Some(issue.body.clone()),
-            ("status", SyncResolution::PreferOrbit) => plan.push_status = Some(task.front.status),
+            ("status", SyncResolution::PreferOrbit) => {
+                plan.push_status = Status::for_workflow_status(workflow, &task.front.status)
+            }
             ("status", SyncResolution::PreferRemote) => plan.apply_status = Some(issue.status),
             ("labels", SyncResolution::PreferOrbit) => {
                 plan.push_labels = Some(task.front.labels.clone())
@@ -521,7 +526,7 @@ fn resolve_sync_conflicts(
                 plan.apply_labels = Some(issue.labels.clone())
             }
             ("area", SyncResolution::PreferOrbit) => {
-                plan.push_area = Some(task.front.area.clone());
+                plan.push_area = Some(task.front.component.clone());
             }
             ("area", SyncResolution::PreferRemote) => plan.apply_area = Some(issue.area.clone()),
             ("verification", SyncResolution::PreferOrbit) => {
@@ -564,6 +569,7 @@ pub(crate) fn apply_plan(
         commit_message,
     } = request;
     let project = link.remote_project();
+    let workflow = board.workflow()?;
     let mut task = task.clone();
     if let Some(title) = &plan.apply_title {
         task.front.title = title.clone();
@@ -572,20 +578,26 @@ pub(crate) fn apply_plan(
         task.body = body.clone();
     }
     if let Some(status) = plan.apply_status {
-        task.front.status = status;
+        task.front.status = status.orbit_name(&workflow);
+        task.front.resolution = workflow.resolution_for(&task.front.status);
+        if status.is_terminal() {
+            // A closed Issue holds no claim, as with every Orbit transition.
+            task.front.assignee = None;
+            task.front.lease = None;
+        }
     }
     if let Some(labels) = &plan.apply_labels {
         task.front.labels = labels.clone();
     }
     if let Some(area) = &plan.apply_area {
         if let Some(value) = area
-            && !crate::task::is_valid_area(value)
+            && !crate::task::is_valid_component(value)
         {
             return Err(OrbitError::invalid_argument(format!(
                 "the remote tracker returned an invalid area `{value}`"
             )));
         }
-        task.front.area = area.clone();
+        task.front.component = area.clone();
     }
     if let Some(verification) = &plan.apply_verification {
         task.front.verification = verification.clone();
@@ -610,9 +622,12 @@ pub(crate) fn apply_plan(
         } else {
             None
         },
-        status: plan
-            .push_status
-            .or_else(|| plan.push_labels.is_some().then_some(task.front.status)),
+        status: plan.push_status.or_else(|| {
+            plan.push_labels
+                .is_some()
+                .then(|| Status::for_workflow_status(&workflow, &task.front.status))
+                .flatten()
+        }),
         area: metadata_update.then(|| plan.push_area.clone().unwrap_or_else(|| issue.area.clone())),
         verification: metadata_update.then(|| {
             plan.push_verification
@@ -649,7 +664,7 @@ pub(crate) fn apply_plan(
     }
 
     let refreshed = adapter.fetch_issue(&project, &link.id)?;
-    set_baseline(&mut task, &refreshed);
+    set_baseline(&mut task, &refreshed, &workflow);
     let outcome = persist_task(board, &task, commit_message)?;
     Ok(crate::mutation::commit_warning(outcome))
 }
@@ -696,11 +711,11 @@ pub fn require_project_available<R: RemoteResolver + ?Sized>(
 
 /// Write the sync baseline onto the Task's Remote link, materializing a
 /// legacy `github:` link first.
-pub fn set_baseline(task: &mut Task, issue: &RemoteIssue) {
+pub fn set_baseline(task: &mut Task, issue: &RemoteIssue, workflow: &crate::workflow::Workflow) {
     if link_view(task).is_none() {
         return;
     }
-    let baseline = sync::baseline_from(task, issue);
+    let baseline = sync::baseline_from(task, issue, workflow);
     if let Some(link) = link_mut(task) {
         link.baseline = encode_baseline(&baseline);
     }
@@ -742,14 +757,16 @@ pub fn create_and_link<R: RemoteResolver + ?Sized>(
     require_project_available(board, resolver, project)?;
     let adapter = resolver.adapter(&project.tracker)?;
     sync::reject_unmapped_metadata(adapter.as_ref(), project, task)?;
+    let workflow = board.workflow()?;
     let mut issue = adapter.create_issue(
         project,
         RemoteIssueFields {
             title: task.front.title.clone(),
             body: task.body.clone(),
             labels: task.front.labels.clone(),
-            status: task.front.status,
-            area: task.front.area.clone(),
+            status: Status::for_workflow_status(&workflow, &task.front.status)
+                .unwrap_or(Status::Todo),
+            area: task.front.component.clone(),
             verification: task.front.verification.clone(),
         },
     )?;
@@ -767,7 +784,7 @@ pub fn create_and_link<R: RemoteResolver + ?Sized>(
         baseline: None,
     });
     task.front.updated_at = Utc::now();
-    set_baseline(&mut task, &issue);
+    set_baseline(&mut task, &issue, &workflow);
     match persist_task(board, &task, commit_message) {
         Ok(outcome) => warnings.extend(crate::mutation::commit_warning(outcome)),
         Err(error) => failures.push(CreateFollowUp::LinkNotPersisted(error)),
@@ -785,12 +802,12 @@ pub fn create_and_link<R: RemoteResolver + ?Sized>(
     };
     remember(&issue, &mut failures);
 
-    if task.front.status.is_terminal() {
+    if workflow.is_terminal(&task.front.status) {
         let close = adapter.update_issue(
             project,
             &issue.id,
             &RemoteIssueUpdate {
-                status: Some(task.front.status),
+                status: Status::for_workflow_status(&workflow, &task.front.status),
                 ..RemoteIssueUpdate::default()
             },
             &issue,
@@ -799,7 +816,7 @@ pub fn create_and_link<R: RemoteResolver + ?Sized>(
             Ok(closed) => {
                 issue = closed;
                 if linked {
-                    set_baseline(&mut task, &issue);
+                    set_baseline(&mut task, &issue, &workflow);
                     match persist_task(board, &task, commit_message) {
                         Ok(outcome) => warnings.extend(crate::mutation::commit_warning(outcome)),
                         Err(error) => warnings.push(format!(

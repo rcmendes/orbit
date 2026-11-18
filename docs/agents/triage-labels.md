@@ -1,26 +1,36 @@
 # Triage Labels
 
-The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's Orbit board.
+The skills speak in terms of five canonical triage roles. On a Board with
+the `mattpocock` profile applied (`orbit setup mattpocock`), each role maps
+onto the Issue workflow — a status reached through `orbit transition`, an
+assignee kind, a resolution, or an Issue type — instead of a label.
 
-| Label in mattpocock/skills | Label in our tracker | Meaning                                  |
-| -------------------------- | -------------------- | ---------------------------------------- |
-| `needs-triage`             | `needs-triage`       | Maintainer needs to evaluate this issue  |
-| `needs-info`               | `needs-info`         | Waiting on reporter for more information |
-| `ready-for-agent`          | `ready-for-agent`    | Fully specified, ready for an AFK agent  |
-| `ready-for-human`          | `ready-for-human`    | Requires human implementation            |
-| `wontfix`                  | `wontfix`            | Will not be actioned                     |
+| Label in mattpocock/skills | Orbit mechanism | Meaning                                  |
+| -------------------------- | --------------- | ---------------------------------------- |
+| `needs-triage`             | `orbit transition <ID> needs-triage` → status `Triage` | Maintainer needs to evaluate this issue  |
+| `needs-info`               | `orbit transition <ID> needs-info` → status `Needs Info` | Waiting on reporter for more information |
+| `ready-for-agent`          | `orbit transition <ID> ready-for-agent` → status `Ready` | Fully specified, ready for an AFK agent  |
+| `ready-for-human`          | `orbit transition <ID> ready-for-human` → status `Ready`, then `orbit assign <ID> --to <name>` | Requires human implementation            |
+| `wontfix`                  | `orbit transition <ID> wontfix` → status `Cancelled`, resolution `Won't Do` | Will not be actioned                     |
 
-## Category labels
+## Category roles → Issue types
 
-- `bug`: something is broken
-- `enhancement`: new feature or improvement
+- `bug` → Issue type `bug`: `orbit add "<title>" --type bug` or
+  `orbit update <ID> --type bug`
+- `enhancement` → Issue type `story`
 
 ## Orbit semantics
 
-`needs-triage`, `needs-info`, and `ready-for-human` are **hold labels**. A task carrying one is excluded from `orbit ready` and `orbit claim` returns `LABEL_BLOCKED`. Remove the hold label before claiming the task.
+Only the `Ready` status lists in `orbit ready`, and only while the Issue is
+unassigned, unblocked, and free of hold labels. `Triage` and `Needs Info`
+Issues are never Ready, so they cannot be claimed. A `ready-for-human` Issue
+is assigned to a person with `orbit assign <ID> --to <name>` — the assignee
+kind is `human` — which takes it out of the agent queue.
 
-`ready-for-agent`, `bug`, and `enhancement` do not affect readiness.
+`wontfix` closes the Issue through the workflow's `wontfix` transition,
+which records resolution `Won't Do`; `orbit reopen <ID>` returns it to the
+initial status (`Triage`).
 
-`wontfix` is a label plus a terminal status: add the label and run `orbit cancel <ID> --by <agent>`.
-
-When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from the table, then remove the previous state label.
+When a skill mentions a role (e.g. "apply the AFK-ready triage label"), run
+the matching `orbit transition`. Each transition replaces the previous
+triage state, so there is no label to remove first.

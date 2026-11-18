@@ -279,27 +279,61 @@ pub struct InstallOptions {
 }
 
 pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOutput> {
+    let target = args.client.trim();
+    let client = SetupClient::from_name(&target.to_ascii_lowercase());
+    // `all` installs every harness; it is not a profile name.
+    let profile = if client == Some(SetupClient::All) {
+        None
+    } else {
+        crate::profile::find(target, dir)?
+    };
+
+    match (client, profile) {
+        (None, None) => Err(unknown_setup_target(target)),
+        (None, Some(resolved)) => run_profile(&args, dir, &resolved),
+        (Some(client), resolved) => {
+            let mut output = run_harness(&args, dir, client)?;
+            if let Some(resolved) = resolved {
+                merge_profile(&args, dir, &resolved, &mut output)?;
+            }
+            Ok(output)
+        }
+    }
+}
+
+fn unknown_setup_target(target: &str) -> OrbitError {
+    OrbitError::invalid_argument(format!(
+        "`{target}` is neither an agent integration nor a profile; integrations are claude, cursor, codex, opencode, devin, mattpocock, all — profiles resolve from `profiles/<name>.toml` in the Board, the repository, or `~/.config/orbit/profiles/`"
+    ))
+}
+
+/// The harness half of `orbit setup`: instruction files, skills, MCP
+/// entries, and hooks for one `SetupClient`.
+fn run_harness(
+    args: &crate::cli::SetupArgs,
+    dir: Option<&Path>,
+    client: SetupClient,
+) -> Result<CommandOutput> {
     let project = project_root()?;
     let remote_details = crate::remote::details_visible_for(dir);
     let root = scope_root(args.scope, &project)?;
     let mut warnings = Vec::new();
 
-    if matches!(args.client, SetupClient::Mattpocock)
+    if matches!(client, SetupClient::Mattpocock)
         && (args.mcp || args.mcp_bin.is_some() || args.portable_mcp)
     {
         warnings.push("mattpocock is not an MCP client; ignoring MCP options".to_string());
     }
 
-    let hooks = args.hooks
-        && !args.remove
-        && (args.client == SetupClient::All || args.client.supports_hooks());
+    let hooks =
+        args.hooks && !args.remove && (client == SetupClient::All || client.supports_hooks());
     if args.hooks && !args.remove && !hooks {
         warnings
             .push("hooks are only supported for Claude and Devin; ignoring --hooks".to_string());
     }
 
     let mcp = !args.no_mcp;
-    let clients = expand(args.client);
+    let clients = expand(client);
     let mcp_bin = if mcp && !args.remove {
         Some(configured_mcp_bin(
             args.portable_mcp,
@@ -348,6 +382,221 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
     )?;
     outcome.output.warnings.extend(warnings);
     Ok(outcome.output)
+}
+
+/// The result of previewing, checking, or applying one profile.
+struct ProfileOutcome {
+    /// Merged into `data["profile"]` (and `data["files"]` for previews).
+    data: Value,
+    files: Vec<FileOutcome>,
+    human_extra: String,
+    warnings: Vec<String>,
+    exit_code: i32,
+}
+
+/// `orbit setup <plugin>` where `<plugin>` is not an agent integration:
+/// the profile is the whole target.
+fn run_profile(
+    args: &crate::cli::SetupArgs,
+    dir: Option<&Path>,
+    resolved: &crate::profile::ResolvedProfile,
+) -> Result<CommandOutput> {
+    if args.remove {
+        return Err(OrbitError::invalid_argument(format!(
+            "`{}` is a profile; profiles are declarative — remove its `[[profiles]]` record and applied settings from the Board's config.toml, or apply a different profile",
+            resolved.profile.name()
+        )));
+    }
+    let outcome = profile_outcome(args, dir, resolved)?;
+    let mut data = outcome.data;
+    if let Some(object) = data.as_object_mut() {
+        object.insert(
+            "files".to_string(),
+            json!(
+                outcome
+                    .files
+                    .iter()
+                    .map(|f| f.to_json(args.print))
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
+    let mut output = CommandOutput::new(data, outcome.human_extra);
+    output.warnings = outcome.warnings;
+    output.exit_code = outcome.exit_code;
+    Ok(output)
+}
+
+/// Applies (or previews/checks) a profile found for a known agent
+/// integration, merging the result into the harness output.
+fn merge_profile(
+    args: &crate::cli::SetupArgs,
+    dir: Option<&Path>,
+    resolved: &crate::profile::ResolvedProfile,
+    output: &mut CommandOutput,
+) -> Result<()> {
+    if args.remove {
+        output.warnings.push(format!(
+            "profile `{}` stays applied; profiles are declarative — edit the Board's config.toml to change it",
+            resolved.profile.name()
+        ));
+        return Ok(());
+    }
+    let outcome = match profile_outcome(args, dir, resolved) {
+        Ok(outcome) => outcome,
+        Err(error) if error.code == code::BOARD_NOT_FOUND => {
+            // Harness setup (for example `setup mattpocock`) must still
+            // write its agent files on a repository that has no Board yet;
+            // the profile simply has nothing to apply to.
+            output.warnings.push(format!(
+                "no Orbit Board found; profile `{}` was not applied",
+                resolved.profile.name()
+            ));
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    if let (Some(target), Value::Object(extra)) = (output.data.as_object_mut(), &outcome.data) {
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
+        }
+        if let Some(files) = target.get_mut("files").and_then(Value::as_array_mut) {
+            files.extend(outcome.files.iter().map(|file| file.to_json(args.print)));
+        }
+    }
+    output.human.push_str(&outcome.human_extra);
+    output.warnings.extend(outcome.warnings);
+    output.exit_code = output.exit_code.max(outcome.exit_code);
+    Ok(())
+}
+
+/// Shared profile handling for `--check`, `--print`, and a normal apply.
+/// Requirements are negotiated first: an unmet profile fails (or reports
+/// `unmet` under `--check`) before the Board is touched.
+fn profile_outcome(
+    args: &crate::cli::SetupArgs,
+    dir: Option<&Path>,
+    resolved: &crate::profile::ResolvedProfile,
+) -> Result<ProfileOutcome> {
+    let profile = &resolved.profile;
+    let unmet = profile.unmet();
+    if !unmet.is_empty() && !args.check {
+        return Err(OrbitError::new(
+            code::PROFILE_UNMET,
+            format!(
+                "profile `{}` cannot be applied: this orbit does not provide {}",
+                profile.name(),
+                unmet.describe().join(", ")
+            ),
+        )
+        .with_details(json!({
+            "profile": profile.name(),
+            "missing_capabilities": unmet.capabilities,
+            "required_contract": unmet.contract,
+            "binary_contract": crate::contract::VERSION,
+        })));
+    }
+
+    let write = !args.check && !args.print;
+    let access = crate::board::BoardAccess::open(
+        dir,
+        if write {
+            crate::board::AccessMode::Write
+        } else {
+            crate::board::AccessMode::Read
+        },
+    )?;
+    let board = access.board();
+
+    // Simulate the apply to learn whether the Board would change.
+    let mut simulated = board.config.clone();
+    profile.apply(&mut simulated, Some(&resolved.source))?;
+    let before = board.config.to_toml()?;
+    let after = simulated.to_toml()?;
+    let changed = before != after;
+
+    let config_action = if changed {
+        Action::Updated
+    } else {
+        Action::Unchanged
+    };
+    let config_file = FileOutcome {
+        relative: PathBuf::from("config.toml"),
+        action: config_action,
+        content: args.print.then(|| after.clone()),
+        warning: None,
+    };
+
+    let mut data = json!({
+        "profile": {
+            "name": profile.name(),
+            "source": resolved.source,
+            "path": resolved.path,
+            "board": board.root,
+        },
+    });
+    let mut human = String::new();
+    let mut warnings = Vec::new();
+    let mut exit_code = 0;
+
+    if args.check {
+        let status = if !unmet.is_empty() {
+            "unmet"
+        } else if changed {
+            "stale"
+        } else {
+            "installed"
+        };
+        data["status"] = json!(status);
+        data["changed"] = json!(changed);
+        human.push_str(&format!(
+            "orbit setup check: profile `{}` is {status}\n",
+            profile.name()
+        ));
+        human.push_str(&format!("{} {}\n", config_action.as_str(), "config.toml"));
+        exit_code = if status == "installed" { 0 } else { 1 };
+        if !unmet.is_empty() {
+            warnings.push(format!(
+                "profile `{}` is missing: {}",
+                profile.name(),
+                unmet.describe().join(", ")
+            ));
+        }
+    } else if args.print {
+        data["preview"] = json!(true);
+        data["changed"] = json!(changed);
+        human.push_str(&format!(
+            "profile `{}` would {} the Board's config.toml\n",
+            profile.name(),
+            if changed { "update" } else { "leave unchanged" }
+        ));
+    } else {
+        let outcome = board.save_config(
+            &format!("orbit: apply profile {}", profile.name()),
+            |config| profile.apply(config, Some(&resolved.source)),
+        )?;
+        let committed = matches!(outcome, crate::git::CommitOutcome::Committed);
+        data["changed"] = json!(changed);
+        data["committed"] = json!(committed);
+        human.push_str(&format!(
+            "profile `{}` {} on {}\n",
+            profile.name(),
+            if changed {
+                "applied"
+            } else {
+                "already applied"
+            },
+            board.root.display()
+        ));
+    }
+
+    Ok(ProfileOutcome {
+        data,
+        files: vec![config_file],
+        human_extra: human,
+        warnings,
+        exit_code,
+    })
 }
 
 pub fn install(root: &Path, options: InstallOptions) -> Result<InstallOutcome> {
@@ -2391,9 +2640,9 @@ fn is_orbit_hook(handler: &Value) -> bool {
 /// documented when the Board can actually show it.
 fn list_guidance(remote_details: bool) -> &'static str {
     if remote_details {
-        "- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines."
+        "- `orbit list` prints a table for humans; the `ISSUE` column is `-` for a Local Task, `#N` for a Linked Task, and `~#N` for detached provenance. Filter with `--linked` or `--local`; parse `--json` in automation. `orbit ready`, `orbit search`, `orbit digest`, and `orbit tree` print compact summary lines; `list`/`search` page with `--limit`/`--cursor`."
     } else {
-        "- `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready` and `orbit tree` print compact summary lines."
+        "- `orbit list` prints a table for humans; parse `--json` in automation. `orbit ready`, `orbit search`, `orbit digest`, and `orbit tree` print compact summary lines; `list`/`search` page with `--limit`/`--cursor`."
     }
 }
 
@@ -2401,27 +2650,29 @@ fn workflow_section(remote_details: bool) -> String {
     let list = list_guidance(remote_details);
     format!(
         "{BEGIN_MARKER}
-## Orbit task tracking
+## Orbit issue tracking
 
-Orbit is the task tracker for this project. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
+Orbit is the issue tracker for this project. Use the `orbit` CLI; never edit task files or YAML frontmatter directly.
 
-From any member Repository, these commands resolve the shared Board across the Git boundary. Tasks, dependencies, and claims are shared across its Repositories.
+From any member Repository, these commands resolve the shared Board across the Git boundary. Issues, dependencies, and claims are shared across its Repositories.
 
-- `orbit ready --claim --by <agent>` claims the highest-priority ready task atomically.
-- `orbit claim <id> --by <agent> --worktree` claims one task and creates `.worktrees/<id>` on `ticket/<id>` in the Task's Repository.
+- `orbit ready --claim --by <agent>` claims the highest-priority ready Issue atomically.
+- `orbit claim <id> --by <agent> --worktree` claims one Issue and creates `.worktrees/<id>` on `ticket/<id>` in the Issue's Repository.
+- `orbit assign <id> --to <name>` assigns an Issue to a person or agent without a lease.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 - `orbit checkpoint <id> --by <agent> --progress \"...\" [--next \"...\"] [--blocker \"...\"]` records a handoff that survives release and takeover.
 {COMPLETION_LINE}
-- `orbit add \"title\" -p N --depends-on <id>` creates work.
-- `orbit add \"title\" --parent <id>` creates a SubTask. A spec or epic is a top-level Task with `--type epic`; its issues are SubTasks. `type` is metadata: task, epic, spike, chore, decision. Epic is top-level only. SubTasks are one level deep by default; raise `board.max_subtask_depth` to nest further, and the parent waits for them.
-- Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
+- `orbit add \"title\" -p high` creates work; `orbit depend <id> <dep-id>` adds a blocker.
+- `orbit add \"title\" --parent <id>` creates a child Issue. Issue types and the parent hierarchy are configured per Board under `board.types` and `board.hierarchy` (default: `epic` above `story`/`task`/`bug` above `sub-task`); a child must sit below its parent in the hierarchy, `--parent` without `--type` files a `sub-task`, and the parent waits for every descendant to resolve.
+- Never use `done --force` or `cancel --force` on a parent with open sub-issues; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
-- Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
-- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Tasks; `--all` widens to the whole Board.
+- Use `orbit tree <id>` to inspect one epic/spec with its sub-issues and blockers.
+- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Issues; `--all` widens to the whole Board.
 - `orbit depend <id> <dep-id>` links work; cycles and unfinished dependencies are rejected.
 - `orbit show <id>` reads the full body and acceptance criteria.
 - Use `orbit label add/remove` for triage labels and `orbit comment add/list` for durable notes.
-- `orbit batch --file plan.json` applies many changes in one commit, all or none; `--source-key` makes retries safe.
+- `orbit batch --file plan.json` applies many changes in one commit, all or none; per-operation `key`/`if_version` make retries safe.
+- Pass `--if-version <updated_at>` (from `orbit show`) on a mutation to fail with a retryable `VERSION_CONFLICT` on stale reads, and `--idempotency-key <key>` so a retry returns the first result instead of reapplying.
 - Run `orbit prime` at session start for ready work, stale claims, and counts.
 {list}
 
@@ -2433,7 +2684,7 @@ Parse the JSON envelope: `ok`, `data`, `error.code`, and `error.retryable`. If a
 fn cursor_rule(remote_details: bool) -> String {
     format!(
         "---
-description: \"Orbit task tracker workflow\"
+description: \"Orbit issue tracker workflow\"
 globs: [\"**/*\"]
 alwaysApply: true
 ---
@@ -2447,7 +2698,7 @@ alwaysApply: true
 fn devin_rule(remote_details: bool) -> String {
     format!(
         "---
-description: \"Orbit task tracker workflow\"
+description: \"Orbit issue tracker workflow\"
 trigger: always_on
 ---
 
@@ -2470,59 +2721,161 @@ description: \"Use the Orbit CLI to claim, track, and complete tasks in this rep
     )
 }
 
+/// The built-in profile `orbit setup mattpocock` applies; the `docs/agents/`
+/// guides are generated from its vocabulary, so editing the profile TOML in
+/// `src/profile.rs` changes what setup writes.
+fn mattpocock_profile() -> crate::profile::Profile {
+    crate::profile::builtin("mattpocock").expect("the mattpocock profile ships with orbit")
+}
+
+/// The profile's `[workflow]` section resolved against this binary, when it
+/// defines one.
+fn mattpocock_workflow(profile: &crate::profile::Profile) -> Option<crate::workflow::Workflow> {
+    crate::workflow::Workflow::from_config(&crate::board::Config {
+        workflow: profile.workflow.clone().unwrap_or_default(),
+        ..crate::board::Config::default()
+    })
+    .ok()
+}
+
+/// The Orbit status a triage role maps to under the profile, when the
+/// profile's `vocabulary.status` table names one.
+fn profile_role_status<'a>(profile: &'a crate::profile::Profile, role: &str) -> Option<&'a str> {
+    profile
+        .vocabulary
+        .get("status")
+        .and_then(|map| map.get(role))
+        .map(String::as_str)
+}
+
 fn mattpocock_section(remote_details: bool) -> String {
     let list = list_guidance(remote_details);
+    let profile = mattpocock_profile();
+    let workflow = mattpocock_workflow(&profile);
+    let ready = workflow
+        .as_ref()
+        .and_then(|workflow| workflow.ready_status().map(str::to_string))
+        .unwrap_or_else(|| "Ready".to_string());
+    let initial = profile
+        .workflow
+        .as_ref()
+        .and_then(|section| section.initial.clone())
+        .unwrap_or_else(|| "Triage".to_string());
     format!(
         "{BEGIN_MARKER}
 ## Orbit
 
-We use Orbit, a Git-native issue tracker for coding agents. Tasks live as Markdown on the board and are served by the `orbit` CLI; the board is shared by every Git worktree.
+We use Orbit, a Git-native issue tracker for coding agents. Issues live as Markdown on the board and are served by the `orbit` CLI; the board is shared by every Git worktree. This repository applies the `mattpocock` profile: the five triage roles are workflow statuses and transitions, not labels — see `docs/agents/triage-labels.md` for the mapping.
 
-- To find actionable work, run `orbit ready --json` and parse `data.tasks`.
+- To find actionable work, run `orbit ready --json` and parse `data.issues`. Only Issues in the `{ready}` status appear there.
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
-- To claim a known Task and prepare its worktree, run `orbit claim <ID> --by <agent> --worktree`; it creates or reuses `.worktrees/<ID>` on `ticket/<ID>` in the Task's Repository. If preparation fails after claiming, `CLAIM_WORKTREE_FAILED` means the claim remains active; fix the cause and retry.
+- To claim a known Issue and prepare its worktree, run `orbit claim <ID> --by <agent> --worktree`; it creates or reuses `.worktrees/<ID>` on `ticket/<ID>` in the Issue's Repository. If preparation fails after claiming, `CLAIM_WORKTREE_FAILED` means the claim remains active; fix the cause and retry.
 - To hand off work, run `orbit checkpoint <ID> --by <agent> --progress \"...\" --next \"...\"`; the record survives release and takeover, and never affects readiness.
-- To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change.
-- To create work, run `orbit add \"Title\" -p N --depends-on <ID>`.
-- Orbit calls the unit a Task. A skill's \"issue\" is a Task; a \"sub-issue\" is a SubTask; an \"epic\" or \"spec\" is a top-level Task with `--type epic`.
-- To publish tickets under an existing issue or spec, run `orbit add \"Title\" --parent <PARENT_ID>`; SubTasks are one level deep by default — raise `board.max_subtask_depth` to nest further — and the parent waits for them.
-- `type` is metadata: task, epic, spike, chore, decision. Epic is top-level only. `bug` and `enhancement` stay labels.
-- Never use `done --force` or `cancel --force` on a parent with open SubTasks; it cancels them.
+- To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change. Closing an Issue as `wontfix` instead runs `orbit transition <ID> wontfix`, which records resolution `Won't Do`.
+- To create work, run `orbit add \"Title\" -p high`; `orbit depend <ID> <DEP-ID>` adds a blocker. New Issues start in `{initial}`.
+- Orbit calls the unit an Issue; a child Issue is a sub-issue filed with `--parent`; an \"epic\" or \"spec\" is a top-level Issue with `--type epic`.
+- To publish tickets under an existing issue or spec, run `orbit add \"Title\" --parent <PARENT_ID>`; the parent waits for every descendant to resolve.
+- `type` is a Board-configured Issue type. This profile maps the `bug` category to type `bug` and `enhancement` to type `story`; pass `--type` on `orbit add` or `orbit update` rather than adding category labels.
+- Triage state moves with `orbit transition <ID> <role>`: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. `ready-for-human` work is assigned to a person with `orbit assign <ID> --to <name>` (assignee kind `human`), which takes it out of the agent queue.
+- Never use `done --force` or `cancel --force` on a parent with open sub-issues; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
-- Use `orbit tree <id>` to inspect one epic/spec with its SubTasks and blockers.
-- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Tasks; `--all` widens to the whole Board.
-- To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`.
+- Use `orbit tree <id>` to inspect one epic/spec with its sub-issues and blockers.
+- Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Issues; `--all` widens to the whole Board.
+- To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`. Labels are free-form metadata — triage state is a status, not a label.
 - To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.
-- The hold labels `needs-triage`, `needs-info`, and `ready-for-human` keep tasks out of the ready queue and prevent claims until removed. `ready-for-agent`, `bug`, and `enhancement` are neutral.
 - Never edit task frontmatter directly; that bypasses dependency validation, leases, and the write lock.
 - Use `orbit show <ID>` to read acceptance criteria.
 {list}
-{END_MARKER}"
+{END_MARKER}",
+        ready = ready,
+        initial = initial,
     )
 }
 
 fn mattpocock_triage_labels_section() -> String {
+    let profile = mattpocock_profile();
+    let status = |role: &str| {
+        profile_role_status(&profile, role)
+            .unwrap_or(role)
+            .to_string()
+    };
+    // `wontfix` maps to a resolution, so its target status comes from the
+    // workflow transition named after the role rather than the status
+    // vocabulary.
+    let wontfix_status = mattpocock_workflow(&profile)
+        .and_then(|workflow| {
+            workflow
+                .transition_named("wontfix")
+                .map(|transition| transition.to.clone())
+        })
+        .unwrap_or_else(|| status("wontfix"));
+    let wontfix_resolution = profile
+        .vocabulary
+        .get("resolution")
+        .and_then(|map| map.get("wontfix"))
+        .map(String::as_str)
+        .unwrap_or("Won't Do");
+    let human_kind = profile
+        .roles
+        .get("ready-for-human")
+        .map(String::as_str)
+        .unwrap_or("human");
+    let issue_type = |role: &str| {
+        profile
+            .vocabulary
+            .get("type")
+            .and_then(|map| map.get(role))
+            .map(String::as_str)
+            .unwrap_or(role)
+            .to_string()
+    };
     format!(
         "{BEGIN_MARKER}
 # Orbit triage labels
 
-Use these canonical labels with Orbit Tasks:
+The skills speak in terms of five canonical triage roles. This repository's
+Orbit Board applies the `mattpocock` profile, which maps each role onto the
+Issue workflow — a status reached through `orbit transition`, an assignee
+kind, a resolution, or an Issue type — instead of a label.
 
-| Role | Label | Meaning |
+| Role | Orbit mechanism | Meaning |
 | --- | --- | --- |
-| Needs maintainer review | `needs-triage` | Not yet evaluated |
-| Needs reporter input | `needs-info` | Waiting for more information |
-| Agent-ready | `ready-for-agent` | Specified and available to an agent |
-| Human work | `ready-for-human` | Requires human implementation |
-| Won't fix | `wontfix` | Abandoned; also cancel the Task |
-| Bug | `bug` | Something is broken |
-| Enhancement | `enhancement` | New feature or improvement |
+| `needs-triage` | `orbit transition <ID> needs-triage` → status `{needs_triage}` | Maintainer needs to evaluate this issue |
+| `needs-info` | `orbit transition <ID> needs-info` → status `{needs_info}` | Waiting on reporter for more information |
+| `ready-for-agent` | `orbit transition <ID> ready-for-agent` → status `{ready_for_agent}` | Fully specified, ready for an AFK agent |
+| `ready-for-human` | `orbit transition <ID> ready-for-human` → status `{ready_for_human}`, then `orbit assign <ID> --to <name>` | Requires human implementation |
+| `wontfix` | `orbit transition <ID> wontfix` → status `{wontfix_status}`, resolution `{wontfix_resolution}` | Will not be actioned |
 
-`needs-triage`, `needs-info`, and `ready-for-human` are hold labels. They keep
-Tasks out of `orbit ready` until removed. `ready-for-agent`, `bug`, and
-`enhancement` do not block readiness. `wontfix` is a label plus a terminal
-status; use `orbit cancel <ID> --by <agent>`.
-{END_MARKER}"
+## Category roles → Issue types
+
+- `bug` → Issue type `{bug_type}`: `orbit add \"<title>\" --type {bug_type}` or `orbit update <ID> --type {bug_type}`
+- `enhancement` → Issue type `{enhancement_type}`
+
+## Orbit semantics
+
+Only the Ready status lists in `orbit ready`, and only while the Issue is
+unassigned, unblocked, and free of hold labels. `Triage` and `Needs Info`
+Issues are never Ready, so they cannot be claimed. A `ready-for-human`
+Issue is assigned to a person with `orbit assign <ID> --to <name>` — the
+assignee kind is `{human_kind}` — which takes it out of the agent queue.
+
+`wontfix` closes the Issue through the workflow's `wontfix` transition,
+which records resolution `{wontfix_resolution}`; `orbit reopen <ID>`
+returns it to the initial status.
+
+When a skill mentions a role (e.g. \"apply the AFK-ready triage label\"), run
+the matching `orbit transition`. Each transition replaces the previous
+triage state, so there is no label to remove first.
+{END_MARKER}",
+        needs_triage = status("needs-triage"),
+        needs_info = status("needs-info"),
+        ready_for_agent = status("ready-for-agent"),
+        ready_for_human = status("ready-for-human"),
+        wontfix_status = wontfix_status,
+        wontfix_resolution = wontfix_resolution,
+        human_kind = human_kind,
+        bug_type = issue_type("bug"),
+        enhancement_type = issue_type("enhancement"),
     )
 }
 

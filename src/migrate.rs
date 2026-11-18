@@ -17,7 +17,7 @@ use crate::board::{Board, Config};
 use crate::comment;
 use crate::error::{OrbitError, Result, code};
 use crate::git::{self, CommitOutcome};
-use crate::graph::{Graph, Issue, LoadMode};
+use crate::graph::{Graph, LoadIssue, LoadMode};
 use crate::slug;
 use crate::task;
 
@@ -105,7 +105,14 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
         graph
             .tasks
             .values()
-            .map(|task| task.front.depends_on.len() + usize::from(task.front.parent.is_some()))
+            .map(|task| {
+                task.front
+                    .links
+                    .iter()
+                    .filter(|link| link.target_task().is_some())
+                    .count()
+                    + usize::from(task.front.parent.is_some())
+            })
             .sum()
     } else {
         0
@@ -115,10 +122,10 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
     let mut claims = Vec::new();
     if changed {
         for task in graph.tasks.values() {
-            let Some(claim) = task.front.claim.as_ref() else {
+            let (Some(assignee), Some(lease)) = (&task.front.assignee, &task.front.lease) else {
                 continue;
             };
-            if !claim.is_live(now) {
+            if !lease.is_live(now) {
                 continue;
             }
             let Some(to) = old_to_new.get(&task.id) else {
@@ -127,8 +134,8 @@ pub fn plan(board: &Board, graph: &Graph, requested_slug: &str) -> Result<Plan> 
             claims.push(ClaimMapping {
                 from: task.id.clone(),
                 to: to.clone(),
-                holder: claim.holder.clone(),
-                lease_until: claim.lease_until,
+                holder: assignee.name.clone(),
+                lease_until: lease.lease_until,
             });
         }
         claims.sort_by(|left, right| left.from.cmp(&right.from));
@@ -187,22 +194,21 @@ fn detect_collisions(old_to_new: &BTreeMap<String, String>) -> Vec<Collision> {
 
 /// Doctor-equivalent issues that make a migration unsafe. Strict loading already
 /// covers task parsing and graph structure; this adds the checks doctor performs
-/// over comments, parent/ID agreement, and the checked-out branch.
-pub fn health_issues(board: &Board, graph: &Graph) -> Result<Vec<Issue>> {
+/// over comments and the checked-out branch.
+pub fn health_issues(board: &Board, graph: &Graph) -> Result<Vec<LoadIssue>> {
     health_issues_inner(board, graph, true)
 }
 
-fn health_issues_inner(board: &Board, graph: &Graph, check_branch: bool) -> Result<Vec<Issue>> {
+fn health_issues_inner(board: &Board, graph: &Graph, check_branch: bool) -> Result<Vec<LoadIssue>> {
     let mut issues = Vec::new();
     crate::health::comment_files(board, graph, true, &mut issues)?;
-    crate::health::parent_id_agreement(board, graph, &mut issues);
     if check_branch {
         crate::health::branch_mismatch(board, &mut issues);
     }
     Ok(issues)
 }
 
-pub fn blocked_by_issues(issues: Vec<Issue>) -> OrbitError {
+pub fn blocked_by_issues(issues: Vec<LoadIssue>) -> OrbitError {
     OrbitError::new(
         code::MIGRATION_BLOCKED,
         "the Board is not healthy enough to migrate; run `orbit doctor` and fix the reported issues",
@@ -331,6 +337,7 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
     let mut config: Config = board.config.clone();
     config.id.prefix = plan.new_prefix.clone();
     config.validate()?;
+    crate::modules::validate(&config)?;
     std::fs::write(root.join("config.toml"), config.to_toml()?.as_bytes())
         .map_err(|error| OrbitError::io("write migrated config.toml", error))?;
 
@@ -353,11 +360,17 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
             Some(parent) => Some(mapped(&old_to_new, parent)?.to_string()),
             None => None,
         };
-        migrated.front.depends_on = original
+        migrated.front.links = original
             .front
-            .depends_on
+            .links
             .iter()
-            .map(|dependency| mapped(&old_to_new, dependency).map(str::to_string))
+            .map(|link| {
+                let mut link = link.clone();
+                if let Some(target) = link.target_task() {
+                    link.target = task::LinkTarget::Task(mapped(&old_to_new, target)?.to_string());
+                }
+                Ok(link)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let rendered = task::render_task(&migrated)?;
@@ -408,8 +421,8 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
         migrated_graph.get(&mapping.to)?;
         if migrated_graph.tasks.contains_key(&mapping.from) {
             return Err(OrbitError::board_corrupt(
-                "migration left an old task ID in the temporary Board",
-                serde_json::json!({ "task": mapping.from }),
+                "migration left an old Issue ID in the temporary Board",
+                serde_json::json!({ "issue": mapping.from }),
             ));
         }
     }
@@ -422,7 +435,7 @@ fn build_and_commit(board: &Board, graph: &Graph, plan: &Plan, root: &Path) -> R
     }
 
     let message = format!(
-        "orbit: migrate task prefix from {} to {}",
+        "orbit: migrate issue prefix from {} to {}",
         plan.old_prefix, plan.new_prefix
     );
     match git::commit(root, &message)? {

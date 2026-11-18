@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::help;
-use crate::setup::{SetupClient, SetupScope};
-use crate::task::{Status, TaskType};
+use crate::setup::SetupScope;
+use crate::task::IdentityKind;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -27,6 +27,19 @@ pub struct Cli {
     /// host for this command. Hidden from help; still functional.
     #[arg(global = true, long = "no-sync", hide = true)]
     pub no_sync: bool,
+
+    /// Run the mutation only when the Task's version still matches VERSION —
+    /// the `updated_at` value `orbit show <id>` reports. A stale version
+    /// fails with a retryable VERSION_CONFLICT. Applies to Task mutations
+    /// (`update`, `claim`, `done`, `link add`, ...); `orbit batch` takes a
+    /// per-operation `if_version` instead.
+    #[arg(global = true, long = "if-version", value_name = "VERSION")]
+    pub if_version: Option<String>,
+
+    /// Idempotency key for this write: repeating the call with the same key
+    /// returns the first recorded result instead of running again.
+    #[arg(global = true, long = "idempotency-key", value_name = "KEY")]
+    pub idempotency_key: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -52,9 +65,15 @@ pub enum Command {
     /// into its own Git repository on branch `orbit` under `.orbit/board`
     /// (or a visible folder anchored by `.orbit`), rewriting `github:` links
     /// to `remote:`, `[github]` to remote project entries, `repo:*` labels to
-    /// the `repo` field, and seeding `board.areas` — all in one commit.
+    /// the `repository` field, and seeding `board.components` — all in one
+    /// commit.
+    ///
+    /// The `model` subcommand instead converts a pre-ADR-0022 Board's Tasks
+    /// to the Issue model: workflow statuses, named priorities, typed links,
+    /// properties, components/repository fields, Issue types, and project
+    /// keys — also previewed by default and committed once with --apply.
     #[command(long_about = help::BOARD_MIGRATE_LONG, after_long_help = help::BOARD_MIGRATE_EXAMPLES)]
-    Migrate(BoardMigrateArgs),
+    Migrate(MigrateArgs),
 
     /// Create a task.
     #[command(long_about = help::ADD_LONG, after_long_help = help::ADD_EXAMPLES)]
@@ -85,6 +104,10 @@ pub enum Command {
     #[command(long_about = help::CLAIM_LONG, after_long_help = help::CLAIM_EXAMPLES)]
     Claim(ClaimArgs),
 
+    /// Assign a task to a person or agent without a lease.
+    #[command(long_about = help::ASSIGN_LONG, after_long_help = help::ASSIGN_EXAMPLES)]
+    Assign(AssignArgs),
+
     /// Release a claim and return the task to todo.
     #[command(long_about = help::RELEASE_LONG, after_long_help = help::RELEASE_EXAMPLES)]
     Release(ReleaseArgs),
@@ -109,6 +132,26 @@ pub enum Command {
     #[command(long_about = help::REOPEN_LONG, after_long_help = help::REOPEN_EXAMPLES)]
     Reopen(ReopenArgs),
 
+    /// Run a named workflow transition on a task.
+    #[command(long_about = help::TRANSITION_LONG, after_long_help = help::TRANSITION_EXAMPLES)]
+    Transition(TransitionArgs),
+
+    /// Submit work for review with structured evidence.
+    #[command(long_about = help::SUBMIT_LONG, after_long_help = help::SUBMIT_EXAMPLES)]
+    Submit(SubmitArgs),
+
+    /// Record a review verdict — approve or request-changes — with an optional reason.
+    #[command(long_about = help::REVIEW_LONG, after_long_help = help::REVIEW_EXAMPLES)]
+    Review(ReviewArgs),
+
+    /// Ask a question that blocks the task until it is answered.
+    #[command(long_about = help::ASK_LONG, after_long_help = help::ASK_EXAMPLES)]
+    Ask(AskArgs),
+
+    /// Answer an open ask and unblock the task.
+    #[command(long_about = help::ANSWER_LONG, after_long_help = help::ANSWER_EXAMPLES)]
+    Answer(AnswerArgs),
+
     /// Edit a task's title, body, priority, or external blocker.
     #[command(long_about = help::UPDATE_LONG, after_long_help = help::UPDATE_EXAMPLES)]
     Update(UpdateArgs),
@@ -121,9 +164,9 @@ pub enum Command {
     #[command(long_about = help::BATCH_LONG, after_long_help = help::BATCH_EXAMPLES)]
     Batch(BatchArgs),
 
-    /// Set or remove a tool's Annotation on a task.
-    #[command(long_about = help::ANNOTATION_LONG, after_long_help = help::ANNOTATION_EXAMPLES)]
-    Annotation(AnnotationArgs),
+    /// Set or remove a tool's Property on a task.
+    #[command(long_about = help::PROPERTY_LONG, after_long_help = help::PROPERTY_EXAMPLES)]
+    Property(PropertyArgs),
 
     /// Add to or read a task's comment thread.
     #[command(long_about = help::COMMENT_LONG, after_long_help = help::COMMENT_EXAMPLES)]
@@ -137,6 +180,10 @@ pub enum Command {
     #[command(long_about = help::UNDEPEND_LONG, after_long_help = help::UNDEPEND_EXAMPLES)]
     Undepend(UndependArgs),
 
+    /// Manage typed links to other tasks or external references.
+    #[command(long_about = help::LINK_LONG, after_long_help = help::LINK_EXAMPLES)]
+    Link(LinkArgs),
+
     /// Permanently delete a task and its comments.
     #[command(long_about = help::DELETE_LONG, after_long_help = help::DELETE_EXAMPLES)]
     Delete(DeleteArgs),
@@ -148,6 +195,34 @@ pub enum Command {
     /// Export a deterministic JSON snapshot of the Board.
     #[command(long_about = help::EXPORT_LONG, after_long_help = help::EXPORT_EXAMPLES)]
     Export,
+
+    /// Search tasks by free text and `key:value` qualifiers.
+    ///
+    /// The query mixes free-text terms with qualifiers — `status:`,
+    /// `assignee:`, `label:`, `type:`, `priority:`, `component:`, and
+    /// `repository:` — for example `orbit search "status:ready
+    /// label:backend login"`. Every term must match; scalar qualifiers are
+    /// repeatable with any-of semantics and every `label:` must be present.
+    /// Each result carries a `snippet` quoting the match.
+    #[command(long_about = help::SEARCH_LONG, after_long_help = help::SEARCH_EXAMPLES)]
+    Search(SearchArgs),
+
+    /// Show a compact digest of one Issue, with an epic rollup when it has
+    /// SubTasks: done/cancelled/blocked/open counts over the subtree.
+    #[command(long_about = help::DIGEST_LONG, after_long_help = help::DIGEST_EXAMPLES)]
+    Digest(DigestArgs),
+
+    /// List named change events derived from Board Git history.
+    ///
+    /// Events come oldest first; the response's `cursor` is the Board head
+    /// commit — pass it back as `--since` to fetch only newer events. Each
+    /// event carries `actor` and `trace_id` (the producing commit).
+    #[command(long_about = help::CHANGES_LONG, after_long_help = help::CHANGES_EXAMPLES)]
+    Changes(ChangesArgs),
+
+    /// Show one Issue's event timeline from Board Git history.
+    #[command(long_about = help::HISTORY_LONG, after_long_help = help::HISTORY_EXAMPLES)]
+    History(HistoryArgs),
 
     /// Install, check, or remove one agent integration.
     #[command(long_about = help::SETUP_LONG, after_long_help = help::SETUP_EXAMPLES)]
@@ -164,6 +239,25 @@ pub enum Command {
     /// Commit pending lease-only changes to the board branch.
     #[command(long_about = help::SYNC_LONG, after_long_help = help::SYNC_EXAMPLES)]
     Sync,
+
+    /// Inspect or rebuild the derived read index (opt-in `[index]` module).
+    #[command(long_about = help::INDEX_LONG, after_long_help = help::INDEX_EXAMPLES)]
+    Index(IndexArgs),
+
+    /// Report the Board's contract handshake: contract version, modules, and
+    /// workflow. Answers even on a Board whose contract is newer than this
+    /// binary's, so consumers can negotiate before other commands refuse.
+    #[command(long_about = help::CAPABILITIES_LONG, after_long_help = help::CAPABILITIES_EXAMPLES)]
+    Capabilities,
+
+    /// Print the JSON Schema of the command registry.
+    ///
+    /// Describes every public command once — CLI path, summary, MCP tool,
+    /// argument schema, and safety annotations — as published by the command
+    /// registry in `src/registry.rs`. With COMMAND, prints just that command's
+    /// or tool's entry; --docs prints the generated docs/commands.md section.
+    #[command(long_about = help::SCHEMA_LONG, after_long_help = help::SCHEMA_EXAMPLES)]
+    Schema(SchemaArgs),
 
     /// Configure and synchronize the Board's host repository.
     #[command(long_about = help::BOARD_LONG, after_long_help = help::BOARD_EXAMPLES)]
@@ -308,7 +402,35 @@ pub enum SlugCommand {
 }
 
 #[derive(Debug, Args)]
-pub struct BoardMigrateArgs {
+pub struct MigrateArgs {
+    /// Apply the migration. Without this flag the command only previews.
+    #[arg(long, conflicts_with = "dry_run")]
+    pub apply: bool,
+
+    /// Preview the migration without writing anything (the default).
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Model conversions for Boards written before the Issue model.
+    #[command(subcommand)]
+    pub command: Option<MigrateCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MigrateCommand {
+    /// Rewrite a pre-ADR-0022 Board's Tasks to the Issue model: workflow
+    /// statuses, named priorities, typed links, properties,
+    /// components/repository fields, Issue types, and project keys.
+    ///
+    /// Previews by default; --apply rewrites config.toml, every Task file,
+    /// and keys.toml in a single validated commit. Run `orbit migrate`
+    /// first when the Board still uses a pre-ADR-0019 layout.
+    #[command(long_about = help::MODEL_MIGRATE_LONG, after_long_help = help::MODEL_MIGRATE_EXAMPLES)]
+    Model(ModelMigrateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ModelMigrateArgs {
     /// Apply the migration. Without this flag the command only previews.
     #[arg(long, conflicts_with = "dry_run")]
     pub apply: bool,
@@ -337,34 +459,33 @@ pub struct AddArgs {
     /// Task title. Required and must not be empty.
     pub title: String,
 
-    /// Priority from 0 (highest) to 3 (lowest).
-    #[arg(short = 'p', long, value_name = "N")]
-    pub priority: Option<u8>,
+    /// Priority name from the Board's `board.priorities` list.
+    #[arg(short = 'p', long, value_name = "NAME")]
+    pub priority: Option<String>,
 
-    /// Work shape: task, epic, spike, chore, or decision.
-    #[arg(long = "type", value_name = "TYPE", value_enum)]
-    pub task_type: Option<TaskType>,
+    /// Issue type name from the Board's `board.types`
+    /// (epic, story, task, bug, sub-task by default).
+    #[arg(long = "type", value_name = "TYPE")]
+    pub task_type: Option<String>,
 
-    /// Make the new task wait for an existing task. Repeatable.
-    #[arg(long = "depends-on", value_name = "ID", action = clap::ArgAction::Append)]
-    pub depends_on: Vec<String>,
-
-    /// Create a SubTask under this Parent Task. SubTasks are one level deep by default.
+    /// Nest the new Task under this parent. The Board's `board.hierarchy`
+    /// decides which types may parent which; `--type` picks the child's type
+    /// (the leaf type, `sub-task` by default, when omitted).
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
-
-    /// Record a blocker that lives outside the Board.
-    #[arg(long, value_name = "TEXT")]
-    pub waiting_on: Option<String>,
 
     /// Initial labels. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
 
-    /// Optional work-area slug. Restricted to the Board's `board.areas` when
-    /// the Board configures them; any lowercase slug otherwise.
-    #[arg(long, value_name = "AREA")]
-    pub area: Option<String>,
+    /// Optional Component slug. Restricted to the Board's `board.components`
+    /// when the Board configures them; any lowercase slug otherwise.
+    #[arg(long, value_name = "COMPONENT")]
+    pub component: Option<String>,
+
+    /// The Task's identity in an external system; unique per Board.
+    #[arg(long = "external-id", value_name = "ID")]
+    pub external_id: Option<String>,
 
     /// Concise verification checks or commands for agents.
     #[arg(long, value_name = "TEXT")]
@@ -381,41 +502,46 @@ pub struct AddArgs {
     /// Caller-chosen identity; an add whose Source Key exists returns that Task.
     #[arg(long = "source-key", value_name = "KEY")]
     pub source_key: Option<String>,
+
+    /// Reporter recorded at creation. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub reporter: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ListArgs {
-    /// Filter by status. Requesting done or cancelled includes closed work.
-    #[arg(long, value_enum)]
-    pub status: Option<Status>,
+    /// Filter by workflow status name. Requesting a closed status includes
+    /// closed work.
+    #[arg(long, value_name = "STATUS")]
+    pub status: Option<String>,
 
-    /// Filter by priority (0-3).
-    #[arg(long, value_name = "N")]
-    pub priority: Option<u8>,
+    /// Filter by priority name.
+    #[arg(long, value_name = "NAME")]
+    pub priority: Option<String>,
 
-    /// Filter by claim holder.
-    #[arg(long = "claimed-by", value_name = "NAME")]
-    pub claimed_by: Option<String>,
+    /// Filter by assignee name.
+    #[arg(long = "assignee", value_name = "NAME")]
+    pub assignee: Option<String>,
 
     /// Only tasks waiting on an external blocker.
     #[arg(long)]
     pub waiting: bool,
 
-    /// Filter by work shape. Repeatable; matches any listed type.
-    #[arg(long = "type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
-    pub task_type: Vec<TaskType>,
+    /// Filter by Issue type. Repeatable; matches any listed type.
+    #[arg(long = "type", value_name = "TYPE", action = clap::ArgAction::Append)]
+    pub task_type: Vec<String>,
 
-    /// Exclude work shapes. Repeatable; excludes any listed type.
-    #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
-    pub exclude_type: Vec<TaskType>,
+    /// Exclude Issue types. Repeatable; excludes any listed type.
+    #[arg(long = "exclude-type", value_name = "TYPE", action = clap::ArgAction::Append)]
+    pub exclude_type: Vec<String>,
 
-    /// Filter by work area slug. Repeatable; matches any listed area.
-    #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
-    pub area: Vec<String>,
+    /// Filter by Component slug. Repeatable; matches any listed component.
+    #[arg(long, value_name = "COMPONENT", action = clap::ArgAction::Append)]
+    pub component: Vec<String>,
 
-    /// Exclude tasks with any listed area.
-    #[arg(long = "exclude-area", value_name = "AREA", action = clap::ArgAction::Append)]
-    pub exclude_area: Vec<String>,
+    /// Exclude tasks with any listed component.
+    #[arg(long = "exclude-component", value_name = "COMPONENT", action = clap::ArgAction::Append)]
+    pub exclude_component: Vec<String>,
 
     /// Filter by label. Repeatable; every label must match.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -425,15 +551,15 @@ pub struct ListArgs {
     #[arg(long = "exclude-label", value_name = "LABEL", action = clap::ArgAction::Append)]
     pub exclude_label: Vec<String>,
 
-    /// Filter by repository label. Filter by Repository field or legacy repo:NAME label.
+    /// Filter by member Repository. Matches the `repository` field.
     #[arg(long, value_name = "NAME")]
-    pub repo: Option<String>,
+    pub repository: Option<String>,
 
     /// Only tasks with no labels.
-    #[arg(long, conflicts_with_all = ["label", "repo"])]
+    #[arg(long, conflicts_with_all = ["label", "repository"])]
     pub unlabeled: bool,
 
-    /// Filter to SubTasks of this Parent Task.
+    /// Filter to direct children of this parent Task.
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
@@ -458,6 +584,25 @@ pub struct ListArgs {
     /// Include done and cancelled tasks.
     #[arg(long)]
     pub include_closed: bool,
+
+    /// JSON object filter applied to each Issue's summary fields; every key
+    /// must match (AND). Scalars match by equality or membership in an
+    /// expected array; arrays match by containment.
+    #[arg(long, value_name = "JSON")]
+    pub filter: Option<String>,
+
+    /// Comma-separated fields to keep on each returned Issue, for example
+    /// `id,title,status`. Dotted paths reach into objects.
+    #[arg(long, value_name = "FIELDS")]
+    pub fields: Option<String>,
+
+    /// Page size. The response's `next_cursor` resumes where the page ended.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+
+    /// Cursor from a previous page's `next_cursor`; only later Issues return.
+    #[arg(long, value_name = "CURSOR")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -466,13 +611,13 @@ pub struct ReadyArgs {
     #[arg(long, value_name = "N")]
     pub limit: Option<usize>,
 
-    /// Only Ready SubTasks of this Parent Task.
+    /// Only Ready direct children of this parent Task.
     #[arg(long, value_name = "ID")]
     pub parent: Option<String>,
 
-    /// Only Ready tasks with this repository label. Filter by Repository field or legacy repo:NAME label.
+    /// Only Ready tasks with this member Repository. Matches the `repository` field.
     #[arg(long, value_name = "NAME")]
-    pub repo: Option<String>,
+    pub repository: Option<String>,
 
     /// Include Ready tasks from every Repository. Inside a member Repository
     /// or its worktree the queue is scoped to that Repository plus Board-wide
@@ -480,21 +625,21 @@ pub struct ReadyArgs {
     #[arg(long)]
     pub all: bool,
 
-    /// Only Ready tasks with one of these work shapes. Repeatable.
-    #[arg(long = "type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
-    pub task_type: Vec<TaskType>,
+    /// Only Ready tasks with one of these Issue types. Repeatable.
+    #[arg(long = "type", value_name = "TYPE", action = clap::ArgAction::Append)]
+    pub task_type: Vec<String>,
 
-    /// Exclude Ready tasks with any of these work shapes. Repeatable.
-    #[arg(long = "exclude-type", value_name = "TYPE", value_enum, action = clap::ArgAction::Append)]
-    pub exclude_type: Vec<TaskType>,
+    /// Exclude Ready tasks with any of these Issue types. Repeatable.
+    #[arg(long = "exclude-type", value_name = "TYPE", action = clap::ArgAction::Append)]
+    pub exclude_type: Vec<String>,
 
-    /// Only Ready tasks with any listed work area. Repeatable.
-    #[arg(long, value_name = "AREA", action = clap::ArgAction::Append)]
-    pub area: Vec<String>,
+    /// Only Ready tasks with any listed Component. Repeatable.
+    #[arg(long, value_name = "COMPONENT", action = clap::ArgAction::Append)]
+    pub component: Vec<String>,
 
-    /// Exclude Ready tasks with any listed work area. Repeatable.
-    #[arg(long = "exclude-area", value_name = "AREA", action = clap::ArgAction::Append)]
-    pub exclude_area: Vec<String>,
+    /// Exclude Ready tasks with any listed Component. Repeatable.
+    #[arg(long = "exclude-component", value_name = "COMPONENT", action = clap::ArgAction::Append)]
+    pub exclude_component: Vec<String>,
 
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
@@ -511,28 +656,82 @@ pub struct ReadyArgs {
     /// Agent identity for --claim.
     #[arg(long, value_name = "NAME", requires = "claim")]
     pub by: Option<String>,
+
+    /// Ready-queue strategies, comma-separated and applied in order:
+    /// default, critical-path, touches, capability, wip. Overrides
+    /// `scheduler.strategy` in config.toml for this invocation.
+    #[arg(long, value_name = "NAMES")]
+    pub strategy: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// Comma-separated fields to keep on the returned Issue, for example
+    /// `id,key,status`. Dotted paths reach into objects.
+    #[arg(long, value_name = "FIELDS")]
+    pub fields: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SearchArgs {
+    /// Free-text terms plus `key:value` qualifiers (`status:`, `assignee:`,
+    /// `label:`, `type:`, `priority:`, `component:`, `repository:`).
+    pub query: String,
+
+    /// Include done and cancelled tasks.
+    #[arg(long)]
+    pub include_closed: bool,
+
+    /// JSON object filter applied to each Issue's summary fields.
+    #[arg(long, value_name = "JSON")]
+    pub filter: Option<String>,
+
+    /// Comma-separated fields to keep on each result, for example
+    /// `id,title,status,snippet`.
+    #[arg(long, value_name = "FIELDS")]
+    pub fields: Option<String>,
+
+    /// Page size. The response's `next_cursor` resumes where the page ended.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+
+    /// Cursor from a previous page's `next_cursor`; only later results return.
+    #[arg(long, value_name = "CURSOR")]
+    pub cursor: Option<String>,
+
+    /// Include tasks from every Repository. Inside a member Repository the
+    /// search is scoped to that Repository plus Board-wide Tasks by default.
+    #[arg(long)]
+    pub all: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DigestArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 }
 
 #[derive(Debug, Args)]
 pub struct TreeArgs {
-    /// Parent Task ID, for example orb-a7b2c9.
+    /// Parent Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 }
 
 #[derive(Debug, Args)]
 pub struct ClaimArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
     #[arg(long, value_name = "NAME")]
     pub by: Option<String>,
+
+    /// The assignee's kind.
+    #[arg(long, value_enum, default_value_t = IdentityKind::Agent)]
+    pub kind: IdentityKind,
 
     /// Take over another agent's claim, even while its lease is live.
     #[arg(long)]
@@ -544,8 +743,26 @@ pub struct ClaimArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct AssignArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// The assignee's name — a person or an agent.
+    #[arg(long, value_name = "NAME")]
+    pub to: String,
+
+    /// The assignee's kind.
+    #[arg(long, value_enum, default_value_t = IdentityKind::Human)]
+    pub kind: IdentityKind,
+
+    /// Replace a different assignee.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct ReleaseArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -559,7 +776,7 @@ pub struct ReleaseArgs {
 
 #[derive(Debug, Args)]
 pub struct HeartbeatArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -569,7 +786,7 @@ pub struct HeartbeatArgs {
 
 #[derive(Debug, Args)]
 pub struct CheckpointArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Current progress. Required when recording the first checkpoint.
@@ -599,7 +816,7 @@ pub struct CheckpointArgs {
 
 #[derive(Debug, Args)]
 pub struct DoneArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -621,7 +838,7 @@ pub struct DoneArgs {
 
 #[derive(Debug, Args)]
 pub struct CancelArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -643,7 +860,7 @@ pub struct CancelArgs {
 
 #[derive(Debug, Args)]
 pub struct ReopenArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Reopen even when a dependent task is already done.
@@ -652,8 +869,125 @@ pub struct ReopenArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct TransitionArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// Workflow transition name, for example promote or block.
+    pub name: String,
+
+    /// Caller identity for Claim-holder checks.
+    #[arg(long)]
+    pub by: Option<String>,
+
+    /// Run even when another holder's live Claim blocks the transition.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ReviewVerdictArg {
+    /// Accept the submitted work.
+    Approve,
+    /// Send the work back to the author with a reason.
+    RequestChanges,
+}
+
+#[derive(Debug, Args)]
+pub struct SubmitArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// Submitter identity. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+
+    /// The submitter's kind.
+    #[arg(long, value_enum, default_value_t = IdentityKind::Agent)]
+    pub kind: IdentityKind,
+
+    /// A verification command that proves the work (repeatable).
+    #[arg(long, value_name = "CMD")]
+    pub command: Vec<String>,
+
+    /// Exit code the verification command returned.
+    #[arg(long)]
+    pub exit_code: Option<i64>,
+
+    /// Commit the work was verified against.
+    #[arg(long)]
+    pub commit: Option<String>,
+
+    /// A file the work touched (repeatable).
+    #[arg(long, value_name = "PATH")]
+    pub file: Vec<String>,
+
+    /// Free-form evidence note.
+    #[arg(long)]
+    pub note: Option<String>,
+
+    /// Run even when another holder's live claim blocks the transition.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ReviewArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// The verdict to record.
+    #[arg(long, value_enum)]
+    pub verdict: ReviewVerdictArg,
+
+    /// Why changes are requested; required for `request-changes`.
+    #[arg(long, value_name = "TEXT")]
+    pub reason: Option<String>,
+
+    /// Reviewer identity. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+
+    /// The reviewer's kind.
+    #[arg(long, value_enum, default_value_t = IdentityKind::Agent)]
+    pub kind: IdentityKind,
+
+    /// Run even when another holder's live claim blocks the transition.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AskArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// The question that blocks the task until answered.
+    #[arg(value_name = "QUESTION")]
+    pub question: String,
+
+    /// Asker identity. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AnswerArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// The answer that unblocks the task.
+    #[arg(value_name = "ANSWER")]
+    pub answer: String,
+
+    /// Answerer identity. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long, value_name = "NAME")]
+    pub by: Option<String>,
+}
+
+#[derive(Debug, Args)]
 pub struct UpdateArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// New title.
@@ -668,34 +1002,42 @@ pub struct UpdateArgs {
     #[arg(long = "body-file", value_name = "PATH", conflicts_with = "body")]
     pub body_file: Option<PathBuf>,
 
-    /// New priority (0-3).
-    #[arg(long, value_name = "N")]
-    pub priority: Option<u8>,
+    /// New priority name.
+    #[arg(long, value_name = "NAME")]
+    pub priority: Option<String>,
 
-    /// New work shape: task, epic, spike, chore, or decision.
-    #[arg(long = "type", value_name = "TYPE", value_enum)]
-    pub task_type: Option<TaskType>,
+    /// New Issue type name from the Board's `board.types`.
+    #[arg(long = "type", value_name = "TYPE")]
+    pub task_type: Option<String>,
 
-    /// New external blocker.
+    /// New Component slug. Restricted to the Board's `board.components` when
+    /// the Board configures them; any lowercase slug otherwise.
+    #[arg(long, value_name = "COMPONENT", conflicts_with = "clear_component")]
+    pub component: Option<String>,
+
+    /// Remove the Component classification.
+    #[arg(long = "clear-component")]
+    pub clear_component: bool,
+
+    /// New member Repository name. Absent means Board-wide.
+    #[arg(long, value_name = "NAME", conflicts_with = "clear_repository")]
+    pub repository: Option<String>,
+
+    /// Remove the member Repository classification.
+    #[arg(long = "clear-repository")]
+    pub clear_repository: bool,
+
+    /// New External ID; unique per Board.
     #[arg(
-        long = "waiting-on",
-        value_name = "TEXT",
-        conflicts_with = "clear_waiting"
+        long = "external-id",
+        value_name = "ID",
+        conflicts_with = "clear_external_id"
     )]
-    pub waiting_on: Option<String>,
+    pub external_id: Option<String>,
 
-    /// Remove the external blocker.
-    #[arg(long = "clear-waiting")]
-    pub clear_waiting: bool,
-
-    /// New work area slug. Restricted to the Board's `board.areas` when the
-    /// Board configures them; any lowercase slug otherwise.
-    #[arg(long, value_name = "AREA", conflicts_with = "clear_area")]
-    pub area: Option<String>,
-
-    /// Remove the work area classification.
-    #[arg(long = "clear-area")]
-    pub clear_area: bool,
+    /// Remove the External ID.
+    #[arg(long = "clear-external-id")]
+    pub clear_external_id: bool,
 
     /// New verification checks or commands for agents.
     #[arg(long, value_name = "TEXT", conflicts_with = "clear_verification")]
@@ -708,7 +1050,7 @@ pub struct UpdateArgs {
 
 #[derive(Debug, Args)]
 pub struct DependArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// The task that must finish first.
@@ -718,7 +1060,7 @@ pub struct DependArgs {
 
 #[derive(Debug, Args)]
 pub struct UndependArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// The dependency to remove.
@@ -727,8 +1069,105 @@ pub struct UndependArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct LinkArgs {
+    #[command(subcommand)]
+    pub command: LinkCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LinkCommand {
+    /// Add a typed link from a task to another task or an external reference.
+    #[command(
+        long_about = help::LINK_ADD_LONG,
+        after_long_help = help::LINK_ADD_EXAMPLES
+    )]
+    Add(LinkAddArgs),
+    /// Remove links matching a type and target.
+    #[command(
+        long_about = help::LINK_REMOVE_LONG,
+        after_long_help = help::LINK_REMOVE_EXAMPLES
+    )]
+    Remove(LinkRemoveArgs),
+    /// List a task's links with their types, targets, and attributes.
+    #[command(
+        long_about = help::LINK_LIST_LONG,
+        after_long_help = help::LINK_LIST_EXAMPLES
+    )]
+    List(LinkTargetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct LinkAddArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12. The link is stored on this task.
+    pub id: String,
+
+    /// Link type: blocks, relates-to, duplicates, discovered-from, or a
+    /// custom slug. Defaults to relates-to.
+    #[arg(long = "type", value_name = "TYPE", default_value = "relates-to")]
+    pub kind: String,
+
+    /// Link target: an Orbit Task ID or project key.
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with = "external",
+        required_unless_present = "external"
+    )]
+    pub to: Option<String>,
+
+    /// Link target: an external reference as SYSTEM:ID, for example jira:PROJ-123.
+    #[arg(long, value_name = "SYSTEM:ID")]
+    pub external: Option<String>,
+
+    /// Canonical URL for an external target.
+    #[arg(long, value_name = "URL", requires = "external")]
+    pub url: Option<String>,
+
+    /// Mark the link as blocking (overrides the type's default).
+    #[arg(long, conflicts_with = "no_blocking")]
+    pub blocking: bool,
+
+    /// Mark the link as non-blocking (overrides the type's default).
+    #[arg(long = "no-blocking")]
+    pub no_blocking: bool,
+
+    /// Link attribute as KEY=VALUE. Repeatable; VALUE is parsed as YAML.
+    #[arg(long, value_name = "KEY=VALUE", action = clap::ArgAction::Append)]
+    pub attribute: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct LinkRemoveArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// Only remove links of this type. Omit to match every type.
+    #[arg(long = "type", value_name = "TYPE")]
+    pub kind: Option<String>,
+
+    /// Link target: an Orbit Task ID or project key.
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with = "external",
+        required_unless_present = "external"
+    )]
+    pub to: Option<String>,
+
+    /// Link target: an external reference as SYSTEM:ID.
+    #[arg(long, value_name = "SYSTEM:ID")]
+    pub external: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct LinkTargetArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+}
+
+#[derive(Debug, Args)]
 pub struct DeleteArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Agent identity. Defaults to ORBIT_AGENT, then USER.
@@ -772,7 +1211,7 @@ pub enum LabelCommand {
 
 #[derive(Debug, Args)]
 pub struct LabelMutationArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// One or more lowercase labels.
@@ -796,41 +1235,41 @@ pub struct BatchArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct AnnotationArgs {
+pub struct PropertyArgs {
     #[command(subcommand)]
-    pub command: AnnotationCommand,
+    pub command: PropertyCommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum AnnotationCommand {
-    /// Replace one owner's Annotation with a JSON object.
-    #[command(after_long_help = help::ANNOTATION_SET_EXAMPLES)]
-    Set(AnnotationSetArgs),
+pub enum PropertyCommand {
+    /// Replace one owner's Property with a JSON object.
+    #[command(after_long_help = help::PROPERTY_SET_EXAMPLES)]
+    Set(PropertySetArgs),
 
-    /// Remove one owner's Annotation.
-    #[command(after_long_help = help::ANNOTATION_REMOVE_EXAMPLES)]
-    Remove(AnnotationRemoveArgs),
+    /// Remove one owner's Property.
+    #[command(after_long_help = help::PROPERTY_REMOVE_EXAMPLES)]
+    Remove(PropertyRemoveArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct AnnotationSetArgs {
-    /// Task ID, for example orb-a7b2c9.
+pub struct PropertySetArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Owner: the lowercase slug naming the tool, for example ci.
     pub owner: String,
 
-    /// The Annotation, a JSON object of at most 8192 bytes.
+    /// The Property, a JSON object of at most 8192 bytes.
     #[arg(long, value_name = "JSON")]
     pub value: String,
 }
 
 #[derive(Debug, Args)]
-pub struct AnnotationRemoveArgs {
-    /// Task ID, for example orb-a7b2c9.
+pub struct PropertyRemoveArgs {
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
-    /// Owner whose Annotation is removed.
+    /// Owner whose Property is removed.
     pub owner: String,
 }
 
@@ -859,7 +1298,7 @@ pub enum CommentCommand {
 
 #[derive(Debug, Args)]
 pub struct CommentAddArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 
     /// Comment body. Use "-" to read stdin.
@@ -877,7 +1316,7 @@ pub struct CommentAddArgs {
 
 #[derive(Debug, Args)]
 pub struct CommentListArgs {
-    /// Task ID, for example orb-a7b2c9.
+    /// Task ID or project key, for example orb-a7b2c9 or ORB-12.
     pub id: String,
 }
 
@@ -886,6 +1325,23 @@ pub struct DoctorArgs {
     /// Remove stale temp files and re-attach an orphaned orbit worktree.
     #[arg(long)]
     pub fix: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct IndexArgs {
+    #[command(subcommand)]
+    pub command: IndexCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IndexCommand {
+    /// Report the derived index state: present, entry count, freshness
+    /// against the Task files, and the Board head it was built at.
+    #[command(after_long_help = help::INDEX_STATUS_EXAMPLES)]
+    Status,
+    /// Rebuild the index from the Task files, stamped at the Board head.
+    #[command(after_long_help = help::INDEX_REBUILD_EXAMPLES)]
+    Rebuild,
 }
 
 #[derive(Debug, Args)]
@@ -898,20 +1354,61 @@ pub struct PrimeArgs {
     #[arg(long, value_name = "NAME")]
     pub by: Option<String>,
 
-    /// Only Ready tasks with this repository label. Filter by Repository field or legacy repo:NAME label.
+    /// Only Ready tasks with this member Repository. Matches the `repository` field.
     #[arg(long, value_name = "NAME")]
-    pub repo: Option<String>,
+    pub repository: Option<String>,
 
     /// Only Ready tasks carrying every label. Repeatable.
     #[arg(long, value_name = "LABEL", action = clap::ArgAction::Append)]
     pub label: Vec<String>,
+
+    /// Cap the printed context at roughly this many tokens (~4 characters
+    /// each). Task listings are trimmed first; when the fixed instructions
+    /// alone exceed the budget the human output is truncated and the JSON
+    /// `budget` object reports `truncated: true`.
+    #[arg(long, value_name = "N")]
+    pub max_tokens: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+pub struct ChangesArgs {
+    /// Cursor commit from a previous `orbit changes` response; only events
+    /// from newer commits are returned.
+    #[arg(long, value_name = "CURSOR")]
+    pub since: Option<String>,
+
+    /// Only events of these kinds, for example `issue.transitioned` or
+    /// `issue.commented`. Repeatable; matches exactly.
+    #[arg(long = "type", value_name = "KIND", action = clap::ArgAction::Append)]
+    pub kinds: Vec<String>,
+
+    /// Maximum events to return. Keeps the oldest events (whole commits) when the
+    /// feed is longer than the limit; the returned `cursor` resumes after them.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+pub struct HistoryArgs {
+    /// Issue ID or project key, for example orb-a7b2c9 or ORB-12.
+    pub id: String,
+
+    /// Maximum events to return. Keeps the newest events when the timeline is
+    /// longer than the limit.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Args)]
 pub struct SetupArgs {
-    /// Which agent integration to install.
-    #[arg(value_enum)]
-    pub client: SetupClient,
+    /// Which agent integration or profile to install.
+    ///
+    /// Agent integrations: claude, cursor, codex, opencode, devin,
+    /// mattpocock, all. Any other name is resolved as a profile: a
+    /// `profiles/<name>.toml` shipped with Orbit, in the Board's Orbit
+    /// folder, in the repository, or in `~/.config/orbit/profiles/`.
+    #[arg(value_name = "TARGET")]
+    pub client: String,
 
     /// Where to write the integration: the repository or the user's home.
     #[arg(long, value_enum, default_value_t = SetupScope::Project)]
@@ -1231,6 +1728,17 @@ pub enum AutoPushState {
     On,
     #[value(alias = "disable", alias = "false")]
     Off,
+}
+
+#[derive(Debug, Args)]
+pub struct SchemaArgs {
+    /// Command path or MCP tool name to describe instead of the whole registry.
+    #[arg(value_name = "COMMAND")]
+    pub command: Option<String>,
+
+    /// Print the generated docs/commands.md reference section instead of JSON.
+    #[arg(long)]
+    pub docs: bool,
 }
 
 #[derive(Debug, Args)]

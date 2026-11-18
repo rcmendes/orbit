@@ -1,6 +1,6 @@
 # Agent Triage workflow
 
-`orbit triage` writes metadata on any Task — Local or Linked: `area`, task-level
+`orbit triage` writes metadata on any Issue — Local or Linked: `component`, issue-level
 `verification`, and canonical labels. It is not Matt Pocock's triage skill.
 The split is in [Compatibility boundary](#compatibility-boundary).
 
@@ -11,9 +11,9 @@ change only when you sync explicitly.
 
 A proposal may change:
 
-- `area` (Board-configured values from `board.areas`, or any lowercase slug when
+- `component` (Board-configured values from `board.components`, or any lowercase slug when
   the Board defines none — see [`project-guidance.md`](./project-guidance.md))
-- Task-level `verification` (stored text; the command does not run it)
+- Issue-level `verification` (stored text; the command does not run it)
 - Canonical triage/category labels: `needs-triage`, `needs-info`, `ready-for-agent`,
   `ready-for-human`, `wontfix`, `bug`, `enhancement`
 
@@ -23,15 +23,15 @@ A proposal may change:
 - Write an agent brief ([`agent-brief.md`](./agent-brief.md)) or maintain `.out-of-scope/`
 - Adopt or import Remote Issues (use `orbit remote link` and `orbit remote import`; see
   [github-sync.md](../github-sync.md) for GitHub)
-- Change Task title, body, status, or open/closed state (edit those through
-  normal Orbit Task commands, then review and explicitly sync them)
+- Change Issue title, body, status, or open/closed state (edit those through
+  normal Orbit Issue commands, then review and explicitly sync them)
 - Add arbitrary labels
 - Run verification commands
 
-For a **Linked Task**, only the Remote Project's Mapped fields can be changed:
+For a **Linked Issue**, only the Remote Project's Mapped fields can be changed:
 those are the only fields a later sync publishes, and proposing an unmappable
 field is rejected. `triage context` reports the Mapped fields as
-`metadata_capabilities`. For a **Local Task** there is no publish step, so
+`metadata_capabilities`. For a **Local Issue** there is no publish step, so
 every field stays available.
 
 When evidence is insufficient, record `uncertainty` in the proposal and leave metadata
@@ -49,7 +49,7 @@ machine:
 - Record rejected enhancements in `.out-of-scope/`
 
 `orbit triage` is the metadata step those skills can call. Given a proposal, it
-previews or writes `area`, `verification`, and canonical labels on a Task. It
+previews or writes `component`, `verification`, and canonical labels on an Issue. It
 does not decide whether a claim is true, interview anyone, compose a
 brief, or create `.out-of-scope/` files.
 
@@ -60,7 +60,7 @@ commands.
 
 ## Commands
 
-1. **Context** — load current metadata, allowed areas, canonical labels, and project guidance:
+1. **Context** — load current metadata, allowed components, canonical labels, and project guidance:
 
    ```bash
    orbit triage context <ID> --json
@@ -71,7 +71,7 @@ commands.
    ```json
    {
      "rationale": "CLI command surface change",
-     "area": "cli",
+     "component": "cli",
      "verification": "cargo test triage",
      "labels_add": ["ready-for-agent"],
      "labels_remove": ["needs-triage"]
@@ -82,12 +82,12 @@ commands.
 
    ```json
    {
-     "uncertainty": "Issue body lacks reproduction steps; cannot classify area yet."
+     "uncertainty": "Issue body lacks reproduction steps; cannot classify component yet."
    }
    ```
 
 3. **Review** — validate and display the proposal. Interactive review shows a field-by-field diff
-   for `area`, `verification`, and label additions/removals when a proposal file is used and both
+   for `component`, `verification`, and label additions/removals when a proposal file is used and both
    stdin and stdout are terminals:
 
    ```bash
@@ -121,18 +121,18 @@ commands.
    orbit remote sync <ID> --direction push --apply
    ```
 
-   Local Tasks have no Remote Issue; apply reports `sync_required: false` and
+   Local Issues have no Remote Issue; apply reports `sync_required: false` and
    nothing is published.
 
 ## Proposal fields
 
 | Field | Meaning |
 | --- | --- |
-| `rationale` | Optional human/agent note (not written to the task) |
+| `rationale` | Optional human/agent note (not written to the issue) |
 | `uncertainty` | When set alone, preview shows no changes and apply is rejected |
-| `area` | Set `area` to a Board-allowed slug |
-| `clear_area` | Remove `area` |
-| `verification` | Set task-level verification text |
+| `component` | Set `component` to a Board-allowed slug |
+| `clear_component` | Remove `component` |
+| `verification` | Set issue-level verification text |
 | `clear_verification` | Remove verification |
 | `labels_add` / `labels_remove` | Canonical labels only |
 
@@ -140,7 +140,7 @@ Forbidden proposal keys (not managed by Triage): `title`, `body`, `status`, `sta
 
 ## Errors
 
-When a proposal adds or removes labels, Orbit checks the label set that would remain. That set may contain at most one state role (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) and at most one category role (`bug`, `enhancement`). Zero of either role is allowed. A proposal that only changes `area` or `verification` does not run this check. Labels that are not state or category roles are left in place.
+When a proposal adds or removes labels, Orbit checks the label set that would remain. That set may contain at most one state role (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) and at most one category role (`bug`, `enhancement`). Zero of either role is allowed. A proposal that only changes `component` or `verification` does not run this check. Labels that are not state or category roles are left in place.
 
 | Code | Meaning |
 | --- | --- |
@@ -148,10 +148,10 @@ When a proposal adds or removes labels, Orbit checks the label set that would re
 | `TRIAGE_INVALID_PROPOSAL` | The proposal is invalid; the error identifies the cause, including conflicting state/category roles or non-canonical labels, and directs you to edit the JSON and review it again. |
 
 Human errors include a `Next:` action. JSON keeps the existing error envelope and
-adds `cause`, `remediation`, and Task/proposal-file context to `error.details`.
-Do not add Task lifecycle or content fields (`title`, `body`, `status`, or
+adds `cause`, `remediation`, and Issue/proposal-file context to `error.details`.
+Do not add Issue lifecycle or content fields (`title`, `body`, `status`, or
 `state`) to a Triage proposal. Only use the supported metadata fields above and
-canonical labels. Orbit remains authoritative for those Task fields;
+canonical labels. Orbit remains authoritative for those Issue fields;
 publish their changes through auto-push (when enabled) or explicit,
 conflict-safe Remote Tracker sync.
 

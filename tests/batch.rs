@@ -29,9 +29,10 @@ fn plan() -> Value {
         {"op": "add", "key": "planner:plan-7:epic", "title": "Plan 7", "type": "epic"},
         {"op": "add", "key": "planner:plan-7:step-1", "title": "Step 1",
          "parent": "key:planner:plan-7:epic", "labels": ["needs-triage"],
-         "annotations": {"planner": {"order": 1}}},
+         "properties": {"planner": {"order": 1}}},
         {"op": "add", "key": "planner:plan-7:step-2", "title": "Step 2",
-         "parent": "key:planner:plan-7:epic", "depends_on": ["key:planner:plan-7:step-1"]}
+         "parent": "key:planner:plan-7:epic"},
+        {"op": "depend", "id": "key:planner:plan-7:step-2", "on": "key:planner:plan-7:step-1"}
     ]})
 }
 
@@ -60,14 +61,14 @@ fn batch_creates_parent_subtasks_and_dependencies_in_one_commit() {
     let step1 = keys["planner:plan-7:step-1"].as_str().unwrap();
     let step2 = keys["planner:plan-7:step-2"].as_str().unwrap();
     let show = repo.ok_json(&["show", step2, "--json"]);
-    assert_eq!(show["data"]["depends_on"], json!([step1]));
+    assert_eq!(show["data"]["blocking"], json!([step1]));
     let step1_show = repo.ok_json(&["show", step1, "--json"]);
     assert_eq!(
-        step1_show["data"]["annotations"],
+        step1_show["data"]["properties"],
         json!({"planner": {"order": 1}})
     );
     assert_eq!(step1_show["data"]["source_key"], "planner:plan-7:step-1");
-    assert_eq!(value["data"]["results"].as_array().unwrap().len(), 3);
+    assert_eq!(value["data"]["results"].as_array().unwrap().len(), 4);
     assert_eq!(value["data"]["results"][0]["op"], "add");
     assert_eq!(value["data"]["results"][0]["changed"], true);
 }
@@ -121,7 +122,7 @@ fn batch_dry_run_validates_without_writing() {
     assert_eq!(status, 0, "{value}");
     assert_eq!(value["data"]["dry_run"], true);
     assert_eq!(value["data"]["committed"], false);
-    assert_eq!(value["data"]["results"].as_array().unwrap().len(), 3);
+    assert_eq!(value["data"]["results"].as_array().unwrap().len(), 4);
     assert_eq!(board_commits(&repo), before);
     assert_eq!(task_files(&repo), files);
 }
@@ -141,7 +142,7 @@ fn batch_remove_hold_label_and_claim_together() {
         ]}),
     );
     let show = repo.ok_json(&["show", &held, "--json"]);
-    assert_eq!(show["data"]["claimed_by"], "planner-7");
+    assert_eq!(show["data"]["assignee"], "planner-7");
     assert_eq!(show["data"]["status"], "in_progress");
     let ready = repo.ok_json(&["ready", "--json"]);
     assert_eq!(ready["data"]["count"], 0);
@@ -162,7 +163,7 @@ fn batch_rerun_after_partial_apply_converges() {
          "parent": "key:planner:plan-7:epic", "labels": ["needs-triage"]},
         {"op": "label", "id": "key:planner:plan-7:step-1", "remove": ["needs-triage"]},
         {"op": "claim", "id": "key:planner:plan-7:step-1", "by": "planner-7"},
-        {"op": "annotate", "id": "key:planner:plan-7:step-1", "owner": "planner", "value": {"order": 1}}
+        {"op": "property", "id": "key:planner:plan-7:step-1", "owner": "planner", "value": {"order": 1}}
     ]});
     let first = ok_batch(&repo, input.clone());
     assert_eq!(first["data"]["keys"]["planner:plan-7:epic"], epic);
@@ -177,12 +178,9 @@ fn batch_rerun_after_partial_apply_converges() {
         .as_str()
         .unwrap();
     let show = repo.ok_json(&["show", step, "--json"]);
-    assert_eq!(show["data"]["claimed_by"], "planner-7");
+    assert_eq!(show["data"]["assignee"], "planner-7");
     assert_eq!(show["data"]["labels"], json!([]));
-    assert_eq!(
-        show["data"]["annotations"],
-        json!({"planner": {"order": 1}})
-    );
+    assert_eq!(show["data"]["properties"], json!({"planner": {"order": 1}}));
     assert_eq!(task_files(&repo).len(), after_first.len());
 }
 
@@ -239,12 +237,12 @@ fn batch_comment_and_done_with_comment() {
 }
 
 #[test]
-fn batch_add_rejects_an_invalid_repo() {
+fn batch_add_rejects_an_invalid_repository() {
     let repo = TestRepo::new();
     repo.init();
     let (status, value) = batch(
         &repo,
-        json!({"operations": [{"op": "add", "title": "R", "repo": "Bad Repo!"}]}),
+        json!({"operations": [{"op": "add", "title": "R", "repository": "Bad Repo!"}]}),
         &[],
     );
     assert_ne!(status, 0);
@@ -274,27 +272,30 @@ fn batch_rerun_after_crash_before_commit_commits() {
 fn batch_adds_a_subtask_under_a_subtask_from_the_same_batch() {
     let repo = TestRepo::new();
     repo.init();
-    repo.set_max_subtask_depth(2);
+    // A four-level model: epic > working types > sub-task > detail.
+    repo.set_issue_model(
+        None,
+        "[[board.types]]\nname = \"epic\"\n\n[[board.types]]\nname = \"story\"\n\n[[board.types]]\nname = \"task\"\n\n[[board.types]]\nname = \"bug\"\n\n[[board.types]]\nname = \"sub-task\"\n\n[[board.types]]\nname = \"detail\"\n\n[[board.hierarchy]]\ntypes = [\"epic\"]\n\n[[board.hierarchy]]\ntypes = [\"story\", \"task\", \"bug\"]\n\n[[board.hierarchy]]\ntypes = [\"sub-task\"]\n\n[[board.hierarchy]]\ntypes = [\"detail\"]\n",
+    );
     let before = board_commits(&repo);
     let value = ok_batch(
         &repo,
         json!({"operations": [
             {"op": "add", "key": "planner:spec-1:feature", "title": "Feature"},
             {"op": "add", "key": "planner:spec-1:part", "title": "Part",
-             "parent": "key:planner:spec-1:feature"},
+             "parent": "key:planner:spec-1:feature", "type": "sub-task"},
             {"op": "add", "key": "planner:spec-1:step", "title": "Step",
-             "parent": "key:planner:spec-1:part"}
+             "parent": "key:planner:spec-1:part", "type": "detail"}
         ]}),
     );
     let keys = &value["data"]["keys"];
     let part = keys["planner:spec-1:part"].as_str().unwrap();
     let step = keys["planner:spec-1:step"].as_str().unwrap();
-    assert!(
-        step.starts_with(&format!("{part}.")),
-        "hierarchical ID: {part} -> {step}"
-    );
+    // IDs never encode the parent (ADR 0022): both are flat Board IDs.
+    assert!(!part.contains('.'), "flat ID: {part}");
+    assert!(!step.contains('.'), "flat ID: {step}");
     let shown = repo.ok_json(&["show", step, "--json"]);
-    assert_eq!(shown["data"]["kind"], "subtask");
+    assert_eq!(shown["data"]["type"], "detail");
     assert_eq!(shown["data"]["parent"], part);
     assert_eq!(board_commits(&repo), before + 1);
 }
@@ -303,15 +304,14 @@ fn batch_adds_a_subtask_under_a_subtask_from_the_same_batch() {
 fn batch_depth_overflow_rolls_back_the_whole_batch() {
     let repo = TestRepo::new();
     repo.init();
-    repo.set_max_subtask_depth(2);
     let before_commits = board_commits(&repo);
     let before_files = task_files(&repo);
     let (status, value) = batch(
         &repo,
         json!({"operations": [
-            {"op": "add", "key": "planner:spec-1:feature", "title": "Feature"},
+            {"op": "add", "key": "planner:spec-1:feature", "title": "Feature", "type": "epic"},
             {"op": "add", "key": "planner:spec-1:part", "title": "Part",
-             "parent": "key:planner:spec-1:feature"},
+             "parent": "key:planner:spec-1:feature", "type": "task"},
             {"op": "add", "key": "planner:spec-1:step", "title": "Step",
              "parent": "key:planner:spec-1:part"},
             {"op": "add", "key": "planner:spec-1:leaf", "title": "Leaf",
@@ -320,10 +320,10 @@ fn batch_depth_overflow_rolls_back_the_whole_batch() {
         &[],
     );
     assert_ne!(status, 0);
-    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT", "{value}");
+    assert_eq!(value["error"]["code"], "INVALID_TYPE", "{value}");
     assert_eq!(value["error"]["details"]["index"], 3);
     let message = value["error"]["message"].as_str().unwrap();
-    assert!(message.contains("board.max_subtask_depth"), "{message}");
+    assert!(message.contains("hierarchy"), "{message}");
     assert_eq!(board_commits(&repo), before_commits);
     assert_eq!(task_files(&repo), before_files);
     let listed = repo.ok_json(&["list", "--all", "--json"]);
@@ -336,6 +336,7 @@ fn batch_nested_subtask_rolls_back_on_a_default_board() {
     repo.init();
     let before_commits = board_commits(&repo);
     let before_files = task_files(&repo);
+    // `sub-task` is the leaf of the default hierarchy: it cannot parent.
     let (status, value) = batch(
         &repo,
         json!({"operations": [
@@ -348,10 +349,10 @@ fn batch_nested_subtask_rolls_back_on_a_default_board() {
         &[],
     );
     assert_ne!(status, 0);
-    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT", "{value}");
+    assert_eq!(value["error"]["code"], "INVALID_TYPE", "{value}");
     assert_eq!(value["error"]["details"]["index"], 2);
     let message = value["error"]["message"].as_str().unwrap();
-    assert!(message.contains("board.max_subtask_depth"), "{message}");
+    assert!(message.contains("hierarchy"), "{message}");
     assert_eq!(board_commits(&repo), before_commits);
     assert_eq!(task_files(&repo), before_files);
 }

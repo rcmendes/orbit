@@ -1,4 +1,4 @@
-use crate::error::OrbitError;
+use crate::error::{OrbitError, code};
 use serde_json::{Map, Value, json};
 
 pub struct CommandOutput {
@@ -94,13 +94,112 @@ pub fn print_success(output: CommandOutput, json_mode: bool) {
     }
 }
 
+/// The RFC 9457 `type` member: a stable, namespaced problem identifier
+/// derived from the error code (`DEPENDENCY_BLOCKED` →
+/// `orbit://problems/dependency-blocked`).
+pub(crate) fn problem_type(error_code: &str) -> String {
+    format!(
+        "orbit://problems/{}",
+        error_code.to_lowercase().replace('_', "-")
+    )
+}
+
+/// The RFC 9457 `title` member: a short human-readable summary derived from
+/// the error code (`BOARD_SYNC_CONFLICT` → `Board Sync Conflict`).
+pub(crate) fn problem_title(error_code: &str) -> String {
+    error_code
+        .split('_')
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let lower = word.to_lowercase();
+            let mut chars = lower.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The RFC 9457-style `hint` member: what the caller can do next. Errors with
+/// a dedicated remediation use it; every other code gets a category default.
+pub(crate) fn default_hint(error_code: &str) -> String {
+    match error_code {
+        code::LOCKED => {
+            "Retry the command; another Orbit process holds the Board lock.".to_string()
+        }
+        code::BOARD_NOT_FOUND => {
+            "Run `orbit init` to create a Board, or pass --dir/ORBIT_DIR.".to_string()
+        }
+        code::NOT_FOUND | code::LINK_NOT_FOUND => {
+            "Check the ID or project key; `orbit list` shows valid Issues.".to_string()
+        }
+        code::CONTRACT_VERSION_UNSUPPORTED => {
+            "Upgrade orbit to a version that supports the Board's contract.".to_string()
+        }
+        code::PROFILE_UNMET => {
+            "Upgrade Orbit, or apply a profile whose requirements this binary meets (`orbit setup <plugin>`).".to_string()
+        }
+        code::VERSION_CONFLICT => {
+            "Re-read the Task (`orbit show <id>`) and retry with its current `updated_at` as --if-version.".to_string()
+        }
+        code::MODEL_NOT_MIGRATED => {
+            "Run `orbit migrate model` to preview, then `orbit migrate model --apply`.".to_string()
+        }
+        code::IDEMPOTENCY_KEY_REUSED => {
+            "Use a fresh --idempotency-key for a different request, or repeat the original request unchanged.".to_string()
+        }
+        code::CYCLE_DETECTED => {
+            "Remove or reverse one of the blocking links in the cycle (`orbit link list <id>`).".to_string()
+        }
+        code::EPHEMERAL_BIN => {
+            "Install orbit to a stable path (not a temp or build directory) and run it from there.".to_string()
+        }
+        code::DEPENDENCY_BLOCKED | code::SUBTASKS_OPEN | code::LABEL_BLOCKED => {
+            "Resolve the blocking Issues listed in details first.".to_string()
+        }
+        code::ALREADY_CLAIMED | code::CLAIM_STALE | code::NOT_CLAIM_HOLDER => {
+            "Check `orbit show <id>` for the current assignee and lease.".to_string()
+        }
+        code::INVALID_TRANSITION => {
+            "Run `orbit show <id>` for the Issue's allowed_transitions.".to_string()
+        }
+        code::POLICY_VIOLATION => {
+            "Fix the fields, properties, or labels listed in details.violations, or adjust the `[policy]` rule in config.toml.".to_string()
+        }
+        code::CONFIG_ERROR | code::BOARD_CORRUPT | code::CORRUPT_TASK => {
+            "Fix the Board files or config.toml; `orbit doctor` reports problems.".to_string()
+        }
+        code::GIT_ERROR | code::IO_ERROR | code::ID_COLLISION => {
+            "Check the repository and filesystem state, then retry.".to_string()
+        }
+        _ if error_code.starts_with("GITHUB_") || error_code.starts_with("REMOTE_") => {
+            "Run `orbit remote status` to inspect Remote Tracker health.".to_string()
+        }
+        _ if error_code.starts_with("INVALID_")
+            || error_code.starts_with("DUPLICATE_")
+            || error_code.starts_with("MISSING_") =>
+        {
+            "Fix the reported value and retry; `orbit <command> --help` lists valid inputs."
+                .to_string()
+        }
+        _ => "Retry; if it persists run `orbit doctor`.".to_string(),
+    }
+}
+
 pub fn print_error(error: &OrbitError, json_mode: bool) {
-    let (message, details) = actionable_error(error);
+    let (message, detail, remediation, details) = actionable_error(error);
+    let hint = remediation.unwrap_or_else(|| default_hint(error.code));
     if json_mode {
         let mut body = Map::new();
+        body.insert("type".to_string(), json!(problem_type(error.code)));
+        body.insert("title".to_string(), json!(problem_title(error.code)));
         body.insert("code".to_string(), json!(error.code));
         body.insert("message".to_string(), json!(message));
+        body.insert("detail".to_string(), json!(detail));
         body.insert("retryable".to_string(), json!(error.retryable));
+        body.insert("hint".to_string(), json!(hint));
         if let Some(details) = details {
             body.insert("details".to_string(), details);
         }
@@ -108,6 +207,7 @@ pub fn print_error(error: &OrbitError, json_mode: bool) {
         println!("{payload}");
     } else {
         eprintln!("error [{}]: {}", error.code, message);
+        eprintln!("hint: {hint}");
         if let Some(details) = details
             && let Ok(pretty) = serde_json::to_string_pretty(&details)
         {
@@ -116,7 +216,11 @@ pub fn print_error(error: &OrbitError, json_mode: bool) {
     }
 }
 
-fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
+/// Returns `(message, detail, remediation, details)`: `message` is the
+/// legacy envelope text (cause plus remediation suffix), `detail` is the
+/// RFC 9457 detail (the cause alone), `remediation` is the per-code hint
+/// when one exists, and `details` is the structured payload.
+fn actionable_error(error: &OrbitError) -> (String, String, Option<String>, Option<Value>) {
     let cause = if error.code.starts_with("GITHUB_") {
         redact_github_secrets(&error.message)
     } else {
@@ -160,7 +264,7 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
         }
         crate::error::code::REMOTE_ISSUE_CONFLICT => {
             let task = details
-                .get("task")
+                .get("issue")
                 .and_then(Value::as_str)
                 .unwrap_or("<task-id>")
                 .to_string();
@@ -199,7 +303,7 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
         }
         crate::error::code::TRIAGE_APPROVAL_REQUIRED => {
             let task = details
-                .get("task")
+                .get("issue")
                 .and_then(Value::as_str)
                 .unwrap_or("<task-id>");
             let proposal = details
@@ -217,7 +321,7 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
     };
 
     let Some(remediation) = remediation else {
-        return (error.message.clone(), error.details.clone());
+        return (error.message.clone(), cause, None, error.details.clone());
     };
 
     details.insert("cause".to_string(), json!(cause));
@@ -231,7 +335,12 @@ fn actionable_error(error: &OrbitError) -> (String, Option<Value>) {
         }
         Some(details)
     };
-    (format!("{cause} Next: {remediation}"), details)
+    (
+        format!("{cause} Next: {remediation}"),
+        cause,
+        Some(remediation),
+        details,
+    )
 }
 
 fn redact_github_secrets(message: &str) -> String {

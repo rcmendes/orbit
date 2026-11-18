@@ -2,29 +2,88 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::comment::Comment;
-use crate::task::TaskType;
 
 use super::*;
 
-pub(super) fn list_sort_key<'a>(
-    graph: &'a Graph,
-    task: &'a Task,
-) -> (u8, i64, &'a str, bool, u8, i64, &'a str) {
+/// The owned sort key, ordered for keyset pagination:
+/// `rank` leads (0 for `list`, the search relevance rank for `search`), then
+/// the Parent Task's priority/creation/ID, the subtask flag, and the Task's
+/// own priority/creation/ID. `Ord` is the page order; a `--cursor` stores
+/// one of these so the next page resumes strictly after it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct SortKey {
+    pub rank: i64,
+    pub root_priority: usize,
+    pub root_created_ms: i64,
+    pub root_id: String,
+    pub is_subtask: bool,
+    pub priority: usize,
+    pub created_ms: i64,
+    pub id: String,
+}
+
+pub(super) fn sort_key(graph: &Graph, task: &Task, rank: i64) -> SortKey {
     let root = task
         .front
         .parent
         .as_deref()
         .and_then(|parent_id| graph.get(parent_id).ok())
         .unwrap_or(task);
-    (
-        root.front.priority,
-        root.front.created_at.timestamp_millis(),
-        root.id.as_str(),
-        task.front.parent.is_some(),
-        task.front.priority,
-        task.front.created_at.timestamp_millis(),
-        task.id.as_str(),
-    )
+    SortKey {
+        rank,
+        root_priority: graph.priority_ordinal(&root.front.priority),
+        root_created_ms: root.front.created_at.timestamp_millis(),
+        root_id: root.id.clone(),
+        is_subtask: task.front.parent.is_some(),
+        priority: graph.priority_ordinal(&task.front.priority),
+        created_ms: task.front.created_at.timestamp_millis(),
+        id: task.id.clone(),
+    }
+}
+
+/// The cursor payload: `[rank, root_priority, root_created_ms, root_id,
+/// is_subtask, priority, created_ms, id]`.
+pub(super) fn key_to_json(key: &SortKey) -> Value {
+    serde_json::json!([
+        key.rank,
+        key.root_priority,
+        key.root_created_ms,
+        key.root_id,
+        key.is_subtask,
+        key.priority,
+        key.created_ms,
+        key.id,
+    ])
+}
+
+pub(super) fn key_from_json(value: &Value) -> Result<SortKey> {
+    let invalid = || {
+        OrbitError::invalid_argument(
+            "invalid cursor; pass the `next_cursor` value a previous page returned",
+        )
+    };
+    let items = value.as_array().ok_or_else(invalid)?;
+    if items.len() != 8 {
+        return Err(invalid());
+    }
+    let number = |index: usize| items[index].as_i64().ok_or_else(invalid);
+    let text = |index: usize| {
+        items[index]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(invalid)
+    };
+    let flag = |index: usize| items[index].as_bool().ok_or_else(invalid);
+    Ok(SortKey {
+        rank: number(0)?,
+        root_priority: number(1)?.max(0) as usize,
+        root_created_ms: number(2)?,
+        root_id: text(3)?,
+        is_subtask: flag(4)?,
+        priority: number(5)?.max(0) as usize,
+        created_ms: number(6)?,
+        id: text(7)?,
+    })
 }
 
 pub(super) struct ListGroup<'a> {
@@ -71,7 +130,7 @@ pub(super) fn group_tasks<'a>(graph: &'a Graph, tasks: &[&'a Task]) -> Result<Ve
 }
 
 fn group_headers(remote: bool) -> Vec<String> {
-    let mut headers: Vec<String> = ["ID", "STATUS", "P", "TYPE"]
+    let mut headers: Vec<String> = ["ID", "STATUS", "PRIORITY", "TYPE"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -96,10 +155,10 @@ fn issue_cell(task: &Task) -> String {
 
 fn task_cells(task: &Task, remote: bool) -> Vec<String> {
     let mut cells: Vec<String> = vec![
-        task.id.to_string(),
+        task.display_id().to_string(),
         task.front.status.as_str().to_string(),
-        format!("P{}", task.front.priority),
-        task.front.task_type.as_str().to_string(),
+        task.front.priority.clone(),
+        task.front.task_type.clone(),
     ];
     if remote {
         cells.push(issue_cell(task));
@@ -107,8 +166,8 @@ fn task_cells(task: &Task, remote: bool) -> Vec<String> {
     cells.extend([
         truncate(&task.front.title, 60),
         task.front.labels.join(", "),
-        task.holder()
-            .map(|holder| holder.to_string())
+        task.assignee_name()
+            .map(|name| name.to_string())
             .unwrap_or_default(),
     ]);
     cells
@@ -161,7 +220,11 @@ pub(super) fn format_grouped_table(groups: &[ListGroup], remote: bool) -> String
     for group in groups {
         lines.push(full_border("├", "┤", inner_width));
         if let Some(parent) = group.parent {
-            let left = format!("{}  {}", parent.id, truncate(&parent.front.title, 60));
+            let left = format!(
+                "{}  {}",
+                parent.display_id(),
+                truncate(&parent.front.title, 60)
+            );
             lines.push(banner_row(&left, &group_meta(parent), inner_width));
         } else {
             lines.push(banner_row("No parent", "", inner_width));
@@ -177,15 +240,15 @@ pub(super) fn format_grouped_table(groups: &[ListGroup], remote: bool) -> String
 
 fn group_meta(task: &Task) -> String {
     let mut parts = vec![
-        task.front.task_type.as_str().to_string(),
+        task.front.task_type.clone(),
         task.front.status.as_str().to_string(),
-        format!("P{}", task.front.priority),
+        task.front.priority.clone(),
     ];
     if !task.front.labels.is_empty() {
         parts.push(task.front.labels.join(", "));
     }
-    if let Some(holder) = task.holder() {
-        parts.push(format!("claimed by {holder}"));
+    if let Some(name) = task.assignee_name() {
+        parts.push(format!("assigned to {name}"));
     }
     parts.join(" · ")
 }
@@ -251,37 +314,37 @@ pub(super) fn push_summary_checkpoint(human: &mut String, task: &Value) {
     }
 }
 
-pub(super) fn format_summary(task: &Task) -> String {
-    format_summary_with_parent(task, true)
+pub(super) fn format_summary(task: &Task, graph: &Graph) -> String {
+    format_summary_with_parent(task, true, graph)
 }
 
-fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
+fn format_summary_with_parent(task: &Task, include_parent: bool, graph: &Graph) -> String {
     let claim = task
-        .holder()
-        .map(|holder| format!("  claimed by {holder}"))
+        .assignee_name()
+        .map(|name| format!("  assigned to {name}"))
         .unwrap_or_default();
     let labels = if task.front.labels.is_empty() {
         String::new()
     } else {
         format!("  [{}]", task.front.labels.join(", "))
     };
-    let type_prefix = if task.front.task_type == TaskType::Task {
+    let type_prefix = if task.front.task_type == graph.hierarchy.default_type() {
         String::new()
     } else {
-        format!("{}  ", task.front.task_type.as_str())
+        format!("{}  ", task.front.task_type)
     };
     let parent = if include_parent {
         task.front
             .parent
             .as_deref()
-            .map(|parent| format!("  (subtask of {parent})"))
+            .map(|parent| format!("  (subtask of {})", graph.display_id(parent)))
             .unwrap_or_default()
     } else {
         String::new()
     };
     format!(
-        "{}  {:<11}  P{}  {}{}{}{}{}",
-        task.id,
+        "{}  {:<11}  {}  {}{}{}{}{}",
+        task.display_id(),
         task.front.status.as_str(),
         task.front.priority,
         type_prefix,
@@ -293,7 +356,7 @@ fn format_summary_with_parent(task: &Task, include_parent: bool) -> String {
 }
 
 pub(super) fn format_tree_line(task: &Task, graph: &Graph, root: bool) -> String {
-    let mut line = format_summary_with_parent(task, false);
+    let mut line = format_summary_with_parent(task, false, graph);
     if root {
         let subtask_count = graph.children(&task.id).len();
         if subtask_count > 0 {
@@ -305,7 +368,11 @@ pub(super) fn format_tree_line(task: &Task, graph: &Graph, root: bool) -> String
             }
         }
     }
-    let blocking = graph.blocked_by(task);
+    let blocking: Vec<String> = graph
+        .blocked_by(task)
+        .iter()
+        .map(|id| graph.display_id(id))
+        .collect();
     if !blocking.is_empty() {
         line.push_str(&format!("  blocked by: {}", blocking.join(", ")));
     }
@@ -329,10 +396,31 @@ pub(super) fn format_detail(
     remote: bool,
 ) -> String {
     let mut lines = Vec::new();
-    lines.push(format!("{}  {}", task.id, task.front.title));
+    lines.push(format!("{}  {}", task.display_id(), task.front.title));
+    if let Some(key) = &task.front.key {
+        lines.push(format!("key: {key}"));
+        lines.push(format!("id: {}", task.id));
+    }
+    if !task.front.key_aliases.is_empty() {
+        lines.push(format!(
+            "key_aliases: {}",
+            task.front.key_aliases.join(", ")
+        ));
+    }
     lines.push(format!("status: {}", task.front.status.as_str()));
-    lines.push(format!("kind: {}", task.kind()));
-    lines.push(format!("type: {}", task.front.task_type.as_str()));
+    if let Some(resolution) = &task.front.resolution {
+        lines.push(format!("resolution: {resolution}"));
+    }
+    let allowed: Vec<&str> = graph
+        .workflow
+        .transitions_from(&task.front.status)
+        .iter()
+        .map(|transition| transition.name.as_str())
+        .collect();
+    if !allowed.is_empty() {
+        lines.push(format!("allowed_transitions: {}", allowed.join(", ")));
+    }
+    lines.push(format!("type: {}", task.front.task_type));
     if remote {
         lines.push(match crate::remote::link::link_view(task) {
             Some(link) if link.tracker == "github" && link.active => {
@@ -351,23 +439,41 @@ pub(super) fn format_detail(
             None => "github: -".to_string(),
         });
     }
-    lines.push(format!("priority: P{}", task.front.priority));
+    lines.push(format!("priority: {}", task.front.priority));
     if let Some(parent) = &task.front.parent {
-        lines.push(format!("parent: {parent}"));
+        lines.push(format!("parent: {}", graph.display_id(parent)));
     }
-    if task.front.depends_on.is_empty() {
-        lines.push("depends_on: -".to_string());
+    if task.front.links.is_empty() {
+        lines.push("links: -".to_string());
     } else {
-        lines.push(format!("depends_on: {}", task.front.depends_on.join(", ")));
+        for link in &task.front.links {
+            let target_label = match &link.target {
+                crate::task::LinkTarget::Task(id) => graph.display_id(id),
+                other => other.label(),
+            };
+            let mut line = format!(
+                "link {} {} ({})",
+                link.inward_name(),
+                target_label,
+                link.kind
+            );
+            if link.is_blocking() {
+                line.push_str(" (blocking)");
+            }
+            for (key, value) in &link.attributes {
+                let rendered = serde_yaml_ng::to_string(value)
+                    .map(|text| text.trim().to_string())
+                    .unwrap_or_else(|_| "?".to_string());
+                line.push_str(&format!(" {key}={rendered}"));
+            }
+            lines.push(line);
+        }
     }
-    if let Some(waiting) = &task.front.waiting_on {
-        lines.push(format!("waiting_on: {waiting}"));
-    }
-    for (owner, value) in &task.front.annotations {
-        lines.push(format!("annotation {owner}: {value}"));
+    for (owner, value) in &task.front.properties {
+        lines.push(format!("property {owner}: {value}"));
     }
     if let Some(checkpoint) = &task.front.checkpoint {
-        let label = if task.front.status.is_terminal() {
+        let label = if graph.workflow.is_terminal(&task.front.status) {
             "checkpoint (archived)"
         } else {
             "checkpoint"
@@ -385,15 +491,31 @@ pub(super) fn format_detail(
             push_field_lines(&mut lines, "blocker", blocker);
         }
     }
-    if let Some(claim) = &task.front.claim {
-        let until = claim
-            .lease_until
-            .map(|until| until.to_rfc3339())
-            .unwrap_or_else(|| "unknown".to_string());
-        lines.push(format!("claimed_by: {} (until {until})", claim.holder));
+    if let Some(assignee) = &task.front.assignee {
+        let kind = assignee.kind.as_str();
+        match &task.front.lease {
+            Some(lease) => {
+                let until = lease
+                    .lease_until
+                    .map(|until| until.to_rfc3339())
+                    .unwrap_or_else(|| "unknown".to_string());
+                lines.push(format!(
+                    "assignee: {} ({kind}, lease until {until})",
+                    assignee.name
+                ));
+            }
+            None => lines.push(format!("assignee: {} ({kind})", assignee.name)),
+        }
+    }
+    if let Some(reporter) = &task.front.reporter {
+        lines.push(format!("reporter: {reporter}"));
     }
     lines.push(format!("ready: {}", graph.is_ready(task)));
-    let blocking = graph.blocked_by(task);
+    let blocking: Vec<String> = graph
+        .blocked_by(task)
+        .iter()
+        .map(|id| graph.display_id(id))
+        .collect();
     if !blocking.is_empty() {
         lines.push(format!("blocking: {}", blocking.join(", ")));
     }
@@ -405,25 +527,29 @@ pub(super) fn format_detail(
         "updated_at: {}",
         task.front.updated_at.to_rfc3339()
     ));
-    let dependents: Vec<&str> = graph
+    let dependents: Vec<String> = graph
         .dependents(&task.id)
         .iter()
-        .map(|dependent| dependent.id.as_str())
+        .map(|dependent| graph.display_id(&dependent.id))
         .collect();
     if !dependents.is_empty() {
         lines.push(format!("dependents: {}", dependents.join(", ")));
     }
-    let children: Vec<&str> = graph
+    let children: Vec<String> = graph
         .children(&task.id)
         .iter()
-        .map(|child| child.id.as_str())
+        .map(|child| graph.display_id(&child.id))
         .collect();
     if !children.is_empty() {
-        lines.push(format!("subtasks: {}", children.join(", ")));
+        lines.push(format!("sub-issues: {}", children.join(", ")));
     }
-    let open_subtasks = graph.open_children(&task.id);
+    let open_subtasks: Vec<String> = graph
+        .open_children(&task.id)
+        .iter()
+        .map(|id| graph.display_id(id))
+        .collect();
     if !open_subtasks.is_empty() {
-        lines.push(format!("open_subtasks: {}", open_subtasks.join(", ")));
+        lines.push(format!("open sub-issues: {}", open_subtasks.join(", ")));
     }
     if !comments.is_empty() {
         lines.push(format!("comments: {}", comments.len()));

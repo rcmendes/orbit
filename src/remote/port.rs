@@ -11,8 +11,8 @@ use crate::board::Board;
 use crate::error::{OrbitError, Result};
 use crate::github::client::GitHubClient;
 use crate::remote::RemoteProject;
+use crate::remote::model::Status;
 use crate::remote::model::*;
-use crate::task::Status;
 
 /// The provider-neutral seam every Remote Tracker adapter implements.
 pub trait RemoteAdapter {

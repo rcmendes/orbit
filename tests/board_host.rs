@@ -501,7 +501,7 @@ fn sync_never_rebases_or_force_pushes() {
     peer_write(
         &peer,
         &task_relative,
-        &peer_read(&peer, &task_relative).replace("priority: 2", "priority: 1"),
+        &peer_read(&peer, &task_relative).replace("priority: medium", "priority: high"),
     );
     peer_commit(&repo, &peer, "host edit");
     let peer_tip = repo.git_in(&peer, &["rev-parse", "HEAD"]).stdout;
@@ -719,7 +719,7 @@ fn host_sync_auto_runs_at_prime() {
     peer_write(
         &peer,
         &format!("tasks/{peer_id}.md"),
-        "---\ntitle: Peer task\nstatus: todo\ntype: task\npriority: 2\nlabels: []\ndepends_on: []\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n",
+        "---\ntitle: Peer task\nstatus: todo\ntype: task\npriority: medium\nlabels: []\ndepends_on: []\ncreated_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:00Z\n---\n\nBody.\n",
     );
     peer_commit(&repo, &peer, "peer task");
 
@@ -770,4 +770,113 @@ fn sync_refuses_a_host_branch_replaced_by_another_board() {
 
     let (_, error) = repo.err_json(&["board", "sync", "--json"]);
     assert_eq!(error["error"]["code"], "BOARD_HOST_CONFLICT", "{error}");
+}
+
+#[test]
+fn sync_rekeys_colliding_project_keys_without_losing_issues() {
+    let repo = TestRepo::new();
+    repo.init();
+    let local_id = repo.add("Shared seed", &[]);
+    let host = bare_host(&repo, "host.git");
+    repo.ok_json(&["board", "host", &host_arg(&host), "--json"]);
+    repo.ok_json(&["board", "sync", "--json"]);
+
+    // A second Board with the same Slug joins through `init --host`.
+    let second = repo.path().join("second");
+    std::fs::create_dir_all(&second).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.name", "Test"][..],
+        &["config", "user.email", "test@example.com"][..],
+        &["commit", "--allow-empty", "-q", "-m", "init"][..],
+    ] {
+        let output = repo.git_in(&second, args);
+        assert!(output.status.success());
+    }
+    repo.ok_json_in(
+        repo.path(),
+        &[
+            "init",
+            "second",
+            "--slug",
+            "orb",
+            &format!("--host={}", host_arg(&host)),
+            "--agents",
+            "none",
+            "--json",
+        ],
+    );
+    let second_board = second.join(".orbit").join("board");
+
+    // Both clones allocate ORB-2 for different Issues before either syncs.
+    let peer_id = repo.ok_json_in(&second, &["add", "Peer extra", "--json"])["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let other_local = repo.add("Other local extra", &[]);
+
+    // Each side publishes its own commit, then merges the other's.
+    repo.ok_json(&["board", "sync", "--json"]);
+    let second_sync = repo.ok_json_in(&second, &["board", "sync", "--json"]);
+    assert_eq!(second_sync["data"]["state"], "merged");
+    let first_sync = repo.ok_json(&["board", "sync", "--json"]);
+    assert_eq!(first_sync["data"]["state"], "fast_forwarded");
+
+    // Every Issue survives on both Boards.
+    for board in [repo.board_path(), second_board.clone()] {
+        for id in [&local_id, &peer_id, &other_local] {
+            assert!(
+                board.join("tasks").join(format!("{id}.md")).exists(),
+                "{id} missing under {}",
+                board.display()
+            );
+        }
+    }
+
+    // Exactly one Issue keeps ORB-2; the other was re-keyed to ORB-3 with
+    // ORB-2 recorded as an alias, and the internal IDs never changed.
+    let list = repo.ok_json(&["list", "--json"]);
+    let tasks = list["data"]["issues"].as_array().unwrap();
+    assert_eq!(tasks.len(), 3, "{list}");
+    let by_key = |key: &str| {
+        tasks
+            .iter()
+            .filter(|task| task["key"] == serde_json::json!(key))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(by_key("ORB-1").len(), 1);
+    assert_eq!(by_key("ORB-2").len(), 1);
+    assert_eq!(by_key("ORB-3").len(), 1);
+    let rekeyed = tasks
+        .iter()
+        .find(|task| {
+            task["key_aliases"]
+                .as_array()
+                .is_some_and(|aliases| aliases.iter().any(|a| a == "ORB-2"))
+        })
+        .expect("one Issue records ORB-2 as an alias");
+    assert_eq!(rekeyed["key"], "ORB-3");
+    let keeper = &by_key("ORB-2")[0];
+    let loser = if keeper["id"].as_str().unwrap() == peer_id {
+        other_local.as_str()
+    } else {
+        peer_id.as_str()
+    };
+    assert_eq!(rekeyed["id"].as_str().unwrap(), loser);
+
+    // The old key keeps resolving: with the keeper gone, ORB-2 reaches the
+    // re-keyed Issue through its alias.
+    repo.ok_json(&[
+        "delete",
+        keeper["id"].as_str().unwrap(),
+        "--force",
+        "--json",
+    ]);
+    let shown = repo.ok_json(&["show", "ORB-2", "--json"]);
+    assert_eq!(shown["data"]["id"].as_str().unwrap(), loser, "{shown}");
+    assert_eq!(shown["data"]["key"], "ORB-3");
+
+    // The allocator high-water mark covers the re-keyed number.
+    let state = repo.read(".orbit/board/keys.toml");
+    assert!(state.contains("next_key = 4"), "{state}");
 }

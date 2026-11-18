@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 - 2026-11-17
 
 - `orbit changes --limit N` keeps the oldest events (whole commits) and returns a `cursor` at the last returned commit plus `truncated`, so paging forward never skips events; the feed range is pinned to the resolved head and diffs run with `--no-renames`.
 - Policy: `distinct_from` now applies to closing transitions (the pre-transition holder is the actor, compared case-insensitively); `wip_limit` only gates a Task entering the limited status or category; the `orbit` and `evidence` property owners can no longer be set by hand (`property set` is refused) and `require_properties = ["evidence"]` needs a submitted evidence item. `submit` evidence keeps the newest items within the property size limit.

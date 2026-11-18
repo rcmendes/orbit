@@ -4,6 +4,7 @@
 
 mod common;
 
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -32,6 +33,7 @@ fn configure_hooks(repo: &TestRepo, rules: &str) {
 
 /// Waits up to `timeout` for `path` to exist and contain `needle`; returns the
 /// file contents. Polls because hooks run detached after the write returns.
+#[cfg(unix)]
 fn wait_for_contents(path: &Path, needle: &str, timeout: Duration) -> Option<String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -45,6 +47,7 @@ fn wait_for_contents(path: &Path, needle: &str, timeout: Duration) -> Option<Str
     std::fs::read_to_string(path).ok()
 }
 
+#[cfg(unix)]
 fn hook_log(repo: &TestRepo, name: &str) -> PathBuf {
     repo.path().join(format!("hook-{name}.log"))
 }

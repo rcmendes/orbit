@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.10.15`](https://github.com/rcmendes/orbit/releases/tag/v0.10.15) is the latest release. This release introduces Board-per-repository storage and migration, provider-neutral `orbit remote` commands, and atomic batch operations. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.11.0`](https://github.com/rcmendes/orbit/releases/tag/v0.11.0) is the latest release. This release introduces the Issue model (types, hierarchy, declarative workflow, typed links, named priorities, project keys), review and evidence, the change feed, profiles, and opt-in scheduler, hook and index modules. It is a breaking release: run `orbit migrate model --apply` on an existing Board. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -1008,7 +1008,7 @@ See [ADR 0022](./docs/adr/0022-issue-model-and-platform-architecture.md) and [AD
 
 ## Install details
 
-Prebuilt binaries are the primary path. `v0.10.15` is the latest release. Every persistent route requires Git 2.31+ at runtime.
+Prebuilt binaries are the primary path. `v0.11.0` is the latest release. Every persistent route requires Git 2.31+ at runtime.
 
 | Route | Prerequisites | Command |
 | --- | --- | --- |

@@ -6,6 +6,7 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 Entries record what each release delivered. Some name commands that were later retired or renamed; [CHANGELOG.md](../CHANGELOG.md) maps each retired command to its replacement.
 
+- `v0.11.0` — the Issue model and platform rebuild (ADR 0022): Issue types and hierarchy, declarative workflow, typed links, named priorities, project keys, review and evidence, change feed, profiles, opt-in scheduler/hooks/index, contract handshake; breaking, see CHANGELOG
 - `v0.10.15` — Board-per-repository storage and migration, provider-neutral `orbit remote` commands, atomic batch operations, task Annotations and Source Keys, worktree claims, and safer Child-Board consolidation
 - `v0.10.10` — maintenance republish of v0.10.9; no source or behavior changes
 - `v0.10.9` — `orbit doctor` matches orbit MCP commands case-insensitively on Windows, and `orbit workspace doctor` finds nested local Boards like `workspace migrate`

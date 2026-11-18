@@ -1188,8 +1188,9 @@ the commit it came from.
 The response's `cursor` is the Board head commit. Pass it back as --since to
 fetch only events from newer commits; a cursor that is not an ancestor of the
 Board head is rejected rather than silently skipping or repeating events.
---type filters by event kind (repeatable) and --limit keeps the newest events
-when the feed is longer than the limit.";
+--type filters by event kind (repeatable) and --limit keeps the oldest events
+(whole commits) when the feed is longer than the limit, returns `truncated`, and
+moves `cursor` to the last commit returned, so paging forward skips nothing.";
 
 pub const CHANGES_EXAMPLES: &str = "\
 Examples:
@@ -1199,7 +1200,7 @@ Examples:
   # Only what changed since the last cursor
   orbit changes --since 4f2c9ab --json
 
-  # Only status transitions, capped at the 20 newest
+  # Only status transitions, first 20 events; page on with the returned cursor
   orbit changes --type issue.transitioned --limit 20 --json";
 
 pub const HISTORY_LONG: &str = "\

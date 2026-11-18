@@ -195,6 +195,6 @@ jq -e '.data.applied == true' triage-apply.json > /dev/null
 
 created_id="$("$orbit" add "Create fixture issue" --json | jq -r '.data.id')"
 "$orbit" remote create "$created_id" --apply --json > github-create.json
-jq -e '.data.success_count == 1 and .data.failure_count == 0 and .data.tasks[0].github.repo == "alice/widget"' github-create.json > /dev/null
+jq -e '.data.success_count == 1 and .data.failure_count == 0 and .data.issues[0].github.repo == "alice/widget"' github-create.json > /dev/null
 
 echo "onboarding smoke passed"

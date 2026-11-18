@@ -184,7 +184,7 @@ try {
 
     $createdId = (Invoke-Orbit add "Create fixture issue" --json | ConvertFrom-Json).data.id
     $created = Invoke-Orbit remote create $createdId --apply --json | ConvertFrom-Json
-    if ($created.data.success_count -ne 1 -or $created.data.tasks[0].github.repo -ne "alice/widget") {
+    if ($created.data.success_count -ne 1 -or $created.data.issues[0].github.repo -ne "alice/widget") {
         throw "GitHub create did not use the linked fixture repository"
     }
 

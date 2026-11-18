@@ -2537,6 +2537,8 @@ mod tests {
         let docs =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/commands.md"))
                 .expect("read docs/commands.md");
+        // Windows checkouts may convert line endings.
+        let docs = docs.replace("\r\n", "\n");
         let begin = "<!-- BEGIN GENERATED COMMANDS";
         let end = "<!-- END GENERATED COMMANDS -->";
         let start = docs.find(begin).expect("missing generated begin marker");

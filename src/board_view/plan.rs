@@ -147,6 +147,26 @@ fn ago(d: chrono::Duration) -> String {
     }
 }
 
+/// `key` is null on Issues without a project key; the CLI also takes the id.
+fn key_of(issue: &Value) -> &str {
+    Some(s(issue, "key"))
+        .filter(|k| !k.is_empty())
+        .unwrap_or_else(|| s(issue, "id"))
+}
+
+/// An Ask without `answered_at` (review::open_ask); answering keeps the object.
+fn open_ask(issue: &Value) -> Option<&Value> {
+    let ask = &issue["properties"]["orbit"]["ask"];
+    (ask.is_object() && ask.get("answered_at").is_none()).then_some(ask)
+}
+
+/// `orbit assign` only travels the `claim` transition and lands on its `to`.
+fn on_claim_route(wf: &Value, from: &str, to: &str) -> bool {
+    list(wf, "transitions")
+        .iter()
+        .any(|t| s(t, "name") == "claim" && allows(t, from) && s(t, "to") == to)
+}
+
 fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|p| p.to_string()).collect()
 }
@@ -248,6 +268,10 @@ pub fn plan_move(
     if status == target {
         return refuse("Already in this column.");
     }
+    // The CLI refuses every transition but `answer` with ASK_OPEN.
+    if open_ask(issue).is_some() {
+        return refuse("Answer the open Ask first. Use orbit answer.");
+    }
     let target_cat = cat_of(wf, target);
     if column_of(issue, wf) == "blocked" && target_cat != "canceled" {
         let by = blocking(issue);
@@ -323,12 +347,12 @@ pub fn plan_move(
 
 fn action_for(issue: &Value, t: &Value, wf: &Value, viewer: &str) -> Action {
     let (name, to) = (s(t, "name"), s(t, "to"));
-    let (key, ver) = (s(issue, "key"), s(issue, "updated_at"));
+    let (key, ver) = (key_of(issue), s(issue, "updated_at"));
     let mut confirm = None;
     let args = match name {
         "done" | "cancel" => argv(&[name, key, "--by", viewer, "--if-version", ver]),
         "reopen" => argv(&["reopen", key, "--if-version", ver]),
-        _ if cat_of(wf, to) == "active" => {
+        _ if on_claim_route(wf, s(issue, "status"), to) => {
             let other = s(issue, "assignee");
             let mut a = argv(&["assign", key, "--to", viewer, "--kind", "human"]);
             if !other.is_empty() && other != viewer {
@@ -393,11 +417,7 @@ pub fn stale_actions(issue: &Value, wf: &Value, viewer: &str, now: DateTime<Utc>
     let (ClaimState::Stale, Some(until)) = (claim_state(issue, now), lease(issue)) else {
         return vec![];
     };
-    let (key, ver, agent) = (
-        s(issue, "key"),
-        s(issue, "updated_at"),
-        s(issue, "assignee"),
-    );
+    let (key, ver, agent) = (key_of(issue), s(issue, "updated_at"), s(issue, "assignee"));
     let status = s(issue, "status");
     let since = ago(now - until);
     let allowed = |name: &str| {
@@ -445,9 +465,7 @@ pub fn needs_human(issue: &Value, wf: &Value, now: DateTime<Utc>) -> Option<Stri
         return None;
     }
     let orbit = &issue["properties"]["orbit"];
-    // An answered Ask keeps its object and gains `answered_at` (review::open_ask).
-    let ask = &orbit["ask"];
-    if ask.is_object() && ask.get("answered_at").is_none() {
+    if let Some(ask) = open_ask(issue) {
         return Some(format!("Answer: {}", s(ask, "question")));
     }
     if targets_of(wf, &["ask", "escalate"]).contains(&status) {
@@ -970,5 +988,70 @@ mod tests {
             &issue("ready", json!({"labels": lbl, "assignee": "maria"})),
             &w
         ));
+    }
+
+    #[test]
+    fn move_into_active_off_the_claim_route_runs_the_transition() {
+        let w = agentic_wf();
+        let i = issue("needs_decision", json!({"assignee": "maria"}));
+        let a = actions(plan_move(&i, "in_progress", &w, "me", now()));
+        assert_eq!(
+            a[0].args,
+            [
+                "transition",
+                "ORB-1",
+                "resume",
+                "--by",
+                "me",
+                "--if-version",
+                "V"
+            ]
+        );
+        assert!(a[0].confirm.is_none());
+        let a = actions(plan_move(
+            &issue("ready", json!({})),
+            "in_progress",
+            &w,
+            "me",
+            now(),
+        ));
+        assert_eq!(a[0].args[0], "assign");
+    }
+
+    #[test]
+    fn null_key_falls_back_to_id() {
+        let i = issue("in_progress", json!({"key": null}));
+        let a = actions(mv(&i, "done"));
+        assert_eq!(
+            a[0].args,
+            ["done", "orb-a1b2c3", "--by", "me", "--if-version", "V"]
+        );
+        let i = issue(
+            "in_progress",
+            json!({"key": "", "assignee": "bot", "lease_until": lease(-5)}),
+        );
+        let a = stale_actions(&i, &std_wf(), "me", now());
+        assert_eq!(a[0].args[1], "orb-a1b2c3");
+        assert_eq!(
+            a[0].confirm.as_ref().unwrap().title,
+            "Take over orb-a1b2c3?"
+        );
+    }
+
+    #[test]
+    fn open_ask_refuses_every_move() {
+        let props = json!({"orbit": {"ask": {"question": "Which DB?"}}});
+        let i = issue("needs_human", json!({"properties": props}));
+        let want = "Answer the open Ask first. Use orbit answer.";
+        assert_eq!(reason(mv(&i, "done")), want);
+        assert_eq!(reason(mv(&i, "cancelled")), want);
+        assert_eq!(
+            reason(plan_column(&i, "ready", &std_wf(), "me", now())),
+            want
+        );
+        let mut answered = props.clone();
+        answered["orbit"]["ask"]["answered_at"] = json!("y");
+        let i = issue("needs_human", json!({"properties": answered}));
+        assert_eq!(actions(mv(&i, "done"))[0].transition, "done");
     }
 }

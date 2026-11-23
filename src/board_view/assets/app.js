@@ -19,14 +19,27 @@ function h(tag, attrs, ...kids) {
 }
 const $ = (id) => document.getElementById(id);
 
-// ---------- token: read once from the fragment, keep in memory, strip from the address bar ----------
-const TOKEN = (/(?:^#|&)token=([0-9a-f]{64})(?:&|$)/.exec(location.hash) || [])[1] || "";
+// ---------- token: from the fragment, else this tab's sessionStorage; only ever sent as a header ----------
+const TOKEN_KEY = "orbit.token";
+const NO_TOKEN = "This page has no valid token. Open the link that orbit board view printed.";
+let TOKEN = (/(?:^#|&)token=([0-9a-f]{64})(?:&|$)/.exec(location.hash) || [])[1] || "";
+try {
+  if (TOKEN) sessionStorage.setItem(TOKEN_KEY, TOKEN);
+  else TOKEN = sessionStorage.getItem(TOKEN_KEY) || "";
+} catch {} // no storage: a reload shows the no-token banner
 if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+// A 401 means the server restarted with a new token: drop ours and stop polling.
+function forgetToken() {
+  TOKEN = "";
+  try { sessionStorage.removeItem(TOKEN_KEY); } catch {}
+  setError(NO_TOKEN);
+}
 
 // ---------- constants ----------
 const LAYOUTS = { columns: "Columns", queue: "Queue" };
 const POLL_MS = 3000;
 const LEASE_MS = 30 * 60e3;
+// shortcut: closed Issues have no close timestamp, so updated_at stands in; switch when the Issue model records close time (ADR 0023).
 const CLOSED_WINDOW_MS = 14 * 864e5;
 const CAT_VAR = { todo: "--cat-todo", active: "--cat-active", done: "--cat-done", canceled: "--cat-canceled" };
 const PRIORITIES = ["highest", "high", "medium", "low", "lowest"];
@@ -59,9 +72,8 @@ async function refresh(flashId) {
     const r = await api("/api/snapshot", { headers: S.etag ? { "If-None-Match": S.etag } : {} });
     if (r.status === 304) return;
     if (!r.ok) {
-      setError(r.status === 401 || r.status === 403
-        ? "This page has no valid token. Open the link that orbit board view printed (a reload drops the token)."
-        : `The Board snapshot failed (HTTP ${r.status}). Retrying.`);
+      if (r.status === 401) forgetToken();
+      else setError(`The Board snapshot failed (HTTP ${r.status}). Retrying.`);
       return;
     }
     const d = await r.json();
@@ -109,6 +121,7 @@ async function send(route, i, extra, done) {
         return;
       }
       if (r.ok) { toast(done); await refresh(i.id); return; }
+      if (r.status === 401) { forgetToken(); toast("Nothing was written: the token is no longer valid.", true); return; }
       const e = d.error || {};
       if (e.code === "CHOOSE_TRANSITION" && !body.transition) {
         const t = await chooseDlg(i, e.choices || []);
@@ -624,7 +637,7 @@ function setLayout(name) {
 }
 
 // ---------- start ----------
-if (!TOKEN) setError("This page has no token. Open the link that orbit board view printed (a reload drops the token).");
+if (!TOKEN) setError(NO_TOKEN);
 else refresh();
 setInterval(poll, POLL_MS);
 setInterval(() => { if (!busy()) render(); }, 30e3); // lease rings and "min left" tick between snapshot changes

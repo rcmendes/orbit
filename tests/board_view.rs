@@ -194,6 +194,16 @@ fn assets_have_no_inline_code_and_no_external_urls() {
         "unsafe js"
     );
     assert!(js.contains("X-Orbit-Token"), "page never sends the token");
+    assert!(
+        js.contains("sessionStorage"),
+        "token does not survive a reload"
+    );
+    assert!(
+        js.lines()
+            .filter(|l| l.contains("localStorage"))
+            .all(|l| !l.to_ascii_lowercase().contains("token")),
+        "token in localStorage"
+    );
     for asset in [&js, &css] {
         assert!(!asset.contains("https://") && !asset.contains("http://"));
     }

@@ -164,6 +164,42 @@ fn serves_page_and_assets_with_csp() {
 }
 
 #[test]
+fn assets_have_no_inline_code_and_no_external_urls() {
+    let repo = repo_with_issue();
+    let server = start(&repo);
+    let (status, _, page) = http(&server.base, "GET", "/", &[]);
+    assert_eq!(status, 200);
+    let (js_status, _, js) = http(&server.base, "GET", "/app.js", &[]);
+    let (css_status, _, css) = http(&server.base, "GET", "/app.css", &[]);
+    assert_eq!((js_status, css_status), (200, 200));
+    assert!(page.contains(r#"src="/app.js""#), "{page}");
+    for banned in ["<style", " style=", "innerHTML", "https://", "http://"] {
+        assert!(!page.contains(banned), "page contains {banned}");
+    }
+    // An `on[a-z]+=` attribute inside any tag.
+    let inline_handler = page.split('<').skip(1).any(|tag| {
+        let tag = tag.split('>').next().unwrap_or("");
+        tag.split_whitespace().skip(1).any(|attr| {
+            attr.strip_prefix("on").is_some_and(|rest| {
+                let name = rest.split('=').next().unwrap_or("");
+                rest.contains('=')
+                    && !name.is_empty()
+                    && name.bytes().all(|b| b.is_ascii_lowercase())
+            })
+        })
+    });
+    assert!(!inline_handler, "inline event handler: {page}");
+    assert!(
+        !js.contains("innerHTML") && !js.contains("eval("),
+        "unsafe js"
+    );
+    assert!(js.contains("X-Orbit-Token"), "page never sends the token");
+    for asset in [&js, &css] {
+        assert!(!asset.contains("https://") && !asset.contains("http://"));
+    }
+}
+
+#[test]
 fn snapshot_requires_token() {
     let repo = repo_with_issue();
     let server = start(&repo);

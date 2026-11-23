@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added `orbit board view`: a kanban of the Board in your browser, served on `127.0.0.1` while the command runs (ADR 0023). Two layouts, Columns and Queue, switched from the header; filters for text, Type, Assignee, Repository and Epic; Needs a human, Stale and claim highlighting; and a keyboard Move menu (`m`). Dragging a card or picking a move runs the same `orbit` command a person would type, with `--if-version`, as the human named by `--by` (default `ORBIT_AGENT`, then `USER`); Take over and Release are offered only on Stale Issues and always ask first. Every API call needs the per-run token from the printed URL, and the page loads nothing from outside the binary. `--port` picks the port (default: any free one) and `--no-open` skips launching a browser. The capability vocabulary gains `board-view`.
+- The Board contract version is now `1.1.0`, so an `orbit` 1.0.x binary refuses a Board created or migrated by this build with `CONTRACT_VERSION_UNSUPPORTED`.
+
 ## 0.11.0 - 2026-11-17
 
 - `orbit changes --limit N` keeps the oldest events (whole commits) and returns a `cursor` at the last returned commit plus `truncated`, so paging forward never skips events; the feed range is pinned to the resolved head and diffs run with `--no-renames`.

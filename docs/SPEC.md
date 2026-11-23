@@ -17,7 +17,7 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 - Hosted sync or federation beyond the single Board host: `orbit board host`/`sync` pushes the Board's `orbit` branch to one chosen remote with an Orbit-aware merge ([ADR 0019](./adr/0019-board-folder-is-its-own-repository.md)); there is no multi-writer service.
 - Dolt, SQLite, or any second source of truth.
 - A daemon or background watcher.
-- Web UI.
+- A hosted or multi-user Web UI (the local Board view is ADR 0023).
 - Beads-style issue-type entities or attachments. Parentage is the
   Board-configured Issue hierarchy ([ADR 0022](./adr/0022-issue-model-and-platform-architecture.md));
   Issue types are Board configuration, not separate entities.

@@ -1414,8 +1414,14 @@ foreground server on `127.0.0.1` (ADR 0023). It prints
 `orbit board view: http://127.0.0.1:PORT/#token=TOKEN` (`{"ok":true,"data":{"url":…}}`
 with `--json`) and opens it unless `--no-open` is given. The token lives in the
 URL fragment; the API requires it plus a local `Host`/`Origin`. Routes:
-`GET /api/snapshot` (annotated Issues, ETag/304) and `GET /api/show/ID`. Stop
-with Ctrl-C.
+`GET /api/snapshot` (annotated Issues, ETag/304) and `GET /api/show/ID`, plus
+the writes `POST /api/move` (`{id, version, column | status, transition?,
+confirmed?}`), `POST /api/takeover`, and `POST /api/release` (`{id, version,
+confirmed?}`). The server re-plans each write on a fresh `orbit show` and fails
+with `409`: `MOVE_REFUSED`, `CHOOSE_TRANSITION`, `CONFIRM_REQUIRED`, or
+`VERSION_CONFLICT`. `--force` is passed only for Take over, Release, and an
+active drop over a lease-free Assignee, always after that server-side check,
+`confirmed: true`, and `--if-version`. Stop with Ctrl-C.
 
 ### `orbit remote` — GitHub Issue provider
 

@@ -34,21 +34,31 @@ fn start(repo: &TestRepo) -> Server {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child = command.spawn().unwrap();
-    let mut line = String::new();
-    BufReader::new(child.stdout.take().unwrap())
-        .read_line(&mut line)
-        .unwrap();
+    let child = command.spawn().unwrap();
+    // Guard first: a panic below must not leak the server.
+    let mut guard = Server {
+        child,
+        base: String::new(),
+        token: String::new(),
+    };
+    let stdout = guard.child.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = BufReader::new(stdout).read_line(&mut line);
+        let _ = tx.send(line);
+    });
+    let line = rx
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap_or_else(|_| panic!("orbit board view printed no startup line within 30 s"));
     let url = line
         .trim()
         .strip_prefix("orbit board view: ")
         .unwrap_or_else(|| panic!("unexpected startup line: {line:?}"));
     let (base, token) = url.split_once("/#token=").unwrap();
-    Server {
-        child,
-        base: base.to_string(),
-        token: token.to_string(),
-    }
+    guard.base = base.to_string();
+    guard.token = token.to_string();
+    guard
 }
 
 fn http(
@@ -403,6 +413,28 @@ fn release_stale_claim_returns_issue_to_ready() {
     let issue = shown(&repo, &id);
     assert_eq!(issue["status"], "ready");
     assert!(issue["assignee"].is_null(), "{issue}");
+}
+
+#[test]
+fn live_claim_refuses_takeover_and_release_even_confirmed() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("work", &[]);
+    repo.ok_json(&["claim", &id, "--by", "agent-1", "--json"]);
+    let server = start(&repo);
+    let before = shown(&repo, &id);
+    let v = version(&repo, &id);
+    for path in ["/api/takeover", "/api/release"] {
+        let (status, body) = post(
+            &server,
+            path,
+            &serde_json::json!({"id": id, "version": v, "confirmed": true}),
+            true,
+        );
+        assert_eq!(status, 409, "{path} {body}");
+        assert_eq!(body["error"]["code"], "MOVE_REFUSED", "{path} {body}");
+    }
+    assert_eq!(shown(&repo, &id), before);
 }
 
 #[test]

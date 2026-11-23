@@ -73,7 +73,8 @@ pub(super) fn write(ctx: &Ctx, route: &str, request: &Request) -> Response {
     // The card changed since the viewer saw it (e.g. its agent came back):
     // the plan the viewer confirmed no longer holds, so fail like the CLI would.
     let current = issue["updated_at"].as_str().unwrap_or_default();
-    if current != version {
+    // An Issue without a version cannot be checked, and `--if-version ""` is no guard.
+    if current.is_empty() || current != version {
         let detail =
             format!("{id} changed since version {version}; its current version is {current}");
         return conflict(

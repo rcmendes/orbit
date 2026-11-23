@@ -21,7 +21,7 @@
 - The server passes `--force` only for Take over, Release, and an active drop over a lease-free Assignee. Each needs a server-side precondition check, `confirmed: true` in the request, and the client's `--if-version`.
 - Every write passes the card's `updated_at` as `--if-version`.
 - Identity: `--by`, else `ORBIT_AGENT`, else `USER`, else `USERNAME`; the kind is always `human`.
-- Snapshot: `orbit list --json --all --include-closed --limit 1000`, polled every 3000 ms, with a `sha256` ETag.
+- Snapshot: `orbit list --json --all --include-closed` with no limit (a cap would silently hide Issues on big Boards), polled every 3000 ms, with a `sha256` ETag.
 - Closed columns show Issues with `updated_at` in the last 14 days unless "Show all closed" is on. Mark this in code as `shortcut: no close timestamp, …`.
 - Gates: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all`.
 - Docs rule (AGENTS.md): every behavior change updates `docs/commands.md`, README, and the affected docs in the same task or an immediate follow-up commit.

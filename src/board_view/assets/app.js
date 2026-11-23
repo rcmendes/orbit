@@ -147,7 +147,7 @@ async function send(route, i, extra, done) {
 const moveToColumn = (i, colId) => send("move", i, { column: colId }, `Moved ${i.key} to ${columns().find((c) => c.id === colId)?.name || colId}`);
 const moveToStatus = (i, st) => send("move", i, { status: st }, `Moved ${i.key} to ${label(st)}`);
 function runStale(i, a) {
-  const takeover = a.label === "Take over";
+  const takeover = a.transition === "claim";
   return send(takeover ? "takeover" : "release", i, {}, takeover ? `You took over ${i.key}` : `Released ${i.key}`);
 }
 
@@ -350,7 +350,7 @@ function staleButtons(i) {
   if (claimState(i) !== "stale") return null;
   const acts = i.stale_actions || [];
   return h("div", { class: "staleacts" }, acts.length
-    ? acts.map((a) => h("button", { class: a.label === "Take over" ? "btn warn" : "btn", onclick: (e) => { e.stopPropagation(); runStale(i, a); } }, a.label))
+    ? acts.map((a) => h("button", { class: a.transition === "claim" ? "btn warn" : "btn", onclick: (e) => { e.stopPropagation(); runStale(i, a); } }, a.label))
     : h("span", { class: "key" }, "Release it from the CLI."));
 }
 const dotStyle = (cat) => ({ "--c": `var(${CAT_VAR[cat] || "--cat-todo"})` });

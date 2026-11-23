@@ -62,7 +62,9 @@ was rejected: the Assignee filter covers that need with less screen.
 **What a drop runs.**
 - A drop onto a `done` or `canceled` Status runs `orbit done` or `orbit cancel`,
   keeping their Dependency and open-sub-issue gates.
-- A drop onto an `active` Status makes the viewer the Assignee, without a Lease.
+- A drop onto an `active` Status makes the viewer the Assignee, without a Lease,
+  but only on the Workflow's `claim` route. Any other move into an active Status
+  runs the named Transition and keeps the Assignee.
   If someone else is assigned without a Lease, the viewer replaces them after
   confirming.
 - Any other drop runs `orbit transition`. Leaving an `active` Status already
@@ -93,7 +95,7 @@ Lease) and the viewer has confirmed in a dialog that names who is replaced.
 Every write carries the card's `updated_at` as `--if-version`. A heartbeat or
 claim updates `updated_at`, so an agent that comes back between the check and
 the write makes the write fail with a retryable conflict instead of losing its
-claim. The kernel's contract does not change.
+claim. The kernel's assign and release semantics do not change.
 
 **One human actor per run.** `orbit board view --by <name>` (default
 `ORBIT_AGENT`, then `USER`) is the identity every write records, with Identity
@@ -113,7 +115,8 @@ embedded with `include_str!`, with no build step and no CDN.
 **Local-only security.** The server binds to `127.0.0.1` on a random free port
 unless `--port` is given. A per-run secret token travels in the URL fragment
 (`#token=…`), so it never reaches a request line, a log, or a `Referer`. The
-page reads it and sends it as a header on every API call. The server rejects any
+page reads it, keeps it in the tab's `sessionStorage` so a reload keeps
+working (cleared on a 401), and sends it as a header on every API call. The server rejects any
 request whose `Host` or `Origin` is not local. The HTML, JavaScript, and CSS are
 served as separate same-origin routes, so the CSP can stay `default-src 'self'`
 with no inline script or style. Responses also send `Referrer-Policy:
@@ -144,6 +147,9 @@ may come from a Remote Tracker.
 - `orbit board view` is a front door like `orbit mcp`: it is exempt from MCP
   parity in the command registry, listed in `docs/commands.md`, and reported as
   a `board-view` Capability. It is not a Board module.
+- This build bumps the contract to 1.1.0, so Boards it creates or migrates are
+  refused by orbit 1.0.x with `CONTRACT_VERSION_UNSUPPORTED`; existing 1.0.0
+  Boards keep working.
 - The HTTP parser is a trust boundary and gets its own tests.
 - Issues have no close timestamp, so the `done` and `canceled` columns show
   Issues whose `updated_at` falls in the last 14 days. An edit to a closed Issue

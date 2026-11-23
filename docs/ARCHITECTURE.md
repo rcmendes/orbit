@@ -77,7 +77,7 @@ flowchart LR
     MCPC --> MCP
     DEV -->|browser| BOARDVIEW
     MCP -->|spawns one CLI child per tool call| CLI
-    BOARDVIEW -->|spawns one CLI child per read or move| CLI
+    BOARDVIEW -->|spawns CLI children per request (a move runs `orbit show`, then the write)| CLI
     CLI --> CMD
     CLI --> ENVELOPE
     CMD --> PRIME

@@ -542,7 +542,7 @@ pub fn annotate(issue: &Value, wf: &Value, viewer: &str, now: DateTime<Utc>) -> 
         .collect();
     let stale: Vec<Value> = stale_actions(issue, wf, viewer, now)
         .iter()
-        .map(|a| json!({ "label": a.label, "confirm": confirm_json(&a.confirm) }))
+        .map(|a| json!({ "label": a.label, "transition": a.transition, "confirm": confirm_json(&a.confirm) }))
         .collect();
     let claim = match claim_state(issue, now) {
         ClaimState::None => "none",
@@ -779,6 +779,19 @@ mod tests {
                 "V"
             ]
         );
+    }
+
+    #[test]
+    fn annotate_exposes_stale_transition_and_never_argv() {
+        let i = issue(
+            "in_progress",
+            json!({"assignee": "bot", "lease_until": lease(-5)}),
+        );
+        let out = annotate(&i, &std_wf(), "me", now());
+        let acts = out["stale_actions"].as_array().unwrap();
+        let t: Vec<_> = acts.iter().map(|a| a["transition"].as_str()).collect();
+        assert_eq!(t, [Some("claim"), Some("release")]);
+        assert!(acts.iter().all(|a| a.get("args").is_none()));
     }
 
     #[test]

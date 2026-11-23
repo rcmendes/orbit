@@ -1663,6 +1663,17 @@ Examples:
   orbit board move ~/src/acme/hub/issues
   orbit board move .orbit/board";
 
+pub const BOARD_VIEW_LONG: &str = "\
+Serve the Board as a web page from a foreground local server. The server binds
+127.0.0.1 only, prints a URL whose fragment carries a per-run token, and opens it
+in the default browser unless --no-open is given. The page polls one snapshot
+endpoint; it adds no state of its own. Stop it with Ctrl-C.";
+
+pub const BOARD_VIEW_EXAMPLES: &str = "\
+Examples:
+  orbit board view
+  orbit board view --no-open --port 4747 --by alice";
+
 pub const BOARD_SYNC_LONG: &str = "\
 Synchronize the Board with its host: commit pending changes, fetch the host's
 `orbit` branch, merge, and push — never rebase, never force-push. Different

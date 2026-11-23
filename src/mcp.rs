@@ -1060,14 +1060,14 @@ fn resources_read(
     }))
 }
 
-struct OrbitRun {
-    stdout: String,
-    stderr: String,
-    success: bool,
-    code: Option<i32>,
+pub(crate) struct OrbitRun {
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+    pub(crate) success: bool,
+    pub(crate) code: Option<i32>,
 }
 
-fn run_orbit(
+pub(crate) fn run_orbit(
     executable: &Path,
     dir: Option<&Path>,
     args: &[String],

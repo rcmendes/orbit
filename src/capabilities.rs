@@ -26,6 +26,7 @@ use crate::workflow::Workflow;
 /// supports but a Board enables through its own configuration.
 pub const SUPPORTED: &[&str] = &[
     "workflow",
+    "board-view",
     "policy",
     "issue-types",
     "hierarchy",

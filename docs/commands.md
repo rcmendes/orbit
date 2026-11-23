@@ -1398,6 +1398,7 @@ orbit board host --none              # clear it; remote branch untouched
 orbit board sync                     # fetch, merge, push
 orbit board sync --resolve orb-a1b2c3.title=host --json
 orbit board move issues              # relocate the Board folder
+orbit board view                     # serve the Board in a browser
 ```
 
 `orbit board move DIR` relocates the Board folder. The Board's Git history
@@ -1407,6 +1408,14 @@ pointer file to name DIR — or restores the hidden layout when DIR is
 `.orbit/board` — moves the `.git/info/exclude` entry to the new folder, and
 repoints explicit member Repository links. The Board host and `cache/` are
 unchanged.
+
+`orbit board view [--port N] [--by NAME] [--no-open]` serves the Board from a
+foreground server on `127.0.0.1` (ADR 0023). It prints
+`orbit board view: http://127.0.0.1:PORT/#token=TOKEN` (`{"ok":true,"data":{"url":…}}`
+with `--json`) and opens it unless `--no-open` is given. The token lives in the
+URL fragment; the API requires it plus a local `Host`/`Origin`. Routes:
+`GET /api/snapshot` (annotated Issues, ETag/304) and `GET /api/show/ID`. Stop
+with Ctrl-C.
 
 ### `orbit remote` — GitHub Issue provider
 
@@ -1757,6 +1766,7 @@ orbit sync              # commit anything left uncommitted
 | `orbit changes` | `changes` | read-only, idempotent |
 | `orbit history` | `history` | read-only, idempotent |
 | `orbit setup` | — | — (writes agent harness configuration and Board config.toml profiles; not a Board operation) |
+| `orbit board view` | — | — (is a local web server, not a Board operation) |
 | `orbit mcp` | — | — (is the MCP server itself) |
 | `orbit doctor` | `doctor` | write, idempotent |
 | `orbit sync` | `sync` | write, idempotent |

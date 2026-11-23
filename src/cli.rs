@@ -1774,6 +1774,25 @@ pub enum BoardCommand {
     /// with the folder.
     #[command(long_about = help::BOARD_MOVE_LONG, after_long_help = help::BOARD_MOVE_EXAMPLES)]
     Move(BoardMoveArgs),
+
+    /// Serve the Board in a browser on a local, token-guarded port.
+    #[command(long_about = help::BOARD_VIEW_LONG, after_long_help = help::BOARD_VIEW_EXAMPLES)]
+    View(BoardViewArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BoardViewArgs {
+    /// Port on 127.0.0.1. 0 picks a free port.
+    #[arg(long, default_value_t = 0)]
+    pub port: u16,
+
+    /// Human identity recorded by every write. Defaults to ORBIT_AGENT, then USER.
+    #[arg(long)]
+    pub by: Option<String>,
+
+    /// Print the URL without opening a browser.
+    #[arg(long)]
+    pub no_open: bool,
 }
 
 #[derive(Debug, Args)]

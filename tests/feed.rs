@@ -183,6 +183,50 @@ fn changes_filters_by_type_and_limit() {
 }
 
 #[test]
+fn changes_replays_events_merged_in_from_a_side_branch() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.add("Local task", &[]);
+
+    // A `board sync` merge brings peer commits in through a merge commit;
+    // the feed must diff it against its first parent and replay the peer's
+    // events under the merge commit.
+    let board = repo.board_path();
+    let args = ["checkout", "-q", "-b", "side"];
+    let output = repo.git_in(&board, &args);
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    let task = board.join("tasks").join("peer-one.md");
+    std::fs::write(
+        &task,
+        "---\ntitle: Peer task\nstatus: ready\nkey: ORB-99\n---\n",
+    )
+    .unwrap();
+    for args in [
+        &["add", "-A"][..],
+        &["commit", "-q", "-m", "orbit: add peer-one"][..],
+        &["checkout", "-q", "orbit"][..],
+        &["merge", "--no-ff", "-q", "-m", "orbit: merge side", "side"][..],
+    ] {
+        let output = repo.git_in(&board, args);
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let value = repo.ok_json(&["changes", "--json"]);
+    let feed = events(&value);
+    let created = event(feed, "issue.created", "peer-one");
+    assert_eq!(created["key"], "ORB-99");
+    assert_eq!(created["data"]["title"], "Peer task");
+    // The event is attributed to the merge commit, not the side-branch one.
+    let merge = repo.git_in(&board, &["rev-parse", "HEAD"]).stdout;
+    let merge = String::from_utf8(merge).unwrap().trim().to_string();
+    assert_eq!(created["commit"], merge);
+}
+
+#[test]
 fn history_shows_the_per_issue_timeline() {
     let repo = TestRepo::new();
     repo.init();

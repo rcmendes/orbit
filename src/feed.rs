@@ -28,6 +28,7 @@
 //! produced it, so all events of one commit (for example a `batch`) share a
 //! correlation id. `id` is `<commit>:<ordinal>` and is unique per event.
 
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use serde::Serialize;
@@ -81,9 +82,11 @@ struct CommitInfo {
     hash: String,
     author: String,
     time: String,
-    subject: String,
     body: String,
     parents: Vec<String>,
+    /// The commit's Orbit verb and detail when the subject is `orbit: ...`.
+    orbit: Option<(String, String)>,
+    changes: Vec<Change>,
 }
 
 impl CommitInfo {
@@ -126,9 +129,10 @@ pub fn collect(board: &Board, since: Option<&str>) -> Result<Feed> {
     };
 
     let commits = log_commits(root, &range)?;
+    let blobs = load_blobs(root, &commits)?;
     let mut events = Vec::new();
     for info in &commits {
-        events.extend(events_for_commit(root, info)?);
+        events.extend(events_for_commit(info, &blobs));
     }
     Ok(Feed {
         events,
@@ -147,11 +151,14 @@ fn git_text(root: &Path, args: &[&str]) -> Result<String> {
 }
 
 /// `git log` records separated by \x1e, fields by \x1f:
-/// hash, author name, author date (strict ISO), parents, subject, body.
-/// `--first-parent` keeps the Board's own chain: a `board sync` merge commit
-/// carries the host-side delta in its diff against the first parent, while
-/// the host commits themselves stay off the first-parent chain — without the
-/// flag every synced change would emit its events twice.
+/// hash, author name, author date (strict ISO), parents, subject, body —
+/// then a NUL and the commit's `--name-status -z` file list. `--first-parent`
+/// keeps the Board's own chain: a `board sync` merge commit carries the
+/// host-side delta in its diff against the first parent, while the host
+/// commits themselves stay off the first-parent chain — without the flag
+/// every synced change would emit its events twice. `--diff-merges=
+/// first-parent` gives merge commits that same first-parent diff; plain
+/// `git log` suppresses merge diffs entirely.
 fn log_commits(root: &Path, range: &str) -> Result<Vec<CommitInfo>> {
     let format = "%x1e%H%x1f%an%x1f%aI%x1f%P%x1f%s%x1f%b";
     let out = git_text(
@@ -160,17 +167,24 @@ fn log_commits(root: &Path, range: &str) -> Result<Vec<CommitInfo>> {
             "log",
             "--reverse",
             "--first-parent",
+            "--root",
+            "--diff-merges=first-parent",
+            "--no-renames",
+            "--name-status",
+            "-z",
             &format!("--format={format}"),
             range,
         ],
     )?;
     let mut commits = Vec::new();
     for record in out.split('\x1e') {
-        let record = record.trim_matches('\n');
-        if record.trim().is_empty() {
+        // The header ends at the first NUL; what follows is the -z
+        // name-status list (`STATUS\0path\0`), empty for a no-change commit.
+        let (header, paths) = record.split_once('\0').unwrap_or((record, ""));
+        if header.trim().is_empty() {
             continue;
         }
-        let mut fields = record.split('\x1f');
+        let mut fields = header.split('\x1f');
         let (Some(hash), Some(author), Some(time), Some(parents), Some(subject)) = (
             fields.next(),
             fields.next(),
@@ -180,51 +194,25 @@ fn log_commits(root: &Path, range: &str) -> Result<Vec<CommitInfo>> {
         ) else {
             continue;
         };
+        let subject = subject.trim_end();
         commits.push(CommitInfo {
             hash: hash.trim().to_string(),
             author: author.trim().to_string(),
             time: time.trim().to_string(),
             parents: parents.split_whitespace().map(str::to_string).collect(),
-            subject: subject.trim_end().to_string(),
+            orbit: orbit_verb(subject),
             body: fields.collect::<Vec<_>>().join("\x1f"),
+            changes: parse_name_status_z(paths.trim_start_matches('\n')),
         });
     }
     Ok(commits)
 }
 
 /// One changed path in a commit: status letter plus the new path.
+#[derive(Debug)]
 struct Change {
     status: char,
     path: String,
-}
-
-/// Diffs a commit against its first parent — for a merge commit that is the
-/// net change the merge brought in, so host-side edits replay as events.
-/// A root commit diffs against the empty tree.
-fn changed_files(root: &Path, info: &CommitInfo) -> Result<Vec<Change>> {
-    let args: Vec<String> = if let Some(parent) = info.parents.first() {
-        vec![
-            "diff".into(),
-            "--no-renames".into(),
-            "--name-status".into(),
-            "-z".into(),
-            parent.clone(),
-            info.hash.clone(),
-        ]
-    } else {
-        vec![
-            "diff-tree".into(),
-            "--root".into(),
-            "--no-commit-id".into(),
-            "-r".into(),
-            "-z".into(),
-            "--name-status".into(),
-            info.hash.clone(),
-        ]
-    };
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = git_text(root, &arg_refs)?;
-    Ok(parse_name_status_z(&out))
 }
 
 /// Parses `git diff --name-status -z`: `STATUS\0path\0`, renames/copies add a
@@ -250,6 +238,71 @@ fn parse_name_status_z(out: &str) -> Vec<Change> {
     changes
 }
 
+/// The revisions of a changed file the feed compares: `'A'` reads only the
+/// new side, `'D'` only the old, everything else both.
+fn read_sides(status: char) -> (bool, bool) {
+    match status {
+        'A' => (false, true),
+        'D' => (true, false),
+        _ => (true, true),
+    }
+}
+
+/// Every `rev:path` blob the feed reads across all commits, fetched with one
+/// `git cat-file --batch` instead of two processes per changed file.
+fn load_blobs(root: &Path, commits: &[CommitInfo]) -> Result<HashMap<String, Option<String>>> {
+    let mut specs = BTreeSet::new();
+    for info in commits {
+        if info.orbit.is_none() {
+            continue;
+        }
+        for change in &info.changes {
+            let path = change.path.as_str();
+            if let Some(id) = task_file_id(path) {
+                let file = format!("tasks/{id}.md");
+                let (old, new) = read_sides(change.status);
+                if old && let Some(parent) = info.parents.first() {
+                    specs.insert(format!("{parent}:{file}"));
+                }
+                if new {
+                    specs.insert(format!("{}:{file}", info.hash));
+                }
+            } else if let Some(id) = comment_file_id(path) {
+                if change.status != 'D' {
+                    specs.insert(format!("{}:comments/{id}.md", info.hash));
+                }
+                // The comments sidecar carries no key; the Task's project
+                // key at this commit lets `history <KEY>` find the event.
+                specs.insert(format!("{}:tasks/{id}.md", info.hash));
+            }
+        }
+    }
+    let specs: Vec<String> = specs.into_iter().collect();
+    // `cat-file --batch` is line-oriented: a path containing a newline cannot
+    // ride the batch and falls back to one `show_file` process.
+    let (batched, serial): (Vec<String>, Vec<String>) =
+        specs.into_iter().partition(|spec| !spec.contains('\n'));
+    let contents = git::cat_file_blobs(root, &batched)?;
+    let mut blobs: HashMap<String, Option<String>> = batched.into_iter().zip(contents).collect();
+    for spec in serial {
+        let (rev, path) = spec.split_once(':').expect("blob spec is rev:path");
+        blobs.insert(spec.clone(), git::show_file(root, rev, path)?);
+    }
+    Ok(blobs)
+}
+
+/// `rev:path` → blob content lookup over [`load_blobs`]'s cache.
+fn blob<'a>(blobs: &'a HashMap<String, Option<String>>, rev: &str, path: &str) -> Option<&'a str> {
+    // An empty rev would form `:path`, which cat-file resolves against the
+    // index rather than reporting the object missing.
+    if rev.is_empty() {
+        return None;
+    }
+    blobs
+        .get(&format!("{rev}:{path}"))
+        .and_then(|content| content.as_deref())
+}
+
 /// The commit's Orbit verb and detail: `orbit: claim orb-x` → (`claim`,
 /// `orb-x`). Non-Orbit subjects produce no events.
 fn orbit_verb(subject: &str) -> Option<(String, String)> {
@@ -261,27 +314,23 @@ fn orbit_verb(subject: &str) -> Option<(String, String)> {
     Some((verb.to_string(), detail.trim().to_string()))
 }
 
-fn events_for_commit(root: &Path, info: &CommitInfo) -> Result<Vec<BoardEvent>> {
-    let Some((verb, detail)) = orbit_verb(&info.subject) else {
-        return Ok(Vec::new());
+fn events_for_commit(
+    info: &CommitInfo,
+    blobs: &HashMap<String, Option<String>>,
+) -> Vec<BoardEvent> {
+    let Some((verb, detail)) = info.orbit.as_ref() else {
+        return Vec::new();
     };
-    let changes = changed_files(root, info)?;
+    let (verb, detail) = (verb.as_str(), detail.as_str());
     let mut events = Vec::new();
     let mut board_paths: Vec<String> = Vec::new();
 
-    for change in &changes {
+    for change in &info.changes {
         let path = change.path.as_str();
         if let Some(id) = task_file_id(path) {
-            events.push(task_event(root, info, &verb, &detail, id, change.status)?);
+            events.push(task_event(info, verb, detail, id, change.status, blobs));
         } else if let Some(id) = comment_file_id(path) {
-            events.push(comment_event(
-                root,
-                info,
-                &verb,
-                &detail,
-                id,
-                change.status,
-            )?);
+            events.push(comment_event(info, verb, detail, id, change.status, blobs));
         } else {
             board_paths.push(path.to_string());
         }
@@ -298,7 +347,7 @@ fn events_for_commit(root: &Path, info: &CommitInfo) -> Result<Vec<BoardEvent>> 
             trace_id: info.hash.clone(),
             commit: info.hash.clone(),
             at: info.time.clone(),
-            verb: Some(verb.clone()),
+            verb: Some(verb.to_string()),
             data: json!({
                 "paths": board_paths,
                 "detail": detail,
@@ -308,7 +357,7 @@ fn events_for_commit(root: &Path, info: &CommitInfo) -> Result<Vec<BoardEvent>> 
     for (ordinal, event) in events.iter_mut().enumerate() {
         event.id = format!("{}:{ordinal}", info.hash);
     }
-    Ok(events)
+    events
 }
 
 /// `tasks/<id>.md` → `<id>`; anything else under `tasks/` is not a Task.
@@ -338,7 +387,7 @@ struct TaskSnapshot {
     checkpoint_by: Option<String>,
 }
 
-fn snapshot(content: Option<String>) -> TaskSnapshot {
+fn snapshot(content: Option<&str>) -> TaskSnapshot {
     let Some(content) = content else {
         return TaskSnapshot::default();
     };
@@ -405,28 +454,27 @@ fn scalar_value(line: &str, key: &str) -> Option<String> {
 }
 
 fn task_event(
-    root: &Path,
     info: &CommitInfo,
     verb: &str,
     detail: &str,
     id: &str,
     status: char,
-) -> Result<BoardEvent> {
+    blobs: &HashMap<String, Option<String>>,
+) -> BoardEvent {
     let path = format!("tasks/{id}.md");
-    let parent = format!("{}^", info.hash);
-    let (old, new) = match status {
-        'A' => (
-            TaskSnapshot::default(),
-            snapshot(git::show_file(root, &info.hash, &path)?),
-        ),
-        'D' => (
-            snapshot(git::show_file(root, &parent, &path)?),
-            TaskSnapshot::default(),
-        ),
-        _ => (
-            snapshot(git::show_file(root, &parent, &path)?),
-            snapshot(git::show_file(root, &info.hash, &path)?),
-        ),
+    // The pre-change revision is the first parent's — for a merge commit the
+    // same first-parent diff `git log --diff-merges=first-parent` reported.
+    let parent = info.parents.first().map_or("", String::as_str);
+    let (want_old, want_new) = read_sides(status);
+    let old = if want_old {
+        snapshot(blob(blobs, parent, &path))
+    } else {
+        TaskSnapshot::default()
+    };
+    let new = if want_new {
+        snapshot(blob(blobs, &info.hash, &path))
+    } else {
+        TaskSnapshot::default()
     };
 
     let (kind, mut data) = classify(&old, &new, status);
@@ -435,7 +483,7 @@ fn task_event(
         data["detail"] = json!(detail);
     }
 
-    Ok(BoardEvent {
+    BoardEvent {
         id: String::new(), // ordinal assigned by the caller
         kind: kind.to_string(),
         issue: Some(id.to_string()),
@@ -446,7 +494,7 @@ fn task_event(
         at: info.time.clone(),
         verb: Some(verb.to_string()),
         data,
-    })
+    }
 }
 
 /// Picks the event kind for a Task file change, most significant first, and
@@ -507,33 +555,31 @@ fn classify(old: &TaskSnapshot, new: &TaskSnapshot, status: char) -> (&'static s
 }
 
 fn comment_event(
-    root: &Path,
     info: &CommitInfo,
     verb: &str,
     detail: &str,
     id: &str,
     status: char,
-) -> Result<BoardEvent> {
+    blobs: &HashMap<String, Option<String>>,
+) -> BoardEvent {
     let path = format!("comments/{id}.md");
     let new_content = if status == 'D' {
         None
     } else {
-        git::show_file(root, &info.hash, &path)?
+        blob(blobs, &info.hash, &path).map(str::to_string)
     };
     let author = new_content
         .as_deref()
         .and_then(|content| crate::comment::parse_comments(content).ok())
         .and_then(|comments| comments.last().map(|comment| comment.author.clone()));
-    // The comments sidecar carries no key; read the Task's project key at
-    // this commit so `history <KEY>` finds comment events too.
-    let key = git::show_file(root, &info.hash, &format!("tasks/{id}.md"))?
+    let key = blob(blobs, &info.hash, &format!("tasks/{id}.md"))
         .and_then(|content| snapshot(Some(content)).key);
     let kind = if status == 'D' {
         "issue.comments_deleted"
     } else {
         "issue.commented"
     };
-    Ok(BoardEvent {
+    BoardEvent {
         id: String::new(),
         kind: kind.to_string(),
         issue: Some(id.to_string()),
@@ -548,7 +594,7 @@ fn comment_event(
             "detail": detail,
             "author": author,
         }),
-    })
+    }
 }
 
 /// Resolves the event actor: `Orbit-Actor` trailer, then the Issue's own

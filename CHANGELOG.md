@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1 - 2026-11-23
+
+- `orbit changes`/`orbit history` batch their Git calls: the commit log carries `--name-status -z` (with `--diff-merges=first-parent` and `--root`) instead of one `git diff`/`diff-tree` per commit, and every `rev:path` blob the feed reads is fetched in a single `git cat-file --batch` shared with `read_tree_blobs`.
+
 ## 0.11.0 - 2026-11-17
 
 - `orbit changes --limit N` keeps the oldest events (whole commits) and returns a `cursor` at the last returned commit plus `truncated`, so paging forward never skips events; the feed range is pinned to the resolved head and diffs run with `--no-renames`.

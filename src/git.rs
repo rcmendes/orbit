@@ -817,6 +817,28 @@ pub fn read_tree_blobs(
             entries.push((path.to_string(), hash.to_string()));
         }
     }
+    let hashes: Vec<String> = entries.iter().map(|(_, hash)| hash.clone()).collect();
+    let contents = cat_file_blobs(repo, &hashes)?;
+    let mut tree = std::collections::BTreeMap::new();
+    for ((path, _), content) in entries.into_iter().zip(contents) {
+        let Some(content) = content else {
+            return Err(OrbitError::git(format!(
+                "git cat-file --batch omitted {path}"
+            )));
+        };
+        tree.insert(path, content);
+    }
+    Ok(tree)
+}
+
+/// Reads each object — a hash, `<rev>:<path>`, or any other revision syntax —
+/// with one `git cat-file --batch` instead of one process per object. Results
+/// come back in input order; objects git reports missing or ambiguous, and
+/// objects that are not blobs, yield `None`.
+pub fn cat_file_blobs(repo: &Path, objects: &[String]) -> Result<Vec<Option<String>>> {
+    if objects.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut child = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -827,13 +849,10 @@ pub fn read_tree_blobs(
         .spawn()
         .map_err(|error| OrbitError::git(format!("could not run git: {error}")))?;
     let mut stdin = child.stdin.take().expect("piped stdin");
-    let hashes: Vec<String> = entries
-        .iter()
-        .map(|(_, hash)| format!("{hash}\n"))
-        .collect();
-    // Feed hashes from a thread so a large reply never blocks on a full pipe.
+    let queries: Vec<String> = objects.iter().map(|object| format!("{object}\n")).collect();
+    // Feed objects from a thread so a large reply never blocks on a full pipe.
     let writer = std::thread::spawn(move || {
-        for line in hashes {
+        for line in queries {
             if stdin.write_all(line.as_bytes()).is_err() {
                 break;
             }
@@ -846,32 +865,36 @@ pub fn read_tree_blobs(
     if !output.status.success() {
         return Err(git_failure(&["cat-file", "--batch"], &output));
     }
-    // Reply per object: `<hash> SP <type> SP <size> LF <content> LF`.
+    // Reply per object: `<object> SP <type> SP <size> LF <content> LF`, or
+    // `<object> missing LF` / `<object> ambiguous LF` with no content.
     let data = output.stdout;
-    let mut tree = std::collections::BTreeMap::new();
+    let mut blobs = Vec::with_capacity(objects.len());
     let mut at = 0;
-    for (path, _) in entries {
+    for _ in objects {
         let Some(end) = data[at..].iter().position(|byte| *byte == b'\n') else {
             return Err(OrbitError::git("truncated git cat-file reply"));
         };
         let header = String::from_utf8_lossy(&data[at..at + end]).to_string();
-        let size: usize = header
-            .rsplit(' ')
-            .next()
-            .and_then(|size| size.parse().ok())
-            .ok_or_else(|| OrbitError::git(format!("unexpected cat-file header `{header}`")))?;
-        let start = at + end + 1;
-        let stop = start + size;
-        if stop > data.len() {
+        at += end + 1;
+        let mut fields = header.rsplit(' ');
+        let Some(size) = fields.next().and_then(|size| size.parse::<usize>().ok()) else {
+            // `<object> missing` / `ambiguous`: no content follows.
+            blobs.push(None);
+            continue;
+        };
+        let is_blob = fields.next().is_some_and(|kind| kind == "blob");
+        let stop = at + size;
+        if stop >= data.len() {
             return Err(OrbitError::git("truncated git cat-file reply"));
         }
-        tree.insert(
-            path,
-            String::from_utf8_lossy(&data[start..stop]).to_string(),
-        );
+        blobs.push(if is_blob {
+            Some(String::from_utf8_lossy(&data[at..stop]).to_string())
+        } else {
+            None
+        });
         at = stop + 1;
     }
-    Ok(tree)
+    Ok(blobs)
 }
 
 /// The UTF-8 content of `path` at `commit`, or `None` when absent.

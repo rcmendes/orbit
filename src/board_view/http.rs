@@ -164,6 +164,10 @@ impl Response {
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        304 => "Not Modified",
+        401 => "Unauthorized",
+        422 => "Unprocessable Entity",
+        502 => "Bad Gateway",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
@@ -276,6 +280,23 @@ mod tests {
             parse("POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n").unwrap_err(),
             ParseError::BadRequest(_)
         ));
+    }
+
+    #[test]
+    fn reason_covers_statuses_later_tasks_use() {
+        for (status, line) in [
+            (304, "HTTP/1.1 304 Not Modified\r\n"),
+            (401, "HTTP/1.1 401 Unauthorized\r\n"),
+            (422, "HTTP/1.1 422 Unprocessable Entity\r\n"),
+            (502, "HTTP/1.1 502 Bad Gateway\r\n"),
+        ] {
+            let mut out = Vec::new();
+            write_response(&mut out, &Response::text(status, "")).unwrap();
+            assert!(
+                String::from_utf8(out).unwrap().starts_with(line),
+                "{status}"
+            );
+        }
     }
 
     #[test]

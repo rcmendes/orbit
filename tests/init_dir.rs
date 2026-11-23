@@ -469,3 +469,21 @@ fn a_member_link_resolves_a_legacy_workspace_root_board() {
     assert_eq!(status, 1);
     assert_eq!(value["error"]["code"], "BOARD_NOT_MIGRATED");
 }
+
+#[test]
+fn failed_init_without_git_identity_leaves_nothing_and_retry_succeeds() {
+    let repo = TestRepo::new();
+    let parent = tempfile::tempdir().unwrap();
+    let folder = parent.path().join("acme");
+    let args = ["init", "acme", "--agents", "none", "--json"];
+
+    repo.set_global_git_config("");
+    let failed = repo.orbit_in(parent.path(), &args);
+    assert!(!failed.status.success());
+    assert!(!folder.join(".orbit/board").exists());
+
+    repo.set_global_git_config("[user]\n\tname = Test\n\temail = test@example.com\n");
+    let value = repo.ok_json_in(parent.path(), &args);
+    assert_eq!(value["data"]["created"], true);
+    assert!(folder.join(".orbit/board/config.toml").exists());
+}

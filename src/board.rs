@@ -1458,22 +1458,46 @@ fn init_external(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
         return Err(already_initialized(&root));
     }
 
+    let created_root = !root.exists();
+    let created_git = !root.join(".git").exists();
     std::fs::create_dir_all(&root)
         .map_err(|error| OrbitError::io(format!("create {}", root.display()), error))?;
 
+    let result = init_external_locked(&root, &prefix, created_git);
+    if result.is_err() {
+        // A failed init must not strand a half-created Board that blocks the
+        // retry with ALREADY_INITIALIZED.
+        let _ = std::fs::remove_file(root.join(".init.lock"));
+        if created_git {
+            let _ = std::fs::remove_dir_all(root.join(".git"));
+        }
+        if created_root {
+            // Only succeeds while empty; also tidies the `.orbit` parent.
+            let _ = std::fs::remove_dir(&root);
+            if let Some(parent) = root.parent()
+                && parent.file_name().is_some_and(|name| name == ".orbit")
+            {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
+    }
+    result
+}
+
+fn init_external_locked(root: &Path, prefix: &str, created_git: bool) -> Result<InitResult> {
     let _init_lock = BoardLock::acquire(&root.join(".init.lock"), 2000, true)?;
 
-    if !root.join(".git").exists() {
-        git::init_repo(&root)?;
+    if created_git {
+        git::init_repo(root)?;
     }
-    if git::has_head(&root)? {
+    if git::has_head(root)? {
         return Err(OrbitError::config(format!(
             "{} is a Git repository with commits; use an empty directory for an external board",
             root.display()
         )));
     }
 
-    for entry in std::fs::read_dir(&root)
+    for entry in std::fs::read_dir(root)
         .map_err(|error| OrbitError::io(format!("read {}", root.display()), error))?
         .flatten()
     {
@@ -1488,9 +1512,9 @@ fn init_external(dir: &Path, slug: Option<&str>) -> Result<InitResult> {
         )));
     }
 
-    git::ensure_identity(&root)?;
-    git::set_head(&root, "orbit")?;
-    initialize_board_files(&root, "orbit", true, &prefix)
+    git::ensure_identity(root)?;
+    git::set_head(root, "orbit")?;
+    initialize_board_files(root, "orbit", true, prefix)
 }
 
 fn initialize_board_files(

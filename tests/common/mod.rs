@@ -199,6 +199,11 @@ impl TestRepo {
             .unwrap()
     }
 
+    /// Replaces the isolated global git config (e.g. to drop the identity).
+    pub fn set_global_git_config(&self, content: &str) {
+        std::fs::write(&self.global_config, content).unwrap();
+    }
+
     pub fn orbit_command(&self, args: &[&str]) -> Command {
         self.command(env!("CARGO_BIN_EXE_orbit"), self.path(), args)
     }

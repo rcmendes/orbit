@@ -1,6 +1,7 @@
 pub mod guard;
 pub mod http;
 pub mod plan;
+mod write;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -90,10 +91,24 @@ fn denied(d: Denied) -> Response {
 }
 
 fn route(ctx: &Ctx, request: &Request) -> Response {
+    let path = request.path.split('?').next().unwrap_or("");
+    if let Some(api) = path.strip_prefix("/api/") {
+        if let Err(d) = ctx.guard.check_api(request) {
+            return denied(d);
+        }
+        return match (request.method.as_str(), api) {
+            ("GET", "snapshot") => snapshot(ctx, request),
+            ("POST", "move" | "takeover" | "release") => write::write(ctx, api, request),
+            ("GET", _) => match api.strip_prefix("show/") {
+                Some(id) if !id.is_empty() => show(ctx, id),
+                _ => Response::text(404, "not found"),
+            },
+            _ => Response::text(404, "not found"),
+        };
+    }
     if request.method != "GET" {
         return Response::text(404, "not found");
     }
-    let path = request.path.split('?').next().unwrap_or("");
     let asset = |content_type, body| match ctx.guard.check_host(request) {
         Ok(()) => Response::asset(content_type, body),
         Err(d) => denied(d),
@@ -108,18 +123,6 @@ fn route(ctx: &Ctx, request: &Request) -> Response {
             include_str!("assets/app.js"),
         ),
         "/app.css" => asset("text/css; charset=utf-8", include_str!("assets/app.css")),
-        _ if path.starts_with("/api/") => {
-            if let Err(d) = ctx.guard.check_api(request) {
-                return denied(d);
-            }
-            match path {
-                "/api/snapshot" => snapshot(ctx, request),
-                _ => match path.strip_prefix("/api/show/") {
-                    Some(id) if !id.is_empty() => show(ctx, id),
-                    _ => Response::text(404, "not found"),
-                },
-            }
-        }
         _ => Response::text(404, "not found"),
     }
 }
@@ -177,6 +180,9 @@ fn snapshot(ctx: &Ctx, request: &Request) -> Response {
 }
 
 fn show(ctx: &Ctx, id: &str) -> Response {
+    if !write::valid_id(id) {
+        return write::bad_request("Invalid id.");
+    }
     match cli_data(&ctx.exe, ctx.dir.as_deref(), &["show", id]) {
         Ok(data) => Response::json(200, &data),
         Err(response) => response,

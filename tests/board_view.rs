@@ -57,6 +57,16 @@ fn http(
     path: &str,
     headers: &[(&str, &str)],
 ) -> (u16, Vec<(String, String)>, String) {
+    http_body(base, method, path, headers, "")
+}
+
+fn http_body(
+    base: &str,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> (u16, Vec<(String, String)>, String) {
     let addr = base.trim_start_matches("http://");
     let mut stream = TcpStream::connect(addr).unwrap();
     stream
@@ -69,7 +79,10 @@ fn http(
     for (k, v) in headers {
         request.push_str(&format!("{k}: {v}\r\n"));
     }
-    request.push_str("Connection: close\r\n\r\n");
+    request.push_str(&format!(
+        "Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    ));
     stream.write_all(request.as_bytes()).unwrap();
     let mut raw = String::new();
     stream.read_to_string(&mut raw).unwrap();
@@ -204,4 +217,243 @@ fn silent_client_does_not_block_server() {
     let started = Instant::now();
     assert_eq!(api(&server, "/api/snapshot", &[]).0, 200);
     assert!(started.elapsed() < Duration::from_secs(7));
+}
+
+/// POSTs `body` as JSON with the token and, when `origin`, a same-origin `Origin`.
+fn post(server: &Server, path: &str, body: &Value, origin: bool) -> (u16, Value) {
+    let origin_value = server.base.clone();
+    let mut headers = vec![
+        ("X-Orbit-Token", server.token.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    if origin {
+        headers.push(("Origin", origin_value.as_str()));
+    }
+    let (status, _, body) = http_body(&server.base, "POST", path, &headers, &body.to_string());
+    (status, serde_json::from_str(&body).unwrap_or(Value::Null))
+}
+
+fn shown(repo: &TestRepo, id: &str) -> Value {
+    repo.ok_json(&["show", id, "--json"])["data"].clone()
+}
+
+fn version(repo: &TestRepo, id: &str) -> String {
+    shown(repo, id)["updated_at"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn move_ready_to_in_progress_assigns_viewer() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("work", &[]);
+    let server = start(&repo);
+    let v = version(&repo, &id);
+    let (status, body) = post(
+        &server,
+        "/api/move",
+        &serde_json::json!({"id": id, "status": "in_progress", "version": v}),
+        true,
+    );
+    assert_eq!(status, 200, "{body}");
+    let issue = shown(&repo, &id);
+    assert_eq!(issue["assignee"], "tester");
+    assert_eq!(issue["assignee_kind"], "human");
+    assert!(issue["lease_until"].is_null(), "{issue}");
+}
+
+#[test]
+fn move_by_column_and_bad_shapes() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("work", &[]);
+    let server = start(&repo);
+    let v = version(&repo, &id);
+    for bad in [
+        serde_json::json!({"id": id, "version": v}),
+        serde_json::json!({"id": id, "version": v, "status": "in_progress", "column": "in_progress"}),
+        serde_json::json!({"id": id, "version": v, "status": "nope"}),
+        serde_json::json!({"id": id, "version": v, "column": "nope"}),
+        serde_json::json!({"id": id, "version": v, "column": "in_progress", "transition": "nope"}),
+        serde_json::json!({"id": id, "version": v, "column": "in_progress", "transition": "done"}),
+        serde_json::json!({"id": id, "column": "in_progress"}),
+    ] {
+        assert_eq!(post(&server, "/api/move", &bad, true).0, 400, "{bad}");
+    }
+    let (status, body) = post(
+        &server,
+        "/api/move",
+        &serde_json::json!({"id": id, "column": "in_progress", "version": v}),
+        true,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(shown(&repo, &id)["status"], "in_progress");
+}
+
+#[test]
+fn move_refuses_live_claim() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("work", &[]);
+    repo.ok_json(&["claim", &id, "--by", "agent-1", "--json"]);
+    let before = shown(&repo, &id);
+    let server = start(&repo);
+    let (status, body) = post(
+        &server,
+        "/api/move",
+        &serde_json::json!({"id": id, "status": "ready", "version": before["updated_at"]}),
+        true,
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"]["code"], "MOVE_REFUSED");
+    assert_eq!(shown(&repo, &id), before);
+}
+
+#[test]
+fn takeover_requires_confirmation_then_succeeds() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("work", &[]);
+    repo.ok_json(&["claim", &id, "--by", "agent-1", "--json"]);
+    repo.make_stale(&id);
+    let server = start(&repo);
+    let v = version(&repo, &id);
+    let (status, body) = post(
+        &server,
+        "/api/takeover",
+        &serde_json::json!({"id": id, "version": v}),
+        true,
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"]["code"], "CONFIRM_REQUIRED");
+    assert!(body["error"]["confirm"]["title"].is_string(), "{body}");
+    let (status, body) = post(
+        &server,
+        "/api/takeover",
+        &serde_json::json!({"id": id, "version": v, "confirmed": true}),
+        true,
+    );
+    assert_eq!(status, 200, "{body}");
+    let issue = shown(&repo, &id);
+    assert_eq!(issue["assignee"], "tester");
+    assert_eq!(issue["status"], "in_progress");
+}
+
+#[test]
+fn release_stale_claim_returns_issue_to_ready() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("work", &[]);
+    repo.ok_json(&["claim", &id, "--by", "agent-1", "--json"]);
+    repo.make_stale(&id);
+    let server = start(&repo);
+    let v = version(&repo, &id);
+    let (status, body) = post(
+        &server,
+        "/api/release",
+        &serde_json::json!({"id": id, "version": v, "confirmed": true}),
+        true,
+    );
+    assert_eq!(status, 200, "{body}");
+    let issue = shown(&repo, &id);
+    assert_eq!(issue["status"], "ready");
+    assert!(issue["assignee"].is_null(), "{issue}");
+}
+
+#[test]
+fn takeover_loses_to_returning_agent() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("work", &[]);
+    repo.ok_json(&["claim", &id, "--by", "agent-1", "--json"]);
+    repo.make_stale(&id);
+    let v = version(&repo, &id);
+    repo.ok_json(&["claim", &id, "--by", "agent-1", "--json"]);
+    assert_ne!(version(&repo, &id), v);
+    let server = start(&repo);
+    let (status, body) = post(
+        &server,
+        "/api/takeover",
+        &serde_json::json!({"id": id, "version": v, "confirmed": true}),
+        true,
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"]["code"], "VERSION_CONFLICT");
+    assert_eq!(shown(&repo, &id)["assignee"], "agent-1");
+}
+
+#[test]
+fn move_rejects_option_like_id() {
+    let repo = repo_with_issue();
+    let before = repo.ok_json(&["list", "--all", "--json"])["data"].clone();
+    let server = start(&repo);
+    let (status, _) = post(
+        &server,
+        "/api/move",
+        &serde_json::json!({"id": "--force", "status": "in_progress", "version": "x"}),
+        true,
+    );
+    assert_eq!(status, 400);
+    for path in ["/api/takeover", "/api/release"] {
+        let (status, _) = post(
+            &server,
+            path,
+            &serde_json::json!({"id": "-h", "version": "x", "confirmed": true}),
+            true,
+        );
+        assert_eq!(status, 400, "{path}");
+    }
+    assert_eq!(repo.ok_json(&["list", "--all", "--json"])["data"], before);
+}
+
+#[test]
+fn show_rejects_option_like_id() {
+    let repo = repo_with_issue();
+    let server = start(&repo);
+    assert_eq!(api(&server, "/api/show/--help", &[]).0, 400);
+    assert_eq!(api(&server, "/api/show/-h", &[]).0, 400);
+}
+
+#[test]
+fn post_without_origin_is_forbidden() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("work", &[]);
+    let server = start(&repo);
+    let v = version(&repo, &id);
+    let (status, _) = post(
+        &server,
+        "/api/move",
+        &serde_json::json!({"id": id, "status": "in_progress", "version": v}),
+        false,
+    );
+    assert_eq!(status, 403);
+    assert_eq!(shown(&repo, &id)["status"], "ready");
+}
+
+#[test]
+fn in_review_to_done_is_refused() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("work", &[]);
+    repo.ok_json(&["claim", &id, "--by", "agent-1", "--json"]);
+    repo.ok_json(&["submit", &id, "--by", "agent-1", "--note", "done", "--json"]);
+    let before = shown(&repo, &id);
+    assert_eq!(before["status"], "in_review");
+    let server = start(&repo);
+    let (status, body) = post(
+        &server,
+        "/api/move",
+        &serde_json::json!({"id": id, "status": "done", "version": before["updated_at"]}),
+        true,
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"]["code"], "MOVE_REFUSED");
+    assert!(
+        body["error"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("orbit review"),
+        "{body}"
+    );
+    assert_eq!(shown(&repo, &id), before);
 }

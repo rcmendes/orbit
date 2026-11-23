@@ -376,9 +376,38 @@ impl TouchesDisjoint for BTreeSet<String> {
 /// non-terminal Tasks that transitively block-depend on it. Terminal
 /// dependents contribute nothing; a dependency cycle stops the walk.
 fn critical_scores(graph: &Graph) -> HashMap<String, usize> {
+    // Prebuilt reverse index: link target → the non-terminal Tasks whose
+    // blocking links point at it, sorted by Task ID like `dependents`.
+    // One pass over every Task's links replaces the per-Task
+    // `blocking_dependents` scan, which made scoring O(N²).
+    let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
+    for task in graph.tasks.values() {
+        if graph.workflow.is_terminal(&task.front.status) {
+            continue;
+        }
+        let mut targets: Vec<&str> = task
+            .front
+            .links
+            .iter()
+            .filter(|link| link.is_blocking())
+            .filter_map(|link| link.target_task())
+            .collect();
+        targets.sort_unstable();
+        targets.dedup();
+        for target in targets {
+            dependents
+                .entry(target.to_string())
+                .or_default()
+                .push(task.id.clone());
+        }
+    }
+    for ids in dependents.values_mut() {
+        ids.sort_unstable();
+    }
+
     fn score(
-        graph: &Graph,
         id: &str,
+        dependents: &HashMap<String, Vec<String>>,
         memo: &mut HashMap<String, usize>,
         visiting: &mut HashSet<String>,
     ) -> usize {
@@ -388,15 +417,11 @@ fn critical_scores(graph: &Graph) -> HashMap<String, usize> {
         if !visiting.insert(id.to_string()) {
             return 0;
         }
-        let next: Vec<String> = graph
-            .blocking_dependents(id)
-            .into_iter()
-            .filter(|task| !graph.workflow.is_terminal(&task.front.status))
-            .map(|task| task.id.clone())
-            .collect();
         let mut best = 0;
-        for dependent in next {
-            best = best.max(1 + score(graph, &dependent, memo, visiting));
+        if let Some(next) = dependents.get(id) {
+            for dependent in next {
+                best = best.max(1 + score(dependent, dependents, memo, visiting));
+            }
         }
         visiting.remove(id);
         memo.insert(id.to_string(), best);
@@ -406,7 +431,7 @@ fn critical_scores(graph: &Graph) -> HashMap<String, usize> {
     let mut memo = HashMap::new();
     let mut visiting = HashSet::new();
     for task in graph.tasks.values() {
-        score(graph, &task.id, &mut memo, &mut visiting);
+        score(&task.id, &dependents, &mut memo, &mut visiting);
     }
     memo
 }
@@ -542,6 +567,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ids(&outcome.tasks), vec!["orb-bbbbbb", "orb-aaaaaa"]);
+    }
+
+    #[test]
+    fn critical_scores_skip_terminal_dependents_and_survive_cycles() {
+        // Diamond: a is blocked by b and c, both blocked by tail. The done
+        // dependent of a contributes nothing: b and c each score 1 (tail
+        // scores 0), so a scores 2.
+        let a = task("orb-aaaaaa", "ready", "medium");
+        let b = depends(task("orb-bbbbbb", "ready", "medium"), "orb-aaaaaa");
+        let c = depends(task("orb-cccccc", "ready", "medium"), "orb-aaaaaa");
+        let mut tail = depends(task("orb-dddddd", "ready", "medium"), "orb-bbbbbb");
+        tail.front.links.push(Link::dependency("orb-cccccc"));
+        let done_dependent = depends(task("orb-eeeeee", "done", "medium"), "orb-aaaaaa");
+        // A dependency cycle must not hang the walk; both sides score > 0.
+        let f = depends(task("orb-ffffff", "ready", "medium"), "orb-999999");
+        let g = depends(task("orb-999999", "ready", "medium"), "orb-ffffff");
+        let graph = graph(vec![a, b, c, tail, done_dependent, f, g]);
+
+        let scores = critical_scores(&graph);
+        assert_eq!(scores["orb-aaaaaa"], 2);
+        assert_eq!(scores["orb-bbbbbb"], 1);
+        assert_eq!(scores["orb-cccccc"], 1);
+        assert_eq!(scores["orb-dddddd"], 0);
+        assert!(scores["orb-ffffff"] >= 1);
+        assert!(scores["orb-999999"] >= 1);
     }
 
     #[test]

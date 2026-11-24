@@ -1876,6 +1876,11 @@ pub static COMMANDS: &[CommandEntry] = &[
         "writes agent harness configuration and Board config.toml profiles; not a Board operation",
     ),
     exempt(
+        &["board", "view"],
+        "Serve the Board view in a browser.",
+        "is a local web server, not a Board operation",
+    ),
+    exempt(
         &["mcp"],
         "Serve the MCP tools and resources over stdio.",
         "is the MCP server itself",

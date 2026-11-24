@@ -14,7 +14,7 @@
 use crate::error::{OrbitError, Result, code};
 
 /// The contract version this binary implements.
-pub const VERSION: &str = "1.0.0";
+pub const VERSION: &str = "1.1.0";
 
 /// Serde default for `Config::contract`.
 pub fn default_version() -> String {

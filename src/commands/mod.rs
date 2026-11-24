@@ -446,6 +446,11 @@ pub fn run(cli: Cli) -> Result<crate::output::CommandOutput> {
                 output.warnings.extend(board.warnings.iter().cloned());
                 Ok(output)
             }
+            crate::cli::BoardCommand::View(view_args) => {
+                concurrency.reject_idempotency("orbit board view")?;
+                crate::board_view::serve(dir.as_deref(), view_args, json)
+                    .map(|()| crate::output::CommandOutput::new(Value::Null, "").with_silent())
+            }
             crate::cli::BoardCommand::Move(move_args) => {
                 concurrency.reject_idempotency("orbit board move")?;
                 // The old root is gone after the move; never auto-sync from it.
@@ -761,7 +766,7 @@ fn read_stdin() -> Result<String> {
     Ok(body)
 }
 
-fn resolve_agent(by: Option<String>) -> Result<String> {
+pub(crate) fn resolve_agent(by: Option<String>) -> Result<String> {
     optional_agent(by)
         .ok_or_else(|| OrbitError::config("set --by, ORBIT_AGENT, or USER to identify the agent"))
 }

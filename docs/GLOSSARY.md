@@ -132,6 +132,14 @@ _Avoid_: Blocker, prerequisite, parent
 A condition of an Issue sitting in the Workflow's Ready Status — the one Status marked `ready` — with no Assignee, not Waiting, no Hold Label, no open Dependency, and no open descendant. Ready is derived, never stored.
 _Avoid_: Unblocked, available, actionable
 
+**Ready for a human**:
+A condition of an Issue sitting in the Workflow's Ready Status with the `ready-for-human` Label, no Assignee, and no open Dependency: work meant for a person, who takes it with `orbit assign`. The Label keeps it out of the agents' Ready queue. Derived, never stored.
+_Avoid_: Human-ready, human queue
+
+**Needs a human**:
+A condition of an open Issue that cannot advance until a person acts at some step: an unanswered Ask, a hold Status reached by Escalation, a Stale claim, or a `needs-triage` or `needs-info` Label. Each cause names the step the person must take. Derived, never stored.
+_Avoid_: Blocked on human, waiting, needs attention
+
 **Blocked**:
 A condition of an Issue with at least one Dependency that is not in a closed Status Category. Blocked is derived, never stored.
 _Avoid_: Blocked status, waiting
@@ -175,6 +183,12 @@ _Avoid_: Status update, progress log, assignment note
 **Stale**:
 A condition of an Issue whose assignee's Lease has expired but the assignment has not been released. A Stale Issue is not Ready; it can be released or stolen, and the previous assignee can still record a Checkpoint until takeover.
 _Avoid_: Expired claim, abandoned
+
+**Takeover**:
+Replacing a claimed Issue's Assignee with a new one while keeping its Status
+and Checkpoint. The new Assignee may take a fresh Lease (`claim --steal`) or
+none (`assign`). The Board view offers Takeover only on Stale Issues.
+_Avoid_: Heal, recover, unlock, reset
 
 **Scheduler strategy**:
 An opt-in rule that reorders or constrains the `orbit ready` queue, selected per call with `--strategy` or for the Board with `scheduler.strategy`: `default` keeps priority/age order, `critical-path` claims work that unblocks the longest dependency chain, `touches` refuses a claim whose declared `touches` Property paths overlap another assignee's, `capability` prefers Issues matching the agent's `[scheduler.capabilities]`, and `wip` caps how many Issues one agent may hold.
@@ -232,6 +246,15 @@ inventory from the last explicit refresh and the Remote Issue catalog. It is a
 snapshot; nothing polls or rescans it, and deleting it loses nothing a refresh
 cannot rebuild.
 _Avoid_: Board, issue store, Workspace cache
+
+**Board view**:
+The kanban rendering of one Board in a web browser, one card per Issue across
+all member Repositories. Columns group Statuses: Blocked Issues, the other
+`todo` Statuses, the Ready Status, each `active` Status, then the closed ones.
+Moving a card
+between columns runs a Transition; the Board view is a front door onto the
+Board, never a second copy of it.
+_Avoid_: Dashboard, web UI, kanban app, ticket board
 
 **Remote Tracker**:
 An external issue tracker a Board may connect to, such as GitHub Issues, GitLab,

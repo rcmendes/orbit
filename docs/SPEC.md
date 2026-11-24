@@ -17,7 +17,7 @@ Beads already provides claims, ready-work detection, priorities, hash IDs, and w
 - Hosted sync or federation beyond the single Board host: `orbit board host`/`sync` pushes the Board's `orbit` branch to one chosen remote with an Orbit-aware merge ([ADR 0019](./adr/0019-board-folder-is-its-own-repository.md)); there is no multi-writer service.
 - Dolt, SQLite, or any second source of truth.
 - A daemon or background watcher.
-- Web UI.
+- A hosted or multi-user Web UI (the local Board view is ADR 0023).
 - Beads-style issue-type entities or attachments. Parentage is the
   Board-configured Issue hierarchy ([ADR 0022](./adr/0022-issue-model-and-platform-architecture.md));
   Issue types are Board configuration, not separate entities.
@@ -987,7 +987,7 @@ Every error carries the RFC 9457-style problem fields alongside the legacy ones:
 
 ### Contract version and capabilities
 
-`config.toml` carries `contract = "<semver>"`: the contract version the Board was written for. Every Orbit binary speaks one contract (`orbit_tracker::contract::VERSION`, currently `1.0.0`). `Config::validate` — the choke point every Board open passes through — refuses a Board whose contract is newer than the binary's with `CONTRACT_VERSION_UNSUPPORTED`; an older or equal contract is accepted, and a missing field reads as the current contract.
+`config.toml` carries `contract = "<semver>"`: the contract version the Board was written for. Every Orbit binary speaks one contract (`orbit_tracker::contract::VERSION`, currently `1.1.0`, bumped with `orbit board view`). `Config::validate` — the choke point every Board open passes through — refuses a Board whose contract is newer than the binary's with `CONTRACT_VERSION_UNSUPPORTED`; an older or equal contract is accepted, and a missing field reads as the current contract.
 
 `orbit capabilities [--json]` is the handshake (ADR 0022). It reads `config.toml` leniently — without validation — so it still answers on a Board every other command refuses. `data` reports `orbit_version`, the binary's `contract`, `capabilities` (the named features this binary provides — the vocabulary Profiles negotiate `requires`/`optional` against), `board.contract` and `board.compatible`, the enabled optional `modules` (`remote` with its projects/trackers and `auto_push`, `workspace` with its include/exclude/detached lists, `scheduler` with its strategy and `wip_limit` when `[scheduler]` is configured, `hooks` with its rule count when `[[hooks]]` is configured, `index` when `[index] enabled = true`; the legacy `[github]` section reports as the `remote` module's `github_adapter`), the Board's applied `profiles` (the `[[profiles]]` record names), and `workflow`: `source` (`template` or `custom`), `template` when templated, `initial`, every `statuses` entry (`name`, `category`, `ready`), and every `transitions` entry (`name`, `from`, `to`, `resolution`). `workflow` is `null` when the Board's `[workflow]` section does not resolve on this binary. The MCP tool `capabilities` exposes the same command.
 

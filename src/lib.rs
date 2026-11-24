@@ -4,6 +4,7 @@ pub mod board_host;
 pub mod board_migrate;
 pub mod board_move;
 pub mod board_sync;
+pub mod board_view;
 pub mod capabilities;
 pub mod cli;
 pub mod commands;

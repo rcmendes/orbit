@@ -262,6 +262,17 @@ orb-a7b2c9.hxdmqt  ready  P1  issue  api: OIDC callback  ... login flow ...
 
 `orbit list` and `orbit search` paginate with a stable cursor — feed `data.next_cursor` back as `--cursor` and page through without repeats or skips while the Board changes. Both also accept `--filter` (a JSON object of summary-field predicates) and `--fields` (a comma-separated projection, dotted paths allowed); `show --fields` projects the detail object the same way. `orbit digest <id>` is the compact per-Issue read; on an epic or parent it adds a `rollup` with `done`/`cancelled`/`blocked`/`open` counts over the subtree.
 
+#### Board view
+
+`orbit board view` serves a kanban of the Board in your browser while the command runs, with two layouts: Columns (drag a card to move it, or walk the grid with the arrow keys) and Queue (a prioritized list with a detail pane). The keyboard covers everything: `/` focuses the filter, `j`/`k` or ↑/↓ move between Issues, ←/→ move between columns in Columns, Enter opens one, `m` opens its move menu, Esc closes, and `?` shows the full shortcut sheet. Every move runs the same `orbit` command you would type, with `--if-version`, so an agent that changed the Issue first wins. Stop it with Ctrl-C.
+
+```bash
+orbit board view            # opens http://127.0.0.1:<port>/#token=...
+orbit board view --no-open --port 8080 --by maria
+```
+
+Security: the server listens on `127.0.0.1` only, and every API call needs the per-run token from the printed URL, so other web pages and sites cannot read or move your Board. The token in the printed URL is the only credential; `--no-open` keeps it out of the browser-launch command line. See [ADR 0023](./docs/adr/0023-board-view-served-by-a-foreground-local-server.md).
+
 Verify Board health, its branch, and uncommitted changes. If a Claude SessionStart hook is configured, `doctor` also warns when `orbit` is not the binary on `PATH`. From a Board anchor or member Repository it also names the resolved Board, checks Repository discovery and cached Issue freshness, and reports migration remnants, sync conflicts, and agent setup drift with a safe next action:
 
 ```bash

@@ -4,21 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Orbit board</title>
+<link rel="icon" href="/favicon.svg">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+<a class="skiplink" href="#stage">Skip to board</a>
 <div class="app">
-  <div class="top">
-    <div class="brand"><h1>Orbit board</h1><span class="src" id="src"></span></div>
+  <header class="top">
+    <div class="brand"><h1>Orbit board</h1><span class="src sync" id="src"></span></div>
     <div class="pulse" id="pulse"></div>
     <div class="layout" id="layout" role="radiogroup" aria-label="Layout"></div>
+    <button class="btn ghost" id="shortcuts" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">?</button>
     <div class="me" id="me"></div>
-  </div>
-  <div class="filters" id="filters"></div>
+  </header>
+  <div class="filters" id="filters" role="search" aria-label="Filters"></div>
   <div id="bannerSlot"></div>
-  <main class="stage" id="stage"></main>
+  <main class="stage" id="stage" tabindex="-1"><p class="loading">Loading the Board…</p></main>
 </div>
-<aside class="drawer" id="drawer" aria-label="Issue detail"></aside>
+<aside class="drawer" id="drawer" aria-labelledby="dtitle"></aside>
 <dialog id="dlg"></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="/app.js"></script>

@@ -349,10 +349,12 @@ fn action_for(issue: &Value, t: &Value, wf: &Value, viewer: &str) -> Action {
     let (name, to) = (s(t, "name"), s(t, "to"));
     let (key, ver) = (key_of(issue), s(issue, "updated_at"));
     let mut confirm = None;
+    let mut action_label = label(name);
     let args = match name {
         "done" | "cancel" => argv(&[name, key, "--by", viewer, "--if-version", ver]),
         "reopen" => argv(&["reopen", key, "--if-version", ver]),
         _ if on_claim_route(wf, s(issue, "status"), to) => {
+            action_label = "Assign to me".into();
             let other = s(issue, "assignee");
             let mut a = argv(&["assign", key, "--to", viewer, "--kind", "human"]);
             if !other.is_empty() && other != viewer {
@@ -372,7 +374,7 @@ fn action_for(issue: &Value, t: &Value, wf: &Value, viewer: &str) -> Action {
         _ => argv(&["transition", key, name, "--by", viewer, "--if-version", ver]),
     };
     Action {
-        label: label(name),
+        label: action_label,
         transition: name.into(),
         args,
         confirm,

@@ -264,7 +264,7 @@ orb-a7b2c9.hxdmqt  ready  P1  issue  api: OIDC callback  ... login flow ...
 
 #### Board view
 
-`orbit board view` serves a kanban of the Board in your browser while the command runs, with two layouts: Columns (drag a card to move it) and Queue (a prioritized list with a detail pane). Every move runs the same `orbit` command you would type, with `--if-version`, so an agent that changed the Issue first wins. Stop it with Ctrl-C.
+`orbit board view` serves a kanban of the Board in your browser while the command runs, with two layouts: Columns (drag a card to move it, or walk the grid with the arrow keys) and Queue (a prioritized list with a detail pane). The keyboard covers everything: `/` focuses the filter, `j`/`k` or the arrows move between Issues, Enter opens one, `m` opens its move menu, Esc closes, and `?` shows the full shortcut sheet. Every move runs the same `orbit` command you would type, with `--if-version`, so an agent that changed the Issue first wins. Stop it with Ctrl-C.
 
 ```bash
 orbit board view            # opens http://127.0.0.1:<port>/#token=...

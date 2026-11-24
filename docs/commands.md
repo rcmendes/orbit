@@ -1421,7 +1421,10 @@ confirmed?}`). The server re-plans each write on a fresh `orbit show` and fails
 with `409`: `MOVE_REFUSED`, `CHOOSE_TRANSITION`, `CONFIRM_REQUIRED`, or
 `VERSION_CONFLICT`. `--force` is passed only for Take over, Release, and an
 active drop over a lease-free Assignee, always after that server-side check,
-`confirmed: true`, and `--if-version`. Stop with Ctrl-C.
+`confirmed: true`, and `--if-version`. Static assets are served at `/app.css`,
+`/app.js`, and `/favicon.svg`. In the page, `/` focuses the filter, `j`/`k` or
+the arrow keys move between Issues, Enter opens one, `m` opens the move menu,
+Esc closes, and `?` shows the shortcut sheet. Stop with Ctrl-C.
 
 ### `orbit remote` — GitHub Issue provider
 

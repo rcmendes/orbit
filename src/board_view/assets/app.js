@@ -32,7 +32,9 @@ if (location.hash) history.replaceState(null, "", location.pathname + location.s
 function forgetToken() {
   TOKEN = "";
   try { sessionStorage.removeItem(TOKEN_KEY); } catch {}
-  setError(NO_TOKEN);
+  S.offlineSince = Date.now();
+  setBanner(NO_TOKEN);
+  paintSync();
 }
 
 // ---------- constants ----------
@@ -48,7 +50,8 @@ const PRIORITIES = ["highest", "high", "medium", "low", "lowest"];
 const S = {
   viewer: "", wf: null, issues: [], byId: new Map(), prios: PRIORITIES, etag: null, error: "",
   q: "", type: "", repo: "", who: "", epic: "", pulse: "", showAllClosed: false,
-  selected: null, expanded: new Set(), bodies: new Map(), writing: false, polling: false,
+  selected: null, expanded: new Set(), bodies: new Map(), writing: false, writeId: null, polling: false,
+  opener: null, drawerSig: "", syncedAt: null, offlineSince: null,
 };
 function layout() {
   const q = new URLSearchParams(location.search).get("layout");
@@ -70,26 +73,56 @@ function api(path, { body, headers } = {}) {
 async function refresh(flashId) {
   try {
     const r = await api("/api/snapshot", { headers: S.etag ? { "If-None-Match": S.etag } : {} });
-    if (r.status === 304) return;
+    if (r.status === 304) { S.syncedAt = new Date(); S.offlineSince = null; setBanner(""); paintSync(); return; }
     if (!r.ok) {
-      if (r.status === 401) forgetToken();
-      else setError(`The Board snapshot failed (HTTP ${r.status}). Retrying.`);
+      if (r.status === 401) { forgetToken(); return; }
+      S.offlineSince ??= Date.now();
+      setBanner(`The Board snapshot failed (HTTP ${r.status}). Retrying.`);
+      paintSync();
       return;
     }
     const d = await r.json();
     S.etag = r.headers.get("ETag");
     setData(d);
-    setError("");
+    S.syncedAt = new Date(); S.offlineSince = null;
+    setBanner("");
     renderControls();
     render(flashId);
+    paintSync();
   } catch {
-    setError("Lost the connection to orbit board view. Is the command still running?");
+    S.offlineSince ??= Date.now();
+    setBanner("Lost the connection to orbit board view. Is the command still running?");
+    paintSync();
   }
 }
-function setError(msg) {
-  if (S.error === msg) return;
-  S.error = msg;
-  $("bannerSlot").replaceChildren(msg ? h("div", { class: "banner", role: "alert" }, msg) : "");
+const hm = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const hms = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+function paintSync() {
+  $("src").textContent = S.offlineSince != null
+    ? `Offline since ${hm(new Date(S.offlineSince))} — retrying`
+    : S.syncedAt ? `Live · synced ${hms(S.syncedAt)}` : "";
+}
+// One banner slot: a connection error wins, else an active-filter notice.
+function setBanner(error) {
+  S.error = error;
+  const slot = $("bannerSlot");
+  if (error) { slot.replaceChildren(h("div", { class: "banner", role: "alert" }, error)); return; }
+  slot.replaceChildren(...[filterBanner()].flat().filter(Boolean));
+}
+function activeFilters() {
+  return S.q !== "" || S.type !== "" || S.repo !== "" || S.who !== "" || S.epic !== "" || S.pulse !== "";
+}
+function clearFilters() {
+  S.q = ""; S.type = ""; S.repo = ""; S.who = ""; S.epic = ""; S.pulse = ""; S.showAllClosed = false;
+  renderControls(); render();
+}
+function filterBanner() {
+  if (S.error || !activeFilters()) return null;
+  const n = S.issues.length - visible().length;
+  if (!n) return null;
+  return h("div", { class: "banner" },
+    visible().length ? `${n} ${n === 1 ? "Issue" : "Issues"} hidden by filters` : "No Issues match these filters.",
+    h("button", { class: "btn", onclick: clearFilters }, "Clear filters"));
 }
 function setData(d) {
   S.viewer = d.viewer; S.wf = d.workflow; S.issues = d.issues || [];
@@ -109,7 +142,8 @@ async function poll() {
 // POST a write; follow CHOOSE_TRANSITION and CONFIRM_REQUIRED, then refresh.
 async function send(route, i, extra, done) {
   const body = { id: i.id, version: i.updated_at, ...extra };
-  S.writing = true;
+  S.writing = true; S.writeId = i.id;
+  render();
   try {
     for (let step = 0; step < 4; step++) {
       let r, d;
@@ -131,8 +165,8 @@ async function send(route, i, extra, done) {
         if (!(await confirmDlg(e.confirm))) return;
         body.confirmed = true;
       } else if (e.code === "VERSION_CONFLICT") {
-        toast(`${i.key || i.id} changed while you were looking. Nothing was written.`, true);
-        await refresh();
+        await refresh(i.id);
+        toast(conflictText(i), true);
         return;
       } else {
         toast(e.detail || e.message || `The write failed (HTTP ${r.status}).`, true);
@@ -141,8 +175,19 @@ async function send(route, i, extra, done) {
       }
     }
   } finally {
-    S.writing = false;
+    S.writing = false; S.writeId = null;
+    render();
   }
+}
+// After a conflict the fresh snapshot is already in S; say what moved if it did.
+function conflictText(i) {
+  const now2 = S.byId.get(i.id), key = i.key || i.id;
+  if (!now2) return `${key} changed while you were looking. Nothing was written.`;
+  const delta = [];
+  if (now2.status !== i.status) delta.push(`status is now ${label(now2.status)}`);
+  if ((now2.assignee || "") !== (i.assignee || "")) delta.push(`assignee is now ${now2.assignee || "nobody"}`);
+  const what = delta.length ? ` ${delta.join("; ")}.` : "";
+  return `${key} changed while you were looking.${what} Nothing was written.`;
 }
 const moveToColumn = (i, colId) => send("move", i, { column: colId }, `Moved ${i.key} to ${columns().find((c) => c.id === colId)?.name || colId}`);
 const moveToStatus = (i, st) => send("move", i, { status: st }, `Moved ${i.key} to ${label(st)}`);
@@ -150,6 +195,8 @@ function runStale(i, a) {
   const takeover = a.transition === "claim";
   return send(takeover ? "takeover" : "release", i, {}, takeover ? `You took over ${i.key}` : `Released ${i.key}`);
 }
+// Buttons that run a write for this Issue go inert while one is in flight.
+const writingProps = (i) => (S.writing ? { disabled: true, "aria-disabled": "true" } : {});
 
 // ---------- workflow + issue helpers ----------
 const statusDef = (name) => S.wf.statuses.find((s) => s.name === name);
@@ -169,6 +216,10 @@ function ago(ms) {
   return hr < 48 ? `${hr} h` : `${Math.round(hr / 24)} days`;
 }
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function timeEl(iso) {
+  const d = new Date(iso);
+  return h("time", { datetime: iso, title: d.toLocaleString() }, `${ago(now() - d)} ago`);
+}
 function ancestors(i) {
   const out = []; let p = i.parent;
   while (p && S.byId.has(p) && out.length < 8) { out.push(p); p = S.byId.get(p).parent; }
@@ -181,7 +232,7 @@ function columns() {
   const todo = st.filter((s) => s.category === "todo" && !s.ready && s.name !== "blocked").map((s) => s.name);
   const closed = st.filter((s) => closedCat(s.category)).map((s) => s.name);
   return [
-    { id: "blocked", name: "Blocked", color: "var(--blocked)" },
+    { id: "blocked", name: "Blocked", color: "var(--blocked)", home: null },
     { id: "todo", name: "Todo", color: "var(--cat-todo)", home: todo.includes("todo") ? "todo" : todo[0] },
     { id: "ready", name: label(ready[0] || "ready"), color: "var(--cat-todo)", home: ready[0] },
     ...st.filter((s) => s.category === "active").map((s) => ({ id: s.name, name: label(s.name), color: "var(--cat-active)", home: s.name })),
@@ -204,17 +255,24 @@ function relatedOf(i) {
   return out;
 }
 const externalOf = (i) => (i.links || []).map(extRef).filter(Boolean);
+const EDGE_TEXT = { up: "blocks it", down: "waits on it", rel: "related", self: "selected Issue" };
 function showEdges(i) {
   clearEdges();
-  const mark = (x, kind) => document.querySelectorAll(`[data-id="${CSS.escape(x.id)}"]`).forEach((el) => (el.dataset.edge = kind));
+  const mark = (x, kind) => document.querySelectorAll(`[data-id="${CSS.escape(x.id)}"]`).forEach((el) => {
+    el.dataset.edge = kind;
+    el.setAttribute("aria-description", EDGE_TEXT[kind]);
+  });
   const up = depsOf(i).map(findIssue).filter(Boolean), down = dependentsOf(i), rel = relatedOf(i);
   up.forEach((x) => mark(x, "up"));
   down.forEach((x) => mark(x, "down"));
   rel.forEach((x) => mark(x, "rel"));
   if (up.length || down.length || rel.length) mark(i, "self");
 }
-function clearEdges() { document.querySelectorAll("[data-edge]").forEach((el) => delete el.dataset.edge); }
-const edgeProps = (i) => ({ "data-id": i.id, onmouseenter: () => showEdges(i), onmouseleave: clearEdges, onfocus: () => showEdges(i), onblur: clearEdges });
+function clearEdges() {
+  document.querySelectorAll("[data-edge]").forEach((el) => { delete el.dataset.edge; el.removeAttribute("aria-description"); });
+}
+const edgeHandlers = (i) => ({ onmouseenter: () => showEdges(i), onmouseleave: clearEdges, onfocus: () => showEdges(i), onblur: clearEdges });
+const edgeProps = (i) => ({ "data-id": i.id, ...edgeHandlers(i) });
 
 // ---------- dialogs, menus, toast ----------
 function confirmDlg(c) {
@@ -241,37 +299,79 @@ function chooseDlg(i, choices) {
     d.showModal();
   });
 }
+function shortcutsDlg() {
+  const d = $("dlg");
+  const row = (k, t) => [h("dt", {}, k), h("dd", {}, t)];
+  d.replaceChildren(
+    h("h3", {}, "Keyboard shortcuts"),
+    h("dl", { class: "keys" },
+      row("/", "Focus the search box"),
+      row("j / k or ↑ / ↓", "Move between Issues"),
+      row("← / →", "Move between columns"),
+      row("Enter", "Open the selected Issue"),
+      row("m", "Open the move menu"),
+      row("Esc", "Close the menu or detail"),
+      row("?", "Show this sheet")),
+    h("div", { class: "acts" }, h("button", { class: "btn primary", autofocus: true, onclick: () => d.close() }, "Close")));
+  d.showModal();
+}
 const planText = (p) => (p.ok ? (p.actions || []).map((a) => a.label).join(" or ") : p.reason);
-let menuEl = null;
-function closeMenu() { menuEl?.remove(); menuEl = null; }
+let menuEl = null, menuAnchor = null;
+function closeMenu(refocus = true) {
+  menuEl?.remove(); menuEl = null;
+  if (refocus && menuAnchor?.isConnected) menuAnchor.focus();
+  menuAnchor = null;
+}
 function moveMenu(i, anchor) {
-  closeMenu();
+  closeMenu(false);
+  menuAnchor = anchor;
   const items = [];
-  for (const a of i.stale_actions || []) items.push(h("button", { role: "menuitem", onclick: () => { closeMenu(); runStale(i, a); } }, h("span", { class: "dot", style: { "--c": "var(--stale)" } }), a.label));
+  for (const a of i.stale_actions || []) items.push(h("button", { role: "menuitem", "aria-disabled": String(S.writing), onclick: () => { if (!S.writing) { closeMenu(false); runStale(i, a); } } }, h("span", { class: "dot", style: { "--c": "var(--stale)" } }), a.label));
   for (const s of S.wf.statuses) {
     if (s.name === i.status) continue;
     const p = i.menu?.[s.name] || { ok: false, reason: "" };
-    items.push(h("button", { role: "menuitem", disabled: !p.ok, onclick: () => { closeMenu(); moveToStatus(i, s.name); } },
+    items.push(h("button", { role: "menuitem", "aria-disabled": String(!p.ok || S.writing), onclick: () => { if (p.ok && !S.writing) { closeMenu(false); moveToStatus(i, s.name); } } },
       h("span", { class: "dot", style: { "--c": `var(${CAT_VAR[s.category]})` } }), `Move to ${label(s.name)}`, h("small", {}, planText(p))));
   }
-  menuEl = h("div", { class: "menu", role: "menu", "aria-label": `Move ${i.key}` }, items);
+  menuEl = h("div", { class: "menu", role: "menu", "aria-label": `Move ${i.key}`,
+    onkeydown: (e) => {
+      const bs = [...menuEl.querySelectorAll("button")];
+      const at = bs.indexOf(document.activeElement);
+      const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+      if (step != null) { e.preventDefault(); bs[(at + step + bs.length) % bs.length]?.focus(); }
+      else if (e.key === "Home") { e.preventDefault(); bs[0]?.focus(); }
+      else if (e.key === "End") { e.preventDefault(); bs[bs.length - 1]?.focus(); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeMenu(); }
+    } }, items);
   document.body.append(menuEl);
   const r = anchor.getBoundingClientRect();
   const top = Math.min(r.bottom + 4, innerHeight - menuEl.offsetHeight - 8);
   const left = Math.min(r.left, innerWidth - menuEl.offsetWidth - 8);
   menuEl.style.top = `${Math.max(8, top)}px`;
   menuEl.style.left = `${Math.max(8, left)}px`;
-  menuEl.querySelector("button:not(:disabled)")?.focus();
+  (menuEl.querySelector('button:not([aria-disabled="true"])') || menuEl.querySelector("button"))?.focus();
 }
-document.addEventListener("click", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest("[data-menu]")) closeMenu(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeMenu(); closeDrawer(); } });
+document.addEventListener("click", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest("[data-menu]")) closeMenu(false); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (menuEl) { closeMenu(); return; }
+    if ($("drawer").classList.contains("open")) { closeDrawer(); return; }
+  }
+  if ($("dlg").open || menuEl) return;
+  const t = e.target;
+  const typing = t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+  if (typing) return;
+  if (e.key === "/") { e.preventDefault(); $("filters").querySelector('input[type="search"]')?.focus(); }
+  if (e.key === "?") { e.preventDefault(); shortcutsDlg(); }
+});
 let toastT;
 function toast(msg, err) {
   const t = $("toast");
-  t.textContent = msg;
   t.className = `toast show${err ? " err" : ""}`;
+  t.setAttribute("role", err ? "alert" : "status");
+  t.replaceChildren(h("span", {}, msg), err ? h("button", { "aria-label": "Dismiss", onclick: () => { t.className = "toast"; } }, "✕") : null);
   clearTimeout(toastT);
-  toastT = setTimeout(() => (t.className = "toast"), err ? 5000 : 3200);
+  if (!err) toastT = setTimeout(() => (t.className = "toast"), 4000);
 }
 
 // ---------- shared visual pieces ----------
@@ -291,7 +391,7 @@ function ring(i, size = 26) {
     h("svg:text", { x: "50%", y: "50%", "text-anchor": "middle", "dominant-baseline": "central" }, initials));
 }
 function typeGlyph(t) {
-  const col = { epic: "#7A5AF8", story: "#2E9E5B", task: "#2F6FE4", bug: "#D64545", "sub-task": "#5C8DD6" }[t] || "#888";
+  const col = `var(--type-${{ "sub-task": "sub" }[t] || t}, var(--ink-3))`;
   const sub = t === "sub-task";
   const shape = t === "epic" ? h("svg:path", { d: "M6 1 L11 6 L6 11 L1 6 Z", fill: col })
     : t === "bug" ? h("svg:circle", { cx: 6, cy: 6, r: 4.5, fill: col })
@@ -304,19 +404,19 @@ function prioGlyph(p) {
   return h("svg:svg", { width: 14, height: 12, viewBox: "0 0 14 12", role: "img", "aria-label": `${p} priority` }, h("svg:title", {}, `${p} priority`),
     [0, 1, 2, 3].map((b) => h("svg:rect", { x: b * 3.5, y: 9 - b * 2.5, width: 2.5, height: 3 + b * 2.5, rx: .6, fill: b < n ? "var(--ink-2)" : "var(--line)" })));
 }
-function claimBar(i) {
+function claimBar(i, pfx = "cb") {
   const cs = claimState(i);
   if (cs === "live") {
     const left = new Date(i.lease_until) - now();
-    return h("div", { class: "claimbar live" }, `Claimed by ${i.assignee}, ${ago(left)} left`,
+    return h("div", { class: "claimbar live", id: `${pfx}-${i.id}` }, `Claimed by ${i.assignee}, ${ago(left)} left`,
       h("span", { class: "leasebar", title: `Lease until ${clock(i.lease_until)}` }, h("i", { style: { width: `${Math.max(0, Math.min(100, left / LEASE_MS * 100))}%` } })));
   }
-  if (cs === "stale") return h("div", { class: "claimbar stale" }, `Stale: ${i.assignee}'s lease expired ${ago(now() - new Date(i.lease_until))} ago`);
+  if (cs === "stale") return h("div", { class: "claimbar stale", id: `${pfx}-${i.id}` }, `Stale: ${i.assignee}'s lease expired ${ago(now() - new Date(i.lease_until))} ago`);
   return null;
 }
 // A Stale card's amber claim bar is its band, so it gets no purple one.
 const showsHumanBand = (i) => needsHuman(i) && claimState(i) !== "stale";
-const humanBar = (i) => (showsHumanBand(i) ? h("div", { class: "humanbar" }, needsHuman(i)) : null);
+const humanBar = (i, pfx = "hb") => (showsHumanBand(i) ? h("div", { class: "humanbar", id: `${pfx}-${i.id}` }, needsHuman(i)) : null);
 const humanClass = (i) => (showsHumanBand(i) ? "needs-human" : "");
 function badges(i, compact, noClaim) {
   const out = [];
@@ -339,18 +439,26 @@ function badges(i, compact, noClaim) {
   if (readyForAgents(i) && !compact) out.push(h("span", { class: "chip live" }, "Ready"));
   return out;
 }
+// ids of the state text a card announces via aria-describedby
+function stateIds(i, badgeId) {
+  const ids = [];
+  if (claimState(i)) ids.push(`cb-${i.id}`);
+  if (showsHumanBand(i)) ids.push(`hb-${i.id}`);
+  if (badgeId) ids.push(badgeId);
+  return ids.length ? ids.join(" ") : null;
+}
 function whoEl(i) {
   return h("span", { class: "who" }, ring(i), h("span", {}, i.assignee ? (i.assignee === S.viewer ? `${i.assignee} (you)` : i.assignee) : "Unassigned"));
 }
 function moreBtn(i) {
-  return h("button", { class: "btn ghost more", "data-menu": "1", "aria-label": `Move ${i.key} to another column`, title: "Move to…",
+  return h("button", { class: "btn ghost more", "data-menu": "1", "aria-label": `Move ${i.key} to another column`, title: "Move to…", ...writingProps(i),
     onclick: (e) => { e.stopPropagation(); moveMenu(i, e.currentTarget); } }, "⋯");
 }
 function staleButtons(i) {
   if (claimState(i) !== "stale") return null;
   const acts = i.stale_actions || [];
   return h("div", { class: "staleacts" }, acts.length
-    ? acts.map((a) => h("button", { class: a.transition === "claim" ? "btn warn" : "btn", onclick: (e) => { e.stopPropagation(); runStale(i, a); } }, a.label))
+    ? acts.map((a) => h("button", { class: a.transition === "claim" ? "btn warn" : "btn", ...writingProps(i), onclick: (e) => { e.stopPropagation(); runStale(i, a); } }, a.label))
     : h("span", { class: "key" }, "Release it from the CLI."));
 }
 const dotStyle = (cat) => ({ "--c": `var(${CAT_VAR[cat] || "--cat-todo"})` });
@@ -362,17 +470,20 @@ function detailEl(i, extra) {
     ck.progress && h("div", {}, h("b", {}, "Progress: "), ck.progress),
     ck.next && h("div", {}, h("b", {}, "Next: "), ck.next),
     ck.blocker && h("div", {}, h("b", {}, "Blocker: "), ck.blocker),
-    ck.by && h("div", { class: "key" }, `${ck.by}${ck.at ? `, ${new Date(ck.at).toLocaleString()}` : ""}`));
+    ck.by && h("div", { class: "key" }, ck.at ? `${ck.by}, ${ago(now() - new Date(ck.at))} ago` : ck.by));
   const moves = S.wf.statuses.filter((s) => s.name !== i.status).map((s) => {
     const p = i.menu?.[s.name] || { ok: false, reason: "" };
-    return h("button", { disabled: !p.ok, onclick: () => moveToStatus(i, s.name) }, h("span", { class: "dot", style: dotStyle(s.category) }),
-      `Move to ${label(s.name)}`, h("small", {}, planText(p)));
+    return { s, p };
   });
-  const subs = S.issues.filter((x) => x.parent === i.id);
+  // When every move is refused for the same reason, say it once above a compact list.
+  const sharedReason = moves.length && moves.every((m) => !m.p.ok && m.p.reason && m.p.reason === moves[0].p.reason) ? moves[0].p.reason : null;
+  const moveBtns = moves.map(({ s, p }) =>
+    h("button", { disabled: !p.ok || S.writing, "data-act": `move-${s.name}`, onclick: () => moveToStatus(i, s.name) }, h("span", { class: "dot", style: dotStyle(s.category) }),
+      `Move to ${label(s.name)}`, sharedReason ? null : h("small", {}, planText(p))));
   return h("div", { class: "detail" },
     h("div", { class: "row" }, typeGlyph(i.type), h("span", { class: "key" }, i.key), extra),
-    h("h3", {}, i.title),
-    claimBar(i), humanBar(i),
+    h("h3", { id: "dtitle", tabindex: -1 }, i.title),
+    claimBar(i, "d-cb"), humanBar(i, "d-hb"),
     h("div", { class: "row" }, badges(i)),
     staleButtons(i),
     h("dl", {},
@@ -383,14 +494,17 @@ function detailEl(i, extra) {
       h("dt", {}, "Repository"), h("dd", {}, i.repository || "Board-wide"),
       i.parent && [h("dt", {}, "Parent"), h("dd", {}, `${keyOf(i.parent)} ${S.byId.get(i.parent)?.title || ""}`)],
       (i.labels || []).length ? [h("dt", {}, "Labels"), h("dd", {}, i.labels.join(", "))] : null,
-      h("dt", {}, "Updated"), h("dd", {}, new Date(i.updated_at).toLocaleString())),
+      h("dt", {}, "Updated"), h("dd", {}, timeEl(i.updated_at))),
     h("section", { class: "bodyslot", "data-body": i.id }, bodyEls(i)),
     linksEl(i),
     ckEl && h("section", {}, h("h4", {}, "Checkpoint"), ckEl),
-    subs.length ? h("section", {}, h("h4", {}, `Sub-issues (${subs.length})`), h("div", { class: "moves" }, subs.map((s) =>
-      h("button", { onclick: () => select(s.id) }, h("span", { class: "dot", style: dotStyle(catOf(s.status)) }), `${s.key} ${s.title}`, h("small", {}, label(s.status)))))) : null,
-    h("section", {}, h("h4", {}, "Move"), h("div", { class: "moves" }, moves)));
+    subsOf(i).length ? h("section", {}, h("h4", {}, `Sub-issues (${subsOf(i).length})`), h("div", { class: "moves" }, subsOf(i).map((s) =>
+      h("button", { "data-act": `sub-${s.id}`, onclick: () => select(s.id) }, h("span", { class: "dot", style: dotStyle(catOf(s.status)) }), `${s.key} ${s.title}`, h("small", {}, label(s.status)))))) : null,
+    h("section", {}, h("h4", {}, "Move"),
+      sharedReason ? h("p", { class: "note" }, sharedReason) : null,
+      h("div", { class: "moves" }, moveBtns)));
 }
+const subsOf = (i) => S.issues.filter((x) => x.parent === i.id);
 function bodyEls(i) {
   const b = S.bodies.get(i.id);
   if (!b || b.version !== i.updated_at) return h("h4", {}, "Loading description…");
@@ -399,7 +513,7 @@ function bodyEls(i) {
     comments.length ? [h("h4", { class: "sub" }, `Comments (${comments.length})`), ...comments.slice(-3).map((c) => h("pre", {}, `${c.author}: ${c.body}`))] : null];
 }
 function linksEl(i) {
-  const row = (x) => h("button", { onclick: () => select(x.id), onmouseenter: () => showEdges(x), onmouseleave: clearEdges },
+  const row = (x) => h("button", { "data-act": `link-${x.id}`, onclick: () => select(x.id), onmouseenter: () => showEdges(x), onmouseleave: clearEdges },
     h("span", { class: "dot", style: dotStyle(catOf(x.status)) }), h("span", { class: "key" }, x.key), h("span", { class: "title" }, x.title), h("small", { class: "key" }, label(x.status)));
   const up = depsOf(i).map(findIssue).filter(Boolean), down = dependentsOf(i), rel = relatedOf(i), ext = externalOf(i);
   if (!up.length && !down.length && !rel.length && !ext.length) return null;
@@ -423,7 +537,13 @@ async function loadBody(i) {
   } catch {}
 }
 const narrow = () => matchMedia("(max-width: 760px)").matches;
-const closeBtn = () => h("button", { class: "btn ghost push", onclick: closeDrawer, "aria-label": "Close" }, "✕");
+const closeBtn = () => h("button", { class: "btn ghost push", onclick: closeDrawer, "data-act": "close", "aria-label": "Close" }, "✕");
+// What about the open drawer Issue would force a rebuild: version, claim text, write state.
+function drawerSig(i) {
+  const cs = claimState(i);
+  const lease = cs === "live" ? ago(new Date(i.lease_until) - now()) : cs === "stale" ? ago(now() - new Date(i.lease_until)) : "";
+  return [i.id, i.updated_at, i.status, i.assignee, cs, lease, i.needs_human || "", i.title, S.writing].join("|");
+}
 function select(id) {
   S.selected = id;
   const i = S.byId.get(id);
@@ -431,22 +551,39 @@ function select(id) {
   if (layout() === "queue" && !narrow()) { render(); return; }
   const d = $("drawer");
   d.replaceChildren(detailEl(i, closeBtn()));
+  S.drawerSig = drawerSig(i);
   d.classList.add("open");
   loadBody(i);
+  d.querySelector("h3")?.focus();
 }
-function closeDrawer() { $("drawer").classList.remove("open"); if (layout() !== "queue") S.selected = null; }
+function closeDrawer() {
+  const d = $("drawer");
+  const was = d.classList.contains("open");
+  d.classList.remove("open");
+  S.drawerSig = "";
+  if (layout() !== "queue") S.selected = null;
+  if (was && S.opener) {
+    const back = document.querySelector(`#stage .card[data-id="${CSS.escape(S.opener)}"], #stage .qopen[data-open="${CSS.escape(S.opener)}"]`);
+    if (back) back.focus({ preventScroll: true });
+    S.opener = null;
+  }
+}
 
 // ---------- filtering ----------
-function visible() {
+function passFilters(i) {
   const q = S.q.toLowerCase();
+  if (q && !`${i.key} ${i.title} ${(i.labels || []).join(" ")} ${i.assignee || ""}`.toLowerCase().includes(q)) return false;
+  if (S.type && i.type !== S.type) return false;
+  if (S.repo && (i.repository || "(board-wide)") !== S.repo) return false;
+  if (S.who === "~none" && i.assignee) return false;
+  if (S.who && S.who !== "~none" && (i.assignee || "") !== (S.who === "~me" ? S.viewer : S.who)) return false;
+  if (S.epic && i.id !== S.epic && !ancestors(i).includes(S.epic)) return false;
+  if (S.pulse && !PULSES[S.pulse].test(i)) return false;
+  return true;
+}
+function visible() {
   return S.issues.filter((i) => {
-    if (q && !`${i.key} ${i.title} ${(i.labels || []).join(" ")} ${i.assignee || ""}`.toLowerCase().includes(q)) return false;
-    if (S.type && i.type !== S.type) return false;
-    if (S.repo && (i.repository || "(board-wide)") !== S.repo) return false;
-    if (S.who === "~none" && i.assignee) return false;
-    if (S.who && S.who !== "~none" && (i.assignee || "") !== (S.who === "~me" ? S.viewer : S.who)) return false;
-    if (S.epic && i.id !== S.epic && !ancestors(i).includes(S.epic)) return false;
-    if (S.pulse && !PULSES[S.pulse].test(i)) return false;
+    if (!passFilters(i)) return false;
     if (closedCat(catOf(i.status)) && !S.showAllClosed && now() - new Date(i.updated_at) > CLOSED_WINDOW_MS) return false;
     return true;
   });
@@ -455,7 +592,7 @@ function visible() {
 const PULSES = {
   agents: { text: "ready for agents", test: readyForAgents },
   forhuman: { text: "ready for a human", test: readyForHuman },
-  human: { text: "need a human", test: (i) => !!needsHuman(i), warn: true },
+  human: { test: (i) => !!needsHuman(i), warn: true },
   active: { text: "in progress", test: (i) => catOf(i.status) === "active" },
   claimed: { text: "claimed", test: (i) => claimState(i) === "live" },
   stale: { text: "stale", test: (i) => claimState(i) === "stale", warn: true },
@@ -468,7 +605,7 @@ let dragId = null;
 function dragStart(e, i) {
   dragId = i.id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", i.key);
   e.currentTarget.classList.add("dragging");
-  closeMenu();
+  closeMenu(false);
   document.querySelectorAll("[data-drop]").forEach((z) => {
     const col = z.dataset.drop, same = col === i.column;
     const p = i.moves?.[col] || { ok: false, reason: "" };
@@ -489,44 +626,69 @@ function dropZone(el, colId) {
   return el;
 }
 function draggableProps(i) {
-  const movable = !claimState(i) && i.column !== "blocked";
+  const movable = !claimState(i) && i.column !== "blocked" && !S.writing;
   return { draggable: movable ? "true" : "false", ondragstart: movable ? (e) => dragStart(e, i) : null, ondragend: movable ? dragEnd : null };
 }
 const stateClass = (i) => ({ live: "is-live", stale: "is-stale" })[claimState(i)] || "";
 
 // ---------- Columns layout ----------
+function cardEl(i, col) {
+  const cancelled = catOf(i.status) === "canceled";
+  const chip = cancelled ? "Cancelled" : i.status !== col.home ? label(i.status) : null;
+  const foot = badges(i, false, true);
+  const badgeId = foot.length ? `bd-${i.id}` : null;
+  const open = () => { S.opener = i.id; select(i.id); };
+  return h("article", { class: `card ${stateClass(i)} ${humanClass(i)} ${cancelled ? "cancelled" : ""} ${S.writeId === i.id ? "busy" : ""}`, tabindex: 0,
+    "aria-label": `${i.key}: ${i.title}`, "aria-describedby": stateIds(i, badgeId),
+    ...edgeProps(i), ...draggableProps(i),
+    onclick: open, onkeydown: (e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter") open(); if (e.key === "m") moveMenu(i, e.currentTarget); } },
+    claimBar(i), humanBar(i),
+    h("div", { class: "head" }, typeGlyph(i.type), h("span", { class: "key" }, i.key), prioGlyph(i.priority), chip ? h("span", { class: "chip status" }, chip) : null, moreBtn(i)),
+    h("div", { class: "title" }, i.title),
+    h("div", { class: "foot" }, whoEl(i)),
+    foot.length ? h("div", { class: "foot", id: badgeId }, foot) : null,
+    staleButtons(i));
+}
+// Arrow keys walk the grid of cards; Enter opens, m opens the move menu.
+function colsKeys(e) {
+  const card = e.target.closest?.(".card");
+  if (!card || e.target !== card) return;
+  const list = card.parentElement;
+  const cards = [...list.querySelectorAll(".card")];
+  const at = cards.indexOf(card);
+  const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+  if (step != null) { e.preventDefault(); (cards[at + step] || card).focus(); return; }
+  const side = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+  if (side != null) {
+    e.preventDefault();
+    const cols = [...document.querySelectorAll(".col")];
+    const ci = cols.indexOf(card.closest(".col"));
+    for (let n = ci + side; n >= 0 && n < cols.length; n += side) {
+      const next = cols[n].querySelectorAll(".card");
+      if (next.length) { next[Math.min(at, next.length - 1)].focus(); return; }
+    }
+  }
+}
 function renderColumns(stage, list) {
   const cols = columns().map((col) => {
     const items = list.filter((i) => i.column === col.id).sort(byPrio);
     const style = { "--c": col.color };
     if (col.id === "done" && !S.expanded.has("done")) {
       const show = () => { S.expanded.add("done"); render(); };
-      return dropZone(h("section", { class: "col collapsed", style, title: "Show Done", tabindex: 0, role: "button", "aria-label": `Done, ${items.length} Issues, show`,
-        onclick: show, onkeydown: (e) => { if (e.key === "Enter") show(); } },
-        h("div", { class: "vlabel" }, `Done  ${items.length}`)), col.id);
+      return dropZone(h("section", { class: "col collapsed", style, "aria-label": `Done, ${items.length} Issues` },
+        h("button", { class: "colbtn", onclick: show, "aria-label": `Done, ${items.length} Issues, show` },
+          h("div", { class: "vlabel" }, `Done  ${items.length}`))), col.id);
     }
     const idle = col.id === "blocked" && !items.length ? "Nothing is blocked." : "";
     const zone = dropZone(h("section", { class: "col", style, "aria-label": col.name },
       h("header", {}, h("h2", {}, col.name), h("span", { class: "n" }, items.length),
         col.id === "done" ? h("button", { class: "btn ghost push", onclick: () => { S.expanded.delete("done"); render(); } }, "Hide") : null),
       h("p", { class: "why" }, idle),
-      h("div", { class: "list" }, items.map((i) => {
-        const cancelled = catOf(i.status) === "canceled";
-        const chip = cancelled ? "Cancelled" : i.status !== col.home ? label(i.status) : null;
-        const foot = badges(i, false, true);
-        return h("article", { class: `card ${stateClass(i)} ${humanClass(i)} ${cancelled ? "cancelled" : ""}`, tabindex: 0, ...edgeProps(i), ...draggableProps(i),
-          onclick: () => select(i.id), onkeydown: (e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter") select(i.id); if (e.key === "m") moveMenu(i, e.currentTarget); } },
-          claimBar(i), humanBar(i),
-          h("div", { class: "head" }, typeGlyph(i.type), h("span", { class: "key" }, i.key), prioGlyph(i.priority), chip ? h("span", { class: "chip status" }, chip) : null, moreBtn(i)),
-          h("div", { class: "title" }, i.title),
-          h("div", { class: "foot" }, whoEl(i)),
-          foot.length ? h("div", { class: "foot" }, foot) : null,
-          staleButtons(i));
-      }))), col.id);
+      h("div", { class: "list" }, items.map((i) => cardEl(i, col)))), col.id);
     zone.dataset.idle = idle;
     return zone;
   });
-  stage.replaceChildren(h("div", { class: "cols" }, cols));
+  stage.replaceChildren(h("div", { class: "cols", onkeydown: colsKeys }, cols));
 }
 
 // ---------- Queue layout ----------
@@ -537,8 +699,8 @@ function renderQueue(stage, list) {
   const sections = [
     ["Needs a human", "Nothing moves until a person takes the step named on each Issue.", human.sort(byPrio)],
     ["In progress", "Being worked by agents or people.", rest.filter((i) => catOf(i.status) === "active").sort(byPrio)],
-    ["Ready", "Agents take these in order; Issues marked For a human wait for a person.", inCol("ready").sort((a, b) => readyForHuman(a) - readyForHuman(b) || byPrio(a, b))],
-    ["Blocked", "They move to Ready when their blockers close.", inCol("blocked").sort(byPrio)],
+    ["Up next", "Agents take these in order; Issues marked For a human wait for a person.", inCol("ready").sort((a, b) => readyForHuman(a) - readyForHuman(b) || byPrio(a, b))],
+    ["Blocked", "They move to Up next when their blockers close.", inCol("blocked").sort(byPrio)],
     ["Todo", "Not ready to start yet.", inCol("todo").sort(byPrio)],
     ["Closed recently", S.showAllClosed ? "All closed Issues." : "Closed in the last 14 days.", inCol("done").sort((a, b) => b.updated_at.localeCompare(a.updated_at))],
   ];
@@ -546,26 +708,47 @@ function renderQueue(stage, list) {
   if (!S.selected || !flat.some((i) => i.id === S.selected)) S.selected = flat[0]?.id || null;
   const rows = sections.filter((s) => s[2].length).map(([title, hint, xs]) => h("section", { class: "qsec" },
     h("h2", {}, title, h("span", { class: "n" }, xs.length)), h("p", { class: "hint" }, hint),
-    xs.map((i) => h("div", { class: `qrow ${stateClass(i)} ${humanClass(i)}`, role: "option", tabindex: S.selected === i.id ? 0 : -1, "aria-selected": String(S.selected === i.id), ...edgeProps(i),
-      onclick: () => select(i.id) },
-      h("button", { class: "statusbtn", "data-menu": "1", style: dotStyle(catOf(i.status)), "aria-label": `${label(i.status)}, move`, onclick: (e) => { e.stopPropagation(); moveMenu(i, e.currentTarget); } }, h("span", { class: "dot" }), label(i.status)),
-      h("span", { class: "row" }, prioGlyph(i.priority), h("span", { class: "key" }, i.key)),
-      h("span", { class: "title", title: i.title }, typeGlyph(i.type), " ", i.title, " ", ...badges(i, true)),
-      whoEl(i)))));
-  const sel = S.byId.get(S.selected);
+    xs.map((i) => {
+      const sel = S.selected === i.id;
+      const badgeId = `bd-${i.id}`;
+      return h("div", { class: `qrow ${stateClass(i)} ${humanClass(i)}`, ...edgeProps(i) },
+        h("button", { class: "qopen", "data-open": i.id, tabindex: sel ? 0 : -1, "aria-current": sel ? "true" : null, ...edgeHandlers(i),
+          "aria-describedby": stateIds(i, badgeId),
+          onclick: () => { S.opener = i.id; select(i.id); } },
+          h("span", { class: "keycell", title: i.key }, prioGlyph(i.priority), h("span", { class: "key" }, i.key)),
+          h("span", { class: "title", title: i.title }, typeGlyph(i.type), " ", i.title),
+          h("span", { class: "badges", id: badgeId }, badges(i, true)),
+          whoEl(i)),
+        h("button", { class: "statusbtn", "data-menu": "1", style: dotStyle(catOf(i.status)), "aria-label": `${i.key}: ${label(i.status)}, move`, ...writingProps(i),
+          onclick: (e) => { e.stopPropagation(); moveMenu(i, e.currentTarget); } }, h("span", { class: "dot" }), label(i.status)));
+    })));
+  const selIssue = S.byId.get(S.selected);
+  const empty = h("p", { class: "qempty" }, "No Issues match these filters.",
+    activeFilters() ? h("div", {}, h("button", { class: "btn", onclick: clearFilters }, "Clear filters")) : null);
   stage.replaceChildren(h("div", { class: "queue" },
-    h("div", { class: "qlist", role: "listbox", "aria-label": "Issues", onkeydown: qKeys }, rows.length ? rows : h("p", { class: "qempty" }, "No Issues match these filters.")),
-    h("div", { class: "qdetail" }, sel ? detailEl(sel) : h("p", { class: "qempty" }, "Select an Issue."))));
-  if (sel) loadBody(sel);
+    h("div", { class: "qlist", "aria-label": "Issues", onkeydown: qKeys }, rows.length ? rows : empty),
+    h("div", { class: "qdetail" }, selIssue ? detailEl(selIssue) : h("p", { class: "qempty" }, "Select an Issue."))));
+  if (selIssue) loadBody(selIssue);
 }
 function qKeys(e) {
-  const ids = [...document.querySelectorAll(".qrow")].map((r) => r.dataset.id);
+  const inRow = e.target.closest?.(".qrow");
+  if (!inRow) return;
+  const btns = [...document.querySelectorAll(".qopen")];
+  const ids = btns.map((b) => b.dataset.open);
   const at = ids.indexOf(S.selected);
-  const go = (n) => { e.preventDefault(); S.selected = ids[Math.max(0, Math.min(ids.length - 1, at + n))]; render(); document.querySelector('.qrow[aria-selected="true"]')?.focus(); };
+  const go = (n) => {
+    e.preventDefault();
+    S.selected = ids[Math.max(0, Math.min(ids.length - 1, at + n))];
+    render();
+    document.querySelector('.qopen[aria-current="true"]')?.focus();
+  };
   if (e.key === "j" || e.key === "ArrowDown") go(1);
   if (e.key === "k" || e.key === "ArrowUp") go(-1);
-  if (e.key === "Enter" && narrow() && S.selected) select(S.selected);
-  if (e.key === "m") { const row = document.querySelector('.qrow[aria-selected="true"]'); if (row) moveMenu(S.byId.get(S.selected), row.querySelector(".statusbtn")); }
+  if (e.key === "Enter" && narrow() && S.selected && e.target.classList.contains("qopen")) { S.opener = S.selected; select(S.selected); }
+  if (e.key === "m") {
+    const row = document.querySelector('.qopen[aria-current="true"]')?.closest(".qrow");
+    if (row) moveMenu(S.byId.get(S.selected), row.querySelector(".statusbtn") || row.querySelector(".qopen"));
+  }
 }
 
 // ---------- chrome: pulse counts and filters ----------
@@ -573,10 +756,10 @@ function renderControls() {
   const all = S.issues;
   $("pulse").replaceChildren(...Object.entries(PULSES).map(([k, p]) => {
     const n = all.filter(p.test).length;
-    return h("button", { class: p.warn && n ? "warn" : "", "aria-pressed": String(S.pulse === k), onclick: () => { S.pulse = S.pulse === k ? "" : k; renderControls(); render(); } }, h("b", {}, n), p.text);
+    const text = k === "human" ? `${n === 1 ? "needs" : "need"} a human` : p.text;
+    return h("button", { class: p.warn && n ? "warn" : "", "aria-pressed": String(S.pulse === k), onclick: () => { S.pulse = S.pulse === k ? "" : k; renderControls(); render(); } }, h("b", {}, n), text);
   }));
   $("me").replaceChildren(ring({ assignee: S.viewer, assignee_kind: "human" }), `Acting as ${S.viewer}`);
-  $("src").textContent = "Live board, refreshed every 3 s";
   // Rebuilding the filters while the viewer types would drop focus and the caret.
   if ($("filters").contains(document.activeElement)) return;
   const opt = (v, t, cur) => h("option", { value: v, selected: v === cur }, t);
@@ -593,31 +776,19 @@ function renderControls() {
         return names.length ? h("optgroup", { label: kind === "agent" ? "Agents" : "People" }, names.map((n) => opt(n, n, S.who))) : null;
       })),
     h("select", { "aria-label": "Repository", onchange: (e) => { S.repo = e.target.value; render(); } }, opt("", "All repositories", S.repo), repos.map((r) => opt(r, r, S.repo))),
-    h("select", { "aria-label": "Epic", onchange: (e) => { S.epic = e.target.value; render(); } }, opt("", "All epics", S.epic), epics.map((x) => opt(x.id, `${x.key} ${x.title.slice(0, 40)}`, S.epic))),
+    h("select", { "aria-label": "Epic", onchange: (e) => { S.epic = e.target.value; render(); } }, opt("", "All epics", S.epic),
+      epics.map((x) => opt(x.id, `${x.key} ${x.title.length > 40 ? `${x.title.slice(0, 40)}…` : x.title}`, S.epic))),
     h("label", {}, h("input", { type: "checkbox", checked: S.showAllClosed, onchange: (e) => { S.showAllClosed = e.target.checked; render(); } }), "Show all closed"));
 }
 
-function render(flashId) {
-  if (!S.wf) return;
-  const v = layout();
-  $("layout").replaceChildren(...Object.entries(LAYOUTS).map(([k, name]) => h("button", { role: "radio", "aria-checked": String(k === v), onclick: () => setLayout(k) }, name)));
-  const list = visible();
-  const view = saveView();
-  if (v === "queue") renderQueue($("stage"), list); else renderColumns($("stage"), list);
-  const d = $("drawer");
-  if (S.selected && d.classList.contains("open")) {
-    const i = S.byId.get(S.selected);
-    if (i) { d.replaceChildren(detailEl(i, closeBtn())); loadBody(i); } else closeDrawer();
-  }
-  restoreView(view);
-  if (flashId) document.querySelector(`[data-id="${CSS.escape(flashId)}"]`)?.classList.add("flash");
-}
-
+// ---------- focus / scroll preservation ----------
 // A re-render replaces the stage; keep the viewer's scroll positions and focused card or row.
 const scrollKey = (el) => `${el.className}|${el.closest("[data-drop]")?.dataset.drop || el.querySelector("[data-body]")?.dataset.body || ""}`;
+// A stable handle for a focusable element inside a rebuilt container.
+const focusKey = (a) => [a.tagName, a.dataset.act || "", a.getAttribute("aria-label") || "", a.className, a.textContent.trim().slice(0, 40)].join("|");
 function saveView() {
   const a = document.activeElement;
-  const focus = a && $("stage").contains(a) && a.matches(".card, .qrow") ? a.dataset.id : null;
+  const focus = a && $("stage").contains(a) && a.matches(".card, .qopen") ? a.dataset.id || a.dataset.open : null;
   const scroll = new Map([...document.querySelectorAll("#stage .cols, #stage .list, #stage .qlist, #stage .qdetail")].map((el) => [scrollKey(el), [el.scrollLeft, el.scrollTop]]));
   return { focus, scroll };
 }
@@ -626,18 +797,66 @@ function restoreView({ focus, scroll }) {
     const at = scroll.get(scrollKey(el));
     if (at) [el.scrollLeft, el.scrollTop] = at;
   }
-  if (focus) $("stage").querySelector(`.card[data-id="${CSS.escape(focus)}"], .qrow[data-id="${CSS.escape(focus)}"]`)?.focus({ preventScroll: true });
+  if (focus) $("stage").querySelector(`.card[data-id="${CSS.escape(focus)}"], .qopen[data-open="${CSS.escape(focus)}"]`)?.focus({ preventScroll: true });
+}
+// Focused control inside a rebuilt pane (drawer or Queue detail): match it again and keep scrollTop.
+function saveInner(root) {
+  const a = document.activeElement;
+  const inRoot = root.contains(a) && a !== root && a !== document.body;
+  return { key: inRoot ? focusKey(a) : null, top: root.scrollTop };
+}
+function restoreInner(root, saved) {
+  root.scrollTop = saved.top;
+  if (!saved.key) return;
+  for (const el of root.querySelectorAll("button, a, input, [tabindex]")) {
+    if (focusKey(el) === saved.key) { el.focus({ preventScroll: true }); return; }
+  }
+}
+
+function render(flashId) {
+  if (!S.wf) return;
+  const v = layout();
+  $("layout").replaceChildren(...Object.entries(LAYOUTS).map(([k, name]) => h("button", { role: "radio", "aria-checked": String(k === v), onclick: () => setLayout(k) }, name)));
+  const list = visible();
+  const view = saveView();
+  const d = $("drawer");
+  const dOpen = S.selected && d.classList.contains("open");
+  // The Queue detail pane lives inside the stage; save its inner focus too.
+  const qdetail = document.querySelector("#stage .qdetail");
+  const qFocus = qdetail ? saveInner(qdetail) : null;
+  const dFocus = dOpen ? saveInner(d) : null;
+  if (v === "queue") renderQueue($("stage"), list); else renderColumns($("stage"), list);
+  if (qFocus && qFocus.key) {
+    const pane = document.querySelector("#stage .qdetail");
+    if (pane) restoreInner(pane, qFocus);
+  }
+  if (dOpen) {
+    const i = S.byId.get(S.selected);
+    if (i) {
+      const sig = drawerSig(i);
+      if (sig !== S.drawerSig) {
+        d.replaceChildren(detailEl(i, closeBtn()));
+        S.drawerSig = sig;
+        restoreInner(d, dFocus);
+      }
+      loadBody(i);
+    } else closeDrawer();
+  }
+  restoreView(view);
+  if (flashId) document.querySelector(`[data-id="${CSS.escape(flashId)}"]`)?.classList.add("flash");
+  setBanner(S.error);
 }
 
 // ---------- layout switch ----------
 function setLayout(name) {
   try { localStorage.setItem("orbit.layout", name); } catch {}
   const u = new URL(location.href); u.searchParams.set("layout", name); history.replaceState(null, "", u);
-  closeDrawer(); closeMenu(); render();
+  closeDrawer(); closeMenu(false); render();
 }
 
 // ---------- start ----------
-if (!TOKEN) setError(NO_TOKEN);
+$("shortcuts").addEventListener("click", shortcutsDlg);
+if (!TOKEN) setBanner(NO_TOKEN);
 else refresh();
 setInterval(poll, POLL_MS);
 setInterval(() => { if (!busy()) render(); }, 30e3); // lease rings and "min left" tick between snapshot changes

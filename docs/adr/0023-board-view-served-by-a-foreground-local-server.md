@@ -47,9 +47,10 @@ not count: agents review too, and a `waiting-on` Link waits on a third party.
 **Ready for a human** (glossary) stays a plain card in Ready with a "For a
 human" tag: it is work to pick up, not an alarm.
 
-**Filters.** Three exclusive pills, **Ready for agents** (exactly the `orbit
-ready` set), **Ready for a human**, and **Needs a human**, combine with the
-Assignee, Type, Repository, and Epic filters.
+**Filters.** Exclusive header pills — **Ready for agents** (exactly the `orbit
+ready` set), **Ready for a human**, **Needs a human**, **In progress**,
+**Claimed**, **Stale**, and **Ready to close** — combine with the Assignee,
+Type, Repository, and Epic filters.
 
 **Two layouts.** A prototype compared three layouts; two were kept. **Columns**
 is the kanban described above. **Queue** groups the same Issues into Needs a

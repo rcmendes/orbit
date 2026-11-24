@@ -123,6 +123,7 @@ fn route(ctx: &Ctx, request: &Request) -> Response {
             include_str!("assets/app.js"),
         ),
         "/app.css" => asset("text/css; charset=utf-8", include_str!("assets/app.css")),
+        "/favicon.svg" => asset("image/svg+xml", include_str!("assets/favicon.svg")),
         _ => Response::text(404, "not found"),
     }
 }

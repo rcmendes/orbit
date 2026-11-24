@@ -170,6 +170,7 @@ fn serves_page_and_assets_with_csp() {
     );
     assert_eq!(http(&server.base, "GET", "/app.js", &[]).0, 200);
     assert_eq!(http(&server.base, "GET", "/app.css", &[]).0, 200);
+    assert_eq!(http(&server.base, "GET", "/favicon.svg", &[]).0, 200);
     assert_eq!(http(&server.base, "GET", "/nope", &[]).0, 404);
 }
 

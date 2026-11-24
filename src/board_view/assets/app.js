@@ -330,6 +330,11 @@ function shortcutsDlg() {
 }
 const planText = (p) => (p.ok ? (p.actions || []).map((a) => a.label).join(" or ") : p.reason);
 let menuEl = null, menuAnchor = null;
+// The menu lives on <body>; before a menu item runs a write, park focus on the Issue's card or Queue row
+// so the re-render can restore it (saveView tracks .card and .qopen).
+function focusMenuIssue() {
+  (menuAnchor?.closest(".card") || menuAnchor?.closest(".qrow")?.querySelector(".qopen"))?.focus({ preventScroll: true });
+}
 function closeMenu(refocus = true) {
   menuEl?.remove(); menuEl = null;
   if (refocus && menuAnchor?.isConnected) menuAnchor.focus();
@@ -339,11 +344,11 @@ function moveMenu(i, anchor) {
   closeMenu(false);
   menuAnchor = anchor;
   const items = [];
-  for (const a of i.stale_actions || []) items.push(h("button", { role: "menuitem", "aria-disabled": String(S.writing), onclick: () => { if (!S.writing) { closeMenu(false); runStale(i, a); } } }, h("span", { class: "dot", style: { "--c": "var(--stale)" } }), a.label));
+  for (const a of i.stale_actions || []) items.push(h("button", { role: "menuitem", "aria-disabled": String(S.writing), onclick: () => { if (!S.writing) { focusMenuIssue(); closeMenu(false); runStale(i, a); } } }, h("span", { class: "dot", style: { "--c": "var(--stale)" } }), a.label));
   for (const s of S.wf.statuses) {
     if (s.name === i.status) continue;
     const p = i.menu?.[s.name] || { ok: false, reason: "" };
-    items.push(h("button", { role: "menuitem", "aria-disabled": String(!p.ok || S.writing), onclick: () => { if (p.ok && !S.writing) { closeMenu(false); moveToStatus(i, s.name); } } },
+    items.push(h("button", { role: "menuitem", "aria-disabled": String(!p.ok || S.writing), onclick: () => { if (p.ok && !S.writing) { focusMenuIssue(); closeMenu(false); moveToStatus(i, s.name); } } },
       h("span", { class: "dot", style: { "--c": `var(${CAT_VAR[s.category]})` } }), `Move to ${label(s.name)}`, h("small", {}, planText(p))));
   }
   menuEl = h("div", { class: "menu", role: "menu", "aria-label": `Move ${i.key}`,
@@ -381,9 +386,16 @@ document.addEventListener("keydown", (e) => {
 let toastT;
 function toast(msg, err) {
   const t = $("toast");
+  const back = document.activeElement;
+  // Dismissing hides the ✕, so hand focus back to where the viewer was (or the stage).
+  const dismiss = () => {
+    const hadFocus = t.contains(document.activeElement);
+    t.className = "toast";
+    if (hadFocus) (back?.isConnected && back !== document.body && !t.contains(back) ? back : $("stage")).focus({ preventScroll: true });
+  };
   t.className = `toast show${err ? " err" : ""}`;
   t.setAttribute("role", err ? "alert" : "status");
-  t.replaceChildren(h("span", {}, msg), err ? h("button", { "aria-label": "Dismiss", onclick: () => { t.className = "toast"; } }, "✕") : null);
+  t.replaceChildren(h("span", {}, msg), err ? h("button", { "aria-label": "Dismiss", onclick: dismiss }, "✕") : null);
   clearTimeout(toastT);
   if (!err) toastT = setTimeout(() => (t.className = "toast"), 4000);
 }

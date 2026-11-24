@@ -109,6 +109,8 @@ button { cursor: pointer; }
 .card.busy::after { content: "Working…"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--surface) 72%, transparent); border-radius: inherit; font-size: 12px; color: var(--ink-2); }
 .card .head { display: flex; align-items: center; gap: 6px; }
 .card .more { margin-left: auto; }
+.card .head .key { white-space: nowrap; flex-shrink: 0; }
+.card .head .chip.status { min-width: 0; white-space: normal; }
 .card .foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .card .notready { font-size: 12px; color: var(--ink-2); margin-top: -2px; }
 

@@ -6,6 +6,10 @@
 - Board view polish: a flat console-style theme (dark palette with a tuned light mode) with a connected status strip and a live "Live · synced HH:MM:SS" / "Offline since HH:MM — retrying" line; the Queue groups its Ready section as "Up next" and keeps badges in their own column so long titles cannot clip them. Keyboard covers the whole board — `/` search, arrows or `j`/`k` between Issues and columns, Enter to open, `m` for the move menu, `?` for a shortcut sheet — and Esc closes the drawer or menu back to the element that opened it. Toasts sit bottom-centre, errors stay until dismissed, a banner offers "Clear filters" when filters hide Issues, the collapsed Done column is a real button, and the page serves `/favicon.svg`.
 - The Board contract version is now `1.1.0`, so an `orbit` 1.0.x binary refuses a Board created or migrated by this build with `CONTRACT_VERSION_UNSUPPORTED`.
 
+## 0.11.1 - 2026-11-23
+
+- `orbit changes`/`orbit history` batch their Git calls: the commit log carries `--name-status -z` (with `--diff-merges=first-parent` and `--root`) instead of one `git diff`/`diff-tree` per commit, and every `rev:path` blob the feed reads is fetched in a single `git cat-file --batch` shared with `read_tree_blobs`.
+
 ## 0.11.0 - 2026-11-17
 
 - `orbit changes --limit N` keeps the oldest events (whole commits) and returns a `cursor` at the last returned commit plus `truncated`, so paging forward never skips events; the feed range is pinned to the resolved head and diffs run with `--no-renames`.

@@ -51,7 +51,7 @@ const S = {
   viewer: "", wf: null, issues: [], byId: new Map(), prios: PRIORITIES, etag: null, error: "",
   q: "", type: "", repo: "", who: "", epic: "", pulse: "", showAllClosed: false,
   selected: null, expanded: new Set(), bodies: new Map(), writing: false, writeId: null, polling: false,
-  opener: null, drawerSig: "", syncedAt: null, offlineSince: null,
+  opener: null, drawerSig: "", bannerSig: "", syncedAt: null, offlineSince: null,
 };
 function layout() {
   const q = new URLSearchParams(location.search).get("layout");
@@ -103,11 +103,14 @@ function paintSync() {
     : S.syncedAt ? `Live · synced ${hms(S.syncedAt)}` : "";
 }
 // One banner slot: a connection error wins, else an active-filter notice.
+// Unchanged content keeps the node, so the alert is not re-announced and focus stays on its button.
 function setBanner(error) {
   S.error = error;
-  const slot = $("bannerSlot");
-  if (error) { slot.replaceChildren(h("div", { class: "banner", role: "alert" }, error)); return; }
-  slot.replaceChildren(...[filterBanner()].flat().filter(Boolean));
+  const node = error ? h("div", { class: "banner", role: "alert" }, error) : filterBanner();
+  const sig = node ? `${error ? "error" : "filter"}|${node.textContent}` : "";
+  if (sig === S.bannerSig) return;
+  S.bannerSig = sig;
+  $("bannerSlot").replaceChildren(...(node ? [node] : []));
 }
 function activeFilters() {
   return S.q !== "" || S.type !== "" || S.repo !== "" || S.who !== "" || S.epic !== "" || S.pulse !== "";
@@ -118,7 +121,7 @@ function clearFilters() {
 }
 function filterBanner() {
   if (S.error || !activeFilters()) return null;
-  const n = S.issues.length - visible().length;
+  const n = S.issues.filter((i) => !passFilters(i)).length;
   if (!n) return null;
   return h("div", { class: "banner" },
     visible().length ? `${n} ${n === 1 ? "Issue" : "Issues"} hidden by filters` : "No Issues match these filters.",
@@ -195,8 +198,9 @@ function runStale(i, a) {
   const takeover = a.transition === "claim";
   return send(takeover ? "takeover" : "release", i, {}, takeover ? `You took over ${i.key}` : `Released ${i.key}`);
 }
-// Buttons that run a write for this Issue go inert while one is in flight.
-const writingProps = (i) => (S.writing ? { disabled: true, "aria-disabled": "true" } : {});
+// Buttons that run a write go inert while one is in flight. aria-disabled (not disabled) keeps
+// them focusable, so focus survives the re-render; every such onclick checks S.writing.
+const writingProps = () => (S.writing ? { "aria-disabled": "true" } : {});
 
 // ---------- workflow + issue helpers ----------
 const statusDef = (name) => S.wf.statuses.find((s) => s.name === name);
@@ -211,6 +215,7 @@ const readyForHuman = (i) => !!i.ready_for_human;
 const readyForAgents = (i) => !!i.ready && !i.ready_for_human;
 function ago(ms) {
   const m = Math.round(Math.abs(ms) / 60e3);
+  if (m < 1) return "<1 min";
   if (m < 60) return `${m} min`;
   const hr = Math.round(m / 60);
   return hr < 48 ? `${hr} h` : `${Math.round(hr / 24)} days`;
@@ -260,7 +265,7 @@ function showEdges(i) {
   clearEdges();
   const mark = (x, kind) => document.querySelectorAll(`[data-id="${CSS.escape(x.id)}"]`).forEach((el) => {
     el.dataset.edge = kind;
-    el.setAttribute("aria-description", EDGE_TEXT[kind]);
+    (el.matches(".qrow") ? el.querySelector(".qopen") : el)?.setAttribute("aria-description", EDGE_TEXT[kind]);
   });
   const up = depsOf(i).map(findIssue).filter(Boolean), down = dependentsOf(i), rel = relatedOf(i);
   up.forEach((x) => mark(x, "up"));
@@ -269,12 +274,19 @@ function showEdges(i) {
   if (up.length || down.length || rel.length) mark(i, "self");
 }
 function clearEdges() {
-  document.querySelectorAll("[data-edge]").forEach((el) => { delete el.dataset.edge; el.removeAttribute("aria-description"); });
+  document.querySelectorAll("[data-edge]").forEach((el) => { delete el.dataset.edge; });
+  document.querySelectorAll("[aria-description]").forEach((el) => el.removeAttribute("aria-description"));
 }
 const edgeHandlers = (i) => ({ onmouseenter: () => showEdges(i), onmouseleave: clearEdges, onfocus: () => showEdges(i), onblur: clearEdges });
 const edgeProps = (i) => ({ "data-id": i.id, ...edgeHandlers(i) });
 
 // ---------- dialogs, menus, toast ----------
+// Open the shared dialog; when it closes, focus goes back to whatever opened it.
+function showDlg(d) {
+  const back = document.activeElement;
+  d.addEventListener("close", () => { if (back?.isConnected && back !== document.body) back.focus({ preventScroll: true }); }, { once: true });
+  d.showModal();
+}
 function confirmDlg(c) {
   const d = $("dlg");
   return new Promise((res) => {
@@ -284,7 +296,7 @@ function confirmDlg(c) {
         h("button", { class: "btn", onclick: () => { res(false); d.close(); } }, "Cancel"),
         h("button", { class: "btn primary", autofocus: true, onclick: () => { res(true); d.close(); } }, c.ok)));
     d.onclose = () => res(false);
-    d.showModal();
+    showDlg(d);
   });
 }
 function chooseDlg(i, choices) {
@@ -296,7 +308,7 @@ function chooseDlg(i, choices) {
       h("div", { class: "choices" }, choices.map((c) => h("button", { onclick: () => { res(c.transition); d.close(); } }, c.label, h("small", {}, label(c.transition))))),
       h("div", { class: "acts" }, h("button", { class: "btn", onclick: () => { res(null); d.close(); } }, "Cancel")));
     d.onclose = () => res(null);
-    d.showModal();
+    showDlg(d);
   });
 }
 function shortcutsDlg() {
@@ -307,13 +319,14 @@ function shortcutsDlg() {
     h("dl", { class: "keys" },
       row("/", "Focus the search box"),
       row("j / k or ↑ / ↓", "Move between Issues"),
-      row("← / →", "Move between columns"),
+      row("← / →", "Move between columns (Columns layout)"),
       row("Enter", "Open the selected Issue"),
       row("m", "Open the move menu"),
       row("Esc", "Close the menu or detail"),
       row("?", "Show this sheet")),
     h("div", { class: "acts" }, h("button", { class: "btn primary", autofocus: true, onclick: () => d.close() }, "Close")));
-  d.showModal();
+  d.onclose = null;
+  showDlg(d);
 }
 const planText = (p) => (p.ok ? (p.actions || []).map((a) => a.label).join(" or ") : p.reason);
 let menuEl = null, menuAnchor = null;
@@ -353,11 +366,12 @@ function moveMenu(i, anchor) {
 }
 document.addEventListener("click", (e) => { if (menuEl && !menuEl.contains(e.target) && !e.target.closest("[data-menu]")) closeMenu(false); });
 document.addEventListener("keydown", (e) => {
+  if ($("dlg").open) return; // the dialog handles its own Esc
   if (e.key === "Escape") {
     if (menuEl) { closeMenu(); return; }
     if ($("drawer").classList.contains("open")) { closeDrawer(); return; }
   }
-  if ($("dlg").open || menuEl) return;
+  if (menuEl) return;
   const t = e.target;
   const typing = t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" || t.isContentEditable);
   if (typing) return;
@@ -432,7 +446,8 @@ function badges(i, compact, noClaim) {
   const ext = (i.links || []).filter((l) => l.blocking && extRef(l)).map(extRef);
   if (ext.length) out.push(h("span", { class: "chip hold", title: ext.join(", ") }, "Waiting"));
   if (readyForHuman(i)) out.push(h("span", { class: "chip forhuman" }, "For a human"));
-  if (compact && humanClass(i)) out.push(h("span", { class: "chip human", title: needsHuman(i) }, "Needs a human"));
+  // Stale cards keep their amber bar but also count toward Needs a human, so they carry the violet chip too.
+  if (needsHuman(i) && (compact || claimState(i) === "stale")) out.push(h("span", { class: "chip human", title: needsHuman(i) }, "Needs a human"));
   if (i.sub_issue_count) out.push(h("span", { class: "chip", title: "Sub-issues resolved" }, `${i.resolved_sub_issue_count}/${i.sub_issue_count} done`));
   if (i.parent && !compact) out.push(h("span", { class: "chip", title: "Parent" }, `in ${keyOf(i.parent)}`));
   if (i.eligible_for_close) out.push(h("span", { class: "chip live" }, "Ready to close"));
@@ -440,31 +455,32 @@ function badges(i, compact, noClaim) {
   return out;
 }
 // ids of the state text a card announces via aria-describedby
-function stateIds(i, badgeId) {
+function stateIds(i, ...more) {
   const ids = [];
   if (claimState(i)) ids.push(`cb-${i.id}`);
   if (showsHumanBand(i)) ids.push(`hb-${i.id}`);
-  if (badgeId) ids.push(badgeId);
+  ids.push(...more.filter(Boolean));
   return ids.length ? ids.join(" ") : null;
 }
 function whoEl(i) {
   return h("span", { class: "who" }, ring(i), h("span", {}, i.assignee ? (i.assignee === S.viewer ? `${i.assignee} (you)` : i.assignee) : "Unassigned"));
 }
 function moreBtn(i) {
-  return h("button", { class: "btn ghost more", "data-menu": "1", "aria-label": `Move ${i.key} to another column`, title: "Move to…", ...writingProps(i),
-    onclick: (e) => { e.stopPropagation(); moveMenu(i, e.currentTarget); } }, "⋯");
+  return h("button", { class: "btn ghost more", "data-menu": "1", "aria-label": `Move ${i.key} to another column`, title: "Move to…", ...writingProps(),
+    onclick: (e) => { e.stopPropagation(); if (!S.writing) moveMenu(i, e.currentTarget); } }, "⋯");
 }
 function staleButtons(i) {
   if (claimState(i) !== "stale") return null;
   const acts = i.stale_actions || [];
   return h("div", { class: "staleacts" }, acts.length
-    ? acts.map((a) => h("button", { class: a.transition === "claim" ? "btn warn" : "btn", ...writingProps(i), onclick: (e) => { e.stopPropagation(); runStale(i, a); } }, a.label))
+    ? acts.map((a) => h("button", { class: a.transition === "claim" ? "btn warn" : "btn", ...writingProps(), onclick: (e) => { e.stopPropagation(); if (!S.writing) runStale(i, a); } }, a.label))
     : h("span", { class: "key" }, "Release it from the CLI."));
 }
 const dotStyle = (cat) => ({ "--c": `var(${CAT_VAR[cat] || "--cat-todo"})` });
 
 // ---------- detail (drawer in Columns, pane in Queue) ----------
-function detailEl(i, extra) {
+// pfx keeps ids unique: "d" for the drawer, "q" for the Queue pane (both can be in the DOM).
+function detailEl(i, extra, pfx = "q") {
   const ck = i.checkpoint;
   const ckEl = ck && h("div", { class: "ckpt" },
     ck.progress && h("div", {}, h("b", {}, "Progress: "), ck.progress),
@@ -478,12 +494,12 @@ function detailEl(i, extra) {
   // When every move is refused for the same reason, say it once above a compact list.
   const sharedReason = moves.length && moves.every((m) => !m.p.ok && m.p.reason && m.p.reason === moves[0].p.reason) ? moves[0].p.reason : null;
   const moveBtns = moves.map(({ s, p }) =>
-    h("button", { disabled: !p.ok || S.writing, "data-act": `move-${s.name}`, onclick: () => moveToStatus(i, s.name) }, h("span", { class: "dot", style: dotStyle(s.category) }),
+    h("button", { disabled: !p.ok, ...writingProps(), "data-act": `move-${s.name}`, onclick: () => { if (!S.writing) moveToStatus(i, s.name); } }, h("span", { class: "dot", style: dotStyle(s.category) }),
       `Move to ${label(s.name)}`, sharedReason ? null : h("small", {}, planText(p))));
   return h("div", { class: "detail" },
     h("div", { class: "row" }, typeGlyph(i.type), h("span", { class: "key" }, i.key), extra),
-    h("h3", { id: "dtitle", tabindex: -1 }, i.title),
-    claimBar(i, "d-cb"), humanBar(i, "d-hb"),
+    h("h3", { id: `${pfx}title`, tabindex: -1 }, i.title),
+    claimBar(i, `${pfx}-cb`), humanBar(i, `${pfx}-hb`),
     h("div", { class: "row" }, badges(i)),
     staleButtons(i),
     h("dl", {},
@@ -550,7 +566,7 @@ function select(id) {
   if (!i) return;
   if (layout() === "queue" && !narrow()) { render(); return; }
   const d = $("drawer");
-  d.replaceChildren(detailEl(i, closeBtn()));
+  d.replaceChildren(detailEl(i, closeBtn(), "d"));
   S.drawerSig = drawerSig(i);
   d.classList.add("open");
   loadBody(i);
@@ -592,10 +608,10 @@ function visible() {
 const PULSES = {
   agents: { text: "ready for agents", test: readyForAgents },
   forhuman: { text: "ready for a human", test: readyForHuman },
-  human: { test: (i) => !!needsHuman(i), warn: true },
-  active: { text: "in progress", test: (i) => catOf(i.status) === "active" },
+  human: { test: (i) => !!needsHuman(i), tone: "human" },
+  active: { text: "active", test: (i) => catOf(i.status) === "active" },
   claimed: { text: "claimed", test: (i) => claimState(i) === "live" },
-  stale: { text: "stale", test: (i) => claimState(i) === "stale", warn: true },
+  stale: { text: "stale", test: (i) => claimState(i) === "stale", tone: "warn" },
   close: { text: "ready to close", test: (i) => !!i.eligible_for_close },
 };
 const byPrio = (a, b) => S.prios.indexOf(a.priority) - S.prios.indexOf(b.priority) || (a.key < b.key ? -1 : 1);
@@ -634,29 +650,46 @@ const stateClass = (i) => ({ live: "is-live", stale: "is-stale" })[claimState(i)
 // ---------- Columns layout ----------
 function cardEl(i, col) {
   const cancelled = catOf(i.status) === "canceled";
-  const chip = cancelled ? "Cancelled" : i.status !== col.home ? label(i.status) : null;
+  // In Blocked, "Status: ready" so the chip is not read as the Ready condition.
+  const chip = cancelled ? "Cancelled" : col.id === "blocked" ? statusText(i) : i.status !== col.home ? label(i.status) : null;
   const foot = badges(i, false, true);
   const badgeId = foot.length ? `bd-${i.id}` : null;
+  const why = col.id === "ready" ? notReadyReason(i) : null;
+  const whyId = why ? `nr-${i.id}` : null;
   const open = () => { S.opener = i.id; select(i.id); };
   return h("article", { class: `card ${stateClass(i)} ${humanClass(i)} ${cancelled ? "cancelled" : ""} ${S.writeId === i.id ? "busy" : ""}`, tabindex: 0,
-    "aria-label": `${i.key}: ${i.title}`, "aria-describedby": stateIds(i, badgeId),
+    "aria-label": `${i.key}: ${i.title}`, "aria-describedby": stateIds(i, whyId, badgeId),
     ...edgeProps(i), ...draggableProps(i),
     onclick: open, onkeydown: (e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter") open(); if (e.key === "m") moveMenu(i, e.currentTarget); } },
     claimBar(i), humanBar(i),
     h("div", { class: "head" }, typeGlyph(i.type), h("span", { class: "key" }, i.key), prioGlyph(i.priority), chip ? h("span", { class: "chip status" }, chip) : null, moreBtn(i)),
     h("div", { class: "title" }, i.title),
+    why ? h("div", { class: "notready", id: whyId }, `Not ready: ${why}`) : null,
     h("div", { class: "foot" }, whoEl(i)),
     foot.length ? h("div", { class: "foot", id: badgeId }, foot) : null,
     staleButtons(i));
 }
-// Arrow keys walk the grid of cards; Enter opens, m opens the move menu.
+const statusText = (i) => `Status: ${label(i.status).toLowerCase()}`;
+// Why a card in the Ready column is not in `orbit ready`; null when it is, or when its For a human tag says so.
+function notReadyReason(i) {
+  if (i.ready) return null;
+  const has = (l) => (i.labels || []).includes(l);
+  if (has("needs-triage")) return "needs triage";
+  if (has("needs-info")) return "needs info";
+  if (has("ready-for-human")) return readyForHuman(i) ? null : "for a human";
+  const subs = i.open_sub_issue_count || 0;
+  if (subs) return `${subs} open sub-${subs === 1 ? "issue" : "issues"}`;
+  if (i.assignee) return `assigned to ${i.assignee}`;
+  return "not in the agents' queue";
+}
+// Arrow keys (or j/k) walk the grid of cards; Enter opens, m opens the move menu.
 function colsKeys(e) {
   const card = e.target.closest?.(".card");
   if (!card || e.target !== card) return;
   const list = card.parentElement;
   const cards = [...list.querySelectorAll(".card")];
   const at = cards.indexOf(card);
-  const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+  const step = { ArrowDown: 1, ArrowUp: -1, j: 1, k: -1 }[e.key];
   if (step != null) { e.preventDefault(); (cards[at + step] || card).focus(); return; }
   const side = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
   if (side != null) {
@@ -677,11 +710,12 @@ function renderColumns(stage, list) {
       const show = () => { S.expanded.add("done"); render(); };
       return dropZone(h("section", { class: "col collapsed", style, "aria-label": `Done, ${items.length} Issues` },
         h("button", { class: "colbtn", onclick: show, "aria-label": `Done, ${items.length} Issues, show` },
-          h("div", { class: "vlabel" }, `Done  ${items.length}`))), col.id);
+          h("div", { class: "vlabel" }, `Done ${items.length}`))), col.id);
     }
     const idle = col.id === "blocked" && !items.length ? "Nothing is blocked." : "";
     const zone = dropZone(h("section", { class: "col", style, "aria-label": col.name },
-      h("header", {}, h("h2", {}, col.name), h("span", { class: "n" }, items.length),
+      h("header", {}, h("h2", {}, col.name),
+        h("span", { class: "n" }, col.id === "ready" ? `${items.length} · ${items.filter(readyForAgents).length} for agents` : items.length),
         col.id === "done" ? h("button", { class: "btn ghost push", onclick: () => { S.expanded.delete("done"); render(); } }, "Hide") : null),
       h("p", { class: "why" }, idle),
       h("div", { class: "list" }, items.map((i) => cardEl(i, col)))), col.id);
@@ -698,7 +732,7 @@ function renderQueue(stage, list) {
   const inCol = (id) => rest.filter((i) => i.column === id);
   const sections = [
     ["Needs a human", "Nothing moves until a person takes the step named on each Issue.", human.sort(byPrio)],
-    ["In progress", "Being worked by agents or people.", rest.filter((i) => catOf(i.status) === "active").sort(byPrio)],
+    ["In progress", "Being worked by agents or people. Stale or human-blocked active Issues are listed under Needs a human.", rest.filter((i) => catOf(i.status) === "active").sort(byPrio)],
     ["Up next", "Agents take these in order; Issues marked For a human wait for a person.", inCol("ready").sort((a, b) => readyForHuman(a) - readyForHuman(b) || byPrio(a, b))],
     ["Blocked", "They move to Up next when their blockers close.", inCol("blocked").sort(byPrio)],
     ["Todo", "Not ready to start yet.", inCol("todo").sort(byPrio)],
@@ -710,17 +744,19 @@ function renderQueue(stage, list) {
     h("h2", {}, title, h("span", { class: "n" }, xs.length)), h("p", { class: "hint" }, hint),
     xs.map((i) => {
       const sel = S.selected === i.id;
-      const badgeId = `bd-${i.id}`;
+      // The badges sit inside the button (its name); describe it only with what lives outside it.
+      const humanId = needsHuman(i) ? `qh-${i.id}` : null;
       return h("div", { class: `qrow ${stateClass(i)} ${humanClass(i)}`, ...edgeProps(i) },
         h("button", { class: "qopen", "data-open": i.id, tabindex: sel ? 0 : -1, "aria-current": sel ? "true" : null, ...edgeHandlers(i),
-          "aria-describedby": stateIds(i, badgeId),
+          "aria-describedby": humanId,
           onclick: () => { S.opener = i.id; select(i.id); } },
           h("span", { class: "keycell", title: i.key }, prioGlyph(i.priority), h("span", { class: "key" }, i.key)),
           h("span", { class: "title", title: i.title }, typeGlyph(i.type), " ", i.title),
-          h("span", { class: "badges", id: badgeId }, badges(i, true)),
+          h("span", { class: "badges" }, badges(i, true)),
           whoEl(i)),
-        h("button", { class: "statusbtn", "data-menu": "1", style: dotStyle(catOf(i.status)), "aria-label": `${i.key}: ${label(i.status)}, move`, ...writingProps(i),
-          onclick: (e) => { e.stopPropagation(); moveMenu(i, e.currentTarget); } }, h("span", { class: "dot" }), label(i.status)));
+        humanId ? h("span", { class: "sr-only", id: humanId }, needsHuman(i)) : null,
+        h("button", { class: "statusbtn", "data-menu": "1", style: dotStyle(catOf(i.status)), "aria-label": `${i.key}: ${label(i.status)}, move`, ...writingProps(),
+          onclick: (e) => { e.stopPropagation(); if (!S.writing) moveMenu(i, e.currentTarget); } }, h("span", { class: "dot" }), i.column === "blocked" ? statusText(i) : label(i.status)));
     })));
   const selIssue = S.byId.get(S.selected);
   const empty = h("p", { class: "qempty" }, "No Issues match these filters.",
@@ -744,7 +780,8 @@ function qKeys(e) {
   };
   if (e.key === "j" || e.key === "ArrowDown") go(1);
   if (e.key === "k" || e.key === "ArrowUp") go(-1);
-  if (e.key === "Enter" && narrow() && S.selected && e.target.classList.contains("qopen")) { S.opener = S.selected; select(S.selected); }
+  // Enter is the button's native click; ←/→ have no meaning in a single list.
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.target.classList.contains("qopen")) e.preventDefault();
   if (e.key === "m") {
     const row = document.querySelector('.qopen[aria-current="true"]')?.closest(".qrow");
     if (row) moveMenu(S.byId.get(S.selected), row.querySelector(".statusbtn") || row.querySelector(".qopen"));
@@ -757,7 +794,7 @@ function renderControls() {
   $("pulse").replaceChildren(...Object.entries(PULSES).map(([k, p]) => {
     const n = all.filter(p.test).length;
     const text = k === "human" ? `${n === 1 ? "needs" : "need"} a human` : p.text;
-    return h("button", { class: p.warn && n ? "warn" : "", "aria-pressed": String(S.pulse === k), onclick: () => { S.pulse = S.pulse === k ? "" : k; renderControls(); render(); } }, h("b", {}, n), text);
+    return h("button", { class: n && p.tone ? p.tone : "", "aria-pressed": String(S.pulse === k), onclick: () => { S.pulse = S.pulse === k ? "" : k; renderControls(); render(); } }, h("b", {}, n), text);
   }));
   $("me").replaceChildren(ring({ assignee: S.viewer, assignee_kind: "human" }), `Acting as ${S.viewer}`);
   // Rebuilding the filters while the viewer types would drop focus and the caret.
@@ -811,6 +848,8 @@ function restoreInner(root, saved) {
   for (const el of root.querySelectorAll("button, a, input, [tabindex]")) {
     if (focusKey(el) === saved.key) { el.focus({ preventScroll: true }); return; }
   }
+  // The control is gone (say the move it ran succeeded): land on the title, not <body>.
+  root.querySelector("h3[tabindex]")?.focus({ preventScroll: true });
 }
 
 function render(flashId) {
@@ -835,7 +874,7 @@ function render(flashId) {
     if (i) {
       const sig = drawerSig(i);
       if (sig !== S.drawerSig) {
-        d.replaceChildren(detailEl(i, closeBtn()));
+        d.replaceChildren(detailEl(i, closeBtn(), "d"));
         S.drawerSig = sig;
         restoreInner(d, dFocus);
       }

@@ -1423,7 +1423,7 @@ with `409`: `MOVE_REFUSED`, `CHOOSE_TRANSITION`, `CONFIRM_REQUIRED`, or
 active drop over a lease-free Assignee, always after that server-side check,
 `confirmed: true`, and `--if-version`. Static assets are served at `/app.css`,
 `/app.js`, and `/favicon.svg`. In the page, `/` focuses the filter, `j`/`k` or
-the arrow keys move between Issues, Enter opens one, `m` opens the move menu,
+↑/↓ move between Issues, ←/→ move between columns in Columns, Enter opens one, `m` opens the move menu,
 Esc closes, and `?` shows the shortcut sheet. Stop with Ctrl-C.
 
 ### `orbit remote` — GitHub Issue provider

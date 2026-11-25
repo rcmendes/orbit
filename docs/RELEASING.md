@@ -6,6 +6,7 @@ Orbit uses [cargo-dist](https://axodotdev.github.io/cargo-dist/) for release bui
 
 Entries record what each release delivered. Some name commands that were later retired or renamed; [CHANGELOG.md](../CHANGELOG.md) maps each retired command to its replacement.
 
+- `v0.12.0` — `orbit board view` local kanban (ADR 0023), batched change-feed Git calls, critical-path scheduler index; Board contract 1.1.0. Supersedes the untagged 0.11.1 bump
 - `v0.11.0` — the Issue model and platform rebuild (ADR 0022): Issue types and hierarchy, declarative workflow, typed links, named priorities, project keys, review and evidence, change feed, profiles, opt-in scheduler/hooks/index, contract handshake; breaking, see CHANGELOG
 - `v0.10.15` — Board-per-repository storage and migration, provider-neutral `orbit remote` commands, atomic batch operations, task Annotations and Source Keys, worktree claims, and safer Child-Board consolidation
 - `v0.10.10` — maintenance republish of v0.10.9; no source or behavior changes

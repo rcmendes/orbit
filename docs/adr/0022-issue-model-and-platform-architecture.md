@@ -155,7 +155,7 @@ properties, keys — with a dry-run preview, and `doctor` verifies the result.
   vocabulary. `orbit export` `schema_version` bumps.
 - Existing Boards do not work until `orbit migrate` converts them; there is no
   read-compat path.
-- `docs/commands.md`, `docs/SPEC.md`, `docs/GLOSSARY.md`, and this document's
+- `docs/commands.md`, `docs/SPEC.md`, `GLOSSARY.md`, and this document's
   component map are regenerated or rewritten as each phase lands.
 - Consumers (including the kinetic refactor) negotiate the contract through
   `orbit capabilities`; an unsupported Orbit is rejected with the missing

@@ -4,13 +4,11 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`docs/GLOSSARY.md`**, or
-- **`docs/GLOSSARY-MAP.md`** if it exists: it points at one `GLOSSARY.md`
-  per context. Read each one relevant to the topic.
+- **`GLOSSARY.md`** at the repo root, or
+- **`GLOSSARY-MAP.md`** at the repo root if it exists: it points at one `GLOSSARY.md` per context. Read each one relevant to the topic.
+- **`docs/adr/`**: read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
 - **`docs/ARCHITECTURE.md`**: component map, state machine, command flow, and
   sequence diagrams.
-- **`docs/adr/`**: read ADRs that touch the area you're about to work in. In
-  multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
 - **`docs/agents/project-guidance.md`**: shared verification defaults and the
   controlled `component` values for Issues on this board.
 
@@ -25,32 +23,28 @@ Single-context repo (most repos):
 
 ```
 /
+├── GLOSSARY.md
 ├── docs/
-│   ├── GLOSSARY.md
-│   └── adr/
-│       ├── 0001-event-sourced-orders.md
-│       └── 0002-postgres-for-write-model.md
+│   ├── adr/
+│   │   ├── 0001-event-sourced-orders.md
+│   │   └── 0002-postgres-for-write-model.md
+│   └── ARCHITECTURE.md
 └── src/
 ```
 
-Multi-context repo (presence of `docs/GLOSSARY-MAP.md`):
+Multi-context repo (presence of `GLOSSARY-MAP.md` at the root):
 
 ```
 /
-├── docs/
-│   ├── GLOSSARY-MAP.md
-│   └── adr/                          ← system-wide decisions
+├── GLOSSARY-MAP.md
+├── docs/adr/                          ← system-wide decisions
 └── src/
     ├── ordering/
-    │   ├── docs/
-    │   │   ├── GLOSSARY.md
-    │   │   └── adr/                  ← context-specific decisions
-    │   └── ...
+    │   ├── GLOSSARY.md
+    │   └── docs/adr/                  ← context-specific decisions
     └── billing/
-        ├── docs/
-        │   ├── GLOSSARY.md
-        │   └── adr/
-        └── ...
+        ├── GLOSSARY.md
+        └── docs/adr/
 ```
 
 ## Use the glossary's vocabulary

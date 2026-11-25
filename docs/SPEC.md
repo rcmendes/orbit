@@ -117,12 +117,12 @@ The detailed module map, board-resolution flow, domain relationships, state mach
 
 ## 3. Domain model
 
-The canonical vocabulary lives in `docs/GLOSSARY.md`. In short:
+The canonical vocabulary lives in `GLOSSARY.md` at the repo root. In short:
 
 - An Issue has one stored **Status**: a name defined by the Board's **Workflow**. Every Status belongs to a **Status Category** — `todo`, `active`, `done`, or `canceled` — and the shipped templates (`minimal`, `standard`, `agentic`) or a custom `[workflow]` section in `config.toml` define the names, Transitions, and the single Ready Status.
 - A **parent Issue** groups its descendants, and its completion depends on them. A **sub-issue** is an Issue with a `parent`; it is claimable and completable in its own right. Parentage follows the Board's configured Issue hierarchy (`board.hierarchy`; default `epic` > `story`/`task`/`bug` > `sub-task`) and is not a Dependency.
 
-- **Type** is the stored Issue type, configured per Board under `board.types` (default `epic`, `story`, `task`, `bug`, `sub-task`; `board.default_type` picks the default, `task`). The type decides where in the hierarchy an Issue may sit: a child must be on a strictly deeper level than its parent. An **Epic** or **spec** is a top-level Issue with `type: epic`. External trackers call the unit an Issue and a child a Sub-issue; see [`docs/GLOSSARY.md`](./GLOSSARY.md), [ADR 0009](./adr/0009-keep-task-vocabulary.md), [ADR 0010](./adr/0010-structural-type-field.md), and [ADR 0022](./adr/0022-issue-model-and-platform-architecture.md).
+- **Type** is the stored Issue type, configured per Board under `board.types` (default `epic`, `story`, `task`, `bug`, `sub-task`; `board.default_type` picks the default, `task`). The type decides where in the hierarchy an Issue may sit: a child must be on a strictly deeper level than its parent. An **Epic** or **spec** is a top-level Issue with `type: epic`. External trackers call the unit an Issue and a child a Sub-issue; see [`GLOSSARY.md`](../GLOSSARY.md), [ADR 0009](./adr/0009-keep-task-vocabulary.md), [ADR 0010](./adr/0010-structural-type-field.md), and [ADR 0022](./adr/0022-issue-model-and-platform-architecture.md).
 - **Ready** is derived: the Issue sits in the Workflow's Ready Status (the one Status flagged `ready`), has no Assignee (claimed or assigned), is not Waiting, carries no Hold Label, has no open Dependency (a blocking Link to an Issue not in a closed Status Category), and has no open descendant.
 - **Blocked** is derived: at least one Dependency is not in a closed Status Category, or a Parent Issue has at least one open descendant.
 - **Waiting** is an external blocker recorded as a blocking Link to an external reference; it is not a Status.

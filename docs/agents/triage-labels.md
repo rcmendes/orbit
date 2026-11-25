@@ -5,7 +5,7 @@ the `mattpocock` profile applied (`orbit setup mattpocock`), each role maps
 onto the Issue workflow — a status reached through `orbit transition`, an
 assignee kind, a resolution, or an Issue type — instead of a label.
 
-| Label in mattpocock/skills | Orbit mechanism | Meaning                                  |
+| Label in mattpocock/skills | Label in our tracker | Meaning                                  |
 | -------------------------- | --------------- | ---------------------------------------- |
 | `needs-triage`             | `orbit transition <ID> needs-triage` → status `Triage` | Maintainer needs to evaluate this issue  |
 | `needs-info`               | `orbit transition <ID> needs-info` → status `Needs Info` | Waiting on reporter for more information |

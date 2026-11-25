@@ -292,6 +292,14 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
         (None, None) => Err(unknown_setup_target(target)),
         (None, Some(resolved)) => run_profile(&args, dir, &resolved),
         (Some(client), resolved) => {
+            // The workflow guard runs before any harness file is written:
+            // setup must not leave agent docs that describe a workflow the
+            // Board does not run.
+            if let Some(resolved) = &resolved
+                && !args.remove
+            {
+                guard_workflow_ownership(dir, &resolved.profile)?;
+            }
             let mut output = run_harness(&args, dir, client)?;
             if let Some(resolved) = resolved {
                 merge_profile(&args, dir, &resolved, &mut output)?;
@@ -299,6 +307,52 @@ pub fn run(args: crate::cli::SetupArgs, dir: Option<&Path>) -> Result<CommandOut
             Ok(output)
         }
     }
+}
+
+/// Refuses to apply a workflow-bearing profile when the Board's workflow
+/// already belongs to a different profile. Runs before any file is written
+/// so a conflicting `orbit setup` writes nothing. A missing Board is not a
+/// conflict — there is no workflow to clobber.
+fn guard_workflow_ownership(dir: Option<&Path>, profile: &crate::profile::Profile) -> Result<()> {
+    if profile.workflow.is_none() {
+        return Ok(());
+    }
+    let access = match crate::board::BoardAccess::open(dir, crate::board::AccessMode::Read) {
+        Ok(access) => access,
+        Err(error) if error.code == code::BOARD_NOT_FOUND => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    ensure_workflow_compatible(&access.board().config, profile)
+}
+
+/// `PROFILE_CONFLICT` when `profile` wants to set the Board's `[workflow]`
+/// but a `[[profiles]]` record shows another profile already did.
+fn ensure_workflow_compatible(
+    config: &crate::board::Config,
+    profile: &crate::profile::Profile,
+) -> Result<()> {
+    if profile.workflow.is_none() {
+        return Ok(());
+    }
+    if let Some(conflicting) = config
+        .profiles
+        .iter()
+        .find(|applied| applied.name != profile.name() && applied.workflow.is_some())
+    {
+        return Err(OrbitError::new(
+            code::PROFILE_CONFLICT,
+            format!(
+                "profile `{}` cannot be applied: the Board's workflow was set by profile `{}`",
+                profile.name(),
+                conflicting.name
+            ),
+        )
+        .with_details(json!({
+            "profile": profile.name(),
+            "conflicting_profile": conflicting.name,
+        })));
+    }
+    Ok(())
 }
 
 fn unknown_setup_target(target: &str) -> OrbitError {
@@ -507,6 +561,7 @@ fn profile_outcome(
         },
     )?;
     let board = access.board();
+    ensure_workflow_compatible(&board.config, profile)?;
 
     // Simulate the apply to learn whether the Board would change.
     let mut simulated = board.config.clone();
@@ -1542,6 +1597,7 @@ fn plan_install(
             root,
             tracker,
             &mattpocock_section(options.remote_details),
+            UPSTREAM_TRACKER_HEADINGS,
             plan,
         )?;
     }
@@ -1550,6 +1606,7 @@ fn plan_install(
             root,
             triage_labels,
             &mattpocock_triage_labels_section(),
+            UPSTREAM_TRIAGE_LABEL_COLUMNS,
             plan,
         )?;
     }
@@ -1642,11 +1699,14 @@ fn plan_section(
 }
 
 /// Install a managed section only when the file is absent or already managed.
-/// A hand-written file is reported as skipped instead of gaining a second section.
+/// A hand-written file is reported as skipped instead of gaining a second
+/// section; the skip warning names `expected` — the headings or markers the
+/// skills look up there — so a missing one is visible instead of silent.
 fn plan_section_unless_custom(
     root: &Path,
     relative: &str,
     section: &str,
+    expected: &[&str],
     plan: &mut BTreeMap<PathBuf, FilePlan>,
 ) -> Result<()> {
     let absolute = root.join(relative);
@@ -1655,16 +1715,25 @@ fn plan_section_unless_custom(
         && !existing.contains(BEGIN_MARKER)
         && !existing.contains(END_MARKER)
     {
-        return insert_plan(plan, skipped_plan(absolute, PathBuf::from(relative)));
+        return insert_plan(
+            plan,
+            skipped_plan(absolute, PathBuf::from(relative), expected),
+        );
     }
     plan_section(root, relative, section, plan)
 }
 
-fn skipped_plan(absolute: PathBuf, relative: PathBuf) -> FilePlan {
-    let warning = format!(
+fn skipped_plan(absolute: PathBuf, relative: PathBuf, expected: &[&str]) -> FilePlan {
+    let mut warning = format!(
         "{} is not managed by Orbit; leaving it in place",
         relative.display()
     );
+    if !expected.is_empty() {
+        warning.push_str(&format!(
+            " — the skills look up these headings there: {}",
+            expected.join(", ")
+        ));
+    }
     FilePlan {
         absolute,
         relative,
@@ -1755,7 +1824,7 @@ fn plan_full_file_remove(
             },
         )?;
     } else {
-        insert_plan(plan, skipped_plan(absolute, PathBuf::from(relative)))?;
+        insert_plan(plan, skipped_plan(absolute, PathBuf::from(relative), &[]))?;
     }
     Ok(())
 }
@@ -2748,6 +2817,22 @@ fn profile_role_status<'a>(profile: &'a crate::profile::Profile, role: &str) -> 
         .map(String::as_str)
 }
 
+/// The headings the upstream mattpocock skills look up in
+/// `docs/agents/issue-tracker.md`. A rename upstream must break a test, not
+/// silently break the skills — `mattpocock_section_generates_every_upstream_heading`
+/// asserts each of these appears in the generated document.
+const UPSTREAM_TRACKER_HEADINGS: &[&str] = &[
+    "## Conventions",
+    "## When a skill says \"publish to the issue tracker\"",
+    "## When a skill says \"fetch the relevant ticket\"",
+    "## Wayfinding operations",
+];
+
+/// The markers the upstream skills look up in `docs/agents/triage-labels.md`:
+/// the upstream column names for the role mapping table.
+const UPSTREAM_TRIAGE_LABEL_COLUMNS: &[&str] =
+    &["Label in mattpocock/skills", "Label in our tracker"];
+
 fn mattpocock_section(remote_details: bool) -> String {
     let list = list_guidance(remote_details);
     let profile = mattpocock_profile();
@@ -2771,21 +2856,57 @@ We use Orbit, a Git-native issue tracker for coding agents. Issues live as Markd
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
 - To claim a known Issue and prepare its worktree, run `orbit claim <ID> --by <agent> --worktree`; it creates or reuses `.worktrees/<ID>` on `ticket/<ID>` in the Issue's Repository, and `--base <ref>` starts the branch at that ref (for example a spec's integration branch). If preparation fails after claiming, `CLAIM_WORKTREE_FAILED` means the claim remains active; fix the cause and retry.
 - To hand off work, run `orbit checkpoint <ID> --by <agent> --progress \"...\" --next \"...\"`; the record survives release and takeover, and never affects readiness.
-- To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change. Closing an Issue as `wontfix` instead runs `orbit transition <ID> wontfix`, which records resolution `Won't Do`.
-- To create work, run `orbit add \"Title\" -p high`; `orbit depend <ID> <DEP-ID>` adds a blocker. New Issues start in `{initial}`.
-- Orbit calls the unit an Issue; a child Issue is a sub-issue filed with `--parent`; an \"epic\" or \"spec\" is a top-level Issue with `--type epic`.
-- To publish tickets under an existing issue or spec, run `orbit add \"Title\" --parent <PARENT_ID>`; the parent waits for every descendant to resolve.
-- `type` is a Board-configured Issue type. This profile maps the `bug` category to type `bug` and `enhancement` to type `story`; pass `--type` on `orbit add` or `orbit update` rather than adding category labels.
 - Triage state moves with `orbit transition <ID> <role>`: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. `ready-for-human` work is assigned to a person with `orbit assign <ID> --to <name>` (assignee kind `human`), which takes it out of the agent queue.
+- Closing an Issue as `wontfix` instead runs `orbit transition <ID> wontfix`, which records resolution `Won't Do`; `orbit reopen <ID>` returns it to the initial status.
+- `type` is a Board-configured Issue type. This profile maps the `bug` category to type `bug` and `enhancement` to type `story`; pass `--type` on `orbit add` or `orbit update` rather than adding category labels.
+- To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`. Labels are free-form metadata — triage state is a status, not a label.
+- Never edit task frontmatter directly; that bypasses dependency validation, leases, and the write lock.
+- Use `orbit show <ID>` to read acceptance criteria.
 - Never use `done --force` or `cancel --force` on a parent with open sub-issues; it cancels them.
 - Use `--type epic` or `--exclude-type epic` on `orbit ready` or `orbit list` to find or skip spec/epic containers. `--exclude-label epic` remains for legacy boards.
 - Use `orbit tree <id>` to inspect one epic/spec with its sub-issues and blockers.
 - Inside a member Repository, `orbit ready` and `orbit list` scope to it plus Board-wide Issues; `--all` widens to the whole Board.
-- To label work, use `orbit label add <ID> <label>...` and `orbit label remove <ID> <label>...`; filter with `orbit list --label <label>` or `orbit list --unlabeled`. Labels are free-form metadata — triage state is a status, not a label.
-- To comment, use `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.
-- Never edit task frontmatter directly; that bypasses dependency validation, leases, and the write lock.
-- Use `orbit show <ID>` to read acceptance criteria.
 {list}
+
+## Conventions
+
+- **Create:** `orbit add \"Title\" -p high`. New Issues start in `{initial}`.
+- **Read:** `orbit show <ID> --json` returns the full Issue — body, labels, parent, dependents, and comments.
+- **List:** `orbit list --json` for the board, `orbit ready --json` for claimable work.
+- **Sub-issue:** `orbit add \"Title\" --parent <PARENT_ID>` files a child Issue; the parent waits for every descendant to resolve.
+- **Blocking:** `orbit depend <ID> <DEP-ID>` adds a blocker. Use it only for real blockers — never for parentage; `--parent` does that.
+- **Count open blockers:** `orbit tree <ID>` lists an Issue's sub-issues and blockers; `orbit ready --json` reports `blocking` per Issue.
+- **Comment:** `orbit comment add <ID> --body \"...\" --by <agent>` and `orbit comment list <ID>`.
+- **Close:** `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change. Work closes through `orbit done`, not through PRs.
+
+## When a skill says \"publish to the issue tracker\"
+
+Create one Issue per ticket, blockers first, and capture the returned `data.id`:
+
+```bash
+orbit add \"<title>\" -p high --body-file -
+```
+
+Feed the Markdown body on stdin. A ticket ready for an agent starts in `{initial}` and moves with `orbit transition <ID> ready-for-agent`. If the source is an existing Issue or spec, create each ticket as a sub-issue with `--parent <source-id>`; otherwise create top-level Issues, and use `--type epic` when publishing a spec or epic parent. Then use the returned ID for any dependent ticket. To add a blocking edge later, run `orbit depend <dependent-id> <blocker-id>`.
+
+## When a skill says \"fetch the relevant ticket\"
+
+```bash
+orbit show <ID> --json
+```
+
+Use `orbit list --all --include-closed --json` to inspect the whole board. `orbit ready --json` lists only unclaimed Issues in the workflow's ready status whose dependencies are in a closed status category and which carry no hold label.
+
+## Wayfinding operations
+
+A map is a parent Issue labelled `wayfinder:map`; map membership is the parent edge, not a per-map label.
+
+- **Map:** `orbit add \"Wayfinder: <destination>\" --label wayfinder:map --body-file - --json`. Find maps with `orbit list --label wayfinder:map --json`.
+- **Child ticket:** one sub-issue per child with the map as its parent and one type label — `wayfinder:research`, `wayfinder:prototype`, `wayfinder:grilling`, or `wayfinder:task`: `orbit add \"<child title>\" --parent <map-id> --label wayfinder:task --body-file - --json`.
+- **Blocking:** `orbit depend <task-id> <dependency-id>` — the first Issue cannot become Ready until the second is closed. Never use `depend` to record parentage; `--parent` does that, and the map waits for its sub-issues automatically.
+- **Frontier query:** `orbit ready --parent <map-id> --json` (or `orbit list --parent <map-id> --json`) returns only that map's Ready sub-issues — the frontier, not the whole Board.
+- **Claim:** `orbit claim <id> --by <agent>` or `orbit ready --parent <map-id> --claim --by <agent>`. Tracker assignees are not Orbit claims.
+- **Resolve:** `orbit done <id> --by <agent>` or `orbit cancel <id> --by <agent>` each sub-issue as its work lands; the map becomes Ready when every sub-issue is closed, and `orbit done` closes it. Work closes through `orbit done`, not through PRs.
 {END_MARKER}",
         ready = ready,
         initial = initial,
@@ -2838,7 +2959,7 @@ Orbit Board applies the `mattpocock` profile, which maps each role onto the
 Issue workflow — a status reached through `orbit transition`, an assignee
 kind, a resolution, or an Issue type — instead of a label.
 
-| Role | Orbit mechanism | Meaning |
+| Label in mattpocock/skills | Label in our tracker | Meaning |
 | --- | --- | --- |
 | `needs-triage` | `orbit transition <ID> needs-triage` → status `{needs_triage}` | Maintainer needs to evaluate this issue |
 | `needs-info` | `orbit transition <ID> needs-info` → status `{needs_info}` | Waiting on reporter for more information |
@@ -2956,6 +3077,31 @@ mod tests {
             ".config/devin/mcp_config.json",
         ] {
             assert!(relatives.contains(&expected), "missing {expected}");
+        }
+    }
+
+    /// The upstream skills look up tracker sections by heading — an upstream
+    /// rename must break this test, not silently break the skills.
+    #[test]
+    fn mattpocock_section_generates_every_upstream_heading() {
+        for remote_details in [false, true] {
+            let section = mattpocock_section(remote_details);
+            for heading in UPSTREAM_TRACKER_HEADINGS {
+                assert!(
+                    section.contains(heading),
+                    "missing `{heading}` (remote_details={remote_details}) in:\n{section}"
+                );
+            }
+            // implement-spec needs to learn that work closes through
+            // `orbit done`, not through PRs.
+            assert!(
+                section.contains("`orbit done`") && section.contains("not through PRs"),
+                "section does not name `orbit done` as the close path:\n{section}"
+            );
+        }
+        let labels = mattpocock_triage_labels_section();
+        for marker in UPSTREAM_TRIAGE_LABEL_COLUMNS {
+            assert!(labels.contains(marker), "missing `{marker}` in:\n{labels}");
         }
     }
 

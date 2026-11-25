@@ -331,6 +331,21 @@ the resulting `config.toml`; `--remove` refuses a profile-only target — profil
 are declarative, so remove the `[[profiles]]` record and its settings by hand
 or apply a different profile.
 
+Only one profile may own the Board's `[workflow]`: when a `[[profiles]]` record
+shows another profile already set it (recorded as the profile's `workflow`
+field), applying a workflow-bearing profile fails with `PROFILE_CONFLICT`
+naming the conflicting profile and a `Next:` action, and nothing is written —
+setup never generates agent docs that describe a workflow the Board does not
+run. Profiles without a `[workflow]` section compose freely.
+
+`orbit setup mattpocock` writes `docs/agents/issue-tracker.md` and
+`docs/agents/triage-labels.md` inside the managed marker block, with the
+sections the upstream skills look up by heading: `Conventions`, `When a skill
+says "publish to the issue tracker"`, `When a skill says "fetch the relevant
+ticket"`, and `Wayfinding operations` — including the rule that work closes
+through `orbit done`, not through PRs. A hand-written file without the marker
+is skipped, and the warning names the headings the skills will not find.
+
 User scope writes Claude memory to `~/.claude/CLAUDE.md`, its hook to
 `~/.claude/settings.json`, and MCP to `~/.claude.json`; Cursor rules, the shared
 skill, and MCP to `~/.cursor/rules/orbit.mdc`, `~/.agents/skills/orbit/SKILL.md`,
@@ -1725,6 +1740,7 @@ orbit sync              # commit anything left uncommitted
 | `LOCKED` | Retryable: another writer holds the lock. Retry after a short backoff. |
 | `CONTRACT_VERSION_UNSUPPORTED` | The Board's `contract` in `config.toml` is newer than this `orbit` supports. Upgrade `orbit`; `orbit capabilities` still reports the Board's contract and workflow. |
 | `PROFILE_UNMET` | A Profile's `requires` capabilities or minimum `contract` exceed this `orbit`. Upgrade `orbit` or apply a profile whose requirements are met; `details` names what is missing. `orbit doctor` reports the same code for an applied `[[profiles]]` record. |
+| `PROFILE_CONFLICT` | Another applied Profile owns the Board's workflow, as recorded in `[[profiles]]`. Remove the conflicting profile's record and settings before applying a different workflow-bearing profile, or use a profile without `[workflow]`; the error names the conflicting profile and provides a `Next:` action. |
 
 ## Command reference
 

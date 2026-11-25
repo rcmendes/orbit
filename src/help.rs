@@ -1229,7 +1229,9 @@ file, skill, and MCP configuration as appropriate; Claude and Devin can also
 receive the SessionStart hook with --hooks. Re-running is safe: only managed
 sections are
 rewritten. A hand-written docs/agents/issue-tracker.md without the marker is
-reported as skipped and left alone.
+reported as skipped and left alone; the skip warning names the headings the
+skills look up there (Conventions, the publish/fetch sections, and Wayfinding
+operations), so a missing one is visible instead of silent.
 
 Any target that is not an agent integration (claude, cursor, codex, opencode,
 devin, mattpocock, all) resolves as a profile: `profiles/<name>.toml` shipped
@@ -1244,6 +1246,15 @@ Board's config.toml idempotently and records it under `[[profiles]]` so
 for a known integration name (for example `mattpocock`) applies alongside the
 harness files. Profiles cannot be removed with --remove; edit config.toml or
 apply a different profile.
+
+Only one profile may own the Board's [workflow]. When a `[[profiles]]` record
+shows another profile already set the workflow, applying a workflow-bearing
+profile fails with PROFILE_CONFLICT naming the conflicting profile and a Next
+action, and setup writes nothing — it never generates docs that describe a
+workflow the Board does not run. The mattpocock guides carry the sections the
+upstream skills read by heading: Conventions, the 'publish to the issue
+tracker' and 'fetch the relevant ticket' sections, and Wayfinding operations,
+plus the closing rule that work closes through `orbit done`, not through PRs.
 
 --scope project (the default) writes repository-level files. --scope user writes
 the same managed content under the user's home: Claude memory, settings, and

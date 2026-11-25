@@ -920,6 +920,15 @@ orbit setup all --portable-mcp # MCP command `orbit`; editor PATH must find it
 orbit setup all --remove     # remove only Orbit-managed content
 ```
 
+`orbit setup mattpocock` writes `docs/agents/issue-tracker.md` and
+`docs/agents/triage-labels.md` with the sections the upstream skills look up
+by heading (Conventions, the publish/fetch sections, and Wayfinding
+operations) inside a managed marker block; a hand-written file without the
+marker is skipped, and the warning names the missing headings. Profiles are
+also applied through `setup`: when a different profile already owns the
+Board's `[workflow]`, applying another workflow-bearing profile fails with
+`PROFILE_CONFLICT` naming it — nothing is written.
+
 **Core `setup` parameters**
 
 | Parameter | Use it when | Example |

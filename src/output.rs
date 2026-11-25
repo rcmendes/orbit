@@ -301,6 +301,19 @@ fn actionable_error(error: &OrbitError) -> (String, String, Option<String>, Opti
                 "Task {task} conflicts with {tracker} Issue {project}#{id} in {fields}. Review with `{sync_command}`, choose each side with `--resolve FIELD=orbit` or `--resolve FIELD=remote`, then apply with `{sync_command} --resolve FIELD=orbit|remote --apply`."
             ))
         }
+        crate::error::code::PROFILE_CONFLICT => {
+            let conflicting = details
+                .get("conflicting_profile")
+                .and_then(Value::as_str)
+                .unwrap_or("<profile>");
+            let profile = details
+                .get("profile")
+                .and_then(Value::as_str)
+                .unwrap_or("<profile>");
+            Some(format!(
+                "Remove profile `{conflicting}` and its applied `[workflow]` section from the Board's config.toml, then retry `orbit setup {profile}` — or keep `{conflicting}` and skip `{profile}`."
+            ))
+        }
         crate::error::code::TRIAGE_APPROVAL_REQUIRED => {
             let task = details
                 .get("issue")

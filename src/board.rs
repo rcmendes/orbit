@@ -269,6 +269,12 @@ pub struct AppliedProfile {
     /// `resolution`, `component`, or a plugin-defined area).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub vocabulary: BTreeMap<String, BTreeMap<String, String>>,
+    /// The workflow this profile set, when it carried a `[workflow]`
+    /// section: the template name, or `custom` for an inline definition.
+    /// Recorded so a later `orbit setup` refuses to overwrite a workflow a
+    /// different profile owns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
 }
 
 impl Default for Config {

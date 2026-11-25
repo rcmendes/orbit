@@ -355,6 +355,12 @@ impl Profile {
             holds: self.holds.clone(),
             roles: self.roles.clone(),
             vocabulary: self.vocabulary.clone(),
+            workflow: self.workflow.as_ref().map(|workflow| {
+                workflow
+                    .template
+                    .clone()
+                    .unwrap_or_else(|| "custom".to_string())
+            }),
         }
     }
 
@@ -688,6 +694,7 @@ components = ["api"]
             holds: Vec::new(),
             roles: BTreeMap::new(),
             vocabulary: BTreeMap::new(),
+            workflow: None,
         };
         let unmet = unmet_applied(&applied);
         assert_eq!(unmet.capabilities, ["teleport"]);

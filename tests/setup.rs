@@ -259,6 +259,129 @@ fn setup_mattpocock_writes_the_issue_tracker_bridge() {
     assert!(!repo.exists("docs/agents/triage-labels.md"));
 }
 
+/// The upstream skills look up tracker sections by heading, so every heading
+/// they rely on must be generated: a rename upstream should break this test,
+/// not silently break the skills.
+#[test]
+fn setup_mattpocock_writes_every_upstream_tracker_heading() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.ok_json(&["setup", "mattpocock", "--json"]);
+
+    let tracker = repo.read("docs/agents/issue-tracker.md");
+    for heading in [
+        "## Conventions",
+        "## When a skill says \"publish to the issue tracker\"",
+        "## When a skill says \"fetch the relevant ticket\"",
+        "## Wayfinding operations",
+    ] {
+        assert!(
+            tracker.contains(heading),
+            "missing `{heading}` in:\n{tracker}"
+        );
+    }
+    // Wayfinding covers the map/child/blocking/frontier/claim/resolve set.
+    for term in [
+        "Map",
+        "Child",
+        "Blocking",
+        "orbit ready --parent",
+        "Claim",
+        "Resolve",
+    ] {
+        assert!(
+            tracker.contains(term),
+            "missing Wayfinding term `{term}` in:\n{tracker}"
+        );
+    }
+    // The skills must learn that work closes through `orbit done`, not PRs.
+    assert!(
+        tracker.contains("orbit done") && tracker.contains("not through PRs"),
+        "tracker does not name `orbit done` as the close path:\n{tracker}"
+    );
+
+    let labels = repo.read("docs/agents/triage-labels.md");
+    for heading in ["Label in mattpocock/skills", "Label in our tracker"] {
+        assert!(
+            labels.contains(heading),
+            "missing `{heading}` in:\n{labels}"
+        );
+    }
+}
+
+/// On a Board whose workflow belongs to a different profile,
+/// `orbit setup mattpocock` fails naming that profile — it must not write
+/// docs that describe a workflow the Board does not run.
+#[test]
+fn setup_mattpocock_refuses_a_foreign_workflow_profile() {
+    let repo = TestRepo::new();
+    repo.init();
+    let profiles = repo.home().join(".config").join("orbit").join("profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::write(
+        profiles.join("kinetic.toml"),
+        "name = \"kinetic\"\n[workflow]\ntemplate = \"minimal\"\n",
+    )
+    .unwrap();
+    repo.ok_json(&["setup", "kinetic", "--json"]);
+
+    let (status, value) = repo.json(&["setup", "mattpocock", "--json"]);
+    assert_ne!(status, 0, "{value}");
+    assert_eq!(value["error"]["code"], "PROFILE_CONFLICT", "{value}");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("kinetic"), "{message}");
+    assert!(message.contains("Next:"), "{message}");
+    // Nothing was written.
+    assert!(!repo.exists("docs/agents/issue-tracker.md"));
+    assert!(!repo.exists("docs/agents/triage-labels.md"));
+
+    // The same-name profile stays applicable after a conflict elsewhere.
+    let (status, value) = repo.json(&["setup", "kinetic", "--json"]);
+    assert_eq!(status, 0, "{value}");
+}
+
+/// A pure profile target hits the same guard: applying a workflow-bearing
+/// profile over another profile's workflow conflicts.
+#[test]
+fn setup_profile_refuses_a_foreign_workflow_profile() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.ok_json(&["setup", "mattpocock", "--json"]);
+
+    let profiles = repo.home().join(".config").join("orbit").join("profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::write(
+        profiles.join("kinetic.toml"),
+        "name = \"kinetic\"\n[workflow]\ntemplate = \"minimal\"\n",
+    )
+    .unwrap();
+
+    let (status, value) = repo.json(&["setup", "kinetic", "--json"]);
+    assert_ne!(status, 0, "{value}");
+    assert_eq!(value["error"]["code"], "PROFILE_CONFLICT", "{value}");
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.contains("mattpocock"), "{message}");
+
+    // The Board's workflow is untouched.
+    let config = std::fs::read_to_string(repo.board_path().join("config.toml")).unwrap();
+    assert!(config.contains("initial = \"Triage\""), "{config}");
+    assert!(!config.contains("kinetic"), "{config}");
+}
+
+/// A non-workflow profile composes with an applied profile: only workflow
+/// ownership conflicts.
+#[test]
+fn setup_profile_without_workflow_composes_with_an_applied_profile() {
+    let repo = TestRepo::new();
+    repo.init();
+    repo.ok_json(&["setup", "mattpocock", "--json"]);
+
+    let profiles = repo.home().join(".config").join("orbit").join("profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::write(profiles.join("extras.toml"), "name = \"extras\"\n").unwrap();
+    repo.ok_json(&["setup", "extras", "--json"]);
+}
+
 #[test]
 fn setup_mattpocock_updates_and_removes_a_managed_tracker_doc() {
     let repo = TestRepo::new();
@@ -306,7 +429,11 @@ fn setup_mattpocock_leaves_a_custom_tracker_doc_alone() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|warning| warning.as_str().unwrap().contains("not managed"))
+            .any(|warning| {
+                let warning = warning.as_str().unwrap();
+                // The warning names the headings the skills will not find.
+                warning.contains("not managed") && warning.contains("Wayfinding operations")
+            })
     );
 
     let (status, value) = repo.json(&["setup", "mattpocock", "--check", "--json"]);

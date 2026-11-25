@@ -56,7 +56,7 @@ Homebrew support is configured through cargo-dist but stays disabled until a tap
 3. Add `"homebrew"` to `installers`, add `"homebrew"` to `publish-jobs`, and set `tap = "rcmendes/homebrew-tap"` and `formula = "orbit"` in `dist-workspace.toml`.
 4. Run `dist generate` and commit the regenerated workflow.
 
-Until then, the README leads with the shell, PowerShell, and npm installers.
+Until then, the README install section and [Install details](./guides/install.md) lead with the shell, PowerShell, and npm installers.
 
 ## Cut a release
 

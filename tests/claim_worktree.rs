@@ -65,6 +65,154 @@ fn claim_worktree_is_idempotent_for_the_same_holder() {
     );
 }
 
+/// Creates `branch` in `cwd` with one empty commit and returns its tip,
+/// restoring the previously checked-out branch.
+fn commit_on_branch(repo: &TestRepo, cwd: &Path, branch: &str) -> String {
+    let original = worktree_branch(repo, cwd);
+    assert!(
+        repo.git_in(cwd, &["checkout", "-q", "-b", branch])
+            .status
+            .success()
+    );
+    assert!(
+        repo.git_in(cwd, &["commit", "--allow-empty", "-q", "-m", branch])
+            .status
+            .success()
+    );
+    let tip = String::from_utf8_lossy(&repo.git_in(cwd, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    assert!(
+        repo.git_in(cwd, &["checkout", "-q", &original])
+            .status
+            .success()
+    );
+    tip
+}
+
+fn head_commit(repo: &TestRepo, cwd: &Path) -> String {
+    String::from_utf8_lossy(&repo.git_in(cwd, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn claim_worktree_base_starts_the_ticket_branch_at_the_given_ref() {
+    let repo = TestRepo::new();
+    repo.init();
+    let api = repo.named_repo("api");
+    repo.ok_json(&[
+        "repo",
+        "add",
+        api.to_str().unwrap(),
+        "--name",
+        "api",
+        "--json",
+    ]);
+    let added = repo.ok_json_in(&api, &["add", "API work", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap().to_string();
+    let tip = commit_on_branch(&repo, &api, "feature/x");
+
+    let value = repo.ok_json(&[
+        "claim",
+        &id,
+        "--by",
+        "devin",
+        "--worktree",
+        "--base",
+        "feature/x",
+        "--json",
+    ]);
+
+    let worktree = api.join(".worktrees").join(&id);
+    assert_eq!(head_commit(&repo, &worktree), tip, "{value}");
+    assert_eq!(
+        worktree_branch(&repo, &worktree),
+        format!("ticket/{id}"),
+        "{value}"
+    );
+    assert_eq!(value["data"]["worktree"]["created"], true, "{value}");
+    assert!(value["meta"]["warnings"].is_null(), "{value}");
+}
+
+#[test]
+fn claim_base_without_worktree_is_a_usage_error() {
+    let repo = TestRepo::new();
+    repo.init();
+    let id = repo.add("Board work", &[]);
+
+    let output = repo.orbit(&["claim", &id, "--by", "devin", "--base", "main"]);
+
+    assert!(!output.status.success());
+    let shown = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(shown["data"]["status"], "ready", "{shown}");
+}
+
+#[test]
+fn claim_worktree_base_with_an_unknown_ref_fails_before_claiming() {
+    let repo = TestRepo::new();
+    repo.init();
+    let api = repo.named_repo("api");
+    repo.ok_json(&["repo", "add", api.to_str().unwrap(), "--json"]);
+    let added = repo.ok_json_in(&api, &["add", "API work", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap().to_string();
+
+    let (status, value) = repo.json(&[
+        "claim",
+        &id,
+        "--by",
+        "devin",
+        "--worktree",
+        "--base",
+        "does/not-exist",
+        "--json",
+    ]);
+
+    assert_eq!(status, 1, "{value}");
+    assert_eq!(value["error"]["code"], "INVALID_ARGUMENT", "{value}");
+    let shown = repo.ok_json(&["show", &id, "--json"]);
+    assert_eq!(shown["data"]["status"], "ready", "{shown}");
+    assert!(!api.join(".worktrees").join(&id).exists());
+}
+
+#[test]
+fn claim_worktree_base_warns_when_reusing_a_branch_on_another_base() {
+    let repo = TestRepo::new();
+    repo.init();
+    let api = repo.named_repo("api");
+    repo.ok_json(&["repo", "add", api.to_str().unwrap(), "--json"]);
+    let added = repo.ok_json_in(&api, &["add", "API work", "--json"]);
+    let id = added["data"]["id"].as_str().unwrap().to_string();
+
+    // An existing ticket branch rooted elsewhere is kept, and the claim
+    // reports that it is not based on the requested ref.
+    let ticket_tip = commit_on_branch(&repo, &api, &format!("ticket/{id}"));
+    commit_on_branch(&repo, &api, "feature/x");
+
+    let value = repo.ok_json(&[
+        "claim",
+        &id,
+        "--by",
+        "devin",
+        "--worktree",
+        "--base",
+        "feature/x",
+        "--json",
+    ]);
+
+    let worktree = api.join(".worktrees").join(&id);
+    assert_eq!(head_commit(&repo, &worktree), ticket_tip, "{value}");
+    let warnings = value["meta"]["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{value}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .contains(&format!("ticket/{id}")),
+        "{value}"
+    );
+}
+
 #[test]
 fn claim_worktree_reuses_an_existing_ticket_branch() {
     let repo = TestRepo::new();

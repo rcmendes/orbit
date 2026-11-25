@@ -11,7 +11,7 @@ Orbit is the issue tracker for this project. Use the `orbit` CLI; never edit tas
 From any member Repository, these commands resolve the shared Board across the Git boundary. Issues, dependencies, and claims are shared across its Repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready Issue atomically.
-- `orbit claim <id> --by <agent> --worktree` claims one Issue and creates `.worktrees/<id>` on `ticket/<id>` in the Issue's Repository.
+- `orbit claim <id> --by <agent> --worktree` claims one Issue and creates `.worktrees/<id>` on `ticket/<id>` in the Issue's Repository; `--base <ref>` starts the branch at that ref, for example a spec's integration branch.
 - `orbit assign <id> --to <name>` assigns an Issue to a person or agent without a lease.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 - `orbit checkpoint <id> --by <agent> --progress "..." [--next "..."] [--blocker "..."]` records a handoff that survives release and takeover.

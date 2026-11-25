@@ -305,6 +305,17 @@ orbit done <ID> --by opencode --comment "Implemented and verified."
 orbit cancel <ID> --by opencode
 ```
 
+To claim a known Issue and prepare its worktree in one step, run
+`orbit claim <ID> --by <agent> --worktree`; it creates or reuses
+`.worktrees/<ID>` on `ticket/<ID>` in the Issue's Repository. When the work
+belongs to a spec or epic implemented on an integration branch, pass
+`--base <integration-branch>` so the new `ticket/<ID>` branch starts there
+instead of the Repository's default branch:
+
+```bash
+orbit claim <ID> --by <agent> --worktree --base <integration-branch>
+```
+
 Pass `--comment` (or `--comment-file`) to `done` or `cancel` when the
 terminal note belongs with the transition; it is written and committed with the
 status change. Use `orbit comment add` for notes on an active issue. Record a

@@ -740,6 +740,10 @@ pub struct ClaimArgs {
     /// Create .worktrees/<id> on branch ticket/<id> in the Task's Repository.
     #[arg(long)]
     pub worktree: bool,
+
+    /// Base ref for a new ticket/<id> branch; requires --worktree.
+    #[arg(long, value_name = "REF", requires = "worktree")]
+    pub base: Option<String>,
 }
 
 #[derive(Debug, Args)]

@@ -984,6 +984,7 @@ orbit claim orb-a7b2c9 --by claude
 orbit claim orb-a7b2c9 --by claude --kind human   # a person claims with a lease
 orbit claim orb-a7b2c9 --by claude --steal   # take over a live or stale lease
 orbit claim orb-a7b2c9 --by claude --worktree # claim and create the issue worktree
+orbit claim orb-a7b2c9 --by claude --worktree --base feature/sso # base the branch on a ref
 ```
 
 `--steal` overrides the assignee's lease, not the readiness rules: hold labels and
@@ -994,8 +995,13 @@ unfinished dependencies still block the claim.
 `repository` field), falling back to the member Repository containing the current
 directory when the Issue names none. A new branch starts from the Repository's
 local default branch (the local branch named by `origin/HEAD`, else `main`,
-`master`, or the currently checked-out branch); no fetch is performed. An
-existing `ticket/<id>` branch is checked out without resetting its commits.
+`master`, or the currently checked-out branch); no fetch is performed.
+`--base <ref>` starts the new branch at that ref instead — for example a
+spec's integration branch — and an unknown ref fails before the claim is
+taken. `--base` is valid only together with `--worktree`. An
+existing `ticket/<id>` branch is checked out without resetting its commits;
+when it does not contain the `--base` commit the claim succeeds with a
+warning and the branch is left unchanged.
 An existing worktree is reused only at the expected path on that branch, so
 repeating the claim by the same assignee is safe. A branch checked out elsewhere
 or an incompatible target path is rejected before changing the claim.

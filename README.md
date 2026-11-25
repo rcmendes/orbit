@@ -585,6 +585,10 @@ orbit add "infra: register OIDC client" --parent orb-a7b2c9
 orbit ready --parent orb-a7b2c9 --claim --by api-agent
 orbit ready --repository api --claim --by api-agent
 
+# Claim into a worktree whose ticket branch starts on a spec's
+# integration branch instead of the Repository's default branch.
+orbit claim orb-a7b2c9.z21c2w --by api-agent --worktree --base feature/sso
+
 # Inspect the family and its blockers.
 orbit tree orb-a7b2c9
 orbit list --parent orb-a7b2c9 --json

@@ -534,9 +534,11 @@ the assignee is an agent or a human.
 --worktree also creates the Issue's worktree: .worktrees/<id> on branch
 ticket/<id> in the Issue's Repository, falling back to the member Repository
 containing the current directory. A new branch starts at the local default
-branch (origin/HEAD's local branch, else main, master, or current branch), without
-fetching. Existing ticket/<id> commits are preserved; a matching worktree is
-reused. A branch checked out elsewhere is rejected before claiming.
+branch (origin/HEAD's local branch, else main, master, or current branch),
+without fetching; --base <ref> starts it at that ref instead and fails before
+claiming when the ref does not resolve. Existing ticket/<id> commits are preserved; a
+matching worktree is reused, and reusing a branch that does not contain --base
+only warns. A branch checked out elsewhere is rejected before claiming.
 If worktree preparation fails after claiming, CLAIM_WORKTREE_FAILED reports the
 successful claim in error.details.claim and the original error in
 error.details.cause. The claim remains active; fix the cause and retry, or
@@ -552,6 +554,9 @@ Examples:
 
   # Claim and create .worktrees/orb-a7b2c9 on ticket/orb-a7b2c9
   orbit claim orb-a7b2c9 --by claude --worktree
+
+  # Base the new ticket branch on a spec's integration branch
+  orbit claim orb-a7b2c9 --by claude --worktree --base feature/sso
 
   # Inspect the claim and its lease
   orbit show orb-a7b2c9 --json";

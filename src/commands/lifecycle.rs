@@ -13,7 +13,7 @@ use super::*;
 pub(super) fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output::CommandOutput> {
     let agent = resolve_agent(args.by)?;
     let worktree = if args.worktree {
-        Some(plan_worktree(board, &args.id)?)
+        Some(plan_worktree(board, &args.id, args.base.as_deref())?)
     } else {
         None
     };
@@ -37,7 +37,7 @@ pub(super) fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output:
         format!("claimed {} by {agent} until {lease}", args.id),
     );
     if let Some(plan) = worktree {
-        let created = plan.create().map_err(|cause| {
+        let (created, warning) = plan.create().map_err(|cause| {
             OrbitError::new(
                 code::CLAIM_WORKTREE_FAILED,
                 format!(
@@ -77,6 +77,9 @@ pub(super) fn cmd_claim(board: &Board, args: ClaimArgs) -> Result<crate::output:
             plan.branch,
             plan.repository
         ));
+        if let Some(warning) = warning {
+            output.warnings.push(warning);
+        }
     }
     Ok(output)
 }
@@ -89,12 +92,16 @@ struct WorktreePlan {
     path: std::path::PathBuf,
     branch: String,
     existing: bool,
+    base: Option<String>,
+    base_commit: Option<String>,
 }
 
 /// Resolves the member Repository a claim worktree belongs to and validates
 /// the target before the claim is taken: the Task's `repo` field wins, else
-/// the member Repository containing the current directory.
-fn plan_worktree(board: &Board, id: &str) -> Result<WorktreePlan> {
+/// the member Repository containing the current directory. `--base` must
+/// resolve to a commit in that Repository so an unknown ref fails before any
+/// lease is taken.
+fn plan_worktree(board: &Board, id: &str, base: Option<&str>) -> Result<WorktreePlan> {
     let (graph, _) = crate::graph::Graph::load(board, crate::graph::LoadMode::Strict)?;
     let task = graph.get(id)?;
     let member = match task.front.repository.as_deref() {
@@ -146,31 +153,64 @@ fn plan_worktree(board: &Board, id: &str) -> Result<WorktreePlan> {
         }
         existing = true;
     }
+    let base_commit = match base {
+        Some(reference) => Some(crate::git::rev_parse(&member.path, reference)?.ok_or_else(
+            || {
+                OrbitError::invalid_argument(format!(
+                    "--base {reference} does not resolve to a commit in Repository `{}`",
+                    member.name
+                ))
+            },
+        )?),
+        None => None,
+    };
     Ok(WorktreePlan {
         repository: member.name,
         repo_path: member.path,
         path,
         branch,
         existing,
+        base: base.map(str::to_string),
+        base_commit,
     })
 }
 
 impl WorktreePlan {
     /// Creates the worktree unless it already exists, hiding `.worktrees/`
     /// through the Repository's local exclude file. Returns whether a new
-    /// worktree was created.
-    fn create(&self) -> Result<bool> {
+    /// worktree was created plus a warning when an existing `ticket/<id>`
+    /// branch is reused without containing the requested `--base`.
+    fn create(&self) -> Result<(bool, Option<String>)> {
         crate::git::ensure_exclude_entry(&self.repo_path, &self.repo_path.join(".worktrees"))?;
         if self.existing {
-            return Ok(false);
+            return Ok((false, self.base_warning()?));
         }
         if crate::git::branch_exists(&self.repo_path, &self.branch)? {
             crate::git::worktree_add(&self.repo_path, &self.path, &self.branch)?;
-        } else {
-            let base = crate::git::default_branch(&self.repo_path)?;
-            crate::git::worktree_add_new(&self.repo_path, &self.path, &self.branch, &base)?;
+            return Ok((true, self.base_warning()?));
         }
-        Ok(true)
+        let base = match &self.base_commit {
+            Some(commit) => commit.clone(),
+            None => crate::git::default_branch(&self.repo_path)?,
+        };
+        crate::git::worktree_add_new(&self.repo_path, &self.path, &self.branch, &base)?;
+        Ok((true, None))
+    }
+
+    /// Warns when `ticket/<id>` already exists but does not contain the
+    /// `--base` commit: the branch is reused as-is and never rebased.
+    fn base_warning(&self) -> Result<Option<String>> {
+        let (Some(reference), Some(base_commit)) = (&self.base, &self.base_commit) else {
+            return Ok(None);
+        };
+        let merge_base = crate::git::merge_base(&self.repo_path, &self.branch, base_commit)?;
+        if merge_base.as_deref() == Some(base_commit.as_str()) {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "{} already exists and does not contain {reference}; the existing branch was kept unchanged",
+            self.branch
+        )))
     }
 }
 

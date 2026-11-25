@@ -2657,7 +2657,7 @@ Orbit is the issue tracker for this project. Use the `orbit` CLI; never edit tas
 From any member Repository, these commands resolve the shared Board across the Git boundary. Issues, dependencies, and claims are shared across its Repositories.
 
 - `orbit ready --claim --by <agent>` claims the highest-priority ready Issue atomically.
-- `orbit claim <id> --by <agent> --worktree` claims one Issue and creates `.worktrees/<id>` on `ticket/<id>` in the Issue's Repository.
+- `orbit claim <id> --by <agent> --worktree` claims one Issue and creates `.worktrees/<id>` on `ticket/<id>` in the Issue's Repository; `--base <ref>` starts the branch at that ref, for example a spec's integration branch.
 - `orbit assign <id> --to <name>` assigns an Issue to a person or agent without a lease.
 - `orbit heartbeat <id> --by <agent>` extends the lease while you work.
 - `orbit checkpoint <id> --by <agent> --progress \"...\" [--next \"...\"] [--blocker \"...\"]` records a handoff that survives release and takeover.
@@ -2769,7 +2769,7 @@ We use Orbit, a Git-native issue tracker for coding agents. Issues live as Markd
 
 - To find actionable work, run `orbit ready --json` and parse `data.issues`. Only Issues in the `{ready}` status appear there.
 - To take work, run `orbit ready --claim --by <agent>` or `orbit claim <ID> --by <agent>`.
-- To claim a known Issue and prepare its worktree, run `orbit claim <ID> --by <agent> --worktree`; it creates or reuses `.worktrees/<ID>` on `ticket/<ID>` in the Issue's Repository. If preparation fails after claiming, `CLAIM_WORKTREE_FAILED` means the claim remains active; fix the cause and retry.
+- To claim a known Issue and prepare its worktree, run `orbit claim <ID> --by <agent> --worktree`; it creates or reuses `.worktrees/<ID>` on `ticket/<ID>` in the Issue's Repository, and `--base <ref>` starts the branch at that ref (for example a spec's integration branch). If preparation fails after claiming, `CLAIM_WORKTREE_FAILED` means the claim remains active; fix the cause and retry.
 - To hand off work, run `orbit checkpoint <ID> --by <agent> --progress \"...\" --next \"...\"`; the record survives release and takeover, and never affects readiness.
 - To finish or abandon work, run `orbit done <ID> --by <agent> --comment \"...\"` or `orbit cancel <ID> --by <agent>`; the note is recorded with the status change. Closing an Issue as `wontfix` instead runs `orbit transition <ID> wontfix`, which records resolution `Won't Do`.
 - To create work, run `orbit add \"Title\" -p high`; `orbit depend <ID> <DEP-ID>` adds a blocker. New Issues start in `{initial}`.

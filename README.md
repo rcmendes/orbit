@@ -30,7 +30,7 @@ $ orbit ready --claim --by claude
 claimed orb-a7b2c9 by claude until 2026-10-24T22:30:00Z
 ```
 
-> **Status:** pre-alpha. [`v0.12.0`](https://github.com/rcmendes/orbit/releases/tag/v0.12.0) is the latest release. This release adds `orbit board view`, a local kanban of the Board in your browser (ADR 0023), batches the change feed's Git calls, and bumps the Board contract to 1.1.0, so older 0.11 binaries refuse Boards this build creates or migrates. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./docs/GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
+> **Status:** pre-alpha. [`v0.12.0`](https://github.com/rcmendes/orbit/releases/tag/v0.12.0) is the latest release. This release adds `orbit board view`, a local kanban of the Board in your browser (ADR 0023), batches the change feed's Git calls, and bumps the Board contract to 1.1.0, so older 0.11 binaries refuse Boards this build creates or migrates. The canonical design is [SPEC.md](./docs/SPEC.md) and vocabulary is [GLOSSARY.md](./GLOSSARY.md). Orbit requires Git 2.31+ (Rust 1.89+ only when building from source).
 
 <details>
 <summary><strong>Contents</strong></summary>
@@ -301,7 +301,7 @@ Orbit keeps the vocabulary small on purpose. Everything else is derived.
 | **Waiting** | An external blocker recorded as a blocking Link to an external reference. Not a Status. |
 | **Comment** | An append-only, authored, timestamped note attached to an Issue. |
 
-The full definitions, including the words Orbit avoids, are in [GLOSSARY.md](./docs/GLOSSARY.md).
+The full definitions, including the words Orbit avoids, are in [GLOSSARY.md](./GLOSSARY.md).
 
 ## How it works
 
@@ -1050,7 +1050,7 @@ See [RELEASING.md](./docs/RELEASING.md) for the release process, supported targe
 | [Architecture](./docs/ARCHITECTURE.md) | Component map, board resolution, domain model, state machine, readiness gate, command flow, sequence diagrams |
 | [Specification](./docs/SPEC.md) | Canonical behavior, issue format, config, command rules, JSON contract, concurrency, testing, distribution |
 | [GitHub sync](./docs/github-sync.md) | Basic and full GitHub modes, sync behavior, limitations, and upgrade path |
-| [Glossary](./docs/GLOSSARY.md) | Canonical vocabulary and the words Orbit avoids |
+| [Glossary](./GLOSSARY.md) | Canonical vocabulary and the words Orbit avoids |
 | [Issue tracker guide](./docs/agents/issue-tracker.md) | How agents should use the board in this repository |
 | [Triage labels](./docs/agents/triage-labels.md) | The five canonical triage roles and category labels |
 | [Triage workflow](./docs/agents/triage-workflow.md) | Review/apply proposals for Issues, Local or Linked |

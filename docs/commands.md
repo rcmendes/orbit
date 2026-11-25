@@ -480,7 +480,7 @@ types > `sub-task`. To nest deeper, extend `board.types` and
 `board.hierarchy` in `config.toml`.
 Never
 use `done --force` or `cancel --force` on a spec parent with open tickets: it
-cancels them. See [ADR 0009](./adr/0009-keep-issue-vocabulary.md) and
+cancels them. See [ADR 0009](./adr/0009-keep-task-vocabulary.md) and
 [ADR 0010](./adr/0010-structural-type-field.md).
 
 `--component` sets an optional Component slug (`cli`, `payments`, `mobile-api`,
@@ -1818,4 +1818,4 @@ the environment rather than operate on a Board.
 - [README](../README.md) for the overview, quick start, and multi-repository Board model.
 - [Architecture](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
 - [Specification](./SPEC.md) for the canonical JSON contract and transition rules.
-- [Glossary](./GLOSSARY.md) for the canonical vocabulary.
+- [Glossary](../GLOSSARY.md) for the canonical vocabulary.

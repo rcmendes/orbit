@@ -445,6 +445,32 @@ fn setup_mattpocock_leaves_a_custom_tracker_doc_alone() {
 }
 
 #[test]
+fn setup_mattpocock_skip_warning_names_only_missing_headings() {
+    let repo = TestRepo::new();
+    let custom = "# Issue tracker: Orbit\n\n## Conventions\n\nHand-written.\n";
+    std::fs::create_dir_all(repo.path().join("docs/agents")).unwrap();
+    std::fs::write(repo.path().join("docs/agents/issue-tracker.md"), custom).unwrap();
+
+    let value = repo.ok_json(&["setup", "mattpocock", "--json"]);
+    let warnings: Vec<&str> = value["meta"]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|warning| warning.as_str().unwrap())
+        .collect();
+    let warning = warnings
+        .iter()
+        .find(|warning| warning.contains("not managed"))
+        .expect("skip warning");
+    assert!(warning.contains("Wayfinding operations"), "{warning}");
+    assert!(warning.contains("fetch the relevant ticket"), "{warning}");
+    assert!(
+        !warning.contains("## Conventions"),
+        "present heading must not be reported missing: {warning}"
+    );
+}
+
+#[test]
 fn setup_all_writes_every_integration_and_removes_it() {
     let repo = TestRepo::new();
     repo.ok_json(&["setup", "all", "--hooks", "--json"]);

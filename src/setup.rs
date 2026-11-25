@@ -1700,8 +1700,8 @@ fn plan_section(
 
 /// Install a managed section only when the file is absent or already managed.
 /// A hand-written file is reported as skipped instead of gaining a second
-/// section; the skip warning names `expected` — the headings or markers the
-/// skills look up there — so a missing one is visible instead of silent.
+/// section; the skip warning names the `expected` headings or markers the
+/// skills look up there that the file lacks, so a missing one is visible.
 fn plan_section_unless_custom(
     root: &Path,
     relative: &str,
@@ -1717,21 +1717,31 @@ fn plan_section_unless_custom(
     {
         return insert_plan(
             plan,
-            skipped_plan(absolute, PathBuf::from(relative), expected),
+            skipped_plan(absolute, PathBuf::from(relative), expected, existing),
         );
     }
     plan_section(root, relative, section, plan)
 }
 
-fn skipped_plan(absolute: PathBuf, relative: PathBuf, expected: &[&str]) -> FilePlan {
+fn skipped_plan(
+    absolute: PathBuf,
+    relative: PathBuf,
+    expected: &[&str],
+    existing: &str,
+) -> FilePlan {
+    let missing: Vec<&str> = expected
+        .iter()
+        .copied()
+        .filter(|heading| !existing.contains(heading))
+        .collect();
     let mut warning = format!(
         "{} is not managed by Orbit; leaving it in place",
         relative.display()
     );
-    if !expected.is_empty() {
+    if !missing.is_empty() {
         warning.push_str(&format!(
-            " — the skills look up these headings there: {}",
-            expected.join(", ")
+            " — the skills look up these headings there, which the file lacks: {}",
+            missing.join(", ")
         ));
     }
     FilePlan {
@@ -1824,7 +1834,10 @@ fn plan_full_file_remove(
             },
         )?;
     } else {
-        insert_plan(plan, skipped_plan(absolute, PathBuf::from(relative), &[]))?;
+        insert_plan(
+            plan,
+            skipped_plan(absolute, PathBuf::from(relative), &[], &existing),
+        )?;
     }
     Ok(())
 }

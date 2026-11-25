@@ -1837,7 +1837,7 @@ the environment rather than operate on a Board.
 
 ## See also
 
-- [README](../README.md) for the overview, quick start, and multi-repository Board model.
+- [README](../README.md) for the overview and install routes; [Quickstart](./guides/quickstart.md) for the walkthrough and [Boards and repositories](./guides/boards.md) for the multi-repository Board model.
 - [Architecture](./ARCHITECTURE.md) for the component map, state machine, command flow, and sequence diagrams.
 - [Specification](./SPEC.md) for the canonical JSON contract and transition rules.
 - [Glossary](../GLOSSARY.md) for the canonical vocabulary.

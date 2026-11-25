@@ -1606,7 +1606,7 @@ fn plan_install(
             root,
             triage_labels,
             &mattpocock_triage_labels_section(),
-            UPSTREAM_TRIAGE_LABEL_MARKERS,
+            UPSTREAM_TRIAGE_LABEL_COLUMNS,
             plan,
         )?;
     }
@@ -2830,7 +2830,7 @@ const UPSTREAM_TRACKER_HEADINGS: &[&str] = &[
 
 /// The markers the upstream skills look up in `docs/agents/triage-labels.md`:
 /// the upstream column names for the role mapping table.
-const UPSTREAM_TRIAGE_LABEL_MARKERS: &[&str] =
+const UPSTREAM_TRIAGE_LABEL_COLUMNS: &[&str] =
     &["Label in mattpocock/skills", "Label in our tracker"];
 
 fn mattpocock_section(remote_details: bool) -> String {
@@ -3100,7 +3100,7 @@ mod tests {
             );
         }
         let labels = mattpocock_triage_labels_section();
-        for marker in UPSTREAM_TRIAGE_LABEL_MARKERS {
+        for marker in UPSTREAM_TRIAGE_LABEL_COLUMNS {
             assert!(labels.contains(marker), "missing `{marker}` in:\n{labels}");
         }
     }

@@ -1740,6 +1740,7 @@ orbit sync              # commit anything left uncommitted
 | `LOCKED` | Retryable: another writer holds the lock. Retry after a short backoff. |
 | `CONTRACT_VERSION_UNSUPPORTED` | The Board's `contract` in `config.toml` is newer than this `orbit` supports. Upgrade `orbit`; `orbit capabilities` still reports the Board's contract and workflow. |
 | `PROFILE_UNMET` | A Profile's `requires` capabilities or minimum `contract` exceed this `orbit`. Upgrade `orbit` or apply a profile whose requirements are met; `details` names what is missing. `orbit doctor` reports the same code for an applied `[[profiles]]` record. |
+| `PROFILE_CONFLICT` | Another applied Profile owns the Board's workflow, as recorded in `[[profiles]]`. Remove the conflicting profile's record and settings before applying a different workflow-bearing profile, or use a profile without `[workflow]`; the error names the conflicting profile and provides a `Next:` action. |
 
 ## Command reference
 

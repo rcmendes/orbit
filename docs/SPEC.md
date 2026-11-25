@@ -326,6 +326,7 @@ prefix = "orb-"
 # name = "acme"
 # source = "user"
 # requires = ["workflow"]
+# workflow = "agentic"          # template name or "custom" when this profile set the workflow
 
 # Optional: declarative transition policy — see §3.2.
 # [policy]

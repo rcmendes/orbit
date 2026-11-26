@@ -227,3 +227,7 @@ dialog .keys dd { margin: 0; color: var(--ink-2); }
   .me { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+.filters .fctl { display: contents; }
+.filters .cw { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ink-2); }
+.filters .cw input[type="date"] { padding: 3px 6px; }
+.older { margin: 6px 12px; }

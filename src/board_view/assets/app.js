@@ -41,15 +41,16 @@ function forgetToken() {
 const LAYOUTS = { columns: "Columns", queue: "Queue" };
 const POLL_MS = 3000;
 const LEASE_MS = 30 * 60e3;
-// shortcut: closed Issues have no close timestamp, so updated_at stands in; switch when the Issue model records close time (ADR 0023).
-const CLOSED_WINDOW_MS = 14 * 864e5;
+const CW_PRESETS = [["24h", "24 hours"], ["3d", "3 days"], ["1w", "1 week"], ["30d", "1 month"], ["all", "All"]];
+const CW_UNIT_MS = { h: 36e5, d: 864e5, w: 6048e5 };
+const CW_KEY = "orbit.closedWindow";
 const CAT_VAR = { todo: "--cat-todo", active: "--cat-active", done: "--cat-done", canceled: "--cat-canceled" };
 const PRIORITIES = ["highest", "high", "medium", "low", "lowest"];
 
 // ---------- state ----------
 const S = {
   viewer: "", wf: null, issues: [], byId: new Map(), prios: PRIORITIES, etag: null, error: "",
-  q: "", type: "", repo: "", who: "", epic: "", pulse: "", showAllClosed: false,
+  q: "", type: "", repo: "", who: "", epic: "", pulse: "", closedWin: null, teamCw: "14d",
   selected: null, expanded: new Set(), bodies: new Map(), writing: false, writeId: null, polling: false,
   opener: null, drawerSig: "", bannerSig: "", syncedAt: null, offlineSince: null,
 };
@@ -116,7 +117,7 @@ function activeFilters() {
   return S.q !== "" || S.type !== "" || S.repo !== "" || S.who !== "" || S.epic !== "" || S.pulse !== "";
 }
 function clearFilters() {
-  S.q = ""; S.type = ""; S.repo = ""; S.who = ""; S.epic = ""; S.pulse = ""; S.showAllClosed = false;
+  S.q = ""; S.type = ""; S.repo = ""; S.who = ""; S.epic = ""; S.pulse = "";
   renderControls(); render();
 }
 function filterBanner() {
@@ -128,6 +129,7 @@ function filterBanner() {
     h("button", { class: "btn", onclick: clearFilters }, "Clear filters"));
 }
 function setData(d) {
+  S.teamCw = cwValid(d.closed_window) ? d.closed_window : "14d";
   S.viewer = d.viewer; S.wf = d.workflow; S.issues = d.issues || [];
   for (const i of S.issues) i.key = i.key || i.id; // Boards without a project key
   S.byId = new Map(S.issues.map((i) => [i.id, i]));
@@ -609,12 +611,71 @@ function passFilters(i) {
   if (S.pulse && !PULSES[S.pulse].test(i)) return false;
   return true;
 }
+// ---------- Closed window (ADR 0023 amendment) ----------
+// closedWin is the session override: a spec string ("all" from the older footer) or a custom {from, to}; the saved choice and team default sit behind it.
+const cwValid = (v) => typeof v === "string" && (v === "all" || /^[1-9]\d*[hdw]$/.test(v));
+function cwSaved() { try { const v = localStorage.getItem(CW_KEY); return cwValid(v) ? v : null; } catch { return null; } }
+const cwSpec = () => (typeof S.closedWin === "string" ? S.closedWin : cwSaved() ?? S.teamCw);
+function cwLabel(v) {
+  const p = CW_PRESETS.find(([k]) => k === v);
+  if (p) return p[1];
+  const n = parseInt(v, 10);
+  const unit = { h: "hour", d: "day", w: "week" }[v.slice(-1)];
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+}
+// A closed Issue's moment: resolved_at, else updated_at for Issues closed before it was recorded (ADR 0024).
+const closedAt = (i) => new Date(i.resolved_at || i.updated_at);
+function inWindow(i) {
+  const w = S.closedWin;
+  if (w && typeof w === "object") {
+    const t = closedAt(i);
+    return t >= new Date(`${w.from}T00:00:00`) && t < new Date(`${w.to}T00:00:00`).getTime() + 864e5;
+  }
+  const spec = cwSpec();
+  return spec === "all" || now() - closedAt(i) <= parseInt(spec, 10) * CW_UNIT_MS[spec.slice(-1)];
+}
+// A text search that matches shows the Issue whatever the window says.
+const hiddenOlder = (i) => closedCat(catOf(i.status)) && !S.q && !inWindow(i);
 function visible() {
-  return S.issues.filter((i) => {
-    if (!passFilters(i)) return false;
-    if (closedCat(catOf(i.status)) && !S.showAllClosed && now() - new Date(i.updated_at) > CLOSED_WINDOW_MS) return false;
-    return true;
-  });
+  return S.issues.filter((i) => passFilters(i) && !hiddenOlder(i));
+}
+const cwText = () => (S.closedWin && typeof S.closedWin === "object" ? `${S.closedWin.from} to ${S.closedWin.to}` : cwLabel(cwSpec()));
+// Reveals what the window hides, for this session only.
+const olderFooter = () => { const n = olderCount(); return n ? h("button", { class: "btn ghost older", onclick: () => { S.closedWin = "all"; renderClosedWin(); render(); } }, `+${n} older · show`) : null; };
+const olderCount = () => S.issues.filter((i) => passFilters(i) && hiddenOlder(i)).length;
+function setClosedWin(v) {
+  if (v === "custom") {
+    const iso = (d) => { const z = new Date(d - d.getTimezoneOffset() * 6e4); return z.toISOString().slice(0, 10); };
+    S.closedWin = { from: iso(new Date(now() - 7 * 864e5)), to: iso(new Date(now())) };
+  } else {
+    S.closedWin = null;
+    try { localStorage.setItem(CW_KEY, v); } catch {}
+  }
+  renderClosedWin(); render();
+}
+function resetClosedWin() {
+  S.closedWin = null;
+  try { localStorage.removeItem(CW_KEY); } catch {}
+  renderClosedWin(); render();
+}
+function renderClosedWin() {
+  const custom = S.closedWin && typeof S.closedWin === "object";
+  const saved = cwSaved();
+  const spec = cwSpec();
+  const known = new Set(CW_PRESETS.map(([k]) => k));
+  const extras = [...new Set([S.teamCw, saved, spec])].filter((v) => v && !known.has(v));
+  const opt = (v, t) => h("option", { value: v, selected: !custom && v === spec }, t);
+  const range = (k) => h("input", { type: "date", "aria-label": k === "from" ? "Closed from" : "Closed to", value: S.closedWin[k],
+    onchange: (e) => { if (e.target.value) { S.closedWin[k] = e.target.value; render(); } } });
+  $("closedwin").replaceChildren(...[
+    h("label", { for: "cwsel" }, "Closed:"),
+    h("select", { id: "cwsel", onchange: (e) => setClosedWin(e.target.value) },
+      CW_PRESETS.map(([k, t]) => opt(k, t)),
+      extras.map((v) => opt(v, `${cwLabel(v)}${v === S.teamCw ? " (team default)" : ""}`)),
+      h("option", { value: "custom", selected: !!custom }, "Custom…")),
+    custom ? [range("from"), "–", range("to")] : null,
+    custom || saved || S.closedWin ? h("button", { class: "btn ghost", onclick: resetClosedWin, title: `Use the team default (${cwLabel(S.teamCw)})` }, "Reset") : null,
+  ].flat().filter(Boolean));
 }
 // The header pills; one at a time filters the board.
 const PULSES = {
@@ -730,7 +791,7 @@ function renderColumns(stage, list) {
         h("span", { class: "n" }, col.id === "ready" ? `${items.length} · ${items.filter(readyForAgents).length} for agents` : items.length),
         col.id === "done" ? h("button", { class: "btn ghost push", onclick: () => { S.expanded.delete("done"); render(); } }, "Hide") : null),
       h("p", { class: "why" }, idle),
-      h("div", { class: "list" }, items.map((i) => cardEl(i, col)))), col.id);
+      h("div", { class: "list" }, items.map((i) => cardEl(i, col)), col.id === "done" ? olderFooter() : null)), col.id);
     zone.dataset.idle = idle;
     return zone;
   });
@@ -748,12 +809,14 @@ function renderQueue(stage, list) {
     ["Up next", "Agents take these in order; Issues marked For a human wait for a person.", inCol("ready").sort((a, b) => readyForHuman(a) - readyForHuman(b) || byPrio(a, b))],
     ["Blocked", "They move to Up next when their blockers close.", inCol("blocked").sort(byPrio)],
     ["Todo", "Not ready to start yet.", inCol("todo").sort(byPrio)],
-    ["Closed recently", S.showAllClosed ? "All closed Issues." : "Closed in the last 14 days.", inCol("done").sort((a, b) => b.updated_at.localeCompare(a.updated_at))],
+    ["Closed recently", `Closed in the window: ${cwText()}.`, inCol("done").sort((a, b) => b.updated_at.localeCompare(a.updated_at))],
   ];
   const flat = sections.flatMap((s) => s[2]);
   if (!S.selected || !flat.some((i) => i.id === S.selected)) S.selected = flat[0]?.id || null;
-  const rows = sections.filter((s) => s[2].length).map(([title, hint, xs]) => h("section", { class: "qsec" },
+  const older = olderCount();
+  const rows = sections.filter((s) => s[2].length || (s[0] === "Closed recently" && older)).map(([title, hint, xs]) => h("section", { class: "qsec" },
     h("h2", {}, title, h("span", { class: "n" }, xs.length)), h("p", { class: "hint" }, hint),
+    title === "Closed recently" ? olderFooter() : null,
     xs.map((i) => {
       const sel = S.selected === i.id;
       // The badges sit inside the button (its name); describe it only with what lives outside it.
@@ -810,6 +873,7 @@ function renderControls() {
   }));
   $("me").replaceChildren(ring({ assignee: S.viewer, assignee_kind: "human" }), `Acting as ${S.viewer}`);
   // Rebuilding the filters while the viewer types would drop focus and the caret.
+  renderClosedWin();
   if ($("filters").contains(document.activeElement)) return;
   const opt = (v, t, cur) => h("option", { value: v, selected: v === cur }, t);
   const types = [...new Set(all.map((i) => i.type))].sort();
@@ -826,8 +890,7 @@ function renderControls() {
       })),
     h("select", { "aria-label": "Repository", onchange: (e) => { S.repo = e.target.value; render(); } }, opt("", "All repositories", S.repo), repos.map((r) => opt(r, r, S.repo))),
     h("select", { "aria-label": "Epic", onchange: (e) => { S.epic = e.target.value; render(); } }, opt("", "All epics", S.epic),
-      epics.map((x) => opt(x.id, `${x.key} ${x.title.length > 40 ? `${x.title.slice(0, 40)}…` : x.title}`, S.epic))),
-    h("label", {}, h("input", { type: "checkbox", checked: S.showAllClosed, onchange: (e) => { S.showAllClosed = e.target.checked; render(); } }), "Show all closed"));
+      epics.map((x) => opt(x.id, `${x.key} ${x.title.length > 40 ? `${x.title.slice(0, 40)}…` : x.title}`, S.epic))));
 }
 
 // ---------- focus / scroll preservation ----------

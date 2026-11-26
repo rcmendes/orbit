@@ -169,6 +169,7 @@ fn diagnose(
     if let Some(board) = &board {
         issues.extend(crate::remote::commands::doctor_issues(board));
         issues.extend(profile_issues(board));
+        issues.extend(closed_window_issue(board));
     }
 
     let healthy = issues.is_empty();
@@ -394,6 +395,26 @@ fn profile_issues(board: &Board) -> Vec<LoadIssue> {
             )
         })
         .collect()
+}
+
+/// A malformed `[board_view] closed_window`; the Board view falls back to the
+/// default and still starts.
+fn closed_window_issue(board: &Board) -> Option<LoadIssue> {
+    let raw = board.config.board_view.closed_window.as_deref()?;
+    if crate::board_view::window::parse(raw).is_some() {
+        return None;
+    }
+    Some(
+        LoadIssue::new(
+            code::CLOSED_WINDOW_INVALID,
+            None,
+            format!(
+                "[board_view] closed_window `{raw}` is not `<N>h|d|w` or `all`; the Board view uses {}",
+                crate::board_view::window::DEFAULT
+            ),
+        )
+        .with_next_action("set closed_window to a value like `14d`, `24h`, `2w`, or `all`"),
+    )
 }
 
 fn orbit_on_path() -> bool {

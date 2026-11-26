@@ -174,6 +174,9 @@ pub struct Config {
     /// truth (ADR 0022 opt-in module).
     #[serde(default, skip_serializing_if = "IndexConfig::is_default")]
     pub index: IndexConfig,
+    /// Board view settings (`[board_view]`); see ADR 0023.
+    #[serde(default, skip_serializing_if = "BoardViewConfig::is_empty")]
+    pub board_view: BoardViewConfig,
     /// Profiles applied to this Board (`orbit setup <plugin>`), recorded so
     /// `orbit doctor` and `orbit capabilities` can re-negotiate their
     /// requirements without re-reading the profile files.
@@ -238,6 +241,21 @@ impl IndexConfig {
     }
 }
 
+/// The `[board_view]` section. `closed_window` stays raw text: a malformed
+/// value must not fail config load; the Board view falls back and `doctor`
+/// reports it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BoardViewConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_window: Option<String>,
+}
+
+impl BoardViewConfig {
+    pub fn is_empty(&self) -> bool {
+        self.closed_window.is_none()
+    }
+}
+
 /// The `[[profiles]]` record `orbit setup <plugin>` writes into
 /// `config.toml`. It captures everything `doctor` and `capabilities` need
 /// to re-negotiate the profile's requirements without re-reading the
@@ -291,6 +309,7 @@ impl Default for Config {
             scheduler: SchedulerConfig::default(),
             hooks: Vec::new(),
             index: IndexConfig::default(),
+            board_view: BoardViewConfig::default(),
             profiles: Vec::new(),
             contract: crate::contract::default_version(),
         }

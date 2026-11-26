@@ -538,3 +538,29 @@ fn in_review_to_done_is_refused() {
     );
     assert_eq!(shown(&repo, &id), before);
 }
+
+fn closed_window_of(repo: &TestRepo, setting: Option<&str>) -> Value {
+    if let Some(line) = setting {
+        let path = repo.board_path().join("config.toml");
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push_str(&format!("\n[board_view]\nclosed_window = {line}\n"));
+        std::fs::write(&path, text).unwrap();
+    }
+    let server = start(repo);
+    let (status, _, body) = api(&server, "/api/snapshot", &[]);
+    assert_eq!(status, 200, "{body}");
+    serde_json::from_str::<Value>(&body).unwrap()["closed_window"].clone()
+}
+
+#[test]
+fn snapshot_carries_closed_window() {
+    assert_eq!(closed_window_of(&repo_with_issue(), None), "14d");
+    assert_eq!(closed_window_of(&repo_with_issue(), Some("\"3d\"")), "3d");
+    assert_eq!(closed_window_of(&repo_with_issue(), Some("\"all\"")), "all");
+}
+
+#[test]
+fn malformed_closed_window_falls_back_and_view_starts() {
+    assert_eq!(closed_window_of(&repo_with_issue(), Some("\"0d\"")), "14d");
+    assert_eq!(closed_window_of(&repo_with_issue(), Some("\"soon\"")), "14d");
+}

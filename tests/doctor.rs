@@ -350,3 +350,21 @@ fn doctor_fix_honours_dir_from_another_directory() {
     assert!(status == 0 || status == 1, "{value}");
     assert!(board.join("config.toml").is_file(), "{value}");
 }
+
+#[test]
+fn doctor_reports_invalid_closed_window() {
+    let repo = TestRepo::new();
+    repo.init();
+    let config_path = repo.board_path().join("config.toml");
+    let mut text = std::fs::read_to_string(&config_path).unwrap();
+    text.push_str("\n[board_view]\nclosed_window = \"soon\"\n");
+    std::fs::write(&config_path, &text).unwrap();
+
+    let value = doctor_json(&repo, &["doctor", "--json"]);
+    assert!(issue_codes(&value).contains(&"CLOSED_WINDOW_INVALID".to_string()));
+
+    let text = text.replace("soon", "2w");
+    std::fs::write(&config_path, text).unwrap();
+    let value = doctor_json(&repo, &["doctor", "--json"]);
+    assert!(!issue_codes(&value).contains(&"CLOSED_WINDOW_INVALID".to_string()));
+}

@@ -130,7 +130,7 @@ function filterBanner() {
 }
 function setData(d) {
   S.teamCw = cwValid(d.closed_window) ? d.closed_window : "14d";
-  S.viewer = d.viewer; S.wf = d.workflow; S.issues = d.issues || [];
+  S.viewer = d.viewer; S.wf = d.workflow; S.columns = d.columns || []; S.issues = d.issues || [];
   for (const i of S.issues) i.key = i.key || i.id; // Boards without a project key
   S.byId = new Map(S.issues.map((i) => [i.id, i]));
   S.prios = [...PRIORITIES];
@@ -232,20 +232,9 @@ function ancestors(i) {
   while (p && S.byId.has(p) && out.length < 8) { out.push(p); p = S.byId.get(p).parent; }
   return out;
 }
-// Same order and names as the server's plan::columns.
-function columns() {
-  const st = S.wf.statuses;
-  const ready = st.filter((s) => s.ready).map((s) => s.name);
-  const todo = st.filter((s) => s.category === "todo" && !s.ready && s.name !== "blocked").map((s) => s.name);
-  const closed = st.filter((s) => closedCat(s.category)).map((s) => s.name);
-  return [
-    { id: "blocked", name: "Blocked", color: "var(--blocked)", home: null },
-    { id: "todo", name: "Todo", color: "var(--cat-todo)", home: todo.includes("todo") ? "todo" : todo[0] },
-    { id: "ready", name: label(ready[0] || "ready"), color: "var(--cat-todo)", home: ready[0] },
-    ...st.filter((s) => s.category === "active").map((s) => ({ id: s.name, name: label(s.name), color: "var(--cat-active)", home: s.name })),
-    { id: "done", name: "Done", color: "var(--cat-done)", home: closed.includes("done") ? "done" : closed[0] },
-  ];
-}
+// The server's plan::columns owns ids, order, names and home; only color is decided here.
+const COLUMN_COLORS = { blocked: "var(--blocked)", todo: "var(--cat-todo)", ready: "var(--cat-todo)", done: "var(--cat-done)" };
+const columns = () => S.columns.map((c) => ({ ...c, color: COLUMN_COLORS[c.id] || "var(--cat-active)" }));
 
 // ---------- links: blocking edges (open or resolved), related Issues, external references ----------
 const targetId = (l) => (typeof l.target === "string" ? l.target : null);

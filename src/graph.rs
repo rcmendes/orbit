@@ -1272,15 +1272,56 @@ pub fn task_summary_in(graph: &Graph, task: &Task, index: &SummaryIndex) -> serd
 }
 
 pub fn task_detail(graph: &Graph, task: &Task) -> serde_json::Value {
-    let mut value = task_summary(graph, task);
-    value["body"] = serde_json::json!(task.body);
-    value["dependents"] = serde_json::json!(
-        graph
-            .dependents(&task.id)
+    let dependents = graph
+        .dependents(&task.id)
+        .iter()
+        .map(|t| t.id.as_str())
+        .collect();
+    detail_in(graph, task, &graph.summary_index(), dependents)
+}
+
+/// `task_detail` for many Tasks, building the children and dependents indexes
+/// once instead of once per Task.
+pub fn task_details(graph: &Graph, tasks: &[&Task]) -> Vec<serde_json::Value> {
+    let index = graph.summary_index();
+    // Same result as `Graph::dependents(id)` for an internal ID: each linking
+    // Task once, sorted by ID.
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+    for task in graph.tasks.values() {
+        for target in task
+            .front
+            .links
             .iter()
-            .map(|dependent| dependent.id.clone())
-            .collect::<Vec<_>>()
-    );
+            .filter_map(|link| link.target_task())
+        {
+            dependents.entry(target).or_default().push(task.id.as_str());
+        }
+    }
+    dependents.values_mut().for_each(|ids| {
+        ids.sort();
+        ids.dedup();
+    });
+    tasks
+        .iter()
+        .map(|task| {
+            let ids = dependents
+                .get(task.id.as_str())
+                .cloned()
+                .unwrap_or_default();
+            detail_in(graph, task, &index, ids)
+        })
+        .collect()
+}
+
+fn detail_in(
+    graph: &Graph,
+    task: &Task,
+    index: &SummaryIndex,
+    dependents: Vec<&str>,
+) -> serde_json::Value {
+    let mut value = task_summary_in(graph, task, index);
+    value["body"] = serde_json::json!(task.body);
+    value["dependents"] = serde_json::json!(dependents);
     value
 }
 
@@ -1289,7 +1330,10 @@ pub fn task_detail_with_comments(
     task: &Task,
     comments: &[Comment],
 ) -> serde_json::Value {
-    let mut value = task_detail(graph, task);
+    with_comments(task_detail(graph, task), comments)
+}
+
+pub fn with_comments(mut value: serde_json::Value, comments: &[Comment]) -> serde_json::Value {
     value["comments"] = serde_json::to_value(comments).unwrap_or_else(|_| serde_json::json!([]));
     value["comment_count"] = serde_json::json!(comments.len());
     value
@@ -1559,6 +1603,26 @@ mod tests {
     fn typed(mut task: Task, ty: &str) -> Task {
         task.front.task_type = ty.to_string();
         task
+    }
+
+    #[test]
+    fn task_details_match_task_detail() {
+        // Duplicate and self links, a missing target, and a hierarchy.
+        let mut all: Vec<Task> = chain().tasks.into_values().collect();
+        all.push(task(
+            "orb-gggggg",
+            "todo",
+            &["orb-aaaaaa", "orb-aaaaaa", "orb-gggggg"],
+        ));
+        all.push(task("orb-hhhhhh", "done", &["orb-bbbbbb", "orb-missing"]));
+        let graph = Graph::from_tasks(all);
+        let mut tasks: Vec<&Task> = graph.tasks.values().collect();
+        tasks.sort_by(|a, b| a.id.cmp(&b.id));
+        let bulk = task_details(&graph, &tasks);
+        for (task, value) in tasks.iter().zip(&bulk) {
+            assert_eq!(value, &task_detail(&graph, task), "{}", task.id);
+        }
+        assert_eq!(bulk[0]["dependents"], serde_json::json!(["orb-gggggg"]));
     }
 
     fn chain() -> Graph {

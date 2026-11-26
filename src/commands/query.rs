@@ -591,8 +591,9 @@ pub(super) fn cmd_search(board: &Board, args: SearchArgs) -> Result<crate::outpu
     keyed.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut filtered: Vec<(SortKey, &Task, Value)> = Vec::with_capacity(keyed.len());
+    let index = graph.summary_index();
     let search_summary = |task: &Task| {
-        let mut summary = graph::task_summary(&graph, task);
+        let mut summary = graph::task_summary_in(&graph, task, &index);
         summary["snippet"] = json!(crate::search::snippet(task, &query));
         summary
     };
@@ -1069,16 +1070,15 @@ fn prime_human(
 
 pub(super) fn cmd_export(board: &Board) -> Result<crate::output::CommandOutput> {
     let (graph, _) = crate::index::load(board, LoadMode::Strict)?;
-    let mut ids: Vec<&String> = graph.tasks.keys().collect();
-    ids.sort();
+    let mut sorted: Vec<&crate::task::Task> = graph.tasks.values().collect();
+    sorted.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let mut tasks = Vec::with_capacity(ids.len());
+    let mut tasks = Vec::with_capacity(sorted.len());
     let mut comment_count = 0;
-    for id in ids {
-        let comments = board.read_comments(id)?;
+    for (task, detail) in sorted.iter().zip(graph::task_details(&graph, &sorted)) {
+        let comments = board.read_comments(&task.id)?;
         comment_count += comments.len();
-        let task = graph.get(id)?;
-        tasks.push(graph::task_detail_with_comments(&graph, task, &comments));
+        tasks.push(graph::with_comments(detail, &comments));
     }
 
     let task_count = tasks.len();

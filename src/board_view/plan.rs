@@ -33,7 +33,7 @@ pub enum Plan {
     Run(Vec<Action>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Column {
     pub id: String,
     pub name: String,
@@ -202,6 +202,8 @@ pub fn columns(wf: &Value) -> Vec<Column> {
         names(&|d| s(d, "category") == "todo" && d["ready"] != true && s(d, "name") != "blocked");
     let ready = names(&|d| d["ready"] == true);
     let closed_st = names(&|d| closed(s(d, "category")));
+    // The column's own status if the Workflow has it, else its first status.
+    let home = |own: &str, sts: &[String]| sts.iter().find(|n| *n == own).or(sts.first()).cloned();
     let mut out = vec![
         Column {
             id: "blocked".into(),
@@ -212,7 +214,7 @@ pub fn columns(wf: &Value) -> Vec<Column> {
         Column {
             id: "todo".into(),
             name: "Todo".into(),
-            home: todo.iter().any(|n| n == "todo").then(|| "todo".into()),
+            home: home("todo", &todo),
             statuses: todo,
         },
         Column {
@@ -235,7 +237,7 @@ pub fn columns(wf: &Value) -> Vec<Column> {
     out.push(Column {
         id: "done".into(),
         name: "Done".into(),
-        home: closed_st.iter().any(|n| n == "done").then(|| "done".into()),
+        home: home("done", &closed_st),
         statuses: closed_st,
     });
     out

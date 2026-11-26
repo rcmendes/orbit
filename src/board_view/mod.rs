@@ -176,7 +176,7 @@ fn snapshot(ctx: &Ctx, request: &Request) -> Response {
     }
     let mut response = Response::json(
         200,
-        &json!({"viewer": ctx.viewer, "workflow": ctx.workflow, "closed_window": ctx.closed_window, "issues": issues}),
+        &json!({"viewer": ctx.viewer, "workflow": ctx.workflow, "columns": plan::columns(&ctx.workflow), "closed_window": ctx.closed_window, "issues": issues}),
     );
     let etag = format!(
         "\"{}\"",

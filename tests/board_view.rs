@@ -560,6 +560,25 @@ fn snapshot_carries_closed_window() {
 }
 
 #[test]
+fn snapshot_carries_server_columns() {
+    let repo = repo_with_issue();
+    let server = start(&repo);
+    let (status, _, body) = api(&server, "/api/snapshot", &[]);
+    assert_eq!(status, 200, "{body}");
+    let snapshot: Value = serde_json::from_str(&body).unwrap();
+    let columns = snapshot["columns"].as_array().unwrap();
+    let ids: Vec<&str> = columns.iter().map(|c| c["id"].as_str().unwrap()).collect();
+    assert_eq!(ids.first(), Some(&"blocked"));
+    assert_eq!(ids.last(), Some(&"done"));
+    // Every Issue's column is one the page can render.
+    for issue in snapshot["issues"].as_array().unwrap() {
+        assert!(ids.contains(&issue["column"].as_str().unwrap()), "{issue}");
+    }
+    let todo = columns.iter().find(|c| c["id"] == "todo").unwrap();
+    assert_eq!(todo["home"], "todo");
+}
+
+#[test]
 fn malformed_closed_window_falls_back_and_view_starts() {
     assert_eq!(closed_window_of(&repo_with_issue(), Some("\"0d\"")), "14d");
     assert_eq!(

@@ -1012,6 +1012,7 @@ impl Graph {
 
     pub fn counts_where(&self, matches: impl Fn(&Task) -> bool) -> Counts {
         let now = Utc::now();
+        let index = self.children_index();
         let mut counts = Counts::default();
 
         for task in self.tasks.values() {
@@ -1031,7 +1032,7 @@ impl Graph {
                 None => {}
             }
 
-            if self.is_ready(task) {
+            if self.is_ready_in(task, &index) {
                 counts.ready += 1;
             }
             if self.workflow.category_of(&task.front.status) == Some(StatusCategory::Active)
@@ -1050,7 +1051,7 @@ impl Graph {
             }
             if !self.workflow.is_terminal(&task.front.status)
                 && (!self.blocking_ids(task).is_empty()
-                    || !self.open_descendants(&task.id).is_empty())
+                    || self.has_open_descendant(&task.id, &index))
             {
                 counts.blocked += 1;
             }
@@ -1176,15 +1177,43 @@ fn inferred_prefix(id: &str) -> Option<String> {
     Some(format!("{prefix}-"))
 }
 
+/// Children index reusable across many `task_summary_in` calls, so rendering a
+/// list builds it once instead of once per Task.
+pub struct SummaryIndex<'a>(ChildIndex<'a>);
+
+impl Graph {
+    pub fn summary_index(&self) -> SummaryIndex<'_> {
+        SummaryIndex(self.children_index())
+    }
+}
+
 pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
+    task_summary_in(graph, task, &graph.summary_index())
+}
+
+pub fn task_summary_in(graph: &Graph, task: &Task, index: &SummaryIndex) -> serde_json::Value {
+    let index = &index.0;
     // `sub_issues` covers the whole subtree at any depth; `children` remains
     // the direct-children view used by `tree`, `delete`, and grouping.
-    let sub_issues: Vec<String> = graph.descendants(&task.id);
-    let open_sub_issues = graph.open_descendants(&task.id);
+    let sub_issues: Vec<String> = graph
+        .descendants_in(&task.id, index)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let open_sub_issues: Vec<String> = sub_issues
+        .iter()
+        .filter(|id| {
+            graph
+                .tasks
+                .get(id.as_str())
+                .is_some_and(|task| !graph.workflow.is_terminal(&task.front.status))
+        })
+        .cloned()
+        .collect();
     let sub_issue_count = sub_issues.len();
     let open_sub_issue_count = open_sub_issues.len();
     let resolved_sub_issue_count = sub_issue_count.saturating_sub(open_sub_issue_count);
-    let eligible_for_close = graph.eligible_for_close(task);
+    let eligible_for_close = graph.eligible_for_close_in(task, index);
     let allowed_transitions: Vec<&str> = graph
         .workflow
         .transitions_from(&task.front.status)
@@ -1234,7 +1263,7 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
         "reporter": task.front.reporter,
         "created_at": task.front.created_at,
         "updated_at": task.front.updated_at,
-        "ready": graph.is_ready(task),
+        "ready": graph.is_ready_in(task, index),
         "blocking": graph.blocking_ids(task),
     });
     value["key"] = serde_json::json!(task.front.key);

@@ -158,13 +158,14 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
         .collect();
     keyed.sort_by(|left, right| left.0.cmp(&right.0));
 
+    let index = graph.summary_index();
     // Summaries are costly (descendants, readiness): build them for every Task
     // only when `--filter` needs them, otherwise for the page alone.
     let mut filtered: Vec<(SortKey, &Task, Value)> = Vec::with_capacity(keyed.len());
     for (key, task) in keyed {
         let summary = match &json_filter {
             Some(filter) => {
-                let summary = graph::task_summary(&graph, task);
+                let summary = graph::task_summary_in(&graph, task, &index);
                 if !crate::search::matches_filter(&summary, filter) {
                     continue;
                 }
@@ -189,7 +190,7 @@ pub(super) fn cmd_list(board: &Board, mut args: ListArgs) -> Result<crate::outpu
         .iter()
         .map(|(_, task, summary)| {
             if summary.is_null() {
-                graph::task_summary(&graph, task)
+                graph::task_summary_in(&graph, task, &index)
             } else {
                 summary.clone()
             }
@@ -372,9 +373,10 @@ pub(super) fn cmd_ready(
         ready.truncate(limit);
     }
 
+    let index = graph.summary_index();
     let summaries: Vec<Value> = ready
         .iter()
-        .map(|task| graph::task_summary(&graph, task))
+        .map(|task| graph::task_summary_in(&graph, task, &index))
         .collect();
     let count = summaries.len();
     let human = if ready.is_empty() {
@@ -517,9 +519,10 @@ pub(super) fn cmd_tree(board: &Board, args: TreeArgs) -> Result<crate::output::C
     visit(&graph, root, 0, &mut seen, &mut entries);
 
     let tasks: Vec<&Task> = entries.iter().map(|(task, _)| *task).collect();
+    let index = graph.summary_index();
     let summaries: Vec<Value> = tasks
         .iter()
-        .map(|task| graph::task_summary(&graph, task))
+        .map(|task| graph::task_summary_in(&graph, task, &index))
         .collect();
     let count = summaries.len();
 
@@ -881,17 +884,18 @@ Use the CLI; never edit task files directly.\n\
     let mut truncated = false;
     // The JSON payload (what MCP returns) carries full summaries, so the budget
     // must hold for it too, not only for the human rendering.
+    let index = graph.summary_index();
     let all_ready: Vec<Value> = ready_tasks
         .iter()
-        .map(|task| graph::task_summary(&graph, task))
+        .map(|task| graph::task_summary_in(&graph, task, &index))
         .collect();
     let all_close: Vec<Value> = close_candidate_tasks
         .iter()
-        .map(|task| graph::task_summary(&graph, task))
+        .map(|task| graph::task_summary_in(&graph, task, &index))
         .collect();
     let all_stale: Vec<Value> = stale_tasks
         .iter()
-        .map(|task| graph::task_summary(&graph, task))
+        .map(|task| graph::task_summary_in(&graph, task, &index))
         .collect();
     let json_tokens = |ready: usize, close: usize, stale: usize| {
         estimate_tokens(

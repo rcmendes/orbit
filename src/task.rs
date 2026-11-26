@@ -530,6 +530,8 @@ struct RawFrontmatter {
     properties: BTreeMap<String, serde_json::Value>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolved_at: Option<DateTime<Utc>>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_yaml_ng::Value>,
 }
@@ -618,6 +620,7 @@ impl From<RawFrontmatter> for TaskFrontmatter {
             properties: raw.properties,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
+            resolved_at: raw.resolved_at,
             extra: raw.extra,
         }
     }
@@ -655,6 +658,7 @@ impl From<TaskFrontmatter> for RawFrontmatter {
             properties: front.properties,
             created_at: front.created_at,
             updated_at: front.updated_at,
+            resolved_at: front.resolved_at,
             extra: front.extra,
         }
     }
@@ -717,6 +721,9 @@ pub struct TaskFrontmatter {
     pub properties: BTreeMap<String, serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// When the Issue last moved into a closed Status; kept across closed
+    /// moves, cleared on reopen. Absent on Issues closed before ADR 0024.
+    pub resolved_at: Option<DateTime<Utc>>,
     pub extra: BTreeMap<String, serde_yaml_ng::Value>,
 }
 
@@ -1266,6 +1273,7 @@ mod tests {
                 key: None,
                 key_aliases: Vec::new(),
                 resolution: None,
+                resolved_at: None,
                 task_type: "task".to_string(),
                 priority: "high".to_string(),
                 labels: Vec::new(),

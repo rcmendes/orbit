@@ -22,7 +22,7 @@
 - Every write passes the card's `updated_at` as `--if-version`.
 - Identity: `--by`, else `ORBIT_AGENT`, else `USER`, else `USERNAME`; the kind is always `human`.
 - Snapshot: `orbit list --json --all --include-closed` with no limit (a cap would silently hide Issues on big Boards), polled every 3000 ms, with a `sha256` ETag.
-- Closed columns show Issues with `updated_at` in the last 14 days unless "Show all closed" is on. Mark this in code as `shortcut: no close timestamp, …`.
+- Closed columns show Issues closed within the Closed window (default 14 days; `[board_view] closed_window`, ADR 0023 amendment); the page's "Closed:" dropdown (24 hours to All, or a custom range) overrides it. The age is `resolved_at`, falling back to `updated_at` for Issues closed before it was recorded (ADR 0024). This replaces the original `updated_at` 14-day shortcut.
 - Gates: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all`.
 - Docs rule (AGENTS.md): every behavior change updates `docs/commands.md`, README, and the affected docs in the same task or an immediate follow-up commit.
 
@@ -243,7 +243,7 @@ The rules from ADR 0023, ported from the prototype's `planMove` / `actionFor` / 
 
 ### Task 6: The page, and the docs that ship with it
 
-Port the prototype into the three embedded assets. Keep: Columns and Queue layouts, the header layout switch (saved in `localStorage` as `orbit.layout`, plus `?layout=`), filters (search, Type, Assignee with Me / Unassigned / Agents / People, Repository, Epic, Show all closed), the six fixed columns (Blocked cards not draggable, a Status chip when a card is not in its column's home Status, cancelled cards muted in Done), the Needs a human tint and band and the For a human tag, pills (ready for agents, ready for a human, need a human, in progress, claimed, stale, ready to close; mutually exclusive), Queue sections (Needs a human, In progress, Ready, Blocked, Todo, Closed recently), claim bars, lease rings, epic sub-issue rollups and Parent keys on cards, dependency chips and hover edges, the drawer / detail pane with description, Links, Checkpoint and Move list, the keyboard "Move to…" menu (`m`), and `j`/`k` in Queue.
+Port the prototype into the three embedded assets. Keep: Columns and Queue layouts, the header layout switch (saved in `localStorage` as `orbit.layout`, plus `?layout=`), filters (search, Type, Assignee with Me / Unassigned / Agents / People, Repository, Epic; the Closed window dropdown replaces the old Show all closed checkbox), the six fixed columns (Blocked cards not draggable, a Status chip when a card is not in its column's home Status, cancelled cards muted in Done), the Needs a human tint and band and the For a human tag, pills (ready for agents, ready for a human, need a human, in progress, claimed, stale, ready to close; mutually exclusive), Queue sections (Needs a human, In progress, Ready, Blocked, Todo, Closed recently), claim bars, lease rings, epic sub-issue rollups and Parent keys on cards, dependency chips and hover edges, the drawer / detail pane with description, Links, Checkpoint and Move list, the keyboard "Move to…" menu (`m`), and `j`/`k` in Queue.
 
 Drop: demo data, the "What the server would run" log, the variant switcher, the conflict-simulation toggle, and the Google Font. Drop the client-side rule engine: drop targets and reasons come from each Issue's `moves` and `stale_actions` in the snapshot.
 

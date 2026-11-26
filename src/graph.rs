@@ -1153,6 +1153,7 @@ pub fn task_summary(graph: &Graph, task: &Task) -> serde_json::Value {
             .category_of(&task.front.status)
             .map(StatusCategory::as_str),
         "resolution": task.front.resolution,
+        "resolved_at": task.front.resolved_at.map(|at| at.to_rfc3339()),
         "allowed_transitions": allowed_transitions,
         "type": task.front.task_type,
         "priority": task.front.priority,
@@ -1235,6 +1236,7 @@ mod tests {
                 key: None,
                 key_aliases: Vec::new(),
                 resolution: None,
+                resolved_at: None,
                 task_type: "task".to_string(),
                 priority: default_priority(),
                 labels: Vec::new(),

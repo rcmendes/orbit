@@ -401,6 +401,7 @@ mod tests {
                 key: None,
                 key_aliases: Vec::new(),
                 resolution: None,
+                resolved_at: None,
                 task_type: "task".to_string(),
                 priority: default_priority(),
                 labels: vec!["bug".into()],

@@ -328,6 +328,10 @@ impl Task {
         // other transition out of an active status drop the Claim.
         let was_active = workflow.category_of(&self.front.status) == Some(StatusCategory::Active);
         if closed {
+            // A closed -> closed move keeps the original close time (ADR 0024).
+            if !workflow.is_terminal(&self.front.status) {
+                self.front.resolved_at = Some(now);
+            }
             self.front.resolution = Some(
                 transition
                     .resolution
@@ -337,6 +341,7 @@ impl Task {
             self.clear_assignment();
         } else {
             self.front.resolution = None;
+            self.front.resolved_at = None;
             if was_active {
                 self.clear_assignment();
             }
@@ -865,6 +870,7 @@ mod tests {
                 key: None,
                 key_aliases: Vec::new(),
                 resolution: None,
+                resolved_at: None,
                 task_type: "task".to_string(),
                 priority: "medium".to_string(),
                 labels: Vec::new(),
@@ -1316,6 +1322,31 @@ mod tests {
         assert!(t.front.resolution.is_none());
         // Links and external blockers survive reopen.
         assert_eq!(t.waiting_labels(), vec!["vendor".to_string()]);
+    }
+
+    #[test]
+    fn resolved_at_is_set_on_close_kept_across_closed_moves_and_cleared_on_reopen() {
+        let mut t = task("ready", Held::No);
+        t.front.links.clear();
+        assert!(t.front.resolved_at.is_none());
+        t.complete(None, false, &[], &[], now(), &workflow())
+            .unwrap();
+        assert_eq!(t.front.resolved_at, Some(now()));
+
+        // closed -> closed keeps the original value.
+        let later = now() + Duration::hours(2);
+        let closed_move = TransitionDef {
+            name: "recancel".to_string(),
+            from: vec!["done".to_string()],
+            to: "cancelled".to_string(),
+            resolution: None,
+        };
+        t.apply_transition(&closed_move, &workflow(), later);
+        assert_eq!(t.front.status, "cancelled");
+        assert_eq!(t.front.resolved_at, Some(now()));
+
+        t.reopen(false, &[], later, &workflow()).unwrap();
+        assert!(t.front.resolved_at.is_none());
     }
 
     #[test]

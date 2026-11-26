@@ -152,7 +152,31 @@ may come from a Remote Tracker.
   refused by orbit 1.0.x with `CONTRACT_VERSION_UNSUPPORTED`; existing 1.0.0
   Boards keep working.
 - The HTTP parser is a trust boundary and gets its own tests.
-- Issues have no close timestamp, so the `done` and `canceled` columns show
-  Issues whose `updated_at` falls in the last 14 days. An edit to a closed Issue
-  brings it back into view. A real close timestamp is a separate Issue-model
-  change.
+- Issues had no close timestamp, so v1 showed closed Issues whose `updated_at`
+  fell in the last 14 days. ADR 0024 adds `resolved_at`; the **Closed window**
+  amendment below replaces that shortcut.
+
+## Amendment: configurable Closed window
+
+The fixed 14-day window and the "Show all closed" checkbox are replaced by a
+**Closed window** (glossary).
+
+- **One window, both layouts, both categories.** It governs the Done column in
+  Columns and Closed recently in Queue, and `done` and `canceled` share it.
+- **Header dropdown "Closed:"** with `24 hours`, `3 days`, `1 week`, `1 month`,
+  `All`, and `Custom…`. Custom is an absolute from–to date range, kept for the
+  current session only and never saved.
+- **Three layers.** Built-in default `14d`; a team default in the Board config,
+  `[board_view] closed_window = "14d"` (`<N>h|d|w` or `"all"`; a value outside
+  the presets appears as an extra dropdown entry); and a per-viewer choice kept
+  in `localStorage` (`orbit.closedWindow`) with a reset to the team default.
+  There is no CLI flag.
+- **Delivery.** The server reads the config value and sends it in the snapshot
+  response; the page falls back to `14d` if it is absent.
+- **Invalid value.** A malformed `closed_window` falls back to `14d`;
+  `orbit doctor` reports it. The Board view still starts.
+- **Hidden is not gone.** The Done column ends with "+N older · show" for cards
+  outside the window. A text search that matches an Issue shows it regardless of
+  the window; the Type, Epic, and Assignee filters still respect it.
+- **Display filter only.** Hidden closed Issues still count in Epic rollups,
+  Blocked-by lists, Ready logic, and the Ready to close pill.

@@ -838,6 +838,13 @@ fn merge_task(
         &key("resolution"),
         outcome,
     );
+    let resolved_at = pick(
+        base_front.map(|f| f.resolved_at),
+        local.front.resolved_at,
+        remote.front.resolved_at,
+        &key("resolved_at"),
+        outcome,
+    );
     let assignment = merge_assignment(
         id,
         &status,
@@ -946,6 +953,7 @@ fn merge_task(
             properties,
             created_at,
             updated_at,
+            resolved_at,
             extra,
         },
         body,
@@ -1660,5 +1668,31 @@ mod tests {
             parsed.front.source_key.as_deref(),
             Some("planner:plan-7:step-1")
         );
+    }
+
+    #[test]
+    fn merge_preserves_resolved_at_and_a_reopen_clears_it() {
+        let closed = task_with("resolved_at: 2026-01-02T00:00:00Z\n");
+        let open = task_with("");
+        let merge = |base: &Task, local: &Task, remote: &Task| {
+            let merged = merge_task(
+                "orb-aaaaaa",
+                Some(base.clone()),
+                local.clone(),
+                remote.clone(),
+                &Workflow::standard(),
+                &mut outcome(),
+            )
+            .unwrap();
+            task::parse_task("orb-aaaaaa".to_string(), &merged)
+                .unwrap()
+                .front
+                .resolved_at
+        };
+        // Closed on one side only: the close time survives the merge.
+        assert_eq!(merge(&open, &closed, &open), closed.front.resolved_at);
+        assert_eq!(merge(&open, &open, &closed), closed.front.resolved_at);
+        // Reopened on one side, untouched on the other: cleared.
+        assert_eq!(merge(&closed, &open, &closed), None);
     }
 }

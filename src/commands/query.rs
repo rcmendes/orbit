@@ -706,6 +706,7 @@ pub(super) fn cmd_digest(board: &Board, args: DigestArgs) -> Result<crate::outpu
             .category_of(&task.front.status)
             .map(crate::workflow::StatusCategory::as_str),
         "resolution": task.front.resolution,
+        "resolved_at": task.front.resolved_at.map(|at| at.to_rfc3339()),
         "priority": task.front.priority,
         "ready": graph.is_ready(task),
         "assignee": task.assignee_name(),

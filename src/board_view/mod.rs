@@ -1,6 +1,7 @@
 pub mod guard;
 pub mod http;
 pub mod plan;
+pub mod window;
 mod write;
 
 use std::collections::HashMap;
@@ -26,6 +27,7 @@ struct Ctx {
     guard: Guard,
     viewer: String,
     workflow: Value,
+    closed_window: String,
 }
 
 pub fn serve(dir: Option<&Path>, args: &BoardViewArgs, json_mode: bool) -> Result<()> {
@@ -36,6 +38,15 @@ pub fn serve(dir: Option<&Path>, args: &BoardViewArgs, json_mode: bool) -> Resul
     let workflow = cli_data(&exe, dir.as_deref(), &["capabilities"])
         .map_err(|_| OrbitError::config("could not read the Board workflow"))?["workflow"]
         .clone();
+
+    // Read once at start; a changed team default applies on the next run.
+    let closed_window = window::effective(
+        crate::board::Board::discover(dir.as_deref())?
+            .config
+            .board_view
+            .closed_window
+            .as_deref(),
+    );
 
     let listener = TcpListener::bind(("127.0.0.1", args.port))
         .map_err(|error| OrbitError::io("bind the Board view port", error))?;
@@ -61,6 +72,7 @@ pub fn serve(dir: Option<&Path>, args: &BoardViewArgs, json_mode: bool) -> Resul
         guard: Guard { token, port },
         viewer,
         workflow,
+        closed_window,
     };
     for stream in listener.incoming() {
         match stream {
@@ -164,7 +176,7 @@ fn snapshot(ctx: &Ctx, request: &Request) -> Response {
     }
     let mut response = Response::json(
         200,
-        &json!({"viewer": ctx.viewer, "workflow": ctx.workflow, "issues": issues}),
+        &json!({"viewer": ctx.viewer, "workflow": ctx.workflow, "closed_window": ctx.closed_window, "issues": issues}),
     );
     let etag = format!(
         "\"{}\"",

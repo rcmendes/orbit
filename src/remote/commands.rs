@@ -2397,6 +2397,7 @@ fn create_imported_task(
             properties: std::collections::BTreeMap::new(),
             created_at: now,
             updated_at: now,
+            resolved_at: None,
             extra: std::collections::BTreeMap::new(),
         },
         body: issue.body.clone(),
@@ -2890,6 +2891,8 @@ fn apply_issue_to_task(
     if issue.status.is_terminal() {
         task.front.assignee = None;
         task.front.lease = None;
+    } else {
+        task.front.resolved_at = None;
     }
     execution::set_baseline(task, issue, workflow);
     Ok(())

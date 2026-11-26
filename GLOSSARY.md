@@ -256,6 +256,21 @@ between columns runs a Transition; the Board view is a front door onto the
 Board, never a second copy of it.
 _Avoid_: Dashboard, web UI, kanban app, ticket board
 
+**Closed window**:
+How far back the Board view draws closed Issues, measured from each Issue's
+`resolved_at`. A duration (`24h`, `3d`, `1w`, `30d`) or `all`. The Board sets a
+team default (`[board_view] closed_window`, built-in `14d`); each viewer can
+override it in the header, and may pick an absolute date range for the current
+session. It is a display filter only: hidden closed Issues still count in
+rollups, Blocked-by lists, and Ready logic.
+_Avoid_: Retention, archive threshold, history limit
+
+**Resolved at**:
+The time an Issue last entered a `done` or `canceled` Status from a non-closed
+one. Moving between closed Statuses keeps it; `reopen` clears it. Issues closed
+before it existed fall back to `updated_at`.
+_Avoid_: Closed date, completed at
+
 **Remote Tracker**:
 An external issue tracker a Board may connect to, such as GitHub Issues, GitLab,
 Linear, or Jira. Orbit is local-first: a Board works fully without one, and

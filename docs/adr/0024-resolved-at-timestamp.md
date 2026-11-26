@@ -30,6 +30,9 @@ comment-free label change, made it look newly closed.
 ## Consequences
 
 - This extends the Issue model of ADR 0022 with one additive, optional field, so
-  older readers ignore it. Whether it needs a contract bump is decided when it
-  is implemented.
+  older readers ignore it. **No contract bump** (decided at implementation, stays
+  `1.1.0`): the field is optional and additive, no command or argument changes,
+  and an older binary preserves the unknown frontmatter key and falls back to
+  `updated_at`. The `list`/`show` JSON gains `resolved_at` (`null` when unset),
+  which the golden tests in `tests/contract.rs` pin.
 - A future `orbit list --closed-since <duration>` can use it.

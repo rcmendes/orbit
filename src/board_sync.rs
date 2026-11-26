@@ -946,6 +946,7 @@ fn merge_task(
             properties,
             created_at,
             updated_at,
+            resolved_at: None,
             extra,
         },
         body,

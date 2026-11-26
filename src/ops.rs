@@ -178,6 +178,7 @@ pub fn add(
             reporter,
             created_at: now,
             updated_at: now,
+            resolved_at: None,
             source_key: new.source_key,
             properties: new.properties,
             extra: Default::default(),
@@ -1422,6 +1423,7 @@ pub fn answer(
             Move::Restore(target) => {
                 task.front.status = target.clone();
                 task.front.resolution = None;
+                task.front.resolved_at = None;
                 // Hand the Issue back to whoever held it when the ask was raised.
                 if task.front.assignee.is_none()
                     && let Some((holder, lease)) = ask_holder

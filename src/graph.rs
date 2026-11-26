@@ -119,6 +119,8 @@ pub struct Counts {
     pub blocked: usize,
 }
 
+type ChildIndex<'a> = HashMap<&'a str, Vec<&'a str>>;
+
 pub struct Graph {
     pub tasks: HashMap<String, Task>,
     /// Normalized project key (`ORB-12`) → Task ID. Live keys only; aliases
@@ -648,11 +650,15 @@ impl Graph {
     /// Ask — and the Board's readiness lint (`[policy]` rules with
     /// `lint = true`) passes.
     pub fn is_ready(&self, task: &Task) -> bool {
+        self.is_ready_in(task, &self.children_index())
+    }
+
+    fn is_ready_in(&self, task: &Task, index: &ChildIndex) -> bool {
         self.workflow.is_ready_status(&task.front.status)
             && task.front.assignee.is_none()
             && self.hold_labels(task).is_empty()
             && self.blocking_ids(task).is_empty()
-            && self.open_descendants(&task.id).is_empty()
+            && !self.has_open_descendant(&task.id, index)
             && !crate::review::has_open_ask(task)
             && self.policy.passes_lint(task)
     }
@@ -748,6 +754,41 @@ impl Graph {
         children
     }
 
+    /// Parent ID → child IDs (sorted), built in one pass. Built per call, not
+    /// stored: `tasks` is public and mutated in place, so a cache would go stale.
+    fn children_index(&self) -> ChildIndex<'_> {
+        let mut index: ChildIndex = HashMap::new();
+        for task in self.tasks.values() {
+            if let Some(parent) = task.front.parent.as_deref() {
+                index.entry(parent).or_default().push(task.id.as_str());
+            }
+        }
+        index.values_mut().for_each(|ids| ids.sort());
+        index
+    }
+
+    fn has_open_descendant(&self, id: &str, index: &ChildIndex) -> bool {
+        self.descendants_in(id, index).iter().any(|descendant| {
+            self.tasks
+                .get(*descendant)
+                .is_some_and(|task| !self.workflow.is_terminal(&task.front.status))
+        })
+    }
+
+    /// Depth-first descendants of an already-resolved `id`, via `index`.
+    fn descendants_in<'a>(&self, id: &str, index: &ChildIndex<'a>) -> Vec<&'a str> {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut out = Vec::new();
+        let mut stack: Vec<&str> = index.get(id).into_iter().flatten().rev().copied().collect();
+        while let Some(next) = stack.pop() {
+            if next != id && seen.insert(next) {
+                out.push(next);
+                stack.extend(index.get(next).into_iter().flatten().rev().copied());
+            }
+        }
+        out
+    }
+
     pub fn open_children(&self, id: &str) -> Vec<String> {
         self.children(id)
             .into_iter()
@@ -819,23 +860,28 @@ impl Graph {
     /// A Parent Task is closable once it has descendants and every one of
     /// them — at any depth — is terminal.
     pub fn eligible_for_close(&self, task: &Task) -> bool {
+        self.eligible_for_close_in(task, &self.children_index())
+    }
+
+    fn eligible_for_close_in(&self, task: &Task, index: &ChildIndex) -> bool {
         if self.workflow.is_terminal(&task.front.status) {
             return false;
         }
-        let descendants = self.descendants(&task.id);
+        let descendants = self.descendants_in(&task.id, index);
         !descendants.is_empty()
             && descendants.iter().all(|descendant| {
                 self.tasks
-                    .get(descendant)
+                    .get(*descendant)
                     .is_some_and(|task| self.workflow.is_terminal(&task.front.status))
             })
     }
 
     pub fn close_candidates(&self) -> Vec<&Task> {
+        let index = self.children_index();
         let mut candidates: Vec<&Task> = self
             .tasks
             .values()
-            .filter(|task| self.eligible_for_close(task))
+            .filter(|task| self.eligible_for_close_in(task, &index))
             .collect();
         candidates.sort_by(|left, right| {
             (
@@ -853,10 +899,11 @@ impl Graph {
     }
 
     pub fn ready_tasks(&self) -> Vec<Task> {
+        let index = self.children_index();
         let mut ready: Vec<Task> = self
             .tasks
             .values()
-            .filter(|task| self.is_ready(task))
+            .filter(|task| self.is_ready_in(task, &index))
             .cloned()
             .collect();
         ready.sort_by(|left, right| {

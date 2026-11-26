@@ -8,7 +8,10 @@ pub fn parse(raw: &str) -> Option<String> {
     if raw == "all" {
         return Some(raw.to_string());
     }
-    let unit = raw.chars().last().filter(|c| matches!(c, 'h' | 'd' | 'w'))?;
+    let unit = raw
+        .chars()
+        .last()
+        .filter(|c| matches!(c, 'h' | 'd' | 'w'))?;
     let n: u32 = raw[..raw.len() - 1].parse().ok().filter(|n| *n > 0)?;
     Some(format!("{n}{unit}"))
 }

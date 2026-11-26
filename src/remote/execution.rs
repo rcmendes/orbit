@@ -580,7 +580,9 @@ pub(crate) fn apply_plan(
     if let Some(status) = plan.apply_status {
         task.front.status = status.orbit_name(&workflow);
         task.front.resolution = workflow.resolution_for(&task.front.status);
-        if status.is_terminal() {
+        if !status.is_terminal() {
+            task.front.resolved_at = None;
+        } else {
             // A closed Issue holds no claim, as with every Orbit transition.
             task.front.assignee = None;
             task.front.lease = None;

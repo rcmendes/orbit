@@ -809,7 +809,7 @@ function renderQueue(stage, list) {
     ["Up next", "Agents take these in order; Issues marked For a human wait for a person.", inCol("ready").sort((a, b) => readyForHuman(a) - readyForHuman(b) || byPrio(a, b))],
     ["Blocked", "They move to Up next when their blockers close.", inCol("blocked").sort(byPrio)],
     ["Todo", "Not ready to start yet.", inCol("todo").sort(byPrio)],
-    ["Closed recently", `Closed in the window: ${cwText()}.`, inCol("done").sort((a, b) => b.updated_at.localeCompare(a.updated_at))],
+    ["Closed recently", `Closed in the window: ${cwText()}.`, inCol("done").sort((a, b) => closedAt(b) - closedAt(a))],
   ];
   const flat = sections.flatMap((s) => s[2]);
   if (!S.selected || !flat.some((i) => i.id === S.selected)) S.selected = flat[0]?.id || null;

@@ -562,5 +562,8 @@ fn snapshot_carries_closed_window() {
 #[test]
 fn malformed_closed_window_falls_back_and_view_starts() {
     assert_eq!(closed_window_of(&repo_with_issue(), Some("\"0d\"")), "14d");
-    assert_eq!(closed_window_of(&repo_with_issue(), Some("\"soon\"")), "14d");
+    assert_eq!(
+        closed_window_of(&repo_with_issue(), Some("\"soon\"")),
+        "14d"
+    );
 }

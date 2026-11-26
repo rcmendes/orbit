@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Issues record `resolved_at` when they move into a `done` or `canceled` Status (kept across closed-to-closed moves, cleared on reopen) and `orbit list|show|ready --json` expose it (ADR 0024). The Board view's Closed columns now filter on it instead of `updated_at`, so editing a closed Issue no longer makes it look newly closed.
+- Board view Closed window: a "Closed:" dropdown (24 hours, 3 days, 1 week, 1 month, All, Custom range) with a remembered choice, and a team default set by `[board_view] closed_window` (`<N>h|d|w` or `all`, default `14d`, read at startup). An invalid value falls back to `14d` and `orbit doctor` reports `CLOSED_WINDOW_INVALID`.
+
 ## 0.12.0 - 2026-11-24
 
 - Added `orbit board view`: a kanban of the Board in your browser, served on `127.0.0.1` while the command runs (ADR 0023). Two layouts, Columns and Queue, switched from the header; filters for text, Type, Assignee, Repository and Epic; Needs a human, Stale and claim highlighting; and a keyboard Move menu (`m`). Dragging a card or picking a move runs the same `orbit` command a person would type, with `--if-version`, as the human named by `--by` (default `ORBIT_AGENT`, then `USER`); Take over and Release are offered only on Stale Issues and always ask first. Every API call needs the per-run token from the printed URL, and the page loads nothing from outside the binary. `--port` picks the port (default: any free one) and `--no-open` skips launching a browser. The capability vocabulary gains `board-view`.

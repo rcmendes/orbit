@@ -22,7 +22,7 @@
 - Every write passes the card's `updated_at` as `--if-version`.
 - Identity: `--by`, else `ORBIT_AGENT`, else `USER`, else `USERNAME`; the kind is always `human`.
 - Snapshot: `orbit list --json --all --include-closed` with no limit (a cap would silently hide Issues on big Boards), polled every 3000 ms, with a `sha256` ETag.
-- Closed columns show Issues with `updated_at` in the last 14 days unless "Show all closed" is on. Mark this in code as `shortcut: no close timestamp, …`.
+- Closed columns show Issues closed within the Closed window (default 14 days; `[board_view] closed_window`, ADR 0023 amendment) unless "Show all closed" is on. The age is `resolved_at`, falling back to `updated_at` for Issues closed before it was recorded (ADR 0024). This replaces the original `updated_at` 14-day shortcut.
 - Gates: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all`.
 - Docs rule (AGENTS.md): every behavior change updates `docs/commands.md`, README, and the affected docs in the same task or an immediate follow-up commit.
 

@@ -1447,6 +1447,26 @@ active drop over a lease-free Assignee, always after that server-side check,
 ↑/↓ move between Issues, ←/→ move between columns in Columns, Enter opens one, `m` opens the move menu,
 Esc closes, and `?` shows the shortcut sheet. Stop with Ctrl-C.
 
+The Closed columns show only Issues closed within the **Closed window**. The
+page's "Closed:" dropdown offers 24 hours, 3 days, 1 week, 1 month, All, and
+Custom (a from/to date range); the choice is remembered in the browser, "Reset"
+returns to the team default, and a "+N older" footer widens to All. Search
+ignores the window. The team default comes from `config.toml`, read once when
+`orbit board view` starts (restart to pick up a change):
+
+```toml
+[board_view]
+closed_window = "14d"   # <N>h, <N>d, <N>w (N > 0), or "all"; default 14d
+```
+
+An invalid value (zero, other units, wrong case) falls back to `14d` and
+`orbit doctor` reports `CLOSED_WINDOW_INVALID`. A closed Issue's age is its
+`resolved_at`: the time it last moved from an open Status into a `done` or
+`canceled` Status (ADR 0024). A move between closed Statuses keeps it, reopening
+clears it, and `orbit list|show|ready --json` expose it (`null` when absent).
+Issues closed before it was recorded, or on a Remote Tracker, fall back to
+`updated_at`.
+
 ### `orbit remote` — GitHub Issue provider
 
 GitHub sync and Triage run through the built-in GitHub Remote Tracker adapter
@@ -1707,6 +1727,7 @@ orbit sync              # commit anything left uncommitted
 | `NO_READY_TASKS` | Not an error: nothing is startable. Wait, triage, or remove a hold label. |
 | `VERSION_CONFLICT` | The Issue changed since the `--if-version` you passed. Re-read it with `orbit show <id>` and retry with the current `updated_at`; the error is retryable and carries `details.actual_version`. |
 | `IDEMPOTENCY_KEY_REUSED` | The `--idempotency-key` was already used for a different request; use a fresh key. |
+| `CLOSED_WINDOW_INVALID` | `[board_view] closed_window` in `config.toml` is not `<N>h`, `<N>d`, `<N>w`, or `all`; the Board view uses `14d`. Reported by `orbit doctor`. |
 | `MODEL_NOT_MIGRATED` | The Board's `config.toml` has no `contract` (or an older major); run `orbit migrate model`. |
 | `INVALID_IDEMPOTENCY_KEY` | `--idempotency-key` must be 1–200 printable ASCII characters without spaces. |
 | `ALREADY_CLAIMED` | Another agent holds a live lease. Pick other work, or `--steal` to take it over. |

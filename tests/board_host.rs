@@ -864,6 +864,30 @@ fn sync_rekeys_colliding_project_keys_without_losing_issues() {
     };
     assert_eq!(rekeyed["id"].as_str().unwrap(), loser);
 
+    // The second clone converges on the same keys once it syncs again.
+    repo.ok_json_in(&second, &["board", "sync", "--json"]);
+    let second_list = repo.ok_json_in(&second, &["list", "--json"]);
+    let key_map = |list: &serde_json::Value| {
+        let mut pairs: Vec<(String, String)> = list["data"]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (
+                    t["id"].as_str().unwrap().to_string(),
+                    t["key"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        pairs.sort();
+        pairs
+    };
+    assert_eq!(
+        key_map(&second_list),
+        key_map(&list),
+        "clones diverge on keys"
+    );
+
     // The old key keeps resolving: with the keeper gone, ORB-2 reaches the
     // re-keyed Issue through its alias.
     repo.ok_json(&[

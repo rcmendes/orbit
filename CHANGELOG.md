@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.4 - 2026-11-27
 
 - CI version bump checks use the pull request event's base and head commits, keeping reruns stable when `main` advances.
 

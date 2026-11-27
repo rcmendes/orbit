@@ -60,6 +60,13 @@ Until then, the README install section and [Install details](./guides/install.md
 
 ## Cut a release
 
+Every pull request targeting `main` must set the `Cargo.toml` package version
+higher than the version in its base commit and update `Cargo.lock` accordingly.
+The CI `version bump` check compares the exact base and head commits from the
+pull request event, so advancing `main` or rerunning an older workflow cannot
+change its comparison. An unchanged or lower version still fails. Reproduce the
+comparison regression tests with `python3 scripts/test-version-bump.py`.
+
 1. Update `version` in `Cargo.toml` and add a matching heading to `../CHANGELOG.md` (for example `## 0.10.1 - 2026-10-29`). The changelog must stay at the repository root: cargo-dist only discovers release-note entries there.
 2. Commit the changes.
 3. Tag and push:

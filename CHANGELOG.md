@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- CI version bump checks use the pull request event's base and head commits, keeping reruns stable when `main` advances.
+
 - Issues record `resolved_at` when they move into a `done` or `canceled` Status (kept across closed-to-closed moves, cleared on reopen) and `orbit list|show|ready --json` expose it (ADR 0024). The Board view's Closed columns now filter on it instead of `updated_at`, so editing a closed Issue no longer makes it look newly closed.
 - Board view Closed window: a "Closed:" dropdown (24 hours, 3 days, 1 week, 1 month, All, Custom range) with a remembered choice, and a team default set by `[board_view] closed_window` (`<N>h|d|w` or `all`, default `14d`, read at startup). An invalid value falls back to `14d` and `orbit doctor` reports `CLOSED_WINDOW_INVALID`.
 

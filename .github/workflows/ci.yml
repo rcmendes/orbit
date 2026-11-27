@@ -70,13 +70,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test version comparison
+        run: python3 scripts/test-version-bump.py
+
       - name: Require a version higher than main
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           ver() { sed -n 's/^version = "\(.*\)"/\1/p' | head -1; }
-          base=$(git show "origin/$BASE_REF:Cargo.toml" | ver)
-          head=$(ver < Cargo.toml)
+          base=$(git show "$BASE_SHA:Cargo.toml" | ver)
+          head=$(git show "$HEAD_SHA:Cargo.toml" | ver)
           echo "main: $base, this PR: $head"
           if [ "$base" = "$head" ] || [ "$(printf '%s\n%s\n' "$base" "$head" | sort -V | tail -1)" != "$head" ]; then
             echo "Cargo.toml version must be higher than $base" >&2
